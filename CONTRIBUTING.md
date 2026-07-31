@@ -1,7 +1,7 @@
 # 多模态医疗项目协作规范
 
-本规范用于正式研发，不再包含 GitHub 操作练习。所有参与者同时遵守
-[AGENTS.md](AGENTS.md) 和 [Vibe Coding 开发约束](docs/vibe-coding/03-Vibe-Coding开发约束.md)。
+本规范用于项目启动和后续研发。所有参与者同时遵守
+[Vibe Coding 开发约束](docs/vibe-coding/03-Vibe-Coding开发约束.md)。
 
 ## 1. 领取任务
 
@@ -17,11 +17,11 @@
 
 ## 2. 分支与提交
 
-从最新 `main` 建分支：
+本仓库默认分支为 `master`。从最新 `master` 建分支：
 
 ```bash
-git switch main
-git pull --ff-only origin main
+git switch master
+git pull --ff-only origin master
 git switch -c feature/用户名-任务简述
 ```
 
@@ -72,15 +72,13 @@ PR 必须：
 
 ## 5. 工程检查
 
-API 基线检查：
+当前项目尚未建立代码检查命令。文档 PR 至少执行：
 
 ```powershell
-$env:PYTHONPATH = "src/api"
-python -m ruff check .
-python -m pytest
+git diff --check
 ```
 
-后续前端建立后必须执行类型检查、单元测试和构建。无法运行某项检查时，应在 PR 中写明原因，不能写成“已通过”。
+首个工程增量应建立本地与 CI 一致的格式、静态、单元和集成检查。后续前端建立后必须执行类型检查、单元测试和构建。无法运行某项检查时，应在 PR 中写明原因，不能写成“已通过”。
 
 ## 6. 实验与产品代码
 
@@ -91,7 +89,7 @@ python -m pytest
 
 ## 7. 合并与发布
 
-- 禁止直接向 `main` 推送和对共享分支强制推送。
+- 禁止直接向 `master` 推送和对共享分支强制推送。
 - 使用 squash 或保留清晰提交历史；合并后删除远程任务分支。
 - 需求、API、数据结构、模型、提示词或部署行为变化必须同步文档。
 - 发布必须绑定代码、数据库、模型、知识库和提示词版本。
