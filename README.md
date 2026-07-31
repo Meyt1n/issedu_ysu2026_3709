@@ -1,92 +1,123 @@
-# issedu_ysu2026_3709
+# 多模态智能医疗家庭助手
 
+面向家庭健康管理实训的多模态 AI 系统，整合药物图像识别、医疗知识检索增强问答、健康数据管理和可观测后台。
 
+> 本项目只提供健康信息与家庭照护辅助，不进行临床诊断、处方生成或自动用药决策。
 
-## Getting started
+## 当前阶段
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+仓库已结束 GitHub 操作练习，进入正式研发阶段。当前已交付 **一期：工程与身份权限基线**，
+正在等待人工验收。
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+一期已完成：
 
-## Add your files
+1. 强类型配置、JSON 日志、请求 ID 和统一错误结构；
+2. SQLAlchemy 异步数据层、Alembic 迁移和 PostgreSQL Compose；
+3. 注册、登录、访问令牌、七天刷新令牌轮换与退出；
+4. 家庭、成员角色、可撤销授权、资源所有权检查和脱敏审计；
+5. 单元、集成、迁移和越权安全测试，以及 CI 质量门禁。
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/ee/gitlab-basics/add-file.html#add-a-file-using-the-command-line) or push an existing Git repository with the following command:
+视觉模型、LLM、RAG、真实健康数据 CRUD 和管理后台不在一期范围，现有 Demo 会明确返回
+“模型未接入”，不会生成虚假识别结果。详细边界见
+[一期开发实施方案](docs/vibe-coding/16-一期开发实施方案.md)。
 
+详细范围见 [需求规格说明书](docs/vibe-coding/01-需求规格说明书.md) 和
+[需求追踪矩阵](docs/vibe-coding/12-需求追踪矩阵.md)。
+
+## 核心能力
+
+| 模块 | MVP 目标 | 安全边界 |
+|---|---|---|
+| 药物识别 | 返回候选药品、边界框、置信度和模型版本 | 低置信度拒识别，不给用药决定 |
+| 医疗问答 | 多轮文本/图片问答，回答带来源 | 证据不足拒答，高风险症状转人工就医 |
+| RAG 知识库 | PDF/DOCX 入库、权限检索、可定位引用 | 检索前鉴权，隔离私人知识域 |
+| 健康数据 | 家庭成员、过敏史、体检指标和事件管理 | 最小采集、加密、审计、可导出删除 |
+| 管理后台 | 用户、知识、模型、任务和服务状态 | RBAC，敏感操作二次确认 |
+
+## 技术基线
+
+- Web：Vue 3 + TypeScript + Vite
+- API：Python 3.11 + FastAPI + Pydantic
+- 数据：PostgreSQL、ChromaDB、MinIO、Redis
+- AI：PyTorch、OpenCV、经评估的 YOLO、可替换 LLM 网关
+- 测试：pytest、httpx、Playwright、安全回归集
+- 部署：Docker Compose
+
+完整选型与理由见 [技术方案](docs/vibe-coding/02-技术方案.md)。
+
+## 仓库结构
+
+```text
+.
+├─ src/
+│  ├─ api/                 FastAPI 路由、应用服务、配置与数据层
+│  ├─ web/                 Vue 用户端
+│  ├─ ai/                  vision、rag、safety
+│  └─ admin/               可选管理端
+├─ tests/
+│  ├─ unit/                单元测试
+│  ├─ integration/         数据库与服务集成测试
+│  ├─ e2e/                 端到端主链路
+│  ├─ safety/              医疗安全与越权回归
+│  └─ fixtures/            仅合成/脱敏测试数据
+├─ docs/
+│  ├─ vibe-coding/         需求、方案、约束和交付基线
+│  └─ decisions/           架构决策记录
+├─ .github/                CI、Issue 与 PR 模板
+├─ migrations/             Alembic 数据库迁移
+├─ compose.yaml            PostgreSQL 本地开发服务
+├─ AGENTS.md               AI 编码工具强制约束
+└─ CONTRIBUTING.md         正式研发协作规范
 ```
-cd existing_repo
-git remote add origin http://119.3.217.118:30181/root/issedu_ysu2026_3709.git
-git branch -M main
-git push -uf origin main
+
+## 本地启动一期项目
+
+前置条件：Python 3.11；使用 PostgreSQL 路径时还需要 Docker Desktop。
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements-dev.txt
+Copy-Item .env.example .env
 ```
 
-## Integrate with your tools
+打开 `.env`，至少替换 `APP_SECRET_KEY` 和 `POSTGRES_PASSWORD`，并确保
+`DATABASE_URL` 中的密码一致。随后启动数据库和应用：
 
-- [ ] [Set up project integrations](http://gitlab.example.com/root/issedu_ysu2026_3709/-/settings/integrations)
+```powershell
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+docker compose up -d postgres
+.\scripts\start-demo.ps1
+```
 
-## Collaborate with your team
+第一条命令生成的随机值用于 `APP_SECRET_KEY`，不要提交修改后的 `.env`。
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Automatically merge when pipeline succeeds](https://docs.gitlab.com/ee/user/project/merge_requests/merge_when_pipeline_succeeds.html)
+`start-demo.ps1` 会先执行 `alembic upgrade head`，迁移成功后才启动 API。
+不安装 Docker 的轻量练习方式见
+[本地部署与 Demo 操作指南](docs/本地部署与Demo操作指南.md)。
 
-## Test and Deploy
+启动后访问：
 
-Use the built-in continuous integration in GitLab.
+- 项目 Demo：<http://127.0.0.1:8000/>
+- 健康检查：<http://127.0.0.1:8000/api/v1/health>
+- 数据库就绪检查：<http://127.0.0.1:8000/api/v1/ready>
+- OpenAPI：<http://127.0.0.1:8000/docs>
+- ReDoc：<http://127.0.0.1:8000/redoc>
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/index.html)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing(SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+运行质量检查：
 
-***
+```powershell
+.\scripts\check-local.ps1
+```
 
-# Editing this README
+组员从克隆到验证的完整步骤见 [本地部署与 Demo 操作指南](docs/本地部署与Demo操作指南.md)。
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thank you to [makeareadme.com](https://www.makeareadme.com/) for this template.
+## 开始开发
 
-## Suggestions for a good README
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+1. 阅读 [项目文档导航](docs/vibe-coding/00-文档导航.md) 和 [AGENTS.md](AGENTS.md)。
+2. 从需求追踪矩阵或一期实施方案选择一个未完成条目，创建对应 Issue。
+3. 从最新 `main` 创建 `feature/用户名-任务` 或 `fix/用户名-问题` 分支。
+4. 小步实现并补测试，提交 Pull Request。
+5. 满足 [完成定义](docs/vibe-coding/03-Vibe-Coding开发约束.md#6-完成定义) 后合并。
 
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+协作细节见 [CONTRIBUTING.md](CONTRIBUTING.md)。
