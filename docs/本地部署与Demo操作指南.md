@@ -1,188 +1,73 @@
-# 本地部署与 Demo 操作指南
+# 本地环境与 Demo 操作指南
 
-## 1. 部署目标
+## 1. 当前状态
 
-完成一次正式项目的本地部署闭环：
+项目尚未开始开发，当前仓库只有需求、设计、流程文档和目录占位，没有可启动的 API、Web、数据库迁移或模型服务。
 
-```text
-克隆仓库 -> 创建虚拟环境 -> 配置数据库 -> 执行迁移
--> 运行检查 -> 启动一期项目 -> 验证页面和 API
-```
+本指南现阶段用于第 1 周环境验收，并规定未来 Demo 建立后应补充的真实步骤。不得执行来源仓库中的脚本或把计划页面描述为已完成。
 
-一期包含注册登录、家庭、授权和审计 API，需要关系数据库，但不需要模型权重、GPU 或
-真实患者数据。Demo 仍只使用报告参考图、合成输入和仓库内演示知识卡。
-
-## 2. 环境要求
-
-- Windows 10/11
-- Git
-- Python 3.11
-- 浏览器：最新版 Chrome 或 Edge
-- 推荐：Docker Desktop（PostgreSQL 路径）
-
-检查：
+## 2. 当前可执行的环境检查
 
 ```powershell
 git --version
 python --version
 ```
 
-## 3. 克隆与进入仓库
-
-```powershell
-git clone https://github.com/Meyt1n/multimodal-medical-training.git
-cd multimodal-medical-training
-```
-
-不要在其他项目目录或用户主目录直接执行后续命令。
-
-## 4. 创建隔离环境
+可选创建隔离环境：
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -r requirements-dev.txt
-Copy-Item .env.example .env
+python -m pip --version
 ```
 
-如果 PowerShell 阻止激活脚本，可在当前窗口执行：
+当前没有依赖文件，不需要安装项目依赖。
+
+## 3. 获取仓库
 
 ```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\.venv\Scripts\Activate.ps1
+git clone https://github.com/Meyt1n/issedu_ysu2026_3709.git
+cd issedu_ysu2026_3709
+git switch master
+git pull --ff-only
 ```
 
-该设置只作用于当前 PowerShell 窗口。
+若团队使用双仓库，按根目录[双仓库同步提交说明](../双仓库同步提交说明.md)配置和验证远端。
 
-## 5. 配置数据库
+## 4. 开发启动后的文档要求
 
-生成随机应用密钥：
+首个可运行增量必须在本指南补充：
 
-```powershell
-python -c "import secrets; print(secrets.token_urlsafe(48))"
-```
+1. 操作系统、Python/Node/Docker/GPU 版本；
+2. 依赖安装和校验命令；
+3. 示例配置和密钥生成方式；
+4. 数据库、迁移和回滚；
+5. 本地检查、测试和启动；
+6. 健康检查、OpenAPI 和页面地址；
+7. 停止、清理和故障排查；
+8. 从全新克隆开始的实际复现结果。
 
-把输出写入 `.env` 的 `APP_SECRET_KEY`。同时修改 `POSTGRES_PASSWORD`，并把相同密码写入
-`DATABASE_URL`。
+每条命令必须在目标仓库执行过。尚未验证的命令不能写成“预期通过”。
 
-推荐使用 PostgreSQL：
+## 5. 未来 Demo 最低行为
 
-```powershell
-docker compose up -d postgres
-docker compose ps
-```
+- 页面显著显示“教学演示，不替代医生诊断”；
+- 所有图片、对话和知识资料使用合成或公开授权数据；
+- 未接入模型时明确显示不可用，不生成假药名或假置信度；
+- 低置信度药物图片展示拒识别和人工核对提示；
+- 有证据问答展示可打开引用；
+- 无证据问答明确拒答；
+- S3 场景优先展示立即就医/求助提示；
+- 依赖不可用时展示受控降级和请求 ID；
+- Demo 可停止并清理临时数据。
 
-只做轻量本地练习、不安装 Docker 时，可以把 `.env` 的 `DATABASE_URL` 改为：
+## 6. Demo 验收证据
 
-```dotenv
-DATABASE_URL=sqlite+aiosqlite:///./local-development.sqlite3
-```
+- 干净环境部署记录；
+- 实际命令、退出状态和版本；
+- 正常与失败场景截图/录屏；
+- 使用的数据、模型、提示词和知识版本；
+- 已知限制和回滚步骤；
+- 另一名成员复现签字。
 
-SQLite 仅用于个人开发和测试，不作为团队部署数据库。
-
-## 6. 执行迁移
-
-```powershell
-$env:PYTHONPATH = "src/api"
-python -m alembic upgrade head
-```
-
-迁移失败时不要手工建表，先检查 `.env` 和数据库状态。
-
-## 7. 运行项目检查
-
-```powershell
-.\scripts\check-local.ps1
-```
-
-预期结果：
-
-- Ruff 显示 `All checks passed!`
-- mypy 显示 `Success: no issues found`
-- pytest 全部通过且覆盖率不低于 80%
-
-失败时保留完整错误，先确认 Python 版本、虚拟环境和依赖安装，不要删除测试或关闭检查。
-
-## 8. 启动一期项目
-
-```powershell
-.\scripts\start-demo.ps1
-```
-
-脚本会再次幂等执行迁移，然后启动服务。保持终端窗口运行，浏览器打开：
-
-- Demo：<http://127.0.0.1:8000/>
-- 健康检查：<http://127.0.0.1:8000/api/v1/health>
-- 数据库就绪检查：<http://127.0.0.1:8000/api/v1/ready>
-- OpenAPI：<http://127.0.0.1:8000/docs>
-- ReDoc：<http://127.0.0.1:8000/redoc>
-
-## 9. 验证清单
-
-- [ ] 页面右下模块状态正常加载
-- [ ] 选择本地图片后可以预览，页面明确说明图片未上传
-- [ ] 运行药物接口演示后显示“未接入模型”，不生成虚假药名或置信度
-- [ ] “用药核对”问题返回项目知识卡引用
-- [ ] “高风险场景”触发 S3 紧急升级提示
-- [ ] `/api/v1/health` 返回 `status: ok` 和版本号
-- [ ] `/api/v1/ready` 返回 `status: ok`
-- [ ] `/docs` 能看到 auth、users、families、consent、audit、health 和 demo 接口
-- [ ] 可在 Swagger 注册合成用户并登录
-- [ ] OpenAPI 响应头包含 `X-Request-ID`
-
-## 10. 停止与清理
-
-在运行 Demo 的终端按 `Ctrl+C` 停止服务。
-
-使用 PostgreSQL 时可执行 `docker compose stop` 停止容器。不要随意执行
-`docker compose down --volumes`，该命令会删除本地数据库卷。
-
-`.venv`、`.env`、本地 SQLite、缓存和覆盖率文件都已被 `.gitignore` 忽略。
-
-## 11. 常见问题
-
-### 端口 8000 被占用
-
-先停止原服务，或手动运行其他端口：
-
-```powershell
-$env:PYTHONPATH = "src/api"
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --port 8002
-```
-
-然后访问 <http://127.0.0.1:8002/>。
-
-### 提示找不到 `app`
-
-必须在仓库根目录启动，并使用 `scripts/start-demo.ps1`；手动启动时先设置：
-
-```powershell
-$env:PYTHONPATH = "src/api"
-```
-
-### 页面打开但状态加载失败
-
-确认页面地址是 FastAPI 提供的 `http://127.0.0.1:8000/`，不要直接双击 `index.html`。
-
-### 提示缺少或禁止示例 APP_SECRET_KEY
-
-确认已经创建 `.env`，并用第 5 节命令生成的随机值替换示例值。不要把 `.env` 提交到 Git。
-
-### 数据库连接失败
-
-PostgreSQL 路径先执行 `docker compose ps`，确认状态为 healthy，并核对
-`POSTGRES_PASSWORD` 与 `DATABASE_URL` 中密码一致。轻量 SQLite 路径确认 URL 使用
-`sqlite+aiosqlite`。
-
-## 12. 组员改进任务
-
-每位组员可领取一个真实改进任务，例如：
-
-- 增加成员移除与 owner 不可清空规则；
-- 增加登录限流；
-- 建立注册/登录前端页；
-- 补 PostgreSQL 集成测试；
-- 定义视觉或 RAG 适配器协议。
-
-练习完成后按 [正式协作规范](../CONTRIBUTING.md) 提交 PR，不再创建签到文件或首次提交练习分支。
+Demo 操作步骤将在首个可运行增量合并后更新。在此之前，本指南不得包含不存在的接口地址、测试数量或成功截图。

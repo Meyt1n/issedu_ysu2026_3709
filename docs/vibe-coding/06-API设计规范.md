@@ -33,46 +33,47 @@
 
 ## 4. 核心接口草案
 
-| 方法与路径 | 说明 | 权限 |
-|---|---|---|
-| `POST /auth/login` | 登录 | 公开、限流 |
-| `POST /auth/refresh` | 刷新令牌 | 持有刷新令牌 |
-| `GET /family-members` | 家庭成员列表 | 本人/已授权 |
-| `POST /vision/drug-detections` | 创建单图识别任务 | 登录用户 |
-| `GET /tasks/{task_id}` | 查询异步任务 | 任务所有者 |
-| `POST /knowledge/documents` | 上传知识文档 | 内容权限 |
-| `POST /knowledge/documents/{id}/index-jobs` | 建立索引 | 文档所有者/管理员 |
-| `POST /chats` | 创建会话 | 登录用户 |
-| `POST /chats/{id}/messages` | 发送多模态消息 | 会话所有者 |
-| `GET /audit-events` | 查询脱敏审计 | 管理员 |
-| `DELETE /me/data` | 发起个人数据删除 | 本人、二次认证 |
+| 方法与路径                                  | 说明             | 权限              |
+| ------------------------------------------- | ---------------- | ----------------- |
+| `POST /auth/login`                          | 登录             | 公开、限流        |
+| `POST /auth/refresh`                        | 刷新令牌         | 持有刷新令牌      |
+| `GET /family-members`                       | 家庭成员列表     | 本人/已授权       |
+| `POST /vision/drug-detections`              | 创建单图识别任务 | 登录用户          |
+| `GET /tasks/{task_id}`                      | 查询异步任务     | 任务所有者        |
+| `POST /knowledge/documents`                 | 上传知识文档     | 内容权限          |
+| `POST /knowledge/documents/{id}/index-jobs` | 建立索引         | 文档所有者/管理员 |
+| `POST /chats`                               | 创建会话         | 登录用户          |
+| `POST /chats/{id}/messages`                 | 发送多模态消息   | 会话所有者        |
+| `GET /audit-events`                         | 查询脱敏审计     | 管理员            |
+| `DELETE /me/data`                           | 发起个人数据删除 | 本人、二次认证    |
 
-### 4.1 一期已实现接口
+### 4.1 一期候选接口
 
-| 方法与路径 | 说明 | 权限 |
-|---|---|---|
-| `POST /api/v1/auth/register` | 注册，邮箱规范化唯一 | 公开 |
-| `POST /api/v1/auth/login` | 登录并签发访问/刷新令牌 | 公开 |
-| `POST /api/v1/auth/refresh` | 轮换刷新令牌 | 持有有效刷新令牌 |
-| `POST /api/v1/auth/logout` | 撤销刷新令牌 | 持有刷新令牌 |
-| `GET /api/v1/users/me` | 当前用户信息 | 登录用户 |
-| `POST/GET /api/v1/families` | 创建/列出可访问家庭 | 登录用户 |
-| `GET /api/v1/families/{id}` | 家庭详情 | 成员或有效授权 |
-| `POST/GET /api/v1/families/{id}/members` | 添加/列出成员 | 添加需 owner/caregiver |
-| `POST/GET /api/v1/consent-grants` | 创建/列出授权 | 创建需家庭 owner |
-| `DELETE /api/v1/consent-grants/{id}` | 立即撤销授权 | 授权人 |
-| `GET /api/v1/audit-events` | 当前用户脱敏审计 | 登录用户 |
-| `GET /api/v1/health` | 进程存活检查 | 公开 |
-| `GET /api/v1/ready` | 数据库就绪检查 | 公开 |
+| 方法与路径                               | 说明                    | 权限                   |
+| ---------------------------------------- | ----------------------- | ---------------------- |
+| `POST /api/v1/auth/register`             | 注册，邮箱规范化唯一    | 公开                   |
+| `POST /api/v1/auth/login`                | 登录并签发访问/刷新令牌 | 公开                   |
+| `POST /api/v1/auth/refresh`              | 轮换刷新令牌            | 持有有效刷新令牌       |
+| `POST /api/v1/auth/logout`               | 撤销刷新令牌            | 持有刷新令牌           |
+| `GET /api/v1/users/me`                   | 当前用户信息            | 登录用户               |
+| `POST/GET /api/v1/families`              | 创建/列出可访问家庭     | 登录用户               |
+| `GET /api/v1/families/{id}`              | 家庭详情                | 成员或有效授权         |
+| `POST/GET /api/v1/families/{id}/members` | 添加/列出成员           | 添加需 owner/caregiver |
+| `POST/GET /api/v1/consent-grants`        | 创建/列出授权           | 创建需家庭 owner       |
+| `DELETE /api/v1/consent-grants/{id}`     | 立即撤销授权            | 授权人                 |
+| `GET /api/v1/audit-events`               | 当前用户脱敏审计        | 登录用户               |
+| `GET /api/v1/health`                     | 进程存活检查            | 公开                   |
+| `GET /api/v1/ready`                      | 数据库就绪检查          | 公开                   |
 
-运行时 OpenAPI 的事实入口是 `/openapi.json`，Swagger UI 为 `/docs`，ReDoc 为
-`/redoc`。所有响应通过 `X-Request-ID` 头返回请求 ID。
+以上接口均为待评审契约，当前尚未实现。启动开发后，运行时 OpenAPI 计划使用
+`/openapi.json`，Swagger UI 计划使用 `/docs`，ReDoc 计划使用 `/redoc`；所有响应计划
+通过 `X-Request-ID` 头返回请求 ID。实际路径以已合并 OpenAPI 和契约测试为准。
 
-### 4.2 一期稳定错误码
+### 4.2 一期错误码规划
 
-认证使用 `AUTH_*`，家庭权限使用 `FAMILY_*`，授权使用 `CONSENT_*`，依赖故障使用
-`DEPENDENCY_*`。校验失败固定为 `REQUEST_VALIDATION_FAILED`；错误详情只返回字段位置和
-错误类型，不回显密码、令牌或医疗正文。
+认证计划使用 `AUTH_*`，家庭权限使用 `FAMILY_*`，授权使用 `CONSENT_*`，依赖故障使用
+`DEPENDENCY_*`。校验失败候选码为 `REQUEST_VALIDATION_FAILED`；错误详情只返回字段位置和
+错误类型，不回显密码、令牌或医疗正文。错误码在首个契约评审后冻结，冻结前不得称为稳定接口。
 
 ## 5. AI 响应最低字段
 
