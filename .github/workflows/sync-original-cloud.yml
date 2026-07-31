@@ -1,0 +1,80 @@
+name: 同步 master 到原云端仓库
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-original-cloud-master
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: 快进同步到原云端
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CLOUD_REPO_URL: http://119.3.217.118:30181/29092881243490627/issedu_ysu2026_3709.git
+
+    steps:
+      - name: 检出完整 Git 历史
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: 推送当前 master 到原云端
+        shell: bash
+        env:
+          CLOUD_REPO_USERNAME: ${{ secrets.CLOUD_REPO_USERNAME }}
+          CLOUD_REPO_PASSWORD: ${{ secrets.CLOUD_REPO_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${CLOUD_REPO_USERNAME}" || -z "${CLOUD_REPO_PASSWORD}" ]]; then
+            echo "::error::缺少 CLOUD_REPO_USERNAME 或 CLOUD_REPO_PASSWORD 仓库密钥"
+            exit 1
+          fi
+
+          askpass="${RUNNER_TEMP}/cloud-git-askpass.sh"
+          cleanup() {
+            rm -f "${askpass}"
+          }
+          trap cleanup EXIT
+
+          cat > "${askpass}" <<'EOF'
+          #!/usr/bin/env bash
+          case "$1" in
+            *Username*) printf '%s\n' "${CLOUD_REPO_USERNAME}" ;;
+            *Password*) printf '%s\n' "${CLOUD_REPO_PASSWORD}" ;;
+            *) exit 1 ;;
+          esac
+          EOF
+          chmod 700 "${askpass}"
+
+          export GIT_ASKPASS="${askpass}"
+          export GIT_TERMINAL_PROMPT=0
+
+          git remote add original-cloud "${CLOUD_REPO_URL}"
+          git fetch original-cloud master
+
+          github_sha="$(git rev-parse "${GITHUB_SHA}")"
+          cloud_sha="$(git rev-parse original-cloud/master)"
+
+          if [[ "${cloud_sha}" == "${github_sha}" ]]; then
+            echo "原云端 master 已与 GitHub 一致：${github_sha}"
+            exit 0
+          fi
+
+          if ! git merge-base --is-ancestor "${cloud_sha}" "${github_sha}"; then
+            echo "::error::原云端 master 与 GitHub master 已分叉，拒绝强制覆盖，请人工合并后重试"
+            exit 1
+          fi
+
+          git push original-cloud "${github_sha}:refs/heads/master"
+          echo "已将 GitHub master 同步到原云端：${github_sha}"
