@@ -1,30 +1,27 @@
-# 业务 API
+# HomeCare Twin 业务 API
 
-当前尚无 API 实现。FastAPI 是统一业务 API 的候选方案，需通过 ADR 接受后才能成为事实基线。
+FastAPI 是统一业务入口，MySQL 8 是唯一事实主库。当前目录尚无 API 实现；接口基线见[API 设计规范](../../docs/vibe-coding/06-API设计规范.md)，数据模型见[领域模型与数据库设计](../../docs/vibe-coding/13-领域模型与数据库设计.md)。
 
-候选目录：
+建议目录：
 
 ```text
 app/
-├─ routes/            HTTP 协议适配，不写 SQL
-├─ schemas/           版本化请求/响应契约
-├─ application/       用例、权限和事务编排
-├─ db/                SQLAlchemy 模型与会话适配
-├─ core/              配置、日志、错误、安全
-├─ dependencies.py    FastAPI 鉴权与会话依赖
-└─ main.py            应用装配，不承载业务规则
+├─ routes/           HTTP、认证依赖和 Schema，不写 SQL
+├─ schemas/          版本化请求/响应契约
+├─ application/      用例、成员授权、事务和 AI 编排
+├─ domain/           事件、计划、任务和告警预算规则
+├─ persistence/      MySQL 仓储、outbox 和关系投影
+├─ integrations/     CV、OCR、RAG、Ollama、天气适配器
+├─ core/             配置、日志、错误和安全
+└─ main.py           应用装配
 ```
 
-领域规则复杂后计划放入 `domain/`，外部模型和服务适配器计划放入 `integrations/`。路由不得直接
-写 SQL、模型推理或医疗安全规则。公开接口先更新 OpenAPI 契约，再实现代码。
+核心约束：
 
-一期候选 API：
+- `health_event` 追加写，更正使用补偿事件；
+- 只有人工确认的识别结果可进入正式状态和风险计算；
+- 风险等级由版本化规则生成，LLM 只调用工具和解释；
+- 所有成员资源执行 RBAC + 成员级 ABAC；撤权立即生效；
+- 模型、向量库或天气离线时明确降级，不伪造结果。
 
-- `/api/v1/auth/*`：注册、登录、刷新和退出；
-- `/api/v1/users/me`：当前用户；
-- `/api/v1/families/*`：家庭与成员；
-- `/api/v1/consent-grants/*`：创建、查询和撤销授权；
-- `/api/v1/audit-events`：当前用户的脱敏审计；
-- `/api/v1/health`、`/api/v1/ready`：存活和数据库就绪检查。
-
-以上路径均未实现，实际状态以 OpenAPI、测试和需求追踪矩阵为准。
+实际接口状态以 OpenAPI、迁移、自动测试和需求追踪矩阵为准。
