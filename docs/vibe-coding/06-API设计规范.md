@@ -1,110 +1,84 @@
-# API 设计规范
+# HomeCare Twin API 设计规范
 
 ## 1. 通用约定
 
-- 基础路径：`/api/v1`；破坏性变化升级主版本。
-- JSON 字段使用 `snake_case`，时间使用带时区的 ISO 8601 UTC。
-- 资源使用复数名词，如 `/users`、`/documents`，动作用子资源表达。
-- 成功创建返回 `201`，异步任务返回 `202`，删除成功返回 `204`。
-- 分页统一使用 `page_size` 和不透明 `cursor`。
-- 每个响应返回或响应头携带 `request_id`。
+- 统一前缀 `/api/v1`，JSON 使用 `snake_case`，时间使用含时区 ISO 8601。
+- 所有响应携带 `request_id`；写操作支持 `Idempotency-Key`。
+- 列表使用游标分页；公开 ID 使用 UUID/ULID，不暴露自增序号。
+- 认证只能证明用户身份；每次成员资源访问仍需家庭与成员级授权。
+- 文件上传采用白名单 MIME、大小/像素/时长限制和内容探测。
 
-## 2. 统一错误
+统一错误：
 
 ```json
 {
   "error": {
-    "code": "VISION_LOW_CONFIDENCE",
-    "message": "无法可靠识别该图片，请重新拍摄或人工核对",
-    "request_id": "req_01...",
-    "details": {}
+    "code": "RECOGNITION_REVIEW_REQUIRED",
+    "message": "识别证据存在冲突，需要人工复核",
+    "details": {},
+    "request_id": "01..."
   }
 }
 ```
 
-`message` 可展示给用户且不泄露内部细节；`code` 稳定可编程；堆栈只进入受控日志。
+错误码至少区分 `UNAUTHENTICATED`、`FORBIDDEN_MEMBER`、`CONSENT_REVOKED`、`VALIDATION_ERROR`、`FILE_REJECTED`、`MODEL_UNAVAILABLE`、`EVIDENCE_CONFLICT`、`EVIDENCE_INSUFFICIENT`、`RULE_VERSION_MISMATCH` 和 `RATE_LIMITED`。
 
-## 3. 认证与幂等
+## 2. 核心接口基线
 
-- `Authorization: Bearer <access_token>`，访问令牌短时有效。
-- 刷新令牌单独存储、轮换并可撤销。
-- 创建任务、上传、导出等重试操作支持 `Idempotency-Key`。
-- 所有资源按当前用户和授权范围查询，禁止先查出再由前端隐藏。
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| POST | `/vision/jobs/image` | 创建图片识别任务 |
+| POST | `/vision/jobs/video` | 创建视频抽帧识别任务 |
+| GET | `/vision/jobs/{id}` | 查询进度、候选和证据 |
+| POST | `/recognitions/{id}/review` | 确认、纠正或拒绝结果 |
+| POST | `/health-events` | 创建手工健康事件 |
+| GET | `/members/{id}/timeline` | 获取成员事件时间线 |
+| GET | `/graph/members/{id}` | 获取家庭健康关系投影 |
+| POST | `/risks/evaluate` | 以指定状态/规则版本重算风险 |
+| POST | `/plans/{id}/optimize` | 生成安全时间窗内提醒建议 |
+| POST | `/plans/{id}/approve` | 人工批准计划版本变化 |
+| GET | `/environment/actions` | 获取环境行动卡 |
+| POST | `/assistant/chat` | 调用受约束本地助手 |
+| POST | `/models/retrain` | 管理员创建追加训练任务 |
+| GET | `/dashboard/family` | 家庭业务大屏 |
+| GET | `/dashboard/model` | 模型技术大屏 |
 
-## 4. 核心接口草案
+实际实现可增加 `/auth`、`/families`、`/members`、`/consents`、`/documents`、`/medicines` 和 `/tasks` 资源，但必须先更新 OpenAPI 和追踪矩阵。
 
-| 方法与路径                                  | 说明             | 权限              |
-| ------------------------------------------- | ---------------- | ----------------- |
-| `POST /auth/login`                          | 登录             | 公开、限流        |
-| `POST /auth/refresh`                        | 刷新令牌         | 持有刷新令牌      |
-| `GET /family-members`                       | 家庭成员列表     | 本人/已授权       |
-| `POST /vision/drug-detections`              | 创建单图识别任务 | 登录用户          |
-| `GET /tasks/{task_id}`                      | 查询异步任务     | 任务所有者        |
-| `POST /knowledge/documents`                 | 上传知识文档     | 内容权限          |
-| `POST /knowledge/documents/{id}/index-jobs` | 建立索引         | 文档所有者/管理员 |
-| `POST /chats`                               | 创建会话         | 登录用户          |
-| `POST /chats/{id}/messages`                 | 发送多模态消息   | 会话所有者        |
-| `GET /audit-events`                         | 查询脱敏审计     | 管理员            |
-| `DELETE /me/data`                           | 发起个人数据删除 | 本人、二次认证    |
+## 3. 视觉任务状态机
 
-### 4.1 一期候选接口
+```text
+QUEUED -> PREPROCESSING -> INFERENCING -> FUSING
+       -> MATCHED | CONFLICT | UNKNOWN | REVIEW | FAILED
+MATCHED/CONFLICT/UNKNOWN/REVIEW -> CONFIRMED | CORRECTED | REJECTED
+```
 
-| 方法与路径                               | 说明                    | 权限                   |
-| ---------------------------------------- | ----------------------- | ---------------------- |
-| `POST /api/v1/auth/register`             | 注册，邮箱规范化唯一    | 公开                   |
-| `POST /api/v1/auth/login`                | 登录并签发访问/刷新令牌 | 公开                   |
-| `POST /api/v1/auth/refresh`              | 轮换刷新令牌            | 持有有效刷新令牌       |
-| `POST /api/v1/auth/logout`               | 撤销刷新令牌            | 持有刷新令牌           |
-| `GET /api/v1/users/me`                   | 当前用户信息            | 登录用户               |
-| `POST/GET /api/v1/families`              | 创建/列出可访问家庭     | 登录用户               |
-| `GET /api/v1/families/{id}`              | 家庭详情                | 成员或有效授权         |
-| `POST/GET /api/v1/families/{id}/members` | 添加/列出成员           | 添加需 owner/caregiver |
-| `POST/GET /api/v1/consent-grants`        | 创建/列出授权           | 创建需家庭 owner       |
-| `DELETE /api/v1/consent-grants/{id}`     | 立即撤销授权            | 授权人                 |
-| `GET /api/v1/audit-events`               | 当前用户脱敏审计        | 登录用户               |
-| `GET /api/v1/health`                     | 进程存活检查            | 公开                   |
-| `GET /api/v1/ready`                      | 数据库就绪检查          | 公开                   |
+只有 `CONFIRMED`/`CORRECTED` 可触发健康事件；状态转换使用乐观锁，重复复核保持幂等。返回值必须包含模型/OCR/匹配器版本、证据帧、字段来源和人工确认状态。
 
-以上接口均为待评审契约，当前尚未实现。启动开发后，运行时 OpenAPI 计划使用
-`/openapi.json`，Swagger UI 计划使用 `/docs`，ReDoc 计划使用 `/redoc`；所有响应计划
-通过 `X-Request-ID` 头返回请求 ID。实际路径以已合并 OpenAPI 和契约测试为准。
+## 4. 证据契约
 
-### 4.2 一期错误码规划
-
-认证计划使用 `AUTH_*`，家庭权限使用 `FAMILY_*`，授权使用 `CONSENT_*`，依赖故障使用
-`DEPENDENCY_*`。校验失败候选码为 `REQUEST_VALIDATION_FAILED`；错误详情只返回字段位置和
-错误类型，不回显密码、令牌或医疗正文。错误码在首个契约评审后冻结，冻结前不得称为稳定接口。
-
-## 5. AI 响应最低字段
+风险卡和助手证据型响应至少包含：
 
 ```json
 {
-  "result": {},
-  "confidence": 0.82,
-  "uncertainty": "medium",
-  "model_version": "drug-detector@1.2.0",
-  "knowledge_version": "medical-public@2026-07",
-  "citations": [],
-  "safety": {
-    "level": "informational",
-    "disclaimer": "仅供健康信息参考，不替代医生诊断。"
-  },
-  "request_id": "req_01..."
+  "answer": "...",
+  "route": "EVIDENCE_REQUIRED",
+  "facts": [{"fact_id": "...", "event_id": "...", "confirmed": true}],
+  "rules": [{"rule_id": "...", "version": "...", "level": "HIGH"}],
+  "citations": [{"document_id": "...", "version": "...", "chunk_id": "..."}],
+  "actions": [{"type": "REVIEW", "assignee_role": "MEMBER"}],
+  "model_version": "...",
+  "knowledge_version": "...",
+  "request_id": "..."
 }
 ```
 
-不适用字段可省略，但问答必须有安全信息，药物识别必须有置信度和模型版本。
+`EVIDENCE_REQUIRED` 没有引用时不得返回肯定性回答。客户端不得只展示 `answer` 而隐藏规则和确认状态。
 
-## 6. 文件与流式接口
+## 5. 并发、审计与删除
 
-- 文件先获取受限上传凭证，服务端复核 MIME、扩展名、大小和哈希。
-- 不接受客户端提供的本地路径或对象存储内部地址。
-- 问答流式输出使用 SSE；每个事件包含类型、序号和请求 ID。
-- 视频使用 WebSocket/WebRTC 时必须定义心跳、断线、背压和最大帧率。
+成员状态、计划和授权更新使用版本号/ETag 防止覆盖；所有敏感写操作记录操作者、目标、目的、前后版本和结果。删除接口返回清理任务 ID，支持查询主库、文件、向量索引、缓存和备份处置状态。
 
-## 7. 契约管理
+## 6. 契约管理
 
-- OpenAPI 是接口事实来源，代码、SDK 和测试从同一契约生成或校验。
-- 示例只使用虚构数据。
-- 破坏性修改必须提供迁移期、弃用标头和变更说明。
-- 合并前运行契约测试，保证错误结构、权限和关键字段不回退。
+OpenAPI 是接口事实源。破坏性变化必须新版本或迁移期；Schema、SDK、Mock、契约测试和本文同时更新。Mock 只用于开发，不得作为功能完成证据。
