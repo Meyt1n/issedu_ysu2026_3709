@@ -6,7 +6,9 @@
 - 所有响应携带 `request_id`；写操作支持 `Idempotency-Key`。
 - 列表使用游标分页；公开 ID 使用 UUID/ULID，不暴露自增序号。
 - 认证只能证明用户身份；每次成员资源访问仍需家庭与成员级授权。
+- 每次成员资源访问还需通过字段级可见范围、动作、目的和授权有效期检查；子女不能因角色自动读取全部健康信息。
 - 文件上传采用白名单 MIME、大小/像素/时长限制和内容探测。
+- 家庭版 API 不提供云端模型回退；网络出口仅由受控适配器使用，健康上下文不得出网。
 
 统一错误：
 
@@ -31,8 +33,12 @@
 | POST | `/vision/jobs/video` | 创建视频抽帧识别任务 |
 | GET | `/vision/jobs/{id}` | 查询进度、候选和证据 |
 | POST | `/recognitions/{id}/review` | 确认、纠正或拒绝结果 |
+| GET | `/recognitions/{id}/evidence` | 查看 OCR、条码、包装特征、主数据和模型版本 |
 | POST | `/health-events` | 创建手工健康事件 |
 | GET | `/members/{id}/timeline` | 获取成员事件时间线 |
+| GET | `/members/{id}/visibility` | 返回当前调用者可见字段与动作 |
+| POST | `/consents` | 创建成员/字段/动作/目的/期限授权 |
+| POST | `/consents/{id}/revoke` | 立即撤权并触发缓存/索引清理 |
 | GET | `/graph/members/{id}` | 获取家庭健康关系投影 |
 | POST | `/risks/evaluate` | 以指定状态/规则版本重算风险 |
 | POST | `/plans/{id}/optimize` | 生成安全时间窗内提醒建议 |
@@ -53,7 +59,7 @@ QUEUED -> PREPROCESSING -> INFERENCING -> FUSING
 MATCHED/CONFLICT/UNKNOWN/REVIEW -> CONFIRMED | CORRECTED | REJECTED
 ```
 
-只有 `CONFIRMED`/`CORRECTED` 可触发健康事件；状态转换使用乐观锁，重复复核保持幂等。返回值必须包含模型/OCR/匹配器版本、证据帧、字段来源和人工确认状态。
+只有 `CONFIRMED`/`CORRECTED` 可触发健康事件；状态转换使用乐观锁，重复复核保持幂等。返回值必须包含模型/OCR/匹配器版本、证据帧、字段来源和人工确认状态。`CORRECTED` 必须返回原预测、修正值、修正原因、操作者和训练同意状态。
 
 ## 4. 证据契约
 
@@ -67,6 +73,7 @@ MATCHED/CONFLICT/UNKNOWN/REVIEW -> CONFIRMED | CORRECTED | REJECTED
   "rules": [{"rule_id": "...", "version": "...", "level": "HIGH"}],
   "citations": [{"document_id": "...", "version": "...", "chunk_id": "..."}],
   "actions": [{"type": "REVIEW", "assignee_role": "MEMBER"}],
+  "visibility": {"member_id": "...", "fields": ["medication.summary"], "expires_at": "..."},
   "model_version": "...",
   "knowledge_version": "...",
   "request_id": "..."
@@ -74,6 +81,8 @@ MATCHED/CONFLICT/UNKNOWN/REVIEW -> CONFIRMED | CORRECTED | REJECTED
 ```
 
 `EVIDENCE_REQUIRED` 没有引用时不得返回肯定性回答。客户端不得只展示 `answer` 而隐藏规则和确认状态。
+
+回答接口必须明确返回 `route`、证据完整性和降级状态。模型不可用时只能返回结构化事实/规则结果或 `MODEL_UNAVAILABLE`，不得把云端服务当作家庭版默认回退。
 
 ## 5. 并发、审计与删除
 
