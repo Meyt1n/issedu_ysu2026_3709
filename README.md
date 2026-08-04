@@ -122,7 +122,8 @@ sync-test/           双仓库协作验证记录
 
 ## 开始工作
 
-1. 先阅读[综合研究与实施报告](docs/家健镜%20HomeCare%20Twin%20综合研究与实施报告.md)、[文档导航](docs/vibe-coding/00-文档导航.md)和[需求规格](docs/vibe-coding/01-需求规格说明书.md)。
+0. 任何成员、Vibe Coding 或 agent 必须先阅读[开发前必读与 Vibe Coding 工作流](docs/vibe-coding/开发前必读与Vibe%20Coding工作流.md)；agent 还必须遵守根目录的 [`AGENTS.md`](AGENTS.md)。
+1. 再阅读[综合研究与实施报告](docs/家健镜%20HomeCare%20Twin%20综合研究与实施报告.md)、[文档导航](docs/vibe-coding/00-文档导航.md)和[需求规格](docs/vibe-coding/01-需求规格说明书.md)。
 2. 按[产品信息架构与页面设计](docs/vibe-coding/18-产品信息架构与页面设计.md)冻结页面、状态和文案。
 3. 从[需求追踪矩阵](docs/vibe-coding/12-需求追踪矩阵.md)领取尚未完成的需求。
 4. 按[任务拆分与交付清单](docs/vibe-coding/15-任务拆分与交付清单.md)建立 Story，并遵守[贡献指南](CONTRIBUTING.md)。

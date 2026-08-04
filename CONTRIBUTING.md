@@ -1,6 +1,10 @@
 # HomeCare Twin 项目协作规范
 
-所有参与者同时遵守 [Vibe Coding 开发约束](docs/vibe-coding/03-Vibe-Coding开发约束.md)、[数据与隐私安全规范](docs/vibe-coding/05-数据与隐私安全规范.md)和对应需求的验收标准。
+所有参与者和 agent 必须先阅读[开发前必读与 Vibe Coding 工作流](docs/vibe-coding/开发前必读与Vibe%20Coding工作流.md)，再遵守 [Vibe Coding 开发约束](docs/vibe-coding/03-Vibe-Coding开发约束.md)、[数据与隐私安全规范](docs/vibe-coding/05-数据与隐私安全规范.md)和对应需求的验收标准。根目录 [`AGENTS.md`](AGENTS.md) 是 agent 的强制入口。
+
+## 0. 开发前必读
+
+任何成员或 agent 在创建分支、阅读代码、规划方案或修改文件前，必须完成[开发前必读与 Vibe Coding 工作流](docs/vibe-coding/开发前必读与Vibe%20Coding工作流.md)。该文档定义 Story、事实优先级、AI 执行协议、测试、PR、验收和双仓库流程；本文件和它发生冲突时，必须先发起评审，不得自行猜测。
 
 ## 1. 领取任务
 

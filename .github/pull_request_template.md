@@ -2,6 +2,7 @@
 
 - Story：
 - FR/NFR：
+- [ ] 已阅读并遵守[开发前必读与 Vibe Coding 工作流](../docs/vibe-coding/开发前必读与Vibe%20Coding工作流.md)
 
 ## 变更与证据
 
