@@ -4,17 +4,37 @@
 
 ## 1. 当前可执行状态
 
-仓库目前尚无可运行的 Web、API、数据库迁移、视觉权重或 Ollama 模型。本文先冻结目标拓扑、配置和演示契约；首个工程增量必须用实际验证过的命令替换“待建立”项。
+一期工程骨架已经可以运行健康检查、数据库迁移、家庭/成员/授权和手工确认事件链。视觉权重、规则集、RAG、Ollama、天气和完整十页仍未实现，不能把基础骨架当作完整产品。
 
-当前仅可执行：
+最小本地启动：
 
 ```powershell
 git clone https://github.com/Meyt1n/issedu_ysu2026_3709.git
 cd issedu_ysu2026_3709
 git switch master
-git pull --ff-only
-git diff --check
+Copy-Item .env.example .env
+uv sync
+npm ci
+uv run alembic upgrade head
+uv run uvicorn app.main:app --app-dir src/api --reload --port 8000
 ```
+
+另开终端启动 Web：
+
+```powershell
+npm run dev:web
+```
+
+浏览器访问 `http://localhost:5173`，API 健康检查为 `http://localhost:8000/health`，OpenAPI 为 `http://localhost:8000/docs`。
+
+也可以使用 Docker Compose：
+
+```powershell
+Copy-Item .env.example .env
+docker compose up --build
+```
+
+Compose Web 入口为 `http://localhost:8080`，停止使用 `docker compose down`。带卷删除数据库前必须先完成备份演练。
 
 ## 2. 三档运行目标
 
@@ -26,17 +46,17 @@ git diff --check
 
 MySQL、Ollama、向量检索和文件服务默认仅监听本机/容器网络，不暴露公网。
 
-## 3. 待建立的配置契约
+## 3. 配置契约
 
 示例配置必须只包含占位值，至少覆盖：数据库连接、JWT 密钥路径、文件加密密钥路径、上传限制、原图保留期、视觉/OCR 模型版本、Ollama 地址与模型名、向量索引版本、规则集版本、知识库版本和天气适配器城市编码。
 
 天气请求不得上传姓名、病史、药品或详细住址。生产密钥不能写入仓库、镜像或日志。
 
-## 4. 首个可运行版本必须补齐
+## 4. 后续必须补齐
 
-- 锁定的 Python、Node、Docker、MySQL、Ollama 和 GPU/CPU 版本；
-- 依赖安装、配置生成、数据库迁移及回滚命令；
-- 基础档和增强档的启动、健康检查、停止与备份恢复命令；
+- Ollama、GPU/CPU 和模型权重的实际版本与哈希；
+- 迁移回滚、备份恢复和删除传播的演练记录；
+- 基础档和增强档的完整功能启动、停止与健康检查证据；
 - Web、OpenAPI、业务大屏和模型大屏的真实地址；
 - 从全新克隆开始的复现记录、耗时和最低硬件；
 - 常见故障：数据库未就绪、模型缺失、OCR 超时、向量索引不匹配、磁盘不足。

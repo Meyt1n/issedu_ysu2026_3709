@@ -1,11 +1,14 @@
 # HomeCare Twin 数据库迁移
 
-MySQL 8 是 HomeCare Twin 唯一事实主库，SQLAlchemy 2 与 Alembic 是计划中的访问和迁移基线。当前尚未创建工程配置，因此下列命令必须在依赖锁定并实际验证后才能作为可执行说明：
+MySQL 8 是 HomeCare Twin 唯一事实主库，SQLAlchemy 2 与 Alembic 是当前访问和迁移基线。首个迁移已经建立家庭、成员、授权、健康事件、outbox 和成员状态投影。
 
 ```powershell
-python -m alembic revision --autogenerate -m "说明"
-python -m alembic upgrade head
+uv run alembic upgrade head
+uv run alembic current
+uv run alembic revision --autogenerate -m "说明"
 ```
+
+本地没有 MySQL 时可以用默认 SQLite 配置验证迁移；提交前仍必须在 MySQL 8.4 容器中执行一次空库升级。
 
 迁移顺序按[领域模型与数据库设计](../docs/vibe-coding/13-领域模型与数据库设计.md)：
 
