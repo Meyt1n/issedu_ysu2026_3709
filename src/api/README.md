@@ -1,6 +1,6 @@
 # HomeCare Twin 业务 API
 
-FastAPI 是统一业务入口，MySQL 8 是唯一事实主库。当前目录尚无 API 实现；接口基线见[API 设计规范](../../docs/vibe-coding/06-API设计规范.md)，数据模型见[领域模型与数据库设计](../../docs/vibe-coding/13-领域模型与数据库设计.md)。
+FastAPI 是统一业务入口，MySQL 8 是唯一事实主库。当前已建立一期 API 骨架：健康检查、家庭/成员、开发身份授权、手工确认事件、outbox 和成员状态投影；接口基线见[API 设计规范](../../docs/vibe-coding/06-API设计规范.md)，数据模型见[领域模型与数据库设计](../../docs/vibe-coding/13-领域模型与数据库设计.md)。
 
 建议目录：
 
@@ -26,4 +26,4 @@ app/
 - API 不提供买药、问诊、广告和佣金导流资源；
 - 模型、向量库或天气离线时明确降级，不伪造结果。
 
-实际接口状态以 OpenAPI、迁移、自动测试和需求追踪矩阵为准。
+开发环境启动：`uv run uvicorn app.main:app --app-dir src/api --reload`。当前身份使用 `X-Actor-Id` 开发请求头，仅用于一期本地骨架；生产环境必须替换为真实认证。实际接口状态以 OpenAPI、迁移、自动测试和需求追踪矩阵为准。

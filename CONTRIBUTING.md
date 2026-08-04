@@ -55,13 +55,25 @@ PR 必须说明关联需求、变更范围、测试/评估证据、数据与授�
 
 ## 5. 工程检查
 
-当前尚未建立完整工程命令。文档改动至少执行：
+文档改动至少执行：
 
 ```powershell
 git diff --check
 ```
 
-首个工程增量必须建立与 CI 一致的格式、类型、单元、集成和安全检查。无法运行的检查要在 PR 中如实说明。
+代码改动至少执行：
+
+```powershell
+uv sync
+uv run ruff check src/api tests migrations
+uv run pytest
+npm ci
+npm run check:web
+npm run build:web
+docker compose config --quiet
+```
+
+CI 会重复后端 lint/迁移/测试、前端类型检查/构建和密钥扫描。无法运行的检查要在 PR 中如实说明。
 
 ## 6. 发布与双仓库同步
 
