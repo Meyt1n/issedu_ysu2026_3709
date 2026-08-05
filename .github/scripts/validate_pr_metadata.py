@@ -1,8 +1,8 @@
 """Validate the minimum task and risk metadata required by a pull request.
 
 This check is deliberately deterministic. It validates the PR contract and
-does not attempt to decide whether the implementation is functionally correct;
-that is the responsibility of CI, Codex Review, and human reviewers.
+    does not attempt to decide whether the implementation is functionally correct;
+    that is the responsibility of CI, Relay Review Bot, and human reviewers.
 """
 
 from __future__ import annotations
@@ -142,8 +142,8 @@ def validate_event(event: dict) -> list[str]:
 
     workflow_marker = (
         "已阅读[开发前必读与 Vibe Coding 工作流](../docs/vibe-coding/"
-        "开发前必读与Vibe%20Coding工作流.md)和[PR 任务关联与 Codex Review "
-        "工作流](../docs/vibe-coding/PR任务关联与Codex%20Review工作流.md)"
+        "开发前必读与Vibe%20Coding工作流.md)和[PR 任务关联与 Relay Review Bot "
+        "工作流](../docs/vibe-coding/PR任务关联与Relay%20Review%20Bot%20工作流.md)"
     )
     recognition_marker = (
         "已确认：未确认的视觉识别结果不会进入正式健康状态、风险计算或药物计划；"
@@ -159,7 +159,7 @@ def validate_event(event: dict) -> list[str]:
         "高风险变更已指定第二位人工复核人，或已明确说明不适用",
         "需求追踪矩阵已更新，或已说明本 PR 不改变需求状态",
         "相关 API、OpenAPI、迁移、测试和文档已同步，或已说明不适用",
-        "Codex Review 已完成，或已说明账号侧尚未启用及替代复核方式",
+        "Relay Review Bot 已完成，或已说明未配置中转服务及替代复核方式",
     )
     for marker in required_markers:
         checkbox = re.search(

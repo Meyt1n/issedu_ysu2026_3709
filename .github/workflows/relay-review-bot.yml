@@ -1,0 +1,41 @@
+name: Relay Review Bot
+
+on:
+  # 只在可信的默认分支脚本上运行；不 checkout 或执行 PR 分支代码。
+  pull_request_target:
+    branches:
+      - master
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+      - edited
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  relay-review:
+    name: Relay Review Bot
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted default branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Run relay review
+        env:
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+          GITHUB_TOKEN: ${{ github.token }}
+          REVIEW_API_URL: ${{ vars.REVIEW_API_URL }}
+          REVIEW_API_KEY: ${{ secrets.REVIEW_API_KEY }}
+          REVIEW_MODEL: ${{ vars.REVIEW_MODEL }}
+          REVIEW_MAX_DIFF_CHARS: ${{ vars.REVIEW_MAX_DIFF_CHARS }}
+          REVIEW_API_TIMEOUT_SECONDS: ${{ vars.REVIEW_API_TIMEOUT_SECONDS }}
+        run: python .github/scripts/relay_review_bot.py

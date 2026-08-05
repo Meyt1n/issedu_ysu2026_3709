@@ -5,12 +5,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
-SCRIPT = (
-    Path(__file__).resolve().parents[2]
-    / ".github"
-    / "scripts"
-    / "validate_pr_metadata.py"
-)
+SCRIPT = Path(__file__).resolve().parents[2] / ".github" / "scripts" / "validate_pr_metadata.py"
 SPEC = importlib.util.spec_from_file_location("validate_pr_metadata", SCRIPT)
 assert SPEC and SPEC.loader
 VALIDATOR = importlib.util.module_from_spec(SPEC)
@@ -19,8 +14,8 @@ SPEC.loader.exec_module(VALIDATOR)
 
 WORKFLOW_MARKER = (
     "已阅读[开发前必读与 Vibe Coding 工作流](../docs/vibe-coding/"
-    "开发前必读与Vibe%20Coding工作流.md)和[PR 任务关联与 Codex Review 工作流](../docs/vibe-coding/"
-    "PR任务关联与Codex%20Review工作流.md)"
+    "开发前必读与Vibe%20Coding工作流.md)和[PR 任务关联与 Relay Review Bot "
+    "工作流](../docs/vibe-coding/PR任务关联与Relay%20Review%20Bot%20工作流.md)"
 )
 RECOGNITION_MARKER = (
     "已确认：未确认的视觉识别结果不会进入正式健康状态、风险计算或药物计划；"
@@ -72,7 +67,7 @@ Reviewer A 检查模板、校验脚本和工作流配置。
 
 - [x] 需求追踪矩阵已更新，或已说明本 PR 不改变需求状态
 - [x] 相关 API、OpenAPI、迁移、测试和文档已同步，或已说明不适用
-- [x] Codex Review 已完成，或已说明账号侧尚未启用及替代复核方式
+- [x] Relay Review Bot 已完成，或已说明未配置中转服务及替代复核方式
 """
 
 

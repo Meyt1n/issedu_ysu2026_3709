@@ -31,7 +31,7 @@
 
 ## 安全与隐私门禁
 
-- [ ] 已阅读[开发前必读与 Vibe Coding 工作流](../docs/vibe-coding/开发前必读与Vibe%20Coding工作流.md)和[PR 任务关联与 Codex Review 工作流](../docs/vibe-coding/PR任务关联与Codex%20Review工作流.md)
+- [ ] 已阅读[开发前必读与 Vibe Coding 工作流](../docs/vibe-coding/开发前必读与Vibe%20Coding工作流.md)和[PR 任务关联与 Relay Review Bot 工作流](../docs/vibe-coding/PR任务关联与Relay%20Review%20Bot%20工作流.md)
 - [ ] 未提交真实健康数据、药品图片、密钥、模型权重、缓存或运行日志
 - [ ] 已说明权限、撤权、审计、数据删除和网络出口影响
 - [ ] 已说明 AI 使用、人工复核、证据来源和已知限制
@@ -43,4 +43,4 @@
 
 - [ ] 需求追踪矩阵已更新，或已说明本 PR 不改变需求状态
 - [ ] 相关 API、OpenAPI、迁移、测试和文档已同步，或已说明不适用
-- [ ] Codex Review 已完成，或已说明账号侧尚未启用及替代复核方式
+- [ ] Relay Review Bot 已完成，或已说明未配置中转服务及替代复核方式
