@@ -73,7 +73,9 @@ def _valid_authorizations(
     if household_id is not None:
         stmt = stmt.where(CareAuthorization.household_id == household_id)
     auths: list[CareAuthorization] = list(session.scalars(stmt).all())
-    return [a for a in auths if a.data_fields and a.actions]
+    return [a for a in auths if a.data_fields and a.actions and any(
+        act.startswith("READ_") for act in a.actions
+    )]
 
 
 @router.get("/households", response_model=list[HouseholdRead])

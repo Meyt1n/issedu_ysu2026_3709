@@ -365,6 +365,33 @@ def test_cross_household_auth_does_not_leak_members(client: TestClient) -> None:
     )
     assert resp.status_code == 403
 
+
+def test_write_only_auth_does_not_grant_list_access(client: TestClient) -> None:
+    """仅有 WRITE_EVENTS 授权不能读取列表（READ 才能看）"""
+    household_id = _create_household(client)["id"]
+    member_id = _create_member(client, household_id)["id"]
+    client.post(
+        f"/api/v1/households/{household_id}/authorizations",
+        headers={"X-Actor-Id": "owner"},
+        json={
+            "member_id": member_id,
+            "grantee_actor_id": "writer",
+            "data_fields": ["health_events"],
+            "actions": ["WRITE_EVENTS"],  # 只有写权限，没有读权限
+            "purpose": "录入事件",
+            "valid_until": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+        },
+    )
+    # 家庭列表：write-only 也不应看到
+    households = client.get("/api/v1/households", headers={"X-Actor-Id": "writer"})
+    assert len(households.json()) == 0
+    # 成员列表：write-only 不应看到
+    members = client.get(
+        f"/api/v1/households/{household_id}/members",
+        headers={"X-Actor-Id": "writer"},
+    )
+    assert members.status_code == 403
+
 def test_create_authorization_requires_valid_until_in_future(client: TestClient) -> None:
     """valid_until 在过去时返回 422"""
     household_id = _create_household(client)["id"]
