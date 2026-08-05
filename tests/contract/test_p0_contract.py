@@ -187,17 +187,183 @@ def test_list_members_as_owner_returns_all(client: TestClient) -> None:
     assert len(resp.json()) == 2
 
 
-def test_list_members_unauthorized_returns_403(client: TestClient) -> None:
-    """GET /members 未授权者返回 403"""
+def test_list_members_unauthorized_returns_403_no_leak(client: TestClient) -> None:
+    """GET /members 未授权者返回 403，且响应不含成员数据"""
     household_id = _create_household(client)["id"]
+    _create_member(client, household_id, "成员X")
     resp = client.get(
         f"/api/v1/households/{household_id}/members",
         headers={"X-Actor-Id": "stranger"},
     )
     assert resp.status_code == 403
+    body = resp.json()
+    # 403 body 不能包含任何成员信息
+    assert "id" not in body
+    assert "display_name" not in body
+    assert "household_id" not in body
 
 
-# ── 4. 授权管理接口 ──────────────────────────────────────
+def test_list_members_only_authorized_for_partial(client: TestClient) -> None:
+    """授权照护者只能看到被授权的成员，不能看到同家庭其他成员"""
+    household_id = _create_household(client)["id"]
+    member_a = _create_member(client, household_id, "成员A")["id"]
+    member_b = _create_member(client, household_id, "成员B")["id"]
+    # 只授权 caregiver 访问成员A
+    client.post(
+        f"/api/v1/households/{household_id}/authorizations",
+        headers={"X-Actor-Id": "owner"},
+        json={
+            "member_id": member_a,
+            "grantee_actor_id": "caregiver",
+            "data_fields": ["health_events"],
+            "actions": ["READ_EVENTS"],
+            "purpose": "照护A",
+            "valid_until": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+        },
+    )
+    resp = client.get(
+        f"/api/v1/households/{household_id}/members",
+        headers={"X-Actor-Id": "caregiver"},
+    )
+    assert resp.status_code == 200
+    members = resp.json()
+    ids = {m["id"] for m in members}
+    assert member_a in ids
+    assert member_b not in ids  # 未授权的成员B不可见
+
+
+def test_list_members_expired_auth_blocks_access(client: TestClient) -> None:
+    """授权过期后，照护者无法查看成员列表"""
+    household_id = _create_household(client)["id"]
+    member_id = _create_member(client, household_id)["id"]
+    client.post(
+        f"/api/v1/households/{household_id}/authorizations",
+        headers={"X-Actor-Id": "owner"},
+        json={
+            "member_id": member_id,
+            "grantee_actor_id": "caregiver",
+            "data_fields": ["health_events"],
+            "actions": ["READ_EVENTS"],
+            "purpose": "照护",
+            "valid_until": (datetime.now(UTC) - timedelta(days=1)).isoformat(),
+        },
+    )
+    resp = client.get(
+        f"/api/v1/households/{household_id}/members",
+        headers={"X-Actor-Id": "caregiver"},
+    )
+    assert resp.status_code == 403
+
+
+def test_list_members_revoked_auth_blocks_access(client: TestClient) -> None:
+    """授权被撤销后，照护者无法查看成员列表"""
+    household_id = _create_household(client)["id"]
+    member_id = _create_member(client, household_id)["id"]
+    auth = client.post(
+        f"/api/v1/households/{household_id}/authorizations",
+        headers={"X-Actor-Id": "owner"},
+        json={
+            "member_id": member_id,
+            "grantee_actor_id": "caregiver",
+            "data_fields": ["health_events"],
+            "actions": ["READ_EVENTS"],
+            "purpose": "照护",
+            "valid_until": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+        },
+    )
+    auth_id = auth.json()["id"]
+    # 先确认 caregiver 能访问
+    before = client.get(
+        f"/api/v1/households/{household_id}/members",
+        headers={"X-Actor-Id": "caregiver"},
+    )
+    assert before.status_code == 200
+    # 撤权
+    client.post(
+        f"/api/v1/households/{household_id}/authorizations/{auth_id}/revoke",
+        headers={"X-Actor-Id": "owner"},
+    )
+    after = client.get(
+        f"/api/v1/households/{household_id}/members",
+        headers={"X-Actor-Id": "caregiver"},
+    )
+    assert after.status_code == 403
+
+
+def test_list_households_excludes_revoked(client: TestClient) -> None:
+    """撤权后，被撤权者看不到该家庭"""
+    household_id = _create_household(client)["id"]
+    member_id = _create_member(client, household_id)["id"]
+    auth = client.post(
+        f"/api/v1/households/{household_id}/authorizations",
+        headers={"X-Actor-Id": "owner"},
+        json={
+            "member_id": member_id,
+            "grantee_actor_id": "caregiver",
+            "data_fields": ["health_events"],
+            "actions": ["READ_EVENTS"],
+            "purpose": "照护",
+            "valid_until": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+        },
+    )
+    auth_id = auth.json()["id"]
+    # 撤权前能看到
+    before = client.get("/api/v1/households", headers={"X-Actor-Id": "caregiver"})
+    assert len(before.json()) == 1
+    # 撤权
+    client.post(
+        f"/api/v1/households/{household_id}/authorizations/{auth_id}/revoke",
+        headers={"X-Actor-Id": "owner"},
+    )
+    after = client.get("/api/v1/households", headers={"X-Actor-Id": "caregiver"})
+    assert len(after.json()) == 0
+
+
+def test_list_households_excludes_expired(client: TestClient) -> None:
+    """授权过期后，该家庭不出现在列表中"""
+    household_id = _create_household(client)["id"]
+    member_id = _create_member(client, household_id)["id"]
+    client.post(
+        f"/api/v1/households/{household_id}/authorizations",
+        headers={"X-Actor-Id": "owner"},
+        json={
+            "member_id": member_id,
+            "grantee_actor_id": "caregiver",
+            "data_fields": ["health_events"],
+            "actions": ["READ_EVENTS"],
+            "purpose": "照护",
+            "valid_until": (datetime.now(UTC) - timedelta(days=1)).isoformat(),
+        },
+    )
+    resp = client.get("/api/v1/households", headers={"X-Actor-Id": "caregiver"})
+    assert len(resp.json()) == 0
+
+
+def test_cross_household_auth_does_not_leak_members(client: TestClient) -> None:
+    """一个家庭的授权不影响另一个家庭的成员列表"""
+    h1 = _create_household(client, "家庭1")["id"]
+    h2 = _create_household(client, "家庭2")["id"]
+    _create_member(client, h1, "家庭1成员")["id"]
+    m2 = _create_member(client, h2, "家庭2成员")["id"]
+    # 在家庭2中授权 caregiver
+    client.post(
+        f"/api/v1/households/{h2}/authorizations",
+        headers={"X-Actor-Id": "owner"},
+        json={
+            "member_id": m2,
+            "grantee_actor_id": "caregiver",
+            "data_fields": ["health_events"],
+            "actions": ["READ_EVENTS"],
+            "purpose": "照护",
+            "valid_until": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+        },
+    )
+    # caregiver 查家庭1的成员列表——没被授权
+    resp = client.get(
+        f"/api/v1/households/{h1}/members",
+        headers={"X-Actor-Id": "caregiver"},
+    )
+    assert resp.status_code == 403
 
 def test_create_authorization_requires_valid_until_in_future(client: TestClient) -> None:
     """valid_until 在过去时返回 422"""

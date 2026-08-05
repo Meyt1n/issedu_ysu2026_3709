@@ -110,7 +110,10 @@ def list_members(
         )
     return list(
         session.scalars(
-            select(Member).where(Member.id.in_(authorized_member_ids))
+            select(Member).where(
+                Member.id.in_(authorized_member_ids),
+                Member.household_id == household_id,
+            )
         ).all()
     )
 

@@ -10,7 +10,7 @@
 - 文件上传采用白名单 MIME、大小/像素/时长限制和内容探测。
 - 家庭版 API 不提供云端模型回退；网络出口仅由受控适配器使用，健康上下文不得出网。
 
-统一错误：
+统一错误（P1 目标格式，P0 使用 FastAPI 默认 `{"detail":"..."}` 格式）：
 
 ```json
 {
@@ -23,33 +23,53 @@
 }
 ```
 
+> **P0 过渡方案**：当前实现使用 FastAPI 默认错误格式（`{"detail":"..."}`），P1 统一为上述 `error.code` 格式。前端应兼容两种格式。
+
 错误码至少区分 `UNAUTHENTICATED`、`FORBIDDEN_MEMBER`、`CONSENT_REVOKED`、`VALIDATION_ERROR`、`FILE_REJECTED`、`MODEL_UNAVAILABLE`、`EVIDENCE_CONFLICT`、`EVIDENCE_INSUFFICIENT`、`RULE_VERSION_MISMATCH` 和 `RATE_LIMITED`。
 
 ## 2. 核心接口基线
 
+> **2026-08-05 更新**：按实现阶段分为 P0（当前已实现）和 P1+（未来规划）。
+
+### 2.1 P0 当前实现接口
+
+| 方法 | 路径 | 用途 | 状态 |
+|------|------|------|------|
+| GET | `/health` | 服务健康检查 | ✅ |
+| GET | `/api/v1/health/db` | 数据库连接检查 | ✅ |
+| GET | `/api/v1/meta/capabilities` | 系统能力元数据 | ✅ |
+| GET | `/api/v1/households` | 列出当前用户可见的家庭 | ✅ |
+| POST | `/api/v1/households` | 创建家庭 | ✅ |
+| GET | `/api/v1/households/{id}/members` | 列出家庭成员 | ✅ |
+| POST | `/api/v1/households/{id}/members` | 添加成员 | ✅ |
+| POST | `/api/v1/households/{id}/authorizations` | 创建字段级授权 | ✅ |
+| POST | `/api/v1/households/{id}/authorizations/{auth_id}/revoke` | 撤销授权 | ✅ |
+| POST | `/api/v1/households/{id}/events` | 追加健康事件 | ✅ |
+| GET | `/api/v1/households/{id}/events` | 查询事件列表 | ✅ |
+| GET | `/api/v1/households/{id}/members/{mid}/state` | 查询成员状态投影 | ✅ |
+
+P0 错误格式：当前使用 FastAPI 默认 `{"detail":"..."}`，P1 统一为 `{"error":{"code":"...","message":"...","details":{},"request_id":"..."}}`。
+
+### 2.2 P1+ 未来规划接口
+
 | 方法 | 路径 | 用途 |
-|---|---|---|
+|------|------|------|
 | POST | `/vision/jobs/image` | 创建图片识别任务 |
 | POST | `/vision/jobs/video` | 创建视频抽帧识别任务 |
 | GET | `/vision/jobs/{id}` | 查询进度、候选和证据 |
 | POST | `/recognitions/{id}/review` | 确认、纠正或拒绝结果 |
-| GET | `/recognitions/{id}/evidence` | 查看 OCR、条码、包装特征、主数据和模型版本 |
-| POST | `/health-events` | 创建手工健康事件 |
-| GET | `/members/{id}/timeline` | 获取成员事件时间线 |
-| GET | `/members/{id}/visibility` | 返回当前调用者可见字段与动作 |
-| POST | `/consents` | 创建成员/字段/动作/目的/期限授权 |
-| POST | `/consents/{id}/revoke` | 立即撤权并触发缓存/索引清理 |
-| GET | `/graph/members/{id}` | 获取家庭健康关系投影 |
-| POST | `/risks/evaluate` | 以指定状态/规则版本重算风险 |
-| POST | `/plans/{id}/optimize` | 生成安全时间窗内提醒建议 |
-| POST | `/plans/{id}/approve` | 人工批准计划版本变化 |
-| GET | `/environment/actions` | 获取环境行动卡 |
-| POST | `/assistant/chat` | 调用受约束本地助手 |
-| POST | `/models/retrain` | 管理员创建追加训练任务 |
-| GET | `/dashboard/family` | 家庭业务大屏 |
-| GET | `/dashboard/model` | 模型技术大屏 |
-
-实际实现可增加 `/auth`、`/families`、`/members`、`/consents`、`/documents`、`/medicines` 和 `/tasks` 资源，但必须先更新 OpenAPI 和追踪矩阵。
+| GET | `/recognitions/{id}/evidence` | 查看 OCR、条码、包装特征等 |
+| GET | `/members/{id}/timeline` | 成员事件时间线 |
+| GET | `/members/{id}/visibility` | 当前调用者可见字段与动作 |
+| GET | `/graph/members/{id}` | 家庭健康关系投影 |
+| POST | `/risks/evaluate` | 重算风险 |
+| POST | `/plans/{id}/optimize` | 生成提醒建议 |
+| POST | `/plans/{id}/approve` | 人工批准计划 |
+| GET | `/environment/actions` | 环境行动卡 |
+| POST | `/assistant/chat` | 本地助手 |
+| POST | `/models/retrain` | 追加训练 |
+| GET | `/dashboard/family` | 家庭大屏 |
+| GET | `/dashboard/model` | 模型大屏 |
 
 ## 3. 视觉任务状态机
 
