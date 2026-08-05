@@ -53,6 +53,29 @@ def capabilities() -> CapabilityResponse:
     )
 
 
+def _valid_authorizations(
+    session: Session,
+    actor_id: str,
+    *,
+    household_id: str | None = None,
+) -> list[CareAuthorization]:
+    """获取 actor 的未撤权、未过期、且有明确字段和动作的授权。
+
+    统一在所有列表接口中复用，确保与 has_authorized_action 一致地校验
+    data_fields 和 actions，不会仅凭"存在任意授权记录"就放行。
+    """
+    now = datetime.now(UTC)
+    stmt = select(CareAuthorization).where(
+        CareAuthorization.grantee_actor_id == actor_id,
+        CareAuthorization.revoked_at.is_(None),
+        CareAuthorization.valid_until > now,
+    )
+    if household_id is not None:
+        stmt = stmt.where(CareAuthorization.household_id == household_id)
+    auths: list[CareAuthorization] = list(session.scalars(stmt).all())
+    return [a for a in auths if a.data_fields and a.actions]
+
+
 @router.get("/households", response_model=list[HouseholdRead])
 def list_households(
     actor_id: str = Depends(get_actor_id),
@@ -61,21 +84,17 @@ def list_households(
     owned = session.scalars(
         select(Household).where(Household.created_by == actor_id)
     ).all()
-    authorized_ids = session.scalars(
-        select(CareAuthorization.household_id)
-        .where(
-            CareAuthorization.grantee_actor_id == actor_id,
-            CareAuthorization.revoked_at.is_(None),
-            CareAuthorization.valid_until > datetime.now(UTC),
-        )
-        .distinct()
-    ).all()
-    authorized = session.scalars(
-        select(Household).where(Household.id.in_(authorized_ids))
-    ).all()
+    authorized_ids = {a.household_id for a in _valid_authorizations(session, actor_id)}
+    authorized = (
+        list(session.scalars(
+            select(Household).where(Household.id.in_(authorized_ids))
+        ).all())
+        if authorized_ids
+        else []
+    )
     seen: set[str] = set()
     result: list[Household] = []
-    for h in list(owned) + list(authorized):
+    for h in list(owned) + authorized:
         if h.id not in seen:
             seen.add(h.id)
             result.append(h)
@@ -94,16 +113,8 @@ def list_members(
     if household.created_by == actor_id:
         query = select(Member).where(Member.household_id == household_id)
         return list(session.scalars(query).all())
-    authorized_member_ids = session.scalars(
-        select(CareAuthorization.member_id)
-        .where(
-            CareAuthorization.household_id == household_id,
-            CareAuthorization.grantee_actor_id == actor_id,
-            CareAuthorization.revoked_at.is_(None),
-            CareAuthorization.valid_until > datetime.now(UTC),
-        )
-        .distinct()
-    ).all()
+    auths = _valid_authorizations(session, actor_id, household_id=household_id)
+    authorized_member_ids = {a.member_id for a in auths}
     if not authorized_member_ids:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="MEMBER_LIST_NOT_AUTHORIZED"
