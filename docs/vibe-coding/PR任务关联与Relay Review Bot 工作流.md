@@ -42,6 +42,8 @@ PR 必须使用 `.github/pull_request_template.md`，填写：
 
 自动任务门禁只检查交付格式和最低证据，不判断业务是否正确。业务完成性由 Relay Review Bot、CI 和人工复核共同判断。
 
+任务门禁只授予 `contents: read`、`issues: read` 和 `pull-requests: read`；Relay Review Bot 另外需要 `issues: write` 和 `pull-requests: write` 以更新一条审查评论。两类工作流都不需要 checkout 或执行 PR 分支代码，Bot 的写权限仅用于 PR 评论。
+
 ## 4. Relay Review Bot 审查协议
 
 `.github/workflows/relay-review-bot.yml` 使用 `pull_request_target` 在可信的默认分支脚本上运行。它读取 PR 元数据、完整 diff、PR 正文、关联 Story 和关键工程规则，调用项目配置的 OpenAI-compatible Chat Completions 中转接口，并在 PR 中更新一条带固定标记的审查评论，同时写入 Actions Summary。
