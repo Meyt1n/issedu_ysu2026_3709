@@ -2,6 +2,8 @@
 
 > 本文规定每个 Pull Request 如何绑定任务、验证交付证据，并通过仓库自有的 Relay Review Bot 检查任务完成度、修改意见和 P0/P1/P2 风险。
 
+日常开发按[PR Review Bot 操作规范](PR%20Review%20Bot%20操作规范.md)执行；本文是门禁和审查协议，操作规范是团队实际执行清单。
+
 ## 1. 适用范围
 
 每个提交到 GitHub `master` 的 PR 都必须绑定一个 GitHub Issue、一个仓库 Story 和对应 FR/NFR。一个 PR 只解决一个主要任务；独立任务必须新建 Issue 和 PR。

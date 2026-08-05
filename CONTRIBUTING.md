@@ -1,6 +1,6 @@
 # HomeCare Twin 项目协作规范
 
-所有参与者和 agent 必须先阅读[开发前必读与 Vibe Coding 工作流](docs/vibe-coding/开发前必读与Vibe%20Coding工作流.md)和[PR 任务关联与 Relay Review Bot 工作流](docs/vibe-coding/PR任务关联与Relay%20Review%20Bot%20工作流.md)，再遵守 [Vibe Coding 开发约束](docs/vibe-coding/03-Vibe-Coding开发约束.md)、[数据与隐私安全规范](docs/vibe-coding/05-数据与隐私安全规范.md)和对应需求的验收标准。根目录 [`AGENTS.md`](AGENTS.md) 是 agent 的强制入口。
+所有参与者和 agent 必须先阅读[开发前必读与 Vibe Coding 工作流](docs/vibe-coding/开发前必读与Vibe%20Coding工作流.md)、[PR 任务关联与 Relay Review Bot 工作流](docs/vibe-coding/PR任务关联与Relay%20Review%20Bot%20工作流.md)和[PR Review Bot 操作规范](docs/vibe-coding/PR%20Review%20Bot%20操作规范.md)，再遵守 [Vibe Coding 开发约束](docs/vibe-coding/03-Vibe-Coding开发约束.md)、[数据与隐私安全规范](docs/vibe-coding/05-数据与隐私安全规范.md)和对应需求的验收标准。根目录 [`AGENTS.md`](AGENTS.md) 是 agent 的强制入口。
 
 ## 0. 开发前必读
 
