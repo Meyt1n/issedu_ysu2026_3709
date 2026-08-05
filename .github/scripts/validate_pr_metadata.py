@@ -31,8 +31,12 @@ def section_content(body: str, heading: str) -> str:
 def meaningful(value: str) -> bool:
     cleaned = re.sub(r"<!--.*?-->", "", value, flags=re.DOTALL)
     cleaned = re.sub(r"[`*_>#\-]", "", cleaned)
-    return bool(cleaned.strip()) and not bool(
-        re.fullmatch(r"(?:tbd|todo|待补充|见上文|none|n/?a|不适用)\s*", cleaned.strip(), re.I)
+    if not cleaned.strip():
+        return False
+    return not bool(
+        re.search(r"(?:\b(?:tbd|todo)\b|待补充|见上文)", cleaned, re.I)
+    ) and not bool(
+        re.fullmatch(r"(?:none|n/?a|不适用)\s*", cleaned.strip(), re.I)
     )
 
 
@@ -69,6 +73,13 @@ def main() -> int:
         if not story_files:
             errors.append(f"找不到 Story 文件：docs/stories/{story_id}-*.md。")
 
+    fr_nfr_match = re.search(r"(?im)^\s*-\s*FR/NFR\s*[:：]\s*(.*?)\s*$", body)
+    fr_nfr_value = fr_nfr_match.group(1) if fr_nfr_match else ""
+    if not meaningful(fr_nfr_value) or not re.search(
+        r"\b(?:FR|NFR)-\d+\b", fr_nfr_value, re.I
+    ):
+        errors.append("PR 必须填写至少一个有效的 FR/NFR 编号，例如：- FR/NFR：NFR-04、NFR-06。")
+
     for heading in ("验收标准", "测试证据", "人工验收/演示证据", "部署、迁移和回滚"):
         if not meaningful(section_content(body, heading)):
             errors.append(f"必须填写“{heading}”部分，不能只留模板或写 TBD/TODO。")
@@ -77,6 +88,8 @@ def main() -> int:
         "已阅读[开发前必读与 Vibe Coding 工作流]",
         "未提交真实健康数据、药品图片、密钥、模型权重、缓存或运行日志",
         "已说明权限、撤权、审计、数据删除和网络出口影响",
+        "已说明 AI 使用、人工复核、证据来源和已知限制",
+        "没有诊断、处方、停药、换药、买药、问诊、广告或佣金导流",
         "高风险变更已指定第二位人工复核人，或已明确说明不适用",
         "需求追踪矩阵已更新，或已说明本 PR 不改变需求状态",
         "Codex Review 已完成，或已说明账号侧尚未启用及替代复核方式",

@@ -35,12 +35,12 @@ PR 必须使用仓库的 `.github/pull_request_template.md`，至少填写：
 
 ## 3. 自动任务门禁
 
-`.github/workflows/pr-task-governance.yml` 在 PR 创建、更新、重新打开和转为 Ready for review 时运行，当前只读检查，不修改 PR 内容。它至少验证：
+`.github/workflows/pr-task-governance.yml` 在 PR 创建、正文或提交更新、重新打开和转为 Ready for review 时运行，当前只读检查，不修改 PR 内容。它至少验证：
 
 1. PR 正文存在且只包含一个 `Closes/Fixes/Resolves #<Issue>` 任务引用；
 2. PR 正文存在 `HCT-xxx` Story，且仓库中存在对应 Story 文件；
 3. 验收标准、测试证据、人工验收/演示证据、部署/迁移/回滚四个部分均已填写；
-4. 必读工作流、数据安全、需求追踪矩阵和高风险复核声明已勾选；
+4. 必读工作流、数据安全、AI/医疗安全边界、需求追踪矩阵和高风险复核声明已勾选；
 5. 不允许用空白、`TBD`、`TODO` 或“见上文”冒充交付证据。
 
 自动门禁只检查交付格式和最低证据，不判断业务是否正确。业务完成性由 Codex Review、CI 和人工复核共同判断。
@@ -104,7 +104,7 @@ Codex 的“通过”不能替代人工审批；Codex 发现的问题也不能�
 项目负责人应在 GitHub `master` 上启用以下保护条件：
 
 - `HomeCare Twin CI` 全部通过；
-- `PR task and risk governance` 通过；
+- `Task association and risk metadata` 通过（工作流名称为 `PR task and risk governance`）；
 - 至少一名非提交者人工审批；
 - 高风险变更至少两名人工复核人；
 - 相关 CODEOWNERS 审批（仓库配置完成后启用）；
