@@ -34,6 +34,7 @@ jobs:
           GITHUB_EVENT_PATH: ${{ github.event_path }}
           GITHUB_TOKEN: ${{ github.token }}
           REVIEW_API_URL: ${{ vars.REVIEW_API_URL }}
+          REVIEW_API_WIRE: ${{ vars.REVIEW_API_WIRE }}
           REVIEW_API_KEY: ${{ secrets.REVIEW_API_KEY }}
           REVIEW_MODEL: ${{ vars.REVIEW_MODEL }}
           REVIEW_MAX_DIFF_CHARS: ${{ vars.REVIEW_MAX_DIFF_CHARS }}

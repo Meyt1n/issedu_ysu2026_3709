@@ -74,15 +74,35 @@ def github_request(method: str, path: str, payload: object | None = None) -> obj
 
 def relay_request(url: str, key: str, model: str, system_prompt: str, user_prompt: str) -> dict:
     timeout = env_int("REVIEW_API_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS)
-    base_payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "temperature": 0.1,
-        "max_tokens": 6000,
-    }
+    wire_api = os.environ.get("REVIEW_API_WIRE", "chat_completions").strip().lower()
+    if wire_api == "responses":
+        base_payload = {
+            "model": model,
+            "input": [
+                {
+                    "role": "system",
+                    "content": [{"type": "input_text", "text": system_prompt}],
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": user_prompt}],
+                },
+            ],
+            "max_output_tokens": 6000,
+            "store": False,
+        }
+    elif wire_api == "chat_completions":
+        base_payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": 0.1,
+            "max_tokens": 6000,
+        }
+    else:
+        raise BotError("REVIEW_API_WIRE 只能是 responses 或 chat_completions。")
 
     def send(payload: dict) -> dict:
         request = Request(
@@ -110,6 +130,8 @@ def relay_request(url: str, key: str, model: str, system_prompt: str, user_promp
             raise BotError("中转 API 返回格式不是 JSON 对象。")
         return data
 
+    if wire_api == "responses":
+        return send(base_payload)
     try:
         return send({**base_payload, "response_format": {"type": "json_object"}})
     except BotError as exc:

@@ -77,9 +77,10 @@ Bot 至少检查：任务和 Story 是否真的完成；验收证据是否可定
 
 | 类型 | 名称 | 内容 |
 |---|---|---|
-| Variable | `REVIEW_API_URL` | 完整的 OpenAI-compatible Chat Completions 地址，例如 `https://relay.example/v1/chat/completions` |
+| Variable | `REVIEW_API_URL` | 完整的 OpenAI-compatible 地址；Responses 例：`https://relay.example/v1/responses`，Chat Completions 例：`https://relay.example/v1/chat/completions` |
+| Variable | `REVIEW_API_WIRE` | `responses` 或 `chat_completions`；中转站使用哪种协议就填哪种 |
 | Secret | `REVIEW_API_KEY` | 中转服务密钥，不写入仓库、PR、日志或 `.env` |
-| Variable | `REVIEW_MODEL` | 中转服务上的模型名 |
+| Variable | `REVIEW_MODEL` | 中转服务上的模型名，例如 `codex-auto-review` |
 | Variable（可选） | `REVIEW_MAX_DIFF_CHARS` | 发送给模型的 diff 上限，默认 120000 |
 | Variable（可选） | `REVIEW_API_TIMEOUT_SECONDS` | 请求超时秒数，默认 120 |
 
