@@ -53,6 +53,68 @@ def capabilities() -> CapabilityResponse:
     )
 
 
+@router.get("/households", response_model=list[HouseholdRead])
+def list_households(
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> list[Household]:
+    owned = session.scalars(
+        select(Household).where(Household.created_by == actor_id)
+    ).all()
+    authorized_ids = session.scalars(
+        select(CareAuthorization.household_id)
+        .where(
+            CareAuthorization.grantee_actor_id == actor_id,
+            CareAuthorization.revoked_at.is_(None),
+            CareAuthorization.valid_until > datetime.now(UTC),
+        )
+        .distinct()
+    ).all()
+    authorized = session.scalars(
+        select(Household).where(Household.id.in_(authorized_ids))
+    ).all()
+    seen: set[str] = set()
+    result: list[Household] = []
+    for h in list(owned) + list(authorized):
+        if h.id not in seen:
+            seen.add(h.id)
+            result.append(h)
+    return result
+
+
+@router.get("/households/{household_id}/members", response_model=list[MemberRead])
+def list_members(
+    household_id: str,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> list[Member]:
+    household = session.get(Household, household_id)
+    if household is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="HOUSEHOLD_NOT_FOUND")
+    if household.created_by == actor_id:
+        query = select(Member).where(Member.household_id == household_id)
+        return list(session.scalars(query).all())
+    authorized_member_ids = session.scalars(
+        select(CareAuthorization.member_id)
+        .where(
+            CareAuthorization.household_id == household_id,
+            CareAuthorization.grantee_actor_id == actor_id,
+            CareAuthorization.revoked_at.is_(None),
+            CareAuthorization.valid_until > datetime.now(UTC),
+        )
+        .distinct()
+    ).all()
+    if not authorized_member_ids:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="MEMBER_LIST_NOT_AUTHORIZED"
+        )
+    return list(
+        session.scalars(
+            select(Member).where(Member.id.in_(authorized_member_ids))
+        ).all()
+    )
+
+
 @router.post("/households", response_model=HouseholdRead, status_code=status.HTTP_201_CREATED)
 def create_household(
     payload: HouseholdCreate,
