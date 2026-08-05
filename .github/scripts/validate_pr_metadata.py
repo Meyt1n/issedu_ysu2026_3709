@@ -36,10 +36,13 @@ def meaningful(value: str) -> bool:
     normalized = cleaned.strip()
     if not normalized:
         return False
-    if re.search(
-        r"(?:\b(?:tbd|todo|pending|fill\s+in)\b|待补充|见上文|待(?:项目组)?指定|尚未指定|待确认|待填写)",
-        normalized,
-        re.I,
+    if (
+        re.search(
+            r"(?:\b(?:tbd|todo|fill\s+in)\b|待补充|见上文|待(?:项目组)?指定|尚未指定|待填写)",
+            normalized,
+            re.I,
+        )
+        or normalized == "待确认"
     ):
         return False
     if re.fullmatch(r"(?:none|n/?a|不适用)\s*", normalized, re.I):
@@ -54,6 +57,23 @@ def field_content(body: str, label: str) -> str:
     pattern = rf"(?im)^[ \t]*-[ \t]*{re.escape(label)}[ \t]*[:：][ \t]*([^\r\n]*)[ \t]*$"
     match = re.search(pattern, body)
     return match.group(1).strip() if match else ""
+
+
+def requirement_ids() -> set[str]:
+    sources = (
+        ROOT / "docs" / "vibe-coding" / "01-需求规格说明书.md",
+        ROOT / "docs" / "vibe-coding" / "12-需求追踪矩阵.md",
+    )
+    ids: set[str] = set()
+    for source in sources:
+        if source.is_file():
+            ids.update(re.findall(r"\b(?:FR|NFR)-\d+\b", source.read_text(encoding="utf-8"), re.I))
+    return {value.upper() for value in ids}
+
+
+def identity_prefix(value: str) -> str:
+    value = re.sub(r"[`*_>#\-]", "", value).strip()
+    return re.split(r"[（(、/,，]", value, maxsplit=1)[0].strip()
 
 
 def github_issue_exists(repository: str, issue_number: str) -> tuple[bool, str]:
@@ -92,11 +112,12 @@ def validate_event(event: dict) -> list[str]:
     body = pull_request.get("body") or ""
     errors: list[str] = []
 
+    issue_value = field_content(body, "Issue")
     closing_refs = sorted(
         set(
             re.findall(
                 r"(?im)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s*#(\d+)\b",
-                body,
+                issue_value,
             )
         )
     )
@@ -123,18 +144,29 @@ def validate_event(event: dict) -> list[str]:
         if not story_files:
             errors.append(f"找不到 Story 文件：docs/stories/{story_id}-*.md。")
 
-    fr_nfr_match = re.search(
-        r"(?im)^[ \t]*-[ \t]*FR/NFR[ \t]*[:：][ \t]*([^\r\n]*)[ \t]*$", body
-    )
+    fr_nfr_match = re.search(r"(?im)^[ \t]*-[ \t]*FR/NFR[ \t]*[:：][ \t]*([^\r\n]*)[ \t]*$", body)
     fr_nfr_value = fr_nfr_match.group(1) if fr_nfr_match else ""
-    if not meaningful(fr_nfr_value) or not re.search(
-        r"\b(?:FR|NFR)-\d+\b", fr_nfr_value, re.I
-    ):
+    requested_ids = {
+        value.upper() for value in re.findall(r"\b(?:FR|NFR)-\d+\b", fr_nfr_value, re.I)
+    }
+    known_ids = requirement_ids()
+    if not meaningful(fr_nfr_value) or not requested_ids:
         errors.append("PR 必须填写至少一个有效的 FR/NFR 编号，例如：- FR/NFR：NFR-04、NFR-06。")
+    elif not requested_ids.issubset(known_ids):
+        unknown_ids = ", ".join(sorted(requested_ids - known_ids))
+        errors.append(f"PR 引用了未定义的 FR/NFR：{unknown_ids}；请以需求规格和追踪矩阵为准。")
 
     for label in ("负责人", "复核人", "变更范围", "明确不做"):
         if not meaningful(field_content(body, label)):
             errors.append(f"PR 必须填写“{label}”，不能留空或使用占位词。")
+
+    high_risk_scope = " ".join(field_content(body, label) for label in ("变更范围", "明确不做"))
+    high_risk_terms = ("授权", "撤权", "健康事件", "数据删除", "规则", "模型", "知识", "隐私")
+    if any(term in high_risk_scope for term in high_risk_terms):
+        owner = identity_prefix(field_content(body, "负责人"))
+        reviewer = identity_prefix(field_content(body, "复核人"))
+        if owner and reviewer and owner == reviewer:
+            errors.append("高风险范围不能由负责人自我复核，必须填写另一名人工复核人。")
 
     for heading in ("验收标准", "测试证据", "人工验收/演示证据", "部署、迁移和回滚"):
         if not meaningful(section_content(body, heading)):

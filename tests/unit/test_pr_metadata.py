@@ -83,6 +83,36 @@ def test_meaningful_rejects_placeholder_and_pass_only_values() -> None:
         assert not VALIDATOR.meaningful(value)
 
 
+def test_meaningful_allows_pending_confirmation_as_business_state() -> None:
+    assert VALIDATOR.meaningful("Reviewer A 检查待确认风险卡状态。")
+
+
+def test_issue_reference_must_be_in_issue_field(monkeypatch) -> None:
+    monkeypatch.setattr(VALIDATOR, "github_issue_exists", lambda *_args: (True, ""))
+    body = VALID_BODY.replace("- Issue：Closes #11", "- Issue：Closes #")
+    body = body.replace("Given PR 内容完整", "Given Closes #11 只出现在验收示例中")
+    errors = VALIDATOR.validate_event(event(body))
+    assert any("一个且仅一个 Closes" in error for error in errors)
+
+
+def test_unknown_requirement_id_is_rejected(monkeypatch) -> None:
+    monkeypatch.setattr(VALIDATOR, "github_issue_exists", lambda *_args: (True, ""))
+    body = VALID_BODY.replace("NFR-04、NFR-06", "NFR-999")
+    errors = VALIDATOR.validate_event(event(body))
+    assert any("NFR-999" in error for error in errors)
+
+
+def test_high_risk_scope_requires_distinct_reviewer(monkeypatch) -> None:
+    monkeypatch.setattr(VALIDATOR, "github_issue_exists", lambda *_args: (True, ""))
+    body = VALID_BODY.replace(
+        "变更范围：完善 PR 任务和风险门禁。", "变更范围：修改成员授权和撤权规则。"
+    )
+    body = body.replace("复核人：Reviewer A", "复核人：Meyt1n")
+    body = body.replace("- 负责人：Meyt1n", "- 负责人：Meyt1n")
+    errors = VALIDATOR.validate_event(event(body))
+    assert any("自我复核" in error for error in errors)
+
+
 def test_valid_event_satisfies_contract(monkeypatch) -> None:
     monkeypatch.setattr(VALIDATOR, "github_issue_exists", lambda *_args: (True, ""))
     assert VALIDATOR.validate_event(event(VALID_BODY)) == []
