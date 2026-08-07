@@ -5,8 +5,9 @@
 1. [`docs/vibe-coding/开发前必读与Vibe Coding工作流.md`](docs/vibe-coding/开发前必读与Vibe%20Coding工作流.md)
 2. [`README.md`](README.md)
 3. [`docs/vibe-coding/00-文档导航.md`](docs/vibe-coding/00-文档导航.md)
-4. [`docs/vibe-coding/PR任务关联与 Relay Review Bot 工作流.md`](docs/vibe-coding/PR任务关联与Relay%20Review%20Bot%20工作流.md)
-5. [`docs/vibe-coding/PR Review Bot 操作规范.md`](docs/vibe-coding/PR%20Review%20Bot%20操作规范.md)
+4. [`docs/vibe-coding/19-项目全生命周期开发流程.md`](docs/vibe-coding/19-项目全生命周期开发流程.md)
+5. [`docs/vibe-coding/PR任务关联与 Relay Review Bot 工作流.md`](docs/vibe-coding/PR任务关联与Relay%20Review%20Bot%20工作流.md)
+6. [`docs/vibe-coding/PR Review Bot 操作规范.md`](docs/vibe-coding/PR%20Review%20Bot%20操作规范.md)
 
 随后根据任务读取对应的需求、架构、API、数据、隐私、安全、测试、Story 和 ADR。不得跳过 mandatory 工作流文档直接生成代码，不得把未验证的方案、Mock 或页面宣称为已完成能力。
 
