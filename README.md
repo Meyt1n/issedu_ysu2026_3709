@@ -130,4 +130,4 @@ sync-test/           双仓库协作验证记录
 5. 按[项目全生命周期开发流程](docs/vibe-coding/19-项目全生命周期开发流程.md)领取阶段 Issue、执行 Vibe Coding、PR、周验收和双仓库同步。
 6. 只有在代码、测试和复现证据合并后，才把状态从“未开始/进行中”改为“已验证”。
 
-本地基础启动命令已建立，完整 Demo 仍未完成。以[本地部署与 Demo 操作指南](docs/本地部署与Demo操作指南.md)为唯一入口；首次开发建议先执行 `scripts/start.ps1 setup` 和 `scripts/start.ps1 check`。
+本地基础启动命令已建立，完整 Demo 仍未完成。以[本地部署与 Demo 操作指南](docs/本地部署与Demo操作指南.md)为唯一入口；首次开发依次执行 `scripts/start.ps1 setup`、`scripts/start.ps1 up`、`scripts/start.ps1 health` 和 `scripts/start.ps1 down`，提交前执行 `scripts/start.ps1 check`。Linux/macOS 使用同名 `scripts/start.sh` 命令。
