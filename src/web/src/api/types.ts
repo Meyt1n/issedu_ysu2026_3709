@@ -57,6 +57,7 @@ export interface Authorization {
   id: string
   household_id: string
   member_id: string
+  grantor_actor_id: string
   grantee_actor_id: string
   data_fields: string[]
   actions: AuthorizationAction[]
@@ -64,6 +65,9 @@ export interface Authorization {
   valid_from: string
   valid_until: string
   revoked_at: string | null
+  version: number
+  created_at: string
+  updated_at: string
 }
 
 export interface CreateAuthorizationInput {
@@ -73,6 +77,30 @@ export interface CreateAuthorizationInput {
   actions: AuthorizationAction[]
   purpose: string
   valid_until: string
+}
+
+export interface UpdateAuthorizationInput {
+  expected_version: number
+  data_fields?: string[]
+  actions?: AuthorizationAction[]
+  purpose?: string
+  valid_until?: string
+}
+
+export interface AccessAudit {
+  id: string
+  household_id: string
+  authorization_id: string | null
+  actor_id: string
+  operation: string
+  action: string
+  data_field: string
+  purpose: string | null
+  outcome: string
+  reason: string | null
+  before_version: number | null
+  after_version: number | null
+  created_at: string
 }
 
 export interface HealthEvent {
@@ -108,6 +136,7 @@ export interface MemberState {
 
 export interface RequestOptions {
   actorId?: string
+  accessPurpose?: string
   idempotencyKey?: string
   signal?: AbortSignal
 }

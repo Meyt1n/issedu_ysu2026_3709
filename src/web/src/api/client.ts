@@ -1,4 +1,5 @@
 import type {
+  AccessAudit,
   ApiErrorCode,
   ApiErrorEnvelope,
   Authorization,
@@ -13,6 +14,7 @@ import type {
   Member,
   MemberState,
   RequestOptions,
+  UpdateAuthorizationInput,
 } from './types'
 
 export class ApiClientError extends Error {
@@ -48,6 +50,7 @@ function fallbackErrorCode(status: number): ApiErrorCode {
   if (status === 401) return 'UNAUTHENTICATED'
   if (status === 403) return 'FORBIDDEN_MEMBER'
   if (status === 404) return 'NOT_FOUND'
+  if (status === 409) return 'VERSION_CONFLICT'
   if (status === 422) return 'VALIDATION_ERROR'
   return 'HTTP_ERROR'
 }
@@ -85,6 +88,7 @@ export class ApiClient {
     headers.set('Accept', 'application/json')
     if (init.body !== undefined) headers.set('Content-Type', 'application/json')
     if (options.actorId) headers.set('X-Actor-Id', options.actorId)
+    if (options.accessPurpose) headers.set('X-Access-Purpose', options.accessPurpose)
     if (options.idempotencyKey) headers.set('Idempotency-Key', options.idempotencyKey)
 
     let response: Response
@@ -160,14 +164,50 @@ export class ApiClient {
     }, options)
   }
 
+  listAuthorizations(
+    householdId: string,
+    options?: RequestOptions,
+  ): Promise<Authorization[]> {
+    return this.request(
+      `/api/v1/households/${householdId}/authorizations`,
+      undefined,
+      options,
+    )
+  }
+
+  updateAuthorization(
+    householdId: string,
+    authorizationId: string,
+    input: UpdateAuthorizationInput,
+    options?: RequestOptions,
+  ): Promise<Authorization> {
+    return this.request(
+      `/api/v1/households/${householdId}/authorizations/${authorizationId}`,
+      { method: 'PATCH', body: JSON.stringify(input) },
+      options,
+    )
+  }
+
   revokeAuthorization(
     householdId: string,
     authorizationId: string,
+    expectedVersion: number,
     options?: RequestOptions,
   ): Promise<Authorization> {
     return this.request(
       `/api/v1/households/${householdId}/authorizations/${authorizationId}/revoke`,
-      { method: 'POST' },
+      { method: 'POST', body: JSON.stringify({ expected_version: expectedVersion }) },
+      options,
+    )
+  }
+
+  listAuthorizationAudits(
+    householdId: string,
+    options?: RequestOptions,
+  ): Promise<AccessAudit[]> {
+    return this.request(
+      `/api/v1/households/${householdId}/authorization-audits`,
+      undefined,
       options,
     )
   }
