@@ -201,6 +201,8 @@ def test_cloud_remote_configured() -> None:
 
 def test_this_file_committed_by_correct_author() -> None:
     """自检：本文件最新提交的作者身份与预期一致。"""
+    if _IN_CI:
+        pytest.skip("CI 环境跳过本地 git log 自检")
     result = subprocess.run(
         ["git", "log", "-1", "--format=%an|%ae", "--", __file__],
         capture_output=True, text=True, timeout=10,
