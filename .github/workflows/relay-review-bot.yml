@@ -53,4 +53,4 @@ jobs:
         if: steps.eligibility.outputs.review_required != 'true'
         run: |
           echo "::notice::No Closes/Fixes/Resolves reference in the dedicated Issue field; Relay Review Bot skipped."
-          echo "Task association, CI, secret scan, and other required checks remain unchanged."
+          echo "CI, secret scan, and other required checks remain unchanged."
