@@ -21,4 +21,4 @@ Agent 必须遵守：
 
 ## PR Review 规则
 
-每个功能 PR 必须绑定一个 GitHub Issue、一个 Story 和对应 FR/NFR。没有 Issue 绑定的会议记录、维护性或纯资料 PR 可跳过 Relay Review Bot，但仍受 CI 与任务门禁约束。Relay Review Bot 或人工 Review 必须按[PR 任务关联与 Relay Review Bot 工作流](docs/vibe-coding/PR任务关联与Relay%20Review%20Bot%20工作流.md)核对任务完成度、验收证据和 P0/P1/P2 风险。CI 通过不等于任务完成；合并动作代表本仓库流程中的人工复核完成，不再要求额外第二人 approval。
+每个功能 PR 必须绑定一个 GitHub Issue、一个 Story 和对应 FR/NFR。没有 Issue 绑定的会议记录、维护性或纯资料 PR 可跳过 Relay Review Bot，但仍受 CI 与任务门禁约束。Relay Review Bot 可用时，必须按[PR 任务关联与 Relay Review Bot 工作流](docs/vibe-coding/PR任务关联与Relay%20Review%20Bot%20工作流.md)核对任务完成度、验收证据和 P0/P1/P2 风险；中转服务故障时只记录不可用告警，不阻塞其它 Required Checks，合并人必须完成替代检查。CI 通过不等于任务完成；合并动作代表本仓库流程中的人工复核完成，不再要求额外第二人 approval。
