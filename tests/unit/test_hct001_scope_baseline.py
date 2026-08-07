@@ -57,6 +57,19 @@ PAGE_COMMITMENTS = (
     "无导流",
 )
 
+SAFE_STATE_PHRASES = {
+    "家庭总览": ("不回显其他家庭缓存", "不进入风险摘要"),
+    "成员健康档案": ("不预填敏感旧值", "不泄露字段存在性"),
+    "视觉扫描中心": ("结构化失败原因", "禁止确认入库"),
+    "人工复核中心": ("不产生部分健康事件", "不默认最高分候选"),
+    "家庭健康图谱": ("隐藏未授权节点", "不为未确认事实建节点/边"),
+    "用药安全中心": ("不显示假等级", "不给肯定用药判断"),
+    "健康计划中心": ("不保存部分变更", "禁止优化或切换计划"),
+    "本地健康助手": ("检索前拒绝越权", "不输出医疗结论"),
+    "家庭健康大屏": ("不闪现成员敏感信息", "未确认数据不进入"),
+    "模型实验室": ("禁止云端回退", "禁止发布"),
+}
+
 
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
@@ -66,10 +79,23 @@ def test_p0_scope_names_exactly_ten_core_pages() -> None:
     requirements = read(REQUIREMENTS)
     page_design = read(PAGE_DESIGN)
 
-    for page in CORE_PAGES:
-        assert page in requirements
-        assert f"| {page} |" in page_design
+    requirement_pages = tuple(
+        match.strip()
+        for match in re.findall(r"^\| P0-\d{2} \| ([^|]+) \|", requirements, re.MULTILINE)
+    )
+    design_headings = tuple(
+        match.strip()
+        for match in re.findall(r"^### 3\.\d+ ([^\n]+)$", page_design, re.MULTILINE)
+    )
+    design_pages = tuple(
+        heading for heading in design_headings if not heading.startswith("授权设置")
+    )
 
+    assert requirement_pages == CORE_PAGES
+    assert design_pages == CORE_PAGES
+    assert len(set(requirement_pages)) == len(CORE_PAGES)
+    assert len(set(design_pages)) == len(CORE_PAGES)
+    assert sum(heading.startswith("授权设置") for heading in design_headings) == 1
     assert "### 3.5 家庭健康图谱" in page_design
 
 
@@ -79,14 +105,17 @@ def test_each_core_page_defines_all_required_states() -> None:
 
     assert "## 4.4 十页状态矩阵" in page_design
     assert expected_header in page_design
-    for page in CORE_PAGES:
-        row = next(
-            (line for line in page_design.splitlines() if line.startswith(f"| {page} |")),
-            None,
-        )
-        assert row is not None
+    state_rows = tuple(
+        line
+        for line in page_design.splitlines()
+        if any(line.startswith(f"| {page} |") for page in CORE_PAGES)
+    )
+    state_pages = tuple(row.split("|", maxsplit=2)[1].strip() for row in state_rows)
+    assert state_pages == CORE_PAGES
+    for page, row in zip(state_pages, state_rows, strict=True):
         assert row.count("|") == 9
         assert all(cell.strip() for cell in row.strip("|").split("|"))
+        assert all(phrase in row for phrase in SAFE_STATE_PHRASES[page])
 
 
 def test_product_hard_commitments_remain_explicit() -> None:
