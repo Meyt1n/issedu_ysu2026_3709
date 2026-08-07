@@ -69,9 +69,20 @@ def test_extract_json_accepts_fenced_model_output() -> None:
     assert value["task_completion"] == "complete"
 
 
-def test_review_gate_blocks_incomplete_and_p1() -> None:
+def test_review_gate_blocks_incomplete_but_not_risk_findings() -> None:
     assert BOT.review_requires_failure(review(completion="partial"))
-    assert BOT.review_requires_failure(review(priorities=("P1",)))
+    value = review(priorities=("P1",), risk_priorities=("P0",))
+    BOT.validate_review(value)
+    assert not BOT.review_requires_failure(value)
+    rendered = BOT.render_review(value, "0123456789abcdef")
+    assert "[P1]" in rendered
+    assert "[P0/quality]" in rendered
+
+
+def test_incomplete_task_still_blocks_with_only_p2_findings() -> None:
+    value = review(completion="incomplete", priorities=("P2",), risk_priorities=("P2",))
+    BOT.validate_review(value)
+    assert BOT.review_requires_failure(value)
 
 
 @pytest.mark.parametrize(
@@ -91,11 +102,11 @@ def test_complete_with_only_p2_findings_passes(
     assert not BOT.review_requires_failure(value)
 
 
-def test_complete_with_p2_and_p1_still_blocks() -> None:
+def test_complete_with_p2_and_p1_is_advisory() -> None:
     value = review(priorities=("P2", "P1"), risk_priorities=("P2",))
     BOT.validate_review(value)
     assert not value["review_conclusion"]["recommend_merge"]
-    assert BOT.review_requires_failure(value)
+    assert not BOT.review_requires_failure(value)
 
 
 def test_secret_guard_rejects_private_key_and_api_key_patterns() -> None:
