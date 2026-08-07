@@ -5,9 +5,15 @@ on:
     branches:
       - master
   workflow_dispatch:
+    inputs:
+      github_login:
+        description: "手动同步时指定 GitHub PR 作者；自动合并同步时留空"
+        required: false
+        type: string
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: sync-original-cloud-master
@@ -28,20 +34,68 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: 推送当前 master 到原云端
+      - name: 按合并 PR 作者选择云端凭据并推送 master
         shell: bash
         env:
           CLOUD_REPO_USERNAME: ${{ secrets.CLOUD_REPO_USERNAME }}
           CLOUD_REPO_PASSWORD: ${{ secrets.CLOUD_REPO_PASSWORD }}
+          CLOUD_TOKEN_SHEN_HUANG_123: ${{ secrets.CLOUD_TOKEN_SHEN_HUANG_123 }}
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_GITHUB_LOGIN: ${{ inputs.github_login }}
         run: |
           set -euo pipefail
 
-          if [[ -z "${CLOUD_REPO_USERNAME}" || -z "${CLOUD_REPO_PASSWORD}" ]]; then
-            echo "::error::缺少 CLOUD_REPO_USERNAME 或 CLOUD_REPO_PASSWORD 仓库密钥"
+          if [[ -z "${CLOUD_REPO_USERNAME}" ]]; then
+            echo "::error::缺少 CLOUD_REPO_USERNAME 仓库密钥"
             exit 1
           fi
 
+          github_login="${REQUESTED_GITHUB_LOGIN}"
+          pr_number=""
+
+          if [[ -z "${github_login}" && "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            pr_meta="$(gh api \
+              "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+              --header 'Accept: application/vnd.github+json' \
+              --jq 'map(select(.base.ref == "master")) | if length == 0 then "" else .[0] | [.number, .user.login] | @tsv end')"
+            if [[ -n "${pr_meta}" ]]; then
+              IFS=$'\t' read -r pr_number github_login <<< "${pr_meta}"
+            fi
+          fi
+
+          cloud_password="${CLOUD_REPO_PASSWORD}"
+          credential_source="CLOUD_REPO_PASSWORD（统一服务账号回退）"
+
+          case "${github_login}" in
+            Shen-huang-123)
+              if [[ -z "${CLOUD_TOKEN_SHEN_HUANG_123}" ]]; then
+                echo "::error::已识别 PR 作者 Shen-huang-123，但缺少 CLOUD_TOKEN_SHEN_HUANG_123"
+                exit 1
+              fi
+              cloud_password="${CLOUD_TOKEN_SHEN_HUANG_123}"
+              credential_source="CLOUD_TOKEN_SHEN_HUANG_123"
+              ;;
+            "")
+              echo "::warning::未能确定合并 PR 作者，本次使用统一服务账号回退"
+              ;;
+            *)
+              echo "::warning::GitHub 作者 ${github_login} 尚未配置专属云端 Token，本次使用统一服务账号回退"
+              ;;
+          esac
+
+          if [[ -z "${cloud_password}" ]]; then
+            echo "::error::缺少可用的云端凭据；请配置对应作者 Token 或 CLOUD_REPO_PASSWORD"
+            exit 1
+          fi
+
+          if [[ -n "${pr_number}" ]]; then
+            echo "识别到 PR #${pr_number}，GitHub 作者：${github_login}，凭据来源：${credential_source}"
+          else
+            echo "未关联到合并 PR，凭据来源：${credential_source}"
+          fi
+
           askpass="${RUNNER_TEMP}/cloud-git-askpass.sh"
+          export CLOUD_SELECTED_PASSWORD="${cloud_password}"
           cleanup() {
             rm -f "${askpass}"
           }
@@ -51,7 +105,7 @@ jobs:
           #!/usr/bin/env bash
           case "$1" in
             *Username*) printf '%s\n' "${CLOUD_REPO_USERNAME}" ;;
-            *Password*) printf '%s\n' "${CLOUD_REPO_PASSWORD}" ;;
+            *Password*) printf '%s\n' "${CLOUD_SELECTED_PASSWORD}" ;;
             *) exit 1 ;;
           esac
           EOF
@@ -67,7 +121,7 @@ jobs:
           cloud_sha="$(git rev-parse original-cloud/master)"
 
           if [[ "${cloud_sha}" == "${github_sha}" ]]; then
-            echo "原云端 master 已与 GitHub 一致：${github_sha}"
+            echo "原云端 master 已与 GitHub 一致：${github_sha}；本次不会产生新的推送记录"
             exit 0
           fi
 
@@ -77,4 +131,11 @@ jobs:
           fi
 
           git push original-cloud "${github_sha}:refs/heads/master"
-          echo "已将 GitHub master 同步到原云端：${github_sha}"
+
+          verified_cloud_sha="$(git ls-remote original-cloud refs/heads/master | awk '{print $1}')"
+          if [[ "${verified_cloud_sha}" != "${github_sha}" ]]; then
+            echo "::error::推送后校验失败：原云端=${verified_cloud_sha}，GitHub=${github_sha}"
+            exit 1
+          fi
+
+          echo "已将 GitHub master 的同一 SHA 同步到原云端：${github_sha}"
