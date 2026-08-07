@@ -27,6 +27,7 @@ EXPECTED_SHA = os.environ.get("SYNC_VERIFY_EXPECTED_SHA", "")
 
 GITHUB_REMOTE = "https://github.com/Meyt1n/issedu_ysu2026_3709.git"
 CLOUD_REMOTE = "http://119.3.217.118:30181/29092881243490627/issedu_ysu2026_3709.git"
+VERIFICATION_RECORD = "sync-test/identity-sync-verification.md"
 
 
 def _git_ls_remote(url: str, ref: str = "refs/heads/master") -> str:
@@ -34,7 +35,11 @@ def _git_ls_remote(url: str, ref: str = "refs/heads/master") -> str:
     try:
         result = subprocess.run(
             ["git", "ls-remote", url, ref],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
         )
         if result.returncode != 0:
             return ""
@@ -56,17 +61,29 @@ def _git_cat_file_author(repo_url: str, sha: str) -> tuple[str, str]:
         # fetch the specific commit
         subprocess.run(
             ["git", "fetch", "--no-tags", repo_url, sha],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
             check=False,
         )
         # read author name
         name_result = subprocess.run(
             ["git", "log", "-1", "--format=%an", sha],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
         )
         email_result = subprocess.run(
             ["git", "log", "-1", "--format=%ae", sha],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
         )
         if name_result.returncode != 0 or email_result.returncode != 0:
             return "", ""
@@ -190,7 +207,11 @@ def test_cloud_remote_configured() -> None:
     """验证 cloud remote 已配置（本地开发环境）。"""
     result = subprocess.run(
         ["git", "remote", "get-url", "cloud"],
-        capture_output=True, text=True, timeout=10,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=10,
     )
     if result.returncode != 0:
         pytest.skip("cloud remote 未配置，跳过（CI 环境正常）")
@@ -199,13 +220,17 @@ def test_cloud_remote_configured() -> None:
     )
 
 
-def test_this_file_committed_by_correct_author() -> None:
-    """自检：本文件最新提交的作者身份与预期一致。"""
+def test_verification_record_committed_by_correct_author() -> None:
+    """自检：PR #32 的同步验证记录由预期成员提交。"""
     if _IN_CI:
         pytest.skip("CI 环境跳过本地 git log 自检")
     result = subprocess.run(
-        ["git", "log", "-1", "--format=%an|%ae", "--", __file__],
-        capture_output=True, text=True, timeout=10,
+        ["git", "log", "-1", "--format=%an|%ae", "--", VERIFICATION_RECORD],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=10,
     )
     if result.returncode != 0:
         pytest.skip("无法执行 git log")

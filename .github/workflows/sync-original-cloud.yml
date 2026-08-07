@@ -35,6 +35,9 @@ jobs:
           CLOUD_REPO_USERNAME: ${{ secrets.CLOUD_REPO_USERNAME }}
           CLOUD_REPO_PASSWORD: ${{ secrets.CLOUD_REPO_PASSWORD }}
           CLOUD_TOKEN_SHEN_HUANG_123: ${{ secrets.CLOUD_TOKEN_SHEN_HUANG_123 }}
+          CLOUD_TOKEN_RY12_20: ${{ secrets.CLOUD_TOKEN_RY12_20 }}
+          CLOUD_TOKEN_389883656_LGTM: ${{ secrets.CLOUD_TOKEN_389883656_LGTM }}
+          CLOUD_TOKEN_JIN_123_ZIP: ${{ secrets.CLOUD_TOKEN_JIN_123_ZIP }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
