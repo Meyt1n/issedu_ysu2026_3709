@@ -34,6 +34,30 @@ IDENTITIES: dict[str, dict[str, Any]] = {
         "git_names": {"shen-huang-123", "zhang", "张子涵"},
         "git_emails": {"z85963541@qq.com"},
     },
+    "ry12-20": {
+        "github_login": "ry12-20",
+        "token_env": "CLOUD_TOKEN_RY12_20",
+        "cloud_username": "ry12-20",
+        "cloud_username_env": "",
+        "git_names": {"ry12-20"},
+        "git_emails": set(),
+    },
+    "389883656-lgtm": {
+        "github_login": "389883656-lgtm",
+        "token_env": "CLOUD_TOKEN_389883656_LGTM",
+        "cloud_username": "yanghuan",
+        "cloud_username_env": "",
+        "git_names": {"389883656-lgtm", "yanghuan"},
+        "git_emails": {"389883656@qq.com"},
+    },
+    "jin-123-zip": {
+        "github_login": "jin-123-zip",
+        "token_env": "CLOUD_TOKEN_JIN_123_ZIP",
+        "cloud_username": "jin-123-zip",
+        "cloud_username_env": "",
+        "git_names": {"jin-123-zip"},
+        "git_emails": {"3487355487@qq.com"},
+    },
 }
 
 

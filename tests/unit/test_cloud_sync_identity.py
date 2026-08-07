@@ -48,6 +48,81 @@ def test_accepts_unlinked_commit_only_when_git_email_matches_mapping() -> None:
     assert result["github_login"] == "Shen-huang-123"
 
 
+@pytest.mark.parametrize(
+    ("pr_login", "name", "email", "token_env", "cloud_username"),
+    [
+        ("ry12-20", "ry12-20", "unknown@example.com", "CLOUD_TOKEN_RY12_20", "ry12-20"),
+        (
+            "389883656-lgtm",
+            "389883656-lgtm",
+            "389883656@qq.com",
+            "CLOUD_TOKEN_389883656_LGTM",
+            "yanghuan",
+        ),
+        (
+            "jin-123-zip",
+            "jin-123-zip",
+            "3487355487@qq.com",
+            "CLOUD_TOKEN_JIN_123_ZIP",
+            "jin-123-zip",
+        ),
+    ],
+)
+def test_resolves_new_contributor_when_linked_github_login_matches(
+    pr_login: str,
+    name: str,
+    email: str,
+    token_env: str,
+    cloud_username: str,
+) -> None:
+    result = IDENTITY.resolve_identity(
+        pr_login,
+        [commit(login=pr_login, name=name, email=email)],
+    )
+
+    assert result["token_env"] == token_env
+    assert result["cloud_username"] == cloud_username
+
+
+@pytest.mark.parametrize(
+    ("pr_login", "name", "email", "token_env"),
+    [
+        (
+            "389883656-lgtm",
+            "389883656-lgtm",
+            "389883656@qq.com",
+            "CLOUD_TOKEN_389883656_LGTM",
+        ),
+        (
+            "jin-123-zip",
+            "jin-123-zip",
+            "3487355487@qq.com",
+            "CLOUD_TOKEN_JIN_123_ZIP",
+        ),
+    ],
+)
+def test_accepts_new_contributor_unlinked_commit_by_registered_email(
+    pr_login: str,
+    name: str,
+    email: str,
+    token_env: str,
+) -> None:
+    result = IDENTITY.resolve_identity(
+        pr_login,
+        [commit(login=None, name=name, email=email)],
+    )
+
+    assert result["token_env"] == token_env
+
+
+def test_ry12_requires_linked_github_login_until_email_is_registered() -> None:
+    with pytest.raises(IDENTITY.IdentityError, match="提交账号不一致"):
+        IDENTITY.resolve_identity(
+            "ry12-20",
+            [commit(login=None, name="ry12-20", email="unknown@example.com")],
+        )
+
+
 def test_resolves_owner_pr_to_owner_credentials() -> None:
     result = IDENTITY.resolve_identity(
         "Meyt1n",
