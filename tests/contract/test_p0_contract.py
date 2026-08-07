@@ -464,8 +464,8 @@ def test_revoke_authorization_is_immediate(client: TestClient) -> None:
 
 # ── 5. 健康事件接口 ──────────────────────────────────────
 
-def test_health_event_requires_confirmed_status(client: TestClient) -> None:
-    """非 CONFIRMED 状态被拒绝（严格枚举校验）"""
+def test_health_event_rejects_invalid_status(client: TestClient) -> None:
+    """非 CONFIRMED/UNCONFIRMED 状态被拒绝（严格枚举校验）"""
     household_id = _create_household(client)["id"]
     member_id = _create_member(client, household_id)["id"]
     resp = client.post(
@@ -481,8 +481,8 @@ def test_health_event_requires_confirmed_status(client: TestClient) -> None:
     assert resp.status_code == 422
 
 
-def test_health_event_defaults_to_confirmed(client: TestClient) -> None:
-    """不传 confirmation_status 时默认 CONFIRMED"""
+def test_health_event_defaults_to_unconfirmed(client: TestClient) -> None:
+    """不传 confirmation_status 时默认 UNCONFIRMED（安全默认值）"""
     household_id = _create_household(client)["id"]
     member_id = _create_member(client, household_id)["id"]
     resp = client.post(
@@ -495,7 +495,25 @@ def test_health_event_defaults_to_confirmed(client: TestClient) -> None:
         },
     )
     assert resp.status_code == 201
-    assert resp.json()["confirmation_status"] == "CONFIRMED"
+    assert resp.json()["confirmation_status"] == "UNCONFIRMED"
+
+
+def test_health_event_allows_explicit_unconfirmed(client: TestClient) -> None:
+    """显式传 UNCONFIRMED 可以成功创建事件"""
+    household_id = _create_household(client)["id"]
+    member_id = _create_member(client, household_id)["id"]
+    resp = client.post(
+        f"/api/v1/households/{household_id}/events",
+        headers={"X-Actor-Id": "owner"},
+        json={
+            "member_id": member_id,
+            "event_type": "NOTE",
+            "confirmation_status": "UNCONFIRMED",
+            "payload": {"text": "test"},
+        },
+    )
+    assert resp.status_code == 201
+    assert resp.json()["confirmation_status"] == "UNCONFIRMED"
 
 
 def test_health_event_creates_outbox(client: TestClient, db_session: Session) -> None:

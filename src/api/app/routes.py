@@ -115,20 +115,24 @@ def list_members(
     if household.created_by == actor_id:
         query = select(Member).where(Member.household_id == household_id)
         return list(session.scalars(query).all())
-    auths = _valid_authorizations(session, actor_id, household_id=household_id)
-    authorized_member_ids = {a.member_id for a in auths}
-    if not authorized_member_ids:
+
+    members = list(
+        session.scalars(
+            select(Member).where(Member.household_id == household_id)
+        ).all()
+    )
+    authorized_members = [
+        m
+        for m in members
+        if has_authorized_action(
+            session, household, m.id, actor_id, "READ_EVENTS", "health_events",
+        )
+    ]
+    if not authorized_members:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="MEMBER_LIST_NOT_AUTHORIZED"
         )
-    return list(
-        session.scalars(
-            select(Member).where(
-                Member.id.in_(authorized_member_ids),
-                Member.household_id == household_id,
-            )
-        ).all()
-    )
+    return authorized_members
 
 
 @router.post("/households", response_model=HouseholdRead, status_code=status.HTTP_201_CREATED)

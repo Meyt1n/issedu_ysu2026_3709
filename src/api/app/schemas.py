@@ -74,7 +74,7 @@ class HealthEventCreate(BaseModel):
     member_id: str
     event_type: str = Field(min_length=1, max_length=80)
     source: Literal["MANUAL"] = "MANUAL"
-    confirmation_status: Literal["CONFIRMED"] = "CONFIRMED"
+    confirmation_status: Literal["CONFIRMED", "UNCONFIRMED"] = "UNCONFIRMED"
     payload: dict[str, Any] = Field(min_length=1)
     evidence: dict[str, Any] = Field(default_factory=dict)
 
