@@ -25,8 +25,10 @@ def test_sync_sha_matches() -> None:
     同步工作流只复制同一个 Git 提交对象，不重新提交、不改写提交作者。
     本测试作为标记存在，实际核对通过以下命令完成：
 
-        git ls-remote https://github.com/Meyt1n/issedu_ysu2026_3709.git refs/heads/master
-        git ls-remote http://119.3.217.118:30181/29092881243490627/issedu_ysu2026_3709.git refs/heads/master
+        git ls-remote https://github.com/Meyt1n/issedu_ysu2026_3709.git \\
+            refs/heads/master
+        git ls-remote http://119.3.217.118:30181/29092881243490627/ \\
+            issedu_ysu2026_3709.git refs/heads/master
     """
     # 此测试始终通过；实际 SHA 比对由外部脚本或人工核对完成
     assert True
