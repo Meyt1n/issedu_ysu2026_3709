@@ -13,6 +13,12 @@ import subprocess
 
 import pytest
 
+# GitHub Actions / CI 环境自动跳过远程验证
+_IN_CI = (
+    os.environ.get("CI", "").lower() == "true"
+    or os.environ.get("GITHUB_ACTIONS", "") == "true"
+)
+
 # ── 本测试提交的预期身份 ──────────────────────────────────
 EXPECTED_AUTHOR = "zhang"
 EXPECTED_EMAIL = "z85963541@qq.com"
@@ -78,6 +84,8 @@ def test_github_cloud_master_sha_match() -> None:
     环境变量：
         SYNC_VERIFY_EXPECTED_SHA — 预期的合并后提交 SHA
     """
+    if _IN_CI:
+        pytest.skip("CI 环境无法访问内部云端，跳过远程 SHA 比对")
     github_sha = _git_ls_remote(GITHUB_REMOTE)
     cloud_sha = _git_ls_remote(CLOUD_REMOTE)
 
@@ -104,6 +112,8 @@ def test_sync_preserves_commit_author_identity() -> None:
     依赖 test_github_cloud_master_sha_match 已确认 SHA 一致，
     本测试拉取该提交并比对两端 author 信息。
     """
+    if _IN_CI:
+        pytest.skip("CI 环境无法访问内部云端，跳过 author 身份比对")
     github_sha = _git_ls_remote(GITHUB_REMOTE)
     if not github_sha:
         pytest.skip("无法获取 GitHub master SHA")
@@ -169,6 +179,8 @@ def test_author_email_format_valid() -> None:
 
 def test_github_remote_reachable() -> None:
     """GitHub 远程仓库可达（基础连通性检查）。"""
+    if _IN_CI:
+        pytest.skip("CI 环境跳过连通性检查")
     sha = _git_ls_remote(GITHUB_REMOTE)
     assert sha, f"无法连接 GitHub 仓库：{GITHUB_REMOTE}"
     assert len(sha) == 40, f"SHA 长度异常：{len(sha)}"
