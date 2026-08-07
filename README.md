@@ -127,6 +127,7 @@ sync-test/           双仓库协作验证记录
 2. 按[产品信息架构与页面设计](docs/vibe-coding/18-产品信息架构与页面设计.md)冻结页面、状态和文案。
 3. 从[需求追踪矩阵](docs/vibe-coding/12-需求追踪矩阵.md)领取尚未完成的需求。
 4. 按[任务拆分与交付清单](docs/vibe-coding/15-任务拆分与交付清单.md)建立 Story，并遵守[贡献指南](CONTRIBUTING.md)。
-5. 只有在代码、测试和复现证据合并后，才把状态从“未开始/进行中”改为“已验证”。
+5. 按[项目全生命周期开发流程](docs/vibe-coding/19-项目全生命周期开发流程.md)领取阶段 Issue、执行 Vibe Coding、PR、周验收和双仓库同步。
+6. 只有在代码、测试和复现证据合并后，才把状态从“未开始/进行中”改为“已验证”。
 
 本地基础启动命令已建立，完整 Demo 仍未完成。以[本地部署与 Demo 操作指南](docs/本地部署与Demo操作指南.md)为唯一入口；首次开发建议先执行 `scripts/start.ps1 setup` 和 `scripts/start.ps1 check`。
