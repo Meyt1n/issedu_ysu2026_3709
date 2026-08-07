@@ -6,35 +6,52 @@
 
 一期工程骨架已经可以运行健康检查、数据库迁移、家庭/成员/授权和手工确认事件链。HCT-003 已增加 MySQL、OpenCV 质量探针和 Ollama 结构化资源探针，但视觉权重、规则集、RAG、完整 Ollama 业务助手、天气和完整十页仍未实现，不能把资源探针当作完整产品。
 
-最小本地启动：
+### 1.1 干净环境标准复现路径
+
+以下路径是 HCT-101 的唯一基础档复现入口。`up` 使用 Docker Compose 构建 API/Web，等待 MySQL、API 和 Web 的健康检查，并在 API 容器启动时执行 Alembic 迁移；`down` 默认不删除 `mysql_data` 卷。
+
+Windows PowerShell：
 
 ```powershell
 git clone https://github.com/Meyt1n/issedu_ysu2026_3709.git
 cd issedu_ysu2026_3709
 git switch master
 Copy-Item .env.example .env
-uv sync
-npm ci
-uv run alembic upgrade head
-uv run uvicorn app.main:app --app-dir src/api --reload --port 8000
+scripts/start.ps1 setup
+scripts/start.ps1 up
+scripts/start.ps1 health
+scripts/start.ps1 down
 ```
 
-另开终端启动 Web：
+Linux/macOS Bash：
+
+```bash
+git clone https://github.com/Meyt1n/issedu_ysu2026_3709.git
+cd issedu_ysu2026_3709
+git switch master
+cp .env.example .env
+chmod +x scripts/start.sh
+./scripts/start.sh setup
+./scripts/start.sh up
+./scripts/start.sh health
+./scripts/start.sh down
+```
+
+`health` 会同时检查 Compose 中 API、Web、MySQL 的容器健康状态，并访问 API 与 Web 的 `/health`。默认浏览器入口为 `http://localhost:8080`，API 健康检查为 `http://localhost:8000/health`，OpenAPI 为 `http://localhost:8000/docs`。端口被占用时，在 `.env` 中修改 `API_PORT`、`WEB_PORT` 或 `MYSQL_PORT`，再重新执行 `up`。
+
+### 1.2 本地进程开发路径
+
+需要调试 Vue/FastAPI 时可以不启动 Compose 的 API/Web，但仍必须先安装依赖并执行迁移：
 
 ```powershell
-npm run dev:web
+scripts/start.ps1 setup
+scripts/start.ps1 migrate
+scripts/start.ps1 api
 ```
 
-浏览器访问 `http://localhost:5173`，API 健康检查为 `http://localhost:8000/health`，OpenAPI 为 `http://localhost:8000/docs`。
+另开终端执行 `scripts/start.ps1 web`。Linux/macOS 将脚本名替换为 `scripts/start.sh`。该路径的 `/api/v1/health/db` 使用本地 `DATABASE_URL` 检查数据库，不能代替 Compose 三服务 `health`。
 
-也可以使用 Docker Compose：
-
-```powershell
-Copy-Item .env.example .env
-docker compose up --build
-```
-
-Compose Web 入口为 `http://localhost:8080`，停止使用 `docker compose down`。带卷删除数据库前必须先完成备份演练。
+带卷删除数据库前必须先完成备份演练；标准 `down` 不会删除卷。确需清空教学数据库时，必须由负责人单独执行 `docker compose down --volumes` 并记录影响。
 
 ## 2. 三档运行目标
 
@@ -96,7 +113,7 @@ uv run python scripts/hct003_probe.py ollama --model qwen2.5:7b --strict --timeo
 - 迁移回滚、备份恢复和删除传播的演练记录；
 - 基础档和增强档的完整功能启动、停止与健康检查证据；
 - Web、OpenAPI、业务大屏和模型大屏的真实地址；
-- 全链路从全新克隆开始的复现记录、耗时和最低硬件；HCT-003 仅覆盖资源探针；
+- 全链路从全新克隆开始的复现记录、耗时和最低硬件，见[HCT-101 干净环境复现记录](reviews/HCT-101-工程骨架干净环境复现记录.md)；HCT-003 仅覆盖资源探针；
 - 常见故障：数据库未就绪、模型缺失、OCR 超时、向量索引不匹配、磁盘不足。
 
 ## 6. 连续 Demo 剧本
