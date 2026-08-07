@@ -38,6 +38,7 @@ def review(
     completion: str = "complete",
     priorities: tuple[str, ...] = (),
     risk_priorities: tuple[str, ...] = (),
+    needs_human_reviewer: bool = False,
 ) -> dict:
     blocking_priorities = {"P0", "P1"}
     has_blocking_finding = any(
@@ -57,7 +58,7 @@ def review(
         "must_fix": [finding(priority) for priority in priorities],
         "risks": [risk(priority) for priority in risk_priorities],
         "review_conclusion": {
-            "needs_human_reviewer": False,
+            "needs_human_reviewer": needs_human_reviewer,
             "recommend_merge": completion == "complete" and not has_blocking_finding,
             "reason": "测试结论",
         },
@@ -107,6 +108,14 @@ def test_complete_with_p2_and_p1_is_advisory() -> None:
     BOT.validate_review(value)
     assert not value["review_conclusion"]["recommend_merge"]
     assert not BOT.review_requires_failure(value)
+
+
+def test_complete_task_with_pending_human_review_still_passes_task_gate() -> None:
+    value = review(needs_human_reviewer=True)
+    BOT.validate_review(value)
+    assert not BOT.review_requires_failure(value)
+    rendered = BOT.render_review(value, "0123456789abcdef")
+    assert "人工复核未完成只记录" in rendered
 
 
 def test_secret_guard_rejects_private_key_and_api_key_patterns() -> None:

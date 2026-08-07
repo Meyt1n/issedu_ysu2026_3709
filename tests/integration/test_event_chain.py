@@ -35,6 +35,7 @@ def test_confirmed_event_is_append_only_and_projects_state(
         json={
             "member_id": member_id,
             "event_type": "MEDICINE_ADDED",
+            "confirmation_status": "CONFIRMED",
             "payload": {"name": "示例药品", "confirmation": "manual"},
             "evidence": {"source": "manual-entry"},
         },
@@ -60,7 +61,41 @@ def test_confirmed_event_is_append_only_and_projects_state(
     outbox = db_session.scalars(select(OutboxMessage)).all()
     assert len(outbox) == 1
     assert outbox[0].event_id == event_id
+    assert outbox[0].topic == "health_event.created"
     assert outbox[0].dispatched is False
+
+
+def test_unconfirmed_event_is_retained_but_does_not_project_state(
+    client: TestClient, db_session: Session
+) -> None:
+    household_id, member_id = create_household_and_member(client)
+    event = client.post(
+        f"/api/v1/households/{household_id}/events",
+        headers={"X-Actor-Id": "owner"},
+        json={
+            "member_id": member_id,
+            "event_type": "MEDICINE_ADDED",
+            "confirmation_status": "UNCONFIRMED",
+            "payload": {"name": "待复核药品"},
+        },
+    )
+    assert event.status_code == 201
+    event_body = event.json()
+    assert event_body["confirmation_status"] == "UNCONFIRMED"
+    assert event_body["confirmed_by"] is None
+
+    # 待复核事实可查询，但没有正式状态投影。
+    state = client.get(
+        f"/api/v1/households/{household_id}/members/{member_id}/state",
+        headers={"X-Actor-Id": "owner"},
+    )
+    assert state.status_code == 404
+
+    outbox = db_session.scalars(select(OutboxMessage)).all()
+    assert len(outbox) == 1
+    assert outbox[0].event_id == event_body["id"]
+    assert outbox[0].topic == "health_event.pending"
+    assert outbox[0].payload["confirmation_status"] == "UNCONFIRMED"
 
 
 def test_revoked_authorization_immediately_blocks_reading(client: TestClient) -> None:

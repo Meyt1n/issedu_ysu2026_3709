@@ -37,6 +37,8 @@ def has_authorized_action(
     action: str,
     data_field: str,
 ) -> bool:
+    # P0 管理边界：家庭 owner 是家庭管理员，可访问本家庭的成员目录和健康事实；
+    # 非 owner 照护者必须同时满足成员、字段、动作和有效期授权。子女身份本身不等于 owner。
     if household.created_by == actor_id:
         return True
 

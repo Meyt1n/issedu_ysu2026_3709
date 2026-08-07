@@ -650,10 +650,13 @@ def test_health_event_defaults_to_unconfirmed(client: TestClient) -> None:
     )
     assert resp.status_code == 201
     assert resp.json()["confirmation_status"] == "UNCONFIRMED"
+    assert resp.json()["confirmed_by"] is None
 
 
-def test_health_event_allows_explicit_unconfirmed(client: TestClient) -> None:
-    """显式传 UNCONFIRMED 可以成功创建事件"""
+def test_health_event_allows_explicit_unconfirmed(
+    client: TestClient, db_session: Session
+) -> None:
+    """显式传 UNCONFIRMED 可以留存，但不能更新正式状态"""
     household_id = _create_household(client)["id"]
     member_id = _create_member(client, household_id)["id"]
     resp = client.post(
@@ -667,7 +670,19 @@ def test_health_event_allows_explicit_unconfirmed(client: TestClient) -> None:
         },
     )
     assert resp.status_code == 201
-    assert resp.json()["confirmation_status"] == "UNCONFIRMED"
+    body = resp.json()
+    assert body["confirmation_status"] == "UNCONFIRMED"
+    assert body["confirmed_by"] is None
+
+    state = client.get(
+        f"/api/v1/households/{household_id}/members/{member_id}/state",
+        headers={"X-Actor-Id": "owner"},
+    )
+    assert state.status_code == 404
+
+    outbox = db_session.scalars(select(OutboxMessage)).all()
+    assert len(outbox) == 1
+    assert outbox[0].topic == "health_event.pending"
 
 
 def test_health_event_creates_outbox(client: TestClient, db_session: Session) -> None:
@@ -690,6 +705,7 @@ def test_health_event_creates_outbox(client: TestClient, db_session: Session) ->
     assert len(outbox) == 1
     assert outbox[0].event_id == event_id
     assert outbox[0].topic == "health_event.created"
+    assert outbox[0].payload["confirmation_status"] == "CONFIRMED"
 
 
 def test_health_event_updates_member_state(client: TestClient) -> None:

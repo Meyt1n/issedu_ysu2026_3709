@@ -91,7 +91,7 @@ class HealthEventRead(BaseModel):
     payload: dict[str, Any]
     evidence: dict[str, Any]
     created_by: str
-    confirmed_by: str
+    confirmed_by: str | None
     created_at: datetime
 
 

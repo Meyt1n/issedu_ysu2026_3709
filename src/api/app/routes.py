@@ -258,6 +258,7 @@ def append_health_event(
             status_code=status.HTTP_403_FORBIDDEN, detail="EVENT_WRITE_NOT_AUTHORIZED"
         )
 
+    is_confirmed = payload.confirmation_status == "CONFIRMED"
     event = HealthEvent(
         household_id=household.id,
         member_id=member.id,
@@ -267,32 +268,38 @@ def append_health_event(
         payload=payload.payload,
         evidence=payload.evidence,
         created_by=actor_id,
-        confirmed_by=actor_id,
+        confirmed_by=actor_id if is_confirmed else None,
     )
     session.add(event)
     session.flush()
     session.add(
         OutboxMessage(
             event_id=event.id,
-            topic="health_event.created",
-            payload={"event_id": event.id, "household_id": household.id, "member_id": member.id},
+            topic="health_event.created" if is_confirmed else "health_event.pending",
+            payload={
+                "event_id": event.id,
+                "household_id": household.id,
+                "member_id": member.id,
+                "confirmation_status": event.confirmation_status,
+            },
         )
     )
-    projection = session.get(MemberStateProjection, member.id)
-    if projection is None:
-        projection = MemberStateProjection(
-            member_id=member.id,
-            household_id=household.id,
-            state={},
-        )
-        session.add(projection)
-    current_state = dict(projection.state or {})
-    current_state["last_event_type"] = event.event_type
-    current_state["last_event_payload"] = event.payload
-    current_state["events_count"] = int(current_state.get("events_count", 0)) + 1
-    projection.state = current_state
-    projection.last_event_id = event.id
-    projection.updated_at = datetime.now(UTC)
+    if is_confirmed:
+        projection = session.get(MemberStateProjection, member.id)
+        if projection is None:
+            projection = MemberStateProjection(
+                member_id=member.id,
+                household_id=household.id,
+                state={},
+            )
+            session.add(projection)
+        current_state = dict(projection.state or {})
+        current_state["last_event_type"] = event.event_type
+        current_state["last_event_payload"] = event.payload
+        current_state["events_count"] = int(current_state.get("events_count", 0)) + 1
+        projection.state = current_state
+        projection.last_event_id = event.id
+        projection.updated_at = datetime.now(UTC)
     session.commit()
     session.refresh(event)
     return event
