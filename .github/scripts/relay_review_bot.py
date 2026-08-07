@@ -124,7 +124,7 @@ def relay_request(url: str, key: str, model: str, system_prompt: str, user_promp
             with urlopen(request, timeout=timeout) as response:
                 raw = response.read()
         except HTTPError as exc:
-            if exc.code in {408, 429, 500, 502, 503, 504}:
+            if exc.code in {408, 429} or 500 <= exc.code <= 599:
                 raise RelayUnavailableError(f"中转 API 调用失败（HTTP {exc.code}）。") from exc
             raise BotError(f"中转 API 调用失败（HTTP {exc.code}）。") from exc
         except (URLError, TimeoutError, OSError) as exc:
@@ -478,6 +478,30 @@ def review_requires_failure(review: dict) -> bool:
     return review["task_completion"] != "complete"
 
 
+def print_review_failure_details(review: dict) -> None:
+    """Print actionable failure annotations to the GitHub Actions log."""
+    print("::error title=Relay Review Bot::任务完成度不是 complete，必须补齐验收项。")
+    incomplete_checks = [
+        item for item in review["acceptance_checks"] if item["status"] != "complete"
+    ]
+    for item in incomplete_checks:
+        print(
+            "::error title=验收标准未完成::"
+            f"{item['criterion']}；证据：{item['evidence']}"
+        )
+    for item in review["must_fix"]:
+        print(
+            f"::warning title=[{item['priority']}] 修改建议::"
+            f"{item['location']}：{item['issue']}；影响：{item['impact']}；"
+            f"建议：{item['recommendation']}"
+        )
+    if not incomplete_checks and not review["must_fix"]:
+        print(
+            "::error title=缺少可定位失败证据::"
+            "模型未返回具体验收项或修改建议，请补充 PR 验收证据后重跑。"
+        )
+
+
 def write_summary(content: str) -> None:
     path = os.environ.get("GITHUB_STEP_SUMMARY")
     if path:
@@ -579,7 +603,7 @@ def main() -> int:
         write_summary(comment)
         upsert_comment(repository, number, comment)
         if review_requires_failure(review):
-            print("::error::Relay Review Bot 发现任务未完成。")
+            print_review_failure_details(review)
             return 1
         print(f"Relay Review Bot 通过：PR #{number_text}，提交 {sha[:12]}。")
         return 0

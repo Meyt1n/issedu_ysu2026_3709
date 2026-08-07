@@ -46,6 +46,24 @@ def test_configuration_or_local_failures_remain_blocking() -> None:
     )
 
 
+@pytest.mark.parametrize("status", [500, 501, 505, 599])
+def test_all_http_5xx_relay_failures_are_advisory(
+    monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
+    def unavailable(*args: object, **kwargs: object) -> object:
+        raise BOT.HTTPError("https://relay.test", status, "service error", {}, None)
+
+    monkeypatch.setattr(BOT, "urlopen", unavailable)
+    with pytest.raises(BOT.RelayUnavailableError, match=f"HTTP {status}"):
+        BOT.relay_request(
+            "https://relay.test/v1/responses",
+            "test-key",
+            "test-model",
+            "system prompt",
+            "user prompt",
+        )
+
+
 def _configure_main_test(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> list[str]:
@@ -100,3 +118,33 @@ def test_main_returns_success_when_model_returns_invalid_json(
 
     assert BOT.main() == 0
     assert comments and "不阻塞其它 Required Checks" in comments[0]
+
+
+def test_incomplete_review_prints_failure_reason_and_fix_suggestion(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    value = {
+        "task_completion": "partial",
+        "acceptance_checks": [
+            {
+                "status": "incomplete",
+                "criterion": "所有 5xx 都应降级",
+                "evidence": ".github/scripts/relay_review_bot.py:127",
+            }
+        ],
+        "must_fix": [
+            {
+                "priority": "P1",
+                "location": ".github/scripts/relay_review_bot.py:127",
+                "issue": "501 未被识别为服务不可用",
+                "impact": "Relay Check 仍会阻塞合并",
+                "recommendation": "覆盖 500 <= status <= 599 并增加边界测试",
+            }
+        ],
+    }
+
+    BOT.print_review_failure_details(value)
+    output = capsys.readouterr().out
+    assert "验收标准未完成" in output
+    assert "所有 5xx 都应降级" in output
+    assert "建议：覆盖 500 <= status <= 599 并增加边界测试" in output
