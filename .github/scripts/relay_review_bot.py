@@ -31,6 +31,10 @@ class BotError(RuntimeError):
     """An expected, user-actionable bot failure."""
 
 
+class RelayUnavailableError(BotError):
+    """The external relay could not produce a trustworthy review."""
+
+
 def env_int(name: str, default: int) -> int:
     try:
         value = int(os.environ.get(name, str(default)))
@@ -120,15 +124,19 @@ def relay_request(url: str, key: str, model: str, system_prompt: str, user_promp
             with urlopen(request, timeout=timeout) as response:
                 raw = response.read()
         except HTTPError as exc:
+            if exc.code in {408, 429, 500, 502, 503, 504}:
+                raise RelayUnavailableError(f"中转 API 调用失败（HTTP {exc.code}）。") from exc
             raise BotError(f"中转 API 调用失败（HTTP {exc.code}）。") from exc
         except (URLError, TimeoutError, OSError) as exc:
-            raise BotError(f"中转 API 调用失败（{exc.__class__.__name__}）。") from exc
+            raise RelayUnavailableError(
+                f"中转 API 调用失败（{exc.__class__.__name__}）。"
+            ) from exc
         try:
             data = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise BotError("中转 API 返回了无法解析的 JSON。") from exc
+            raise RelayUnavailableError("中转 API 返回了无法解析的 JSON。") from exc
         if not isinstance(data, dict):
-            raise BotError("中转 API 返回格式不是 JSON 对象。")
+            raise RelayUnavailableError("中转 API 返回格式不是 JSON 对象。")
         return data
 
     if wire_api == "responses":
@@ -162,7 +170,7 @@ def extract_response_text(payload: dict) -> str:
                     parts.append(content["text"])
         if parts:
             return "".join(parts)
-    raise BotError("中转 API 响应缺少可读取的模型文本。")
+    raise RelayUnavailableError("中转 API 响应缺少可读取的模型文本。")
 
 
 def extract_json(text: str) -> dict:
@@ -177,7 +185,7 @@ def extract_json(text: str) -> dict:
             continue
         if isinstance(value, dict):
             return value
-    raise BotError("中转 API 未返回符合要求的 JSON 审查结果。")
+    raise RelayUnavailableError("中转 API 未返回符合要求的 JSON 审查结果。")
 
 
 def validate_review(value: dict) -> dict:
@@ -520,21 +528,14 @@ def failure_comment(message: str) -> str:
     )
 
 
-def relay_service_unavailable(message: str) -> bool:
-    """Return whether the configured relay could not produce a review.
+def relay_service_unavailable(error: BotError) -> bool:
+    """Return whether the external relay could not produce a review.
 
     An outage or malformed provider response is advisory because the other
     required checks still protect the repository. Local safety failures,
     GitHub API failures, and secret detection remain blocking errors.
     """
-    return message.startswith(
-        (
-            "未配置 REVIEW_API_URL、REVIEW_API_KEY 或 REVIEW_MODEL。",
-            "REVIEW_API_WIRE 只能是 responses 或 chat_completions。",
-            "中转 API ",
-            "审查 JSON ",
-        )
-    )
+    return isinstance(error, RelayUnavailableError)
 
 
 def unavailable_comment(message: str) -> str:
@@ -570,7 +571,10 @@ def main() -> int:
             raise BotError("未配置 REVIEW_API_URL、REVIEW_API_KEY 或 REVIEW_MODEL。")
         system_prompt, user_prompt = prompt.split("\n\n", 1)
         response = relay_request(api_url, api_key, model, system_prompt, user_prompt)
-        review = validate_review(extract_json(extract_response_text(response)))
+        try:
+            review = validate_review(extract_json(extract_response_text(response)))
+        except BotError as exc:
+            raise RelayUnavailableError(str(exc)) from exc
         comment = render_review(review, sha)
         write_summary(comment)
         upsert_comment(repository, number, comment)
@@ -581,7 +585,7 @@ def main() -> int:
         return 0
     except BotError as exc:
         message = str(exc)
-        advisory = relay_service_unavailable(message)
+        advisory = relay_service_unavailable(exc)
         comment = unavailable_comment(message) if advisory else failure_comment(message)
         if advisory:
             print(
