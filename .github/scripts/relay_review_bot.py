@@ -520,6 +520,41 @@ def failure_comment(message: str) -> str:
     )
 
 
+def relay_service_unavailable(message: str) -> bool:
+    """Return whether the configured relay could not produce a review.
+
+    An outage or malformed provider response is advisory because the other
+    required checks still protect the repository. Local safety failures,
+    GitHub API failures, and secret detection remain blocking errors.
+    """
+    return message.startswith(
+        (
+            "未配置 REVIEW_API_URL、REVIEW_API_KEY 或 REVIEW_MODEL。",
+            "REVIEW_API_WIRE 只能是 responses 或 chat_completions。",
+            "中转 API ",
+            "审查 JSON ",
+        )
+    )
+
+
+def unavailable_comment(message: str) -> str:
+    return "\n".join(
+        [
+            MARKER,
+            "### Relay Review Bot",
+            "> 中转 Review 服务暂不可用，本次未生成有效的 AI Review。",
+            "",
+            f"**告警：** {message}",
+            "",
+            (
+                "本次仅将 Relay Review Bot 作为降级告警，不阻塞其它 Required Checks。"
+                "维护者仍须自行检查任务完成度、验收证据、风险和回滚；"
+                "中转服务恢复后可从 Actions 重新运行本检查。"
+            ),
+        ]
+    )
+
+
 def main() -> int:
     event_path = Path(os.environ.get("GITHUB_EVENT_PATH", ""))
     if not event_path.is_file():
@@ -546,18 +581,26 @@ def main() -> int:
         return 0
     except BotError as exc:
         message = str(exc)
-        print(f"::error::{message}")
-        write_summary(failure_comment(message))
+        advisory = relay_service_unavailable(message)
+        comment = unavailable_comment(message) if advisory else failure_comment(message)
+        if advisory:
+            print(
+                f"::warning::{message}；Relay Review Bot 以不可用告警结束，"
+                "不阻塞其它 Required Checks。"
+            )
+        else:
+            print(f"::error::{message}")
+        write_summary(comment)
         try:
             event = json.loads(event_path.read_text(encoding="utf-8"))
             pull_request = event.get("pull_request") or {}
             repository = (event.get("repository") or {}).get("full_name")
             number = pull_request.get("number")
             if repository and number and os.environ.get("GITHUB_TOKEN"):
-                upsert_comment(repository, int(number), failure_comment(message))
+                upsert_comment(repository, int(number), comment)
         except (BotError, OSError, json.JSONDecodeError, ValueError):
             pass
-        return 1
+        return 0 if advisory else 1
 
 
 if __name__ == "__main__":
