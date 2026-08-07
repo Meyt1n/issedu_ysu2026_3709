@@ -53,9 +53,9 @@ PR 正文必须使用 `.github/pull_request_template.md`，并逐项填写：
 
 ```powershell
 git diff --check
-uv run ruff check src/api tests migrations .github/scripts/validate_pr_metadata.py .github/scripts/relay_review_bot.py
+uv run ruff check src/api tests migrations .github/scripts/relay_review_bot.py
 uv run pytest
-python -m py_compile .github/scripts/validate_pr_metadata.py .github/scripts/relay_review_bot.py
+python -m py_compile .github/scripts/relay_review_bot.py
 docker compose config --quiet
 ```
 
@@ -65,14 +65,13 @@ docker compose config --quiet
 
 PR 创建、更新、重新打开、转为 Ready for review 或正文编辑时，按以下顺序观察检查：
 
-1. `Task association and risk metadata`：读取 PR 元数据，验证 Issue、Story、FR/NFR、范围、证据和安全声明；它不执行 PR 分支代码。
-2. `Mandatory development docs`：检查开发入口和必读文档。
-3. `Backend lint, migration and tests`：运行后端 lint、迁移和测试。
-4. `Frontend typecheck and build`：运行前端类型检查和构建。
-5. `Secret scan`：扫描疑似密钥和敏感内容。
-6. `Relay Review Bot`：读取 PR 正文、diff、Story 和规则文档，通过配置的中转 API 审查并更新 PR 评论。
+1. `Mandatory development docs`：检查开发入口和必读文档。
+2. `Backend lint, migration and tests`：运行后端 lint、迁移和测试。
+3. `Frontend typecheck and build`：运行前端类型检查和构建。
+4. `Secret scan`：扫描疑似密钥和敏感内容。
+5. `Relay Review Bot`：读取 PR 正文、diff、Story 和规则文档，通过配置的中转 API 审查并更新 PR 评论。
 
-Relay Review Bot 只对同仓库且在专用 `Issue` 字段绑定 `Closes/Fixes/Resolves #<编号>` 的 PR 自动运行。无 Issue 绑定的会议记录、维护性或资料 PR 会成功跳过 Bot，不消耗中转额度；Task Gate、CI 和 Secret Scan 仍按原规则运行。fork PR 不获得中转 Secret，仍必须通过不需要外部密钥的门禁。
+Relay Review Bot 只对同仓库且在专用 `Issue` 字段绑定 `Closes/Fixes/Resolves #<编号>` 的 PR 自动运行。无 Issue 绑定的会议记录、维护性或资料 PR 会成功跳过 Bot，不消耗中转额度；CI 和 Secret Scan 仍按原规则运行。fork PR 不获得中转 Secret，仍必须通过不需要外部密钥的门禁。
 
 ## 6. 如何阅读 Relay Review Bot 结果
 
@@ -92,15 +91,15 @@ Bot 评论固定包含 5 部分：
 - 网络超时、连接不可达、408/429/5xx 服务端错误或模型响应无法解析：记录不可用告警，Relay Check 以降级成功结束，不阻塞其它 Required Checks；
 - API 未配置、协议配置错误、鉴权/权限错误、GitHub 请求错误或工作流自身错误：仍然失败，不能用“中转服务故障”掩盖配置和治理问题；
 - PR 正文或 diff 命中疑似密钥模式：仍然失败，并停止把内容发送到中转服务；
-- GitHub 权限、任务元数据或工作流本身失败：仍然失败，不能把仓库治理故障伪装成中转服务不可用。
+- GitHub 权限或工作流本身失败：仍然失败，不能把仓库治理故障伪装成中转服务不可用。
 
 P0/P1/P2 必须修改项和风险都保留真实优先级并写入评论，但不自动让 Check 失败；P2 建议可以忽略，P0/P1 由负责人和合并人决定是否处理。不要为了合并而把真实风险改标为 P2；merge 代表维护者已看到并承担本次变更的人工复核责任。
 
 ## 7. 失败后的处理
 
-### 7.1 任务门禁失败
+### 7.1 PR 元数据不完整
 
-修正 PR 正文、Issue、Story、FR/NFR 或必填证据，再推送一次。不要通过修改检查名称、删除工作流或勾选空声明绕过门禁。
+PR 作者必须修正 PR 正文、Issue、Story、FR/NFR 或必填证据。仓库不再运行独立的任务元数据自动门禁，这些内容由 Relay Review Bot 辅助检查，并由合并人在 merge 前最终核对。
 
 ### 7.2 Relay Review Bot 失败或不可用
 
@@ -147,9 +146,9 @@ P0/P1、越权、数据外泄、未确认视觉结果入库、错误用药判断
 每次修改门禁后，可建立一个“故意不完整”的测试 PR 验证阻断能力：
 
 1. 创建独立测试 Issue，明确写出一个未实现的验收条件；
-2. PR 正文按模板完整填写，确保任务格式门禁能够通过；
+2. PR 正文按模板完整填写，确保任务元数据可由 Bot 和合并人核对；
 3. 提交无害的文档或测试夹具，但不实现 Issue 要求的功能；
-4. 预期 CI 和任务门禁通过，Relay Review Bot 判定 `partial`/`incomplete` 并失败；
+4. 预期 CI 通过，Relay Review Bot 判定 `partial`/`incomplete` 并失败；
 5. 截图或保存 Bot 评论、Actions 日志和检查结果；
 6. 关闭测试 PR 和测试 Issue，不得合并测试夹具，不得把测试失败伪装成成功。
 

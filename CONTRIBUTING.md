@@ -46,7 +46,7 @@ docs: 更新视觉复核状态机
 
 ## 4. Pull Request 门禁
 
-PR 必须说明关联 Issue、Story、FR/NFR、变更范围、测试/评估证据、数据与授权影响、安全边界、AI 使用与人工复核、已知限制、部署/迁移影响和回滚方式，并通过[PR 任务关联与 Relay Review Bot 工作流](docs/vibe-coding/PR任务关联与Relay%20Review%20Bot%20工作流.md)定义的自动门禁。
+PR 必须说明关联 Issue、Story、FR/NFR、变更范围、测试/评估证据、数据与授权影响、安全边界、AI 使用与人工复核、已知限制、部署/迁移影响和回滚方式，并按[PR 任务关联与 Relay Review Bot 工作流](docs/vibe-coding/PR任务关联与Relay%20Review%20Bot%20工作流.md)完成 CI、Relay 辅助审查和合并人核对。
 
 以下情况阻止合并：
 
