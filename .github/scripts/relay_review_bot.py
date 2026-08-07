@@ -595,10 +595,10 @@ def main() -> int:
             raise BotError("未配置 REVIEW_API_URL、REVIEW_API_KEY 或 REVIEW_MODEL。")
         system_prompt, user_prompt = prompt.split("\n\n", 1)
         response = relay_request(api_url, api_key, model, system_prompt, user_prompt)
-        try:
-            review = validate_review(extract_json(extract_response_text(response)))
-        except BotError as exc:
-            raise RelayUnavailableError(str(exc)) from exc
+        review_payload = extract_json(extract_response_text(response))
+        # Transport/parse failures are advisory; a parseable but invalid review
+        # schema is a protocol error and must remain blocking.
+        review = validate_review(review_payload)
         comment = render_review(review, sha)
         write_summary(comment)
         upsert_comment(repository, number, comment)

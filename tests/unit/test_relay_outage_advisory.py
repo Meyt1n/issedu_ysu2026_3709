@@ -120,6 +120,23 @@ def test_main_returns_success_when_model_returns_invalid_json(
     assert comments and "不阻塞其它 Required Checks" in comments[0]
 
 
+def test_main_blocks_when_model_review_schema_is_invalid(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    comments = _configure_main_test(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        BOT,
+        "relay_request",
+        lambda *args, **kwargs: {
+            "output": [{"content": [{"text": '{"task_completion":"complete"}'}]}]
+        },
+    )
+
+    assert BOT.main() == 1
+    assert comments and "阻断原因" in comments[0]
+    assert "中转服务暂不可用" not in comments[0]
+
+
 def test_incomplete_review_prints_failure_reason_and_fix_suggestion(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
