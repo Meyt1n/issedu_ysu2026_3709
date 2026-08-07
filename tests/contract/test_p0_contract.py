@@ -392,6 +392,160 @@ def test_write_only_auth_does_not_grant_list_access(client: TestClient) -> None:
     )
     assert members.status_code == 403
 
+# ── 字段级权限断言 ──────────────────────────────────────
+
+MEMBER_READ_FIELDS = {"id", "household_id", "display_name", "role", "actor_id", "created_at"}
+HOUSEHOLD_READ_FIELDS = {"id", "name", "created_by", "created_at"}
+
+
+def test_list_members_response_contains_only_memberread_fields(
+    client: TestClient,
+) -> None:
+    """list_members 返回的每个成员仅包含 MemberRead 定义的字段，无额外数据泄露"""
+    household_id = _create_household(client)["id"]
+    _create_member(client, household_id, "成员A")
+    _create_member(client, household_id, "成员B")
+    resp = client.get(
+        f"/api/v1/households/{household_id}/members",
+        headers={"X-Actor-Id": "owner"},
+    )
+    assert resp.status_code == 200
+    for member in resp.json():
+        assert (
+            set(member.keys()) == MEMBER_READ_FIELDS
+        ), f"成员字段 {set(member.keys())} 与 MemberRead schema 不一致"
+
+
+def test_list_members_partial_grantee_response_fields_match_schema(
+    client: TestClient,
+) -> None:
+    """被授权者看到的成员响应字段同样严格遵守 MemberRead schema"""
+    household_id = _create_household(client)["id"]
+    member_id = _create_member(client, household_id, "被照护者")["id"]
+    client.post(
+        f"/api/v1/households/{household_id}/authorizations",
+        headers={"X-Actor-Id": "owner"},
+        json={
+            "member_id": member_id,
+            "grantee_actor_id": "caregiver",
+            "data_fields": ["health_events"],
+            "actions": ["READ_EVENTS"],
+            "purpose": "照护",
+            "valid_until": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+        },
+    )
+    resp = client.get(
+        f"/api/v1/households/{household_id}/members",
+        headers={"X-Actor-Id": "caregiver"},
+    )
+    assert resp.status_code == 200
+    members = resp.json()
+    assert len(members) == 1
+    assert set(members[0].keys()) == MEMBER_READ_FIELDS
+
+
+def test_list_members_non_health_events_data_field_is_denied(
+    client: TestClient,
+) -> None:
+    """仅有非 health_events 数据域的授权不能查看成员列表"""
+    household_id = _create_household(client)["id"]
+    member_id = _create_member(client, household_id, "成员")["id"]
+    client.post(
+        f"/api/v1/households/{household_id}/authorizations",
+        headers={"X-Actor-Id": "owner"},
+        json={
+            "member_id": member_id,
+            "grantee_actor_id": "other_caregiver",
+            "data_fields": ["medications"],  # 非 health_events
+            "actions": ["READ_EVENTS"],
+            "purpose": "用药管理",
+            "valid_until": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+        },
+    )
+    resp = client.get(
+        f"/api/v1/households/{household_id}/members",
+        headers={"X-Actor-Id": "other_caregiver"},
+    )
+    assert resp.status_code == 403
+
+
+def test_list_members_unknown_read_action_is_denied(
+    client: TestClient,
+) -> None:
+    """非 READ_EVENTS 的读权限不能查看成员列表（仅允许已知的精确 action）"""
+    household_id = _create_household(client)["id"]
+    member_id = _create_member(client, household_id, "成员")["id"]
+    client.post(
+        f"/api/v1/households/{household_id}/authorizations",
+        headers={"X-Actor-Id": "owner"},
+        json={
+            "member_id": member_id,
+            "grantee_actor_id": "reader",
+            "data_fields": ["health_events"],
+            # 使用 READ_EVENTS 之外的 action —— 但 schema 只允许 READ_EVENTS/WRITE_EVENTS
+            # 所以这个测试验证的是：只有 READ_EVENTS 能看成员列表，WRITE_EVENTS 不能
+            "actions": ["WRITE_EVENTS"],
+            "purpose": "录入",
+            "valid_until": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+        },
+    )
+    resp = client.get(
+        f"/api/v1/households/{household_id}/members",
+        headers={"X-Actor-Id": "reader"},
+    )
+    assert resp.status_code == 403
+
+
+def test_list_households_excludes_non_matching_grants(
+    client: TestClient,
+) -> None:
+    """仅有写权限或非 health_events 的授权不暴露家庭"""
+    household_id = _create_household(client)["id"]
+    member_id = _create_member(client, household_id)["id"]
+    # 给 write_only 用户写权限（无读权限）
+    client.post(
+        f"/api/v1/households/{household_id}/authorizations",
+        headers={"X-Actor-Id": "owner"},
+        json={
+            "member_id": member_id,
+            "grantee_actor_id": "writer_only",
+            "data_fields": ["health_events"],
+            "actions": ["WRITE_EVENTS"],
+            "purpose": "录入事件",
+            "valid_until": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+        },
+    )
+    # write_only 用户不应在家庭列表中看到该家庭
+    resp = client.get("/api/v1/households", headers={"X-Actor-Id": "writer_only"})
+    assert len(resp.json()) == 0
+
+
+def test_list_households_partial_grantee_response_fields_match_schema(
+    client: TestClient,
+) -> None:
+    """被授权者看到的家庭响应字段严格遵守 HouseholdRead schema"""
+    household_id = _create_household(client)["id"]
+    member_id = _create_member(client, household_id)["id"]
+    client.post(
+        f"/api/v1/households/{household_id}/authorizations",
+        headers={"X-Actor-Id": "owner"},
+        json={
+            "member_id": member_id,
+            "grantee_actor_id": "caregiver",
+            "data_fields": ["health_events"],
+            "actions": ["READ_EVENTS"],
+            "purpose": "照护",
+            "valid_until": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+        },
+    )
+    resp = client.get("/api/v1/households", headers={"X-Actor-Id": "caregiver"})
+    assert resp.status_code == 200
+    for household in resp.json():
+        assert (
+            set(household.keys()) == HOUSEHOLD_READ_FIELDS
+        ), f"家庭字段 {set(household.keys())} 与 HouseholdRead schema 不一致"
+
+
 def test_create_authorization_requires_valid_until_in_future(client: TestClient) -> None:
     """valid_until 在过去时返回 422"""
     household_id = _create_household(client)["id"]
