@@ -61,7 +61,7 @@ Reviewer A 检查模板、校验脚本和工作流配置。
 - [x] 已说明 AI 使用、人工复核、证据来源和已知限制
 - [x] 没有诊断、处方、停药、换药、买药、问诊、广告或佣金导流
 - [x] {RECOGNITION_MARKER}
-- [x] 高风险变更已指定第二位人工复核人，或已明确说明不适用
+- [x] 已在合并前检查高风险变更的权限、医疗安全、隐私、测试、迁移和回滚影响；merge 即代表人工复核完成
 
 ## 合并前同步
 
@@ -102,15 +102,14 @@ def test_unknown_requirement_id_is_rejected(monkeypatch) -> None:
     assert any("NFR-999" in error for error in errors)
 
 
-def test_high_risk_scope_requires_distinct_reviewer(monkeypatch) -> None:
+def test_high_risk_scope_allows_merge_owner_as_reviewer(monkeypatch) -> None:
     monkeypatch.setattr(VALIDATOR, "github_issue_exists", lambda *_args: (True, ""))
     body = VALID_BODY.replace(
         "变更范围：完善 PR 任务和风险门禁。", "变更范围：修改成员授权和撤权规则。"
     )
     body = body.replace("复核人：Reviewer A", "复核人：Meyt1n")
     body = body.replace("- 负责人：Meyt1n", "- 负责人：Meyt1n")
-    errors = VALIDATOR.validate_event(event(body))
-    assert any("自我复核" in error for error in errors)
+    assert VALIDATOR.validate_event(event(body)) == []
 
 
 def test_valid_event_satisfies_contract(monkeypatch) -> None:

@@ -74,8 +74,10 @@ def test_complete_task_with_pending_human_review_still_passes_task_gate() -> Non
     value = review(needs_human_reviewer=True)
     BOT.validate_review(value)
     assert not BOT.review_requires_failure(value)
+    assert not value["review_conclusion"]["needs_human_reviewer"]
+    assert value["review_conclusion"]["recommend_merge"]
     rendered = BOT.render_review(value, "0123456789abcdef")
-    assert "人工复核未完成只记录" in rendered
+    assert "merge 即代表完成人工复核" in rendered
 
 
 def test_review_gate_blocks_incomplete_but_not_risk_findings() -> None:
@@ -114,7 +116,7 @@ def test_complete_with_only_p2_findings_passes(
 def test_complete_with_p2_and_p1_is_advisory() -> None:
     value = review(priorities=("P2", "P1"), risk_priorities=("P2",))
     BOT.validate_review(value)
-    assert not value["review_conclusion"]["recommend_merge"]
+    assert value["review_conclusion"]["recommend_merge"]
     assert not BOT.review_requires_failure(value)
 
 

@@ -253,6 +253,10 @@ def validate_review(value: dict) -> dict:
         or not isinstance(conclusion.get("reason"), str)
     ):
         raise BotError("审查 JSON 的 review_conclusion 格式无效。")
+    # 仓库不设置额外的人工审批门禁；维护者执行 merge 即代表完成
+    # 人工复核。风险仍原样写入评论，但只有技术任务未完成才阻断 Check。
+    conclusion["needs_human_reviewer"] = False
+    conclusion["recommend_merge"] = value["task_completion"] == "complete"
     return value
 
 
@@ -370,6 +374,9 @@ def build_context(event: dict) -> tuple[str, str, str, int, str]:
         review_conclusion.needs_human_reviewer=true 本身不等于任务未完成，不能仅凭这些文字把
         task_completion 判为 partial/incomplete；这类状态必须写入复核结论。只有当人工复核本身被
         明确列为当前 PR 的验收标准，或人工复核发现了具体未满足的标准时，才能影响 task_completion。
+        本仓库不设置额外人工审批门禁；维护者最终 merge 即代表完成人工复核。因此不要因为等待
+        第二位 reviewer、approval 或其它额外人工确认而阻止合并建议；风险和规范冲突仍要以真实
+        P0/P1/P2 记录在评论中，但只有技术验收未完成才把 task_completion 判为非 complete。
         如果 PR 与事实源对权限边界有冲突，应标记为需要人工确认的规范冲突并列出证据，不能把
         owner 的明确管理员权限选择直接当作越权缺陷。区分家庭 owner 的管理/健康数据权限与
         非 owner 照护者的字段级授权，不要用角色名称猜测权限。
@@ -404,8 +411,8 @@ def build_context(event: dict) -> tuple[str, str, str, int, str]:
           "risks": [{{"priority":"P0|P1|P2",
             "area":"security|privacy|authorization|medical_safety|data|deployment|quality",
             "description":"风险","mitigation":"缓解"}}],
-          "review_conclusion": {{"needs_human_reviewer":true,
-            "recommend_merge":false,"reason":"原因"}}
+          "review_conclusion": {{"needs_human_reviewer":false,
+            "recommend_merge":true,"reason":"原因"}}
         }}
         """
     ).strip()
@@ -421,7 +428,7 @@ def render_review(review: dict, sha: str) -> str:
         "",
         "## 任务完成结论",
         f"**{review['task_completion']}**：{review['summary']}",
-        "> 人工复核未完成只记录在下方复核结论；除非它是明确验收标准，否则不单独阻断任务门禁。",
+        "> 本仓库不设置额外人工审批门禁；维护者执行 merge 即代表完成人工复核。风险仍保留真实等级。",
         "",
         "## 验收标准核对",
     ]
@@ -450,8 +457,7 @@ def render_review(review: dict, sha: str) -> str:
         [
             "",
             "## 复核结论",
-            "- 第二位人工复核："
-            f"{'需要' if conclusion['needs_human_reviewer'] else '不需要（仍遵守高风险变更规则）'}",
+            "- 额外人工复核：不需要；merge 动作代表人工复核完成",
             f"- 建议合并：{'是' if conclusion['recommend_merge'] else '否'}；"
             f"{conclusion['reason']}",
         ]
@@ -509,7 +515,7 @@ def failure_comment(message: str) -> str:
             "",
             f"**阻断原因：** {message}",
             "",
-            "请修复原因后重新推送，或在 PR 中记录人工复核和替代证据；不能勾选门禁冒充通过。",
+            "请修复原因后重新推送；不能勾选门禁冒充通过。",
         ]
     )
 
