@@ -1,9 +1,35 @@
+import io
+import json
 from pathlib import Path
 
+import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
+from check_http_health import HealthCheckError, check_health_endpoint
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+class FakeHealthResponse:
+    def __init__(
+        self,
+        payload: object = None,
+        status: int = 200,
+        raw_body: bytes | None = None,
+    ) -> None:
+        self.status = status
+        body = raw_body if raw_body is not None else json.dumps(payload).encode("utf-8")
+        self._body = io.BytesIO(body)
+
+    def read(self) -> bytes:
+        return self._body.read()
+
+    def __enter__(self) -> "FakeHealthResponse":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
 
 
 def read_repo_file(relative_path: str) -> str:
@@ -23,6 +49,54 @@ def test_cross_platform_start_scripts_expose_lifecycle_commands() -> None:
     assert "docker compose up -d --build --wait" in shell
     assert "docker compose down" in powershell
     assert "docker compose down" in shell
+    assert "/api/v1/health/db" in powershell
+    assert "/api/v1/health/db" in shell
+    assert "check_http_health.py" in powershell
+    assert "check_http_health.py" in shell
+    assert "docker compose down --volumes" not in powershell
+    assert "docker compose down --volumes" not in shell
+
+
+def test_http_health_checker_requires_ok_json() -> None:
+    payload = check_health_endpoint(
+        "API",
+        "http://127.0.0.1:8000/health",
+        opener=lambda *_args, **_kwargs: FakeHealthResponse({"status": "ok"}),
+    )
+
+    assert payload["status"] == "ok"
+
+
+def test_http_health_checker_rejects_non_ok_status() -> None:
+    with pytest.raises(HealthCheckError, match="status 不是 ok"):
+        check_health_endpoint(
+            "MySQL",
+            "http://localhost:8000/api/v1/health/db",
+            opener=lambda *_args, **_kwargs: FakeHealthResponse({"status": "degraded"}),
+        )
+
+
+def test_http_health_checker_rejects_non_200_response() -> None:
+    with pytest.raises(HealthCheckError, match="HTTP 503"):
+        check_health_endpoint(
+            "Web",
+            "http://127.0.0.1:8080/health",
+            opener=lambda *_args, **_kwargs: FakeHealthResponse({"status": "ok"}, status=503),
+        )
+
+
+def test_http_health_checker_rejects_invalid_json() -> None:
+    with pytest.raises(HealthCheckError, match="JSON 解析失败"):
+        check_health_endpoint(
+            "API",
+            "http://127.0.0.1:8000/health",
+            opener=lambda *_args, **_kwargs: FakeHealthResponse(raw_body=b"not-json"),
+        )
+
+
+def test_http_health_checker_rejects_non_loopback_url() -> None:
+    with pytest.raises(HealthCheckError, match="只允许本机 HTTP 地址"):
+        check_health_endpoint("API", "https://example.com/health")
 
 
 def test_compose_has_locatable_health_checks_for_all_services() -> None:

@@ -41,27 +41,26 @@ function Get-ComposeServiceStatus {
     }
 }
 
-function Test-HttpHealth {
-    param(
-        [Parameter(Mandatory = $true)][string]$Service,
-        [Parameter(Mandatory = $true)][int]$ContainerPort,
-        [Parameter(Mandatory = $true)][string]$Path
-    )
+function Get-ComposeHostPort {
+    param([Parameter(Mandatory = $true)][string]$Service, [Parameter(Mandatory = $true)][int]$ContainerPort)
+
     $published = @(Invoke-CheckedCommand { docker compose port $Service $ContainerPort })[0]
     if (-not $published) {
         throw "无法定位 ${Service}:$ContainerPort 的宿主端口。"
     }
-    $hostPort = ($published.Trim() -split ":")[-1]
-    $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$hostPort$Path" -TimeoutSec 10
-    if ($response.StatusCode -ne 200) {
-        throw "$Service 健康检查返回 HTTP $($response.StatusCode)。"
-    }
+    return ($published.Trim() -split ":")[-1]
 }
 
 function Invoke-HealthCheck {
     Get-ComposeServiceStatus
-    Test-HttpHealth -Service "api" -ContainerPort 8000 -Path "/health"
-    Test-HttpHealth -Service "web" -ContainerPort 80 -Path "/health"
+    $apiPort = Get-ComposeHostPort -Service "api" -ContainerPort 8000
+    $webPort = Get-ComposeHostPort -Service "web" -ContainerPort 80
+    $endpoints = @(
+        "--endpoint", "API=http://127.0.0.1:$apiPort/health",
+        "--endpoint", "MySQL=http://127.0.0.1:$apiPort/api/v1/health/db",
+        "--endpoint", "Web=http://127.0.0.1:$webPort/health"
+    )
+    Invoke-CheckedCommand { uv run python scripts/check_http_health.py @endpoints }
     Write-Host "API、Web、MySQL Compose 健康检查通过。"
 }
 

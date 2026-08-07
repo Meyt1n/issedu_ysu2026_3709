@@ -53,8 +53,10 @@ case "$target" in
     [[ -n "$api_url" && -n "$web_url" ]] || { echo "无法定位 API/Web 宿主端口。" >&2; exit 1; }
     api_port="${api_url##*:}"
     web_port="${web_url##*:}"
-    curl --fail --silent --show-error "http://127.0.0.1:${api_port}/health" >/dev/null
-    curl --fail --silent --show-error "http://127.0.0.1:${web_port}/health" >/dev/null
+    uv run python scripts/check_http_health.py \
+      --endpoint "API=http://127.0.0.1:${api_port}/health" \
+      --endpoint "MySQL=http://127.0.0.1:${api_port}/api/v1/health/db" \
+      --endpoint "Web=http://127.0.0.1:${web_port}/health"
     echo "API、Web、MySQL Compose 健康检查通过。"
     ;;
   down)
