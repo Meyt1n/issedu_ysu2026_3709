@@ -72,7 +72,8 @@ class HealthEvent(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     evidence: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     created_by: Mapped[str] = mapped_column(String(120), nullable=False)
-    confirmed_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    # 待确认事实可以先保存，但只有 CONFIRMED 事件才有确认人。
+    confirmed_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

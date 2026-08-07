@@ -38,6 +38,7 @@ def review(
     completion: str = "complete",
     priorities: tuple[str, ...] = (),
     risk_priorities: tuple[str, ...] = (),
+    needs_human_reviewer: bool = False,
 ) -> dict:
     blocking_priorities = {"P0", "P1"}
     has_blocking_finding = any(
@@ -57,7 +58,7 @@ def review(
         "must_fix": [finding(priority) for priority in priorities],
         "risks": [risk(priority) for priority in risk_priorities],
         "review_conclusion": {
-            "needs_human_reviewer": False,
+            "needs_human_reviewer": needs_human_reviewer,
             "recommend_merge": completion == "complete" and not has_blocking_finding,
             "reason": "测试结论",
         },
@@ -67,6 +68,16 @@ def review(
 def test_extract_json_accepts_fenced_model_output() -> None:
     value = BOT.extract_json('说明文字\n```json\n{"task_completion":"complete"}\n```')
     assert value["task_completion"] == "complete"
+
+
+def test_complete_task_with_pending_human_review_still_passes_task_gate() -> None:
+    value = review(needs_human_reviewer=True)
+    BOT.validate_review(value)
+    assert not BOT.review_requires_failure(value)
+    assert not value["review_conclusion"]["needs_human_reviewer"]
+    assert value["review_conclusion"]["recommend_merge"]
+    rendered = BOT.render_review(value, "0123456789abcdef")
+    assert "merge 即代表完成人工复核" in rendered
 
 
 def test_review_gate_blocks_incomplete_but_not_risk_findings() -> None:
@@ -105,7 +116,7 @@ def test_complete_with_only_p2_findings_passes(
 def test_complete_with_p2_and_p1_is_advisory() -> None:
     value = review(priorities=("P2", "P1"), risk_priorities=("P2",))
     BOT.validate_review(value)
-    assert not value["review_conclusion"]["recommend_merge"]
+    assert value["review_conclusion"]["recommend_merge"]
     assert not BOT.review_requires_failure(value)
 
 

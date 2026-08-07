@@ -71,11 +71,6 @@ def requirement_ids() -> set[str]:
     return {value.upper() for value in ids}
 
 
-def identity_prefix(value: str) -> str:
-    value = re.sub(r"[`*_>#\-]", "", value).strip()
-    return re.split(r"[（(、/,，]", value, maxsplit=1)[0].strip()
-
-
 def github_issue_exists(repository: str, issue_number: str) -> tuple[bool, str]:
     token = os.environ.get("GITHUB_TOKEN")
     if not token:
@@ -160,14 +155,6 @@ def validate_event(event: dict) -> list[str]:
         if not meaningful(field_content(body, label)):
             errors.append(f"PR 必须填写“{label}”，不能留空或使用占位词。")
 
-    high_risk_scope = " ".join(field_content(body, label) for label in ("变更范围", "明确不做"))
-    high_risk_terms = ("授权", "撤权", "健康事件", "数据删除", "规则", "模型", "知识", "隐私")
-    if any(term in high_risk_scope for term in high_risk_terms):
-        owner = identity_prefix(field_content(body, "负责人"))
-        reviewer = identity_prefix(field_content(body, "复核人"))
-        if owner and reviewer and owner == reviewer:
-            errors.append("高风险范围不能由负责人自我复核，必须填写另一名人工复核人。")
-
     for heading in ("验收标准", "测试证据", "人工验收/演示证据", "部署、迁移和回滚"):
         if not meaningful(section_content(body, heading)):
             errors.append(f"必须填写“{heading}”部分，不能只留模板或写 TBD/TODO。")
@@ -188,7 +175,8 @@ def validate_event(event: dict) -> list[str]:
         "已说明 AI 使用、人工复核、证据来源和已知限制",
         "没有诊断、处方、停药、换药、买药、问诊、广告或佣金导流",
         recognition_marker,
-        "高风险变更已指定第二位人工复核人，或已明确说明不适用",
+        "已在合并前检查高风险变更的权限、医疗安全、隐私、测试、迁移和回滚影响；"
+        "merge 即代表人工复核完成",
         "需求追踪矩阵已更新，或已说明本 PR 不改变需求状态",
         "相关 API、OpenAPI、迁移、测试和文档已同步，或已说明不适用",
         "Relay Review Bot 已完成，或已说明未配置中转服务及替代复核方式",

@@ -53,6 +53,91 @@ def capabilities() -> CapabilityResponse:
     )
 
 
+def _valid_authorizations(
+    session: Session,
+    actor_id: str,
+    *,
+    household_id: str | None = None,
+) -> list[CareAuthorization]:
+    """获取 actor 的未撤权、未过期、且有明确字段和动作的授权。
+
+    统一在所有列表接口中复用，确保与 has_authorized_action 一致地校验
+    data_fields 和 actions，不会仅凭"存在任意授权记录"就放行。
+    """
+    now = datetime.now(UTC)
+    stmt = select(CareAuthorization).where(
+        CareAuthorization.grantee_actor_id == actor_id,
+        CareAuthorization.revoked_at.is_(None),
+        CareAuthorization.valid_until > now,
+    )
+    if household_id is not None:
+        stmt = stmt.where(CareAuthorization.household_id == household_id)
+    auths: list[CareAuthorization] = list(session.scalars(stmt).all())
+    return [
+        a
+        for a in auths
+        if "health_events" in (a.data_fields or [])
+        and "READ_EVENTS" in (a.actions or [])
+    ]
+
+
+@router.get("/households", response_model=list[HouseholdRead])
+def list_households(
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> list[Household]:
+    owned = session.scalars(
+        select(Household).where(Household.created_by == actor_id)
+    ).all()
+    authorized_ids = {a.household_id for a in _valid_authorizations(session, actor_id)}
+    authorized = (
+        list(session.scalars(
+            select(Household).where(Household.id.in_(authorized_ids))
+        ).all())
+        if authorized_ids
+        else []
+    )
+    seen: set[str] = set()
+    result: list[Household] = []
+    for h in list(owned) + authorized:
+        if h.id not in seen:
+            seen.add(h.id)
+            result.append(h)
+    return result
+
+
+@router.get("/households/{household_id}/members", response_model=list[MemberRead])
+def list_members(
+    household_id: str,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> list[Member]:
+    household = session.get(Household, household_id)
+    if household is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="HOUSEHOLD_NOT_FOUND")
+    if household.created_by == actor_id:
+        query = select(Member).where(Member.household_id == household_id)
+        return list(session.scalars(query).all())
+
+    members = list(
+        session.scalars(
+            select(Member).where(Member.household_id == household_id)
+        ).all()
+    )
+    authorized_members = [
+        m
+        for m in members
+        if has_authorized_action(
+            session, household, m.id, actor_id, "READ_EVENTS", "health_events",
+        )
+    ]
+    if not authorized_members:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="MEMBER_LIST_NOT_AUTHORIZED"
+        )
+    return authorized_members
+
+
 @router.post("/households", response_model=HouseholdRead, status_code=status.HTTP_201_CREATED)
 def create_household(
     payload: HouseholdCreate,
@@ -173,6 +258,7 @@ def append_health_event(
             status_code=status.HTTP_403_FORBIDDEN, detail="EVENT_WRITE_NOT_AUTHORIZED"
         )
 
+    is_confirmed = payload.confirmation_status == "CONFIRMED"
     event = HealthEvent(
         household_id=household.id,
         member_id=member.id,
@@ -182,32 +268,38 @@ def append_health_event(
         payload=payload.payload,
         evidence=payload.evidence,
         created_by=actor_id,
-        confirmed_by=actor_id,
+        confirmed_by=actor_id if is_confirmed else None,
     )
     session.add(event)
     session.flush()
     session.add(
         OutboxMessage(
             event_id=event.id,
-            topic="health_event.created",
-            payload={"event_id": event.id, "household_id": household.id, "member_id": member.id},
+            topic="health_event.created" if is_confirmed else "health_event.pending",
+            payload={
+                "event_id": event.id,
+                "household_id": household.id,
+                "member_id": member.id,
+                "confirmation_status": event.confirmation_status,
+            },
         )
     )
-    projection = session.get(MemberStateProjection, member.id)
-    if projection is None:
-        projection = MemberStateProjection(
-            member_id=member.id,
-            household_id=household.id,
-            state={},
-        )
-        session.add(projection)
-    current_state = dict(projection.state or {})
-    current_state["last_event_type"] = event.event_type
-    current_state["last_event_payload"] = event.payload
-    current_state["events_count"] = int(current_state.get("events_count", 0)) + 1
-    projection.state = current_state
-    projection.last_event_id = event.id
-    projection.updated_at = datetime.now(UTC)
+    if is_confirmed:
+        projection = session.get(MemberStateProjection, member.id)
+        if projection is None:
+            projection = MemberStateProjection(
+                member_id=member.id,
+                household_id=household.id,
+                state={},
+            )
+            session.add(projection)
+        current_state = dict(projection.state or {})
+        current_state["last_event_type"] = event.event_type
+        current_state["last_event_payload"] = event.payload
+        current_state["events_count"] = int(current_state.get("events_count", 0)) + 1
+        projection.state = current_state
+        projection.last_event_id = event.id
+        projection.updated_at = datetime.now(UTC)
     session.commit()
     session.refresh(event)
     return event
