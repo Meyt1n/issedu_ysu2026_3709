@@ -12,6 +12,8 @@ from sqlalchemy.orm import Session
 
 from app.models import OutboxMessage
 
+CARE_HEADERS = {"X-Actor-Id": "caregiver", "X-Access-Purpose": "family-care"}
+
 # ── 辅助函数 ────────────────────────────────────────────
 
 def _create_household(client: TestClient, name: str = "测试家庭") -> dict:
@@ -127,11 +129,11 @@ def test_list_households_returns_authorized_for_grantees(client: TestClient) -> 
             "grantee_actor_id": "caregiver",
             "data_fields": ["health_events"],
             "actions": ["READ_EVENTS"],
-            "purpose": "照护",
+            "purpose": "family-care",
             "valid_until": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
         },
     )
-    resp = client.get("/api/v1/households", headers={"X-Actor-Id": "caregiver"})
+    resp = client.get("/api/v1/households", headers=CARE_HEADERS)
     assert resp.status_code == 200
     assert len(resp.json()) == 1
 
@@ -139,14 +141,14 @@ def test_list_households_returns_authorized_for_grantees(client: TestClient) -> 
 # ── 3. 成员管理接口 ──────────────────────────────────────
 
 def test_create_member_only_by_owner(client: TestClient) -> None:
-    """非 owner 添加成员返回 403"""
+    """非 owner 添加成员返回隐藏式 404。"""
     household_id = _create_household(client)["id"]
     resp = client.post(
         f"/api/v1/households/{household_id}/members",
         headers={"X-Actor-Id": "stranger"},
         json={"display_name": "越权成员"},
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 404
 
 
 def test_create_member_to_nonexistent_household(client: TestClient) -> None:
@@ -187,17 +189,17 @@ def test_list_members_as_owner_returns_all(client: TestClient) -> None:
     assert len(resp.json()) == 2
 
 
-def test_list_members_unauthorized_returns_403_no_leak(client: TestClient) -> None:
-    """GET /members 未授权者返回 403，且响应不含成员数据"""
+def test_list_members_unauthorized_returns_404_no_leak(client: TestClient) -> None:
+    """GET /members 未授权者返回隐藏式 404，且响应不含成员数据。"""
     household_id = _create_household(client)["id"]
     _create_member(client, household_id, "成员X")
     resp = client.get(
         f"/api/v1/households/{household_id}/members",
         headers={"X-Actor-Id": "stranger"},
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 404
     body = resp.json()
-    # 403 body 不能包含任何成员信息
+    # 隐藏式拒绝 body 不能包含任何成员信息。
     assert "id" not in body
     assert "display_name" not in body
     assert "household_id" not in body
@@ -217,13 +219,13 @@ def test_list_members_only_authorized_for_partial(client: TestClient) -> None:
             "grantee_actor_id": "caregiver",
             "data_fields": ["health_events"],
             "actions": ["READ_EVENTS"],
-            "purpose": "照护A",
+            "purpose": "family-care",
             "valid_until": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
         },
     )
     resp = client.get(
         f"/api/v1/households/{household_id}/members",
-        headers={"X-Actor-Id": "caregiver"},
+        headers=CARE_HEADERS,
     )
     assert resp.status_code == 200
     members = resp.json()
@@ -244,15 +246,15 @@ def test_list_members_expired_auth_blocks_access(client: TestClient) -> None:
             "grantee_actor_id": "caregiver",
             "data_fields": ["health_events"],
             "actions": ["READ_EVENTS"],
-            "purpose": "照护",
+            "purpose": "family-care",
             "valid_until": (datetime.now(UTC) - timedelta(days=1)).isoformat(),
         },
     )
     resp = client.get(
         f"/api/v1/households/{household_id}/members",
-        headers={"X-Actor-Id": "caregiver"},
+        headers=CARE_HEADERS,
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 404
 
 
 def test_list_members_revoked_auth_blocks_access(client: TestClient) -> None:
@@ -267,7 +269,7 @@ def test_list_members_revoked_auth_blocks_access(client: TestClient) -> None:
             "grantee_actor_id": "caregiver",
             "data_fields": ["health_events"],
             "actions": ["READ_EVENTS"],
-            "purpose": "照护",
+            "purpose": "family-care",
             "valid_until": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
         },
     )
@@ -275,19 +277,20 @@ def test_list_members_revoked_auth_blocks_access(client: TestClient) -> None:
     # 先确认 caregiver 能访问
     before = client.get(
         f"/api/v1/households/{household_id}/members",
-        headers={"X-Actor-Id": "caregiver"},
+        headers=CARE_HEADERS,
     )
     assert before.status_code == 200
     # 撤权
     client.post(
         f"/api/v1/households/{household_id}/authorizations/{auth_id}/revoke",
         headers={"X-Actor-Id": "owner"},
+        json={"expected_version": 1},
     )
     after = client.get(
         f"/api/v1/households/{household_id}/members",
-        headers={"X-Actor-Id": "caregiver"},
+        headers=CARE_HEADERS,
     )
-    assert after.status_code == 403
+    assert after.status_code == 404
 
 
 def test_list_households_excludes_revoked(client: TestClient) -> None:
@@ -302,20 +305,21 @@ def test_list_households_excludes_revoked(client: TestClient) -> None:
             "grantee_actor_id": "caregiver",
             "data_fields": ["health_events"],
             "actions": ["READ_EVENTS"],
-            "purpose": "照护",
+            "purpose": "family-care",
             "valid_until": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
         },
     )
     auth_id = auth.json()["id"]
     # 撤权前能看到
-    before = client.get("/api/v1/households", headers={"X-Actor-Id": "caregiver"})
+    before = client.get("/api/v1/households", headers=CARE_HEADERS)
     assert len(before.json()) == 1
     # 撤权
     client.post(
         f"/api/v1/households/{household_id}/authorizations/{auth_id}/revoke",
         headers={"X-Actor-Id": "owner"},
+        json={"expected_version": 1},
     )
-    after = client.get("/api/v1/households", headers={"X-Actor-Id": "caregiver"})
+    after = client.get("/api/v1/households", headers=CARE_HEADERS)
     assert len(after.json()) == 0
 
 
@@ -331,11 +335,11 @@ def test_list_households_excludes_expired(client: TestClient) -> None:
             "grantee_actor_id": "caregiver",
             "data_fields": ["health_events"],
             "actions": ["READ_EVENTS"],
-            "purpose": "照护",
+            "purpose": "family-care",
             "valid_until": (datetime.now(UTC) - timedelta(days=1)).isoformat(),
         },
     )
-    resp = client.get("/api/v1/households", headers={"X-Actor-Id": "caregiver"})
+    resp = client.get("/api/v1/households", headers=CARE_HEADERS)
     assert len(resp.json()) == 0
 
 
@@ -354,16 +358,16 @@ def test_cross_household_auth_does_not_leak_members(client: TestClient) -> None:
             "grantee_actor_id": "caregiver",
             "data_fields": ["health_events"],
             "actions": ["READ_EVENTS"],
-            "purpose": "照护",
+            "purpose": "family-care",
             "valid_until": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
         },
     )
     # caregiver 查家庭1的成员列表——没被授权
     resp = client.get(
         f"/api/v1/households/{h1}/members",
-        headers={"X-Actor-Id": "caregiver"},
+        headers=CARE_HEADERS,
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 404
 
 
 def test_write_only_auth_does_not_grant_list_access(client: TestClient) -> None:
@@ -378,19 +382,22 @@ def test_write_only_auth_does_not_grant_list_access(client: TestClient) -> None:
             "grantee_actor_id": "writer",
             "data_fields": ["health_events"],
             "actions": ["WRITE_EVENTS"],  # 只有写权限，没有读权限
-            "purpose": "录入事件",
+            "purpose": "event-entry",
             "valid_until": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
         },
     )
     # 家庭列表：write-only 也不应看到
-    households = client.get("/api/v1/households", headers={"X-Actor-Id": "writer"})
+    households = client.get(
+        "/api/v1/households",
+        headers={"X-Actor-Id": "writer", "X-Access-Purpose": "event-entry"},
+    )
     assert len(households.json()) == 0
     # 成员列表：write-only 不应看到
     members = client.get(
         f"/api/v1/households/{household_id}/members",
-        headers={"X-Actor-Id": "writer"},
+        headers={"X-Actor-Id": "writer", "X-Access-Purpose": "event-entry"},
     )
-    assert members.status_code == 403
+    assert members.status_code == 404
 
 # ── 字段级权限断言 ──────────────────────────────────────
 
@@ -430,13 +437,13 @@ def test_list_members_partial_grantee_response_fields_match_schema(
             "grantee_actor_id": "caregiver",
             "data_fields": ["health_events"],
             "actions": ["READ_EVENTS"],
-            "purpose": "照护",
+            "purpose": "family-care",
             "valid_until": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
         },
     )
     resp = client.get(
         f"/api/v1/households/{household_id}/members",
-        headers={"X-Actor-Id": "caregiver"},
+        headers=CARE_HEADERS,
     )
     assert resp.status_code == 200
     members = resp.json()
@@ -458,15 +465,18 @@ def test_list_members_non_health_events_data_field_is_denied(
             "grantee_actor_id": "other_caregiver",
             "data_fields": ["medications"],  # 非 health_events
             "actions": ["READ_EVENTS"],
-            "purpose": "用药管理",
+            "purpose": "medication-care",
             "valid_until": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
         },
     )
     resp = client.get(
         f"/api/v1/households/{household_id}/members",
-        headers={"X-Actor-Id": "other_caregiver"},
+        headers={
+            "X-Actor-Id": "other_caregiver",
+            "X-Access-Purpose": "medication-care",
+        },
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 404
 
 
 def test_list_members_unknown_read_action_is_denied(
@@ -485,15 +495,15 @@ def test_list_members_unknown_read_action_is_denied(
             # 使用 READ_EVENTS 之外的 action —— 但 schema 只允许 READ_EVENTS/WRITE_EVENTS
             # 所以这个测试验证的是：只有 READ_EVENTS 能看成员列表，WRITE_EVENTS 不能
             "actions": ["WRITE_EVENTS"],
-            "purpose": "录入",
+            "purpose": "event-entry",
             "valid_until": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
         },
     )
     resp = client.get(
         f"/api/v1/households/{household_id}/members",
-        headers={"X-Actor-Id": "reader"},
+        headers={"X-Actor-Id": "reader", "X-Access-Purpose": "event-entry"},
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 404
 
 
 def test_list_households_excludes_non_matching_grants(
@@ -511,12 +521,15 @@ def test_list_households_excludes_non_matching_grants(
             "grantee_actor_id": "writer_only",
             "data_fields": ["health_events"],
             "actions": ["WRITE_EVENTS"],
-            "purpose": "录入事件",
+            "purpose": "event-entry",
             "valid_until": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
         },
     )
     # write_only 用户不应在家庭列表中看到该家庭
-    resp = client.get("/api/v1/households", headers={"X-Actor-Id": "writer_only"})
+    resp = client.get(
+        "/api/v1/households",
+        headers={"X-Actor-Id": "writer_only", "X-Access-Purpose": "event-entry"},
+    )
     assert len(resp.json()) == 0
 
 
@@ -534,11 +547,11 @@ def test_list_households_partial_grantee_response_fields_match_schema(
             "grantee_actor_id": "caregiver",
             "data_fields": ["health_events"],
             "actions": ["READ_EVENTS"],
-            "purpose": "照护",
+            "purpose": "family-care",
             "valid_until": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
         },
     )
-    resp = client.get("/api/v1/households", headers={"X-Actor-Id": "caregiver"})
+    resp = client.get("/api/v1/households", headers=CARE_HEADERS)
     assert resp.status_code == 200
     for household in resp.json():
         assert (
@@ -558,7 +571,7 @@ def test_create_authorization_requires_valid_until_in_future(client: TestClient)
             "grantee_actor_id": "caregiver",
             "data_fields": ["health_events"],
             "actions": ["READ_EVENTS"],
-            "purpose": "照护",
+            "purpose": "family-care",
             "valid_until": "2020-01-01T00:00:00Z",
         },
     )
@@ -577,7 +590,7 @@ def test_revoke_authorization_is_immediate(client: TestClient) -> None:
             "grantee_actor_id": "caregiver",
             "data_fields": ["health_events"],
             "actions": ["READ_EVENTS"],
-            "purpose": "照护",
+            "purpose": "family-care",
             "valid_until": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
         },
     )
@@ -596,7 +609,7 @@ def test_revoke_authorization_is_immediate(client: TestClient) -> None:
     )
     before = client.get(
         f"/api/v1/households/{household_id}/events",
-        headers={"X-Actor-Id": "caregiver"},
+        headers=CARE_HEADERS,
     )
     assert before.status_code == 200
 
@@ -604,6 +617,7 @@ def test_revoke_authorization_is_immediate(client: TestClient) -> None:
     revoke = client.post(
         f"/api/v1/households/{household_id}/authorizations/{auth_id}/revoke",
         headers={"X-Actor-Id": "owner"},
+        json={"expected_version": 1},
     )
     assert revoke.status_code == 200
     assert revoke.json()["revoked_at"] is not None
@@ -611,9 +625,9 @@ def test_revoke_authorization_is_immediate(client: TestClient) -> None:
     # 撤权后立即被阻
     after = client.get(
         f"/api/v1/households/{household_id}/events",
-        headers={"X-Actor-Id": "caregiver"},
+        headers=CARE_HEADERS,
     )
-    assert after.status_code == 403
+    assert after.status_code == 404
 
 
 # ── 5. 健康事件接口 ──────────────────────────────────────
@@ -779,7 +793,7 @@ def test_list_events_respects_authorization_boundary(client: TestClient) -> None
             "grantee_actor_id": "caregiver",
             "data_fields": ["health_events"],
             "actions": ["READ_EVENTS"],
-            "purpose": "照护A",
+            "purpose": "family-care",
             "valid_until": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
         },
     )
@@ -809,7 +823,7 @@ def test_list_events_respects_authorization_boundary(client: TestClient) -> None
     # caregiver 只能看到成员A的事件
     resp = client.get(
         f"/api/v1/households/{household_id}/events",
-        headers={"X-Actor-Id": "caregiver"},
+        headers=CARE_HEADERS,
     )
     assert resp.status_code == 200
     events = resp.json()

@@ -1,8 +1,8 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, String, func
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Integer, String, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -46,14 +46,41 @@ class CareAuthorization(Base):
     member_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("member.id", ondelete="CASCADE"), nullable=False
     )
-    grantee_actor_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    grantor_actor_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    grantee_actor_id: Mapped[str] = mapped_column(String(120), nullable=False)
     data_fields: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     actions: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     purpose: Mapped[str] = mapped_column(String(200), nullable=False)
     valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     valid_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class AccessAudit(Base):
+    __tablename__ = "access_audit"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    household_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    authorization_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    actor_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    operation: Mapped[str] = mapped_column(String(32), nullable=False)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    data_field: Mapped[str] = mapped_column(String(120), nullable=False)
+    purpose: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    before_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    after_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), server_default=func.now()
+    )
 
 
 class HealthEvent(Base):
@@ -112,3 +139,7 @@ Index(
     HealthEvent.created_at,
 )
 Index("ix_auth_household_member", CareAuthorization.household_id, CareAuthorization.member_id)
+Index("ix_auth_grantor_actor_id", CareAuthorization.grantor_actor_id)
+Index("ix_auth_grantee_actor_id", CareAuthorization.grantee_actor_id)
+Index("ix_audit_household_time", AccessAudit.household_id, AccessAudit.created_at)
+Index("ix_audit_authorization", AccessAudit.authorization_id)

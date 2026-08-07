@@ -133,7 +133,8 @@ def test_alembic_has_a_single_head() -> None:
     config = Config(str(REPO_ROOT / "alembic.ini"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_heads() == ["0002_allow_pending_health_events"]
+    assert scripts.get_heads() == ["0003_hct102_auth_security"]
+    assert all(len(revision) <= 32 for revision in scripts.get_heads())
 
 
 def test_reproduction_guides_describe_the_verified_lifecycle() -> None:
