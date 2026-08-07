@@ -7,7 +7,10 @@ services:
       MYSQL_USER: ${MYSQL_USER:-homecare}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-change-me}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-change-me-root}
-    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
+    command:
+      - "--character-set-server=utf8mb4"
+      - "--collation-server=utf8mb4_unicode_ci"
+      - "--default-time-zone=+00:00"
     ports:
       - "${MYSQL_PORT:-3306}:3306"
     volumes:
