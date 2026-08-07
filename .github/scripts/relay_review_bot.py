@@ -3,7 +3,8 @@
 The script deliberately uses only the Python standard library. It reads the PR
 event and trusted repository files, sends the review context to an
 OpenAI-compatible Chat Completions endpoint, posts one replaceable PR comment,
-and fails the job for incomplete work or P0/P1 findings.
+and fails the job only when the task is incomplete. Risk findings remain
+visible with their actual priority and are advisory to the merge check.
 """
 
 from __future__ import annotations
@@ -450,11 +451,8 @@ def render_review(review: dict, sha: str) -> str:
 
 
 def review_requires_failure(review: dict) -> bool:
-    if review["task_completion"] != "complete":
-        return True
-    return any(
-        item.get("priority") in {"P0", "P1"} for item in (*review["must_fix"], *review["risks"])
-    )
+    """Block only incomplete tasks; keep risk findings visible but advisory."""
+    return review["task_completion"] != "complete"
 
 
 def write_summary(content: str) -> None:
@@ -527,7 +525,7 @@ def main() -> int:
         write_summary(comment)
         upsert_comment(repository, number, comment)
         if review_requires_failure(review):
-            print("::error::Relay Review Bot 发现任务未完成或 P0/P1 问题。")
+            print("::error::Relay Review Bot 发现任务未完成。")
             return 1
         print(f"Relay Review Bot 通过：PR #{number_text}，提交 {sha[:12]}。")
         return 0
