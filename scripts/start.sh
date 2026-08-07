@@ -26,7 +26,7 @@ case "$target" in
     uv run alembic upgrade head
     ;;
   check)
-    uv run ruff check src/api tests migrations
+    uv run ruff check src/api src/ai scripts tests migrations
     uv run pytest
     npm run check:web
     npm run build:web
