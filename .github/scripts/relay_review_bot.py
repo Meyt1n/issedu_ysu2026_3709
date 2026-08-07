@@ -31,6 +31,10 @@ class BotError(RuntimeError):
     """An expected, user-actionable bot failure."""
 
 
+class RelayUnavailableError(BotError):
+    """The external relay could not produce a trustworthy review."""
+
+
 def env_int(name: str, default: int) -> int:
     try:
         value = int(os.environ.get(name, str(default)))
@@ -120,15 +124,19 @@ def relay_request(url: str, key: str, model: str, system_prompt: str, user_promp
             with urlopen(request, timeout=timeout) as response:
                 raw = response.read()
         except HTTPError as exc:
+            if exc.code in {408, 429} or 500 <= exc.code <= 599:
+                raise RelayUnavailableError(f"中转 API 调用失败（HTTP {exc.code}）。") from exc
             raise BotError(f"中转 API 调用失败（HTTP {exc.code}）。") from exc
         except (URLError, TimeoutError, OSError) as exc:
-            raise BotError(f"中转 API 调用失败（{exc.__class__.__name__}）。") from exc
+            raise RelayUnavailableError(
+                f"中转 API 调用失败（{exc.__class__.__name__}）。"
+            ) from exc
         try:
             data = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise BotError("中转 API 返回了无法解析的 JSON。") from exc
+            raise RelayUnavailableError("中转 API 返回了无法解析的 JSON。") from exc
         if not isinstance(data, dict):
-            raise BotError("中转 API 返回格式不是 JSON 对象。")
+            raise RelayUnavailableError("中转 API 返回格式不是 JSON 对象。")
         return data
 
     if wire_api == "responses":
@@ -162,7 +170,7 @@ def extract_response_text(payload: dict) -> str:
                     parts.append(content["text"])
         if parts:
             return "".join(parts)
-    raise BotError("中转 API 响应缺少可读取的模型文本。")
+    raise RelayUnavailableError("中转 API 响应缺少可读取的模型文本。")
 
 
 def extract_json(text: str) -> dict:
@@ -177,7 +185,7 @@ def extract_json(text: str) -> dict:
             continue
         if isinstance(value, dict):
             return value
-    raise BotError("中转 API 未返回符合要求的 JSON 审查结果。")
+    raise RelayUnavailableError("中转 API 未返回符合要求的 JSON 审查结果。")
 
 
 def validate_review(value: dict) -> dict:
@@ -470,6 +478,30 @@ def review_requires_failure(review: dict) -> bool:
     return review["task_completion"] != "complete"
 
 
+def print_review_failure_details(review: dict) -> None:
+    """Print actionable failure annotations to the GitHub Actions log."""
+    print("::error title=Relay Review Bot::任务完成度不是 complete，必须补齐验收项。")
+    incomplete_checks = [
+        item for item in review["acceptance_checks"] if item["status"] != "complete"
+    ]
+    for item in incomplete_checks:
+        print(
+            "::error title=验收标准未完成::"
+            f"{item['criterion']}；证据：{item['evidence']}"
+        )
+    for item in review["must_fix"]:
+        print(
+            f"::warning title=[{item['priority']}] 修改建议::"
+            f"{item['location']}：{item['issue']}；影响：{item['impact']}；"
+            f"建议：{item['recommendation']}"
+        )
+    if not incomplete_checks and not review["must_fix"]:
+        print(
+            "::error title=缺少可定位失败证据::"
+            "模型未返回具体验收项或修改建议，请补充 PR 验收证据后重跑。"
+        )
+
+
 def write_summary(content: str) -> None:
     path = os.environ.get("GITHUB_STEP_SUMMARY")
     if path:
@@ -520,6 +552,34 @@ def failure_comment(message: str) -> str:
     )
 
 
+def relay_service_unavailable(error: BotError) -> bool:
+    """Return whether the external relay could not produce a review.
+
+    An outage or malformed provider response is advisory because the other
+    required checks still protect the repository. Local safety failures,
+    GitHub API failures, and secret detection remain blocking errors.
+    """
+    return isinstance(error, RelayUnavailableError)
+
+
+def unavailable_comment(message: str) -> str:
+    return "\n".join(
+        [
+            MARKER,
+            "### Relay Review Bot",
+            "> 中转 Review 服务暂不可用，本次未生成有效的 AI Review。",
+            "",
+            f"**告警：** {message}",
+            "",
+            (
+                "本次仅将 Relay Review Bot 作为降级告警，不阻塞其它 Required Checks。"
+                "维护者仍须自行检查任务完成度、验收证据、风险和回滚；"
+                "中转服务恢复后可从 Actions 重新运行本检查。"
+            ),
+        ]
+    )
+
+
 def main() -> int:
     event_path = Path(os.environ.get("GITHUB_EVENT_PATH", ""))
     if not event_path.is_file():
@@ -535,29 +595,40 @@ def main() -> int:
             raise BotError("未配置 REVIEW_API_URL、REVIEW_API_KEY 或 REVIEW_MODEL。")
         system_prompt, user_prompt = prompt.split("\n\n", 1)
         response = relay_request(api_url, api_key, model, system_prompt, user_prompt)
-        review = validate_review(extract_json(extract_response_text(response)))
+        review_payload = extract_json(extract_response_text(response))
+        # Transport/parse failures are advisory; a parseable but invalid review
+        # schema is a protocol error and must remain blocking.
+        review = validate_review(review_payload)
         comment = render_review(review, sha)
         write_summary(comment)
         upsert_comment(repository, number, comment)
         if review_requires_failure(review):
-            print("::error::Relay Review Bot 发现任务未完成。")
+            print_review_failure_details(review)
             return 1
         print(f"Relay Review Bot 通过：PR #{number_text}，提交 {sha[:12]}。")
         return 0
     except BotError as exc:
         message = str(exc)
-        print(f"::error::{message}")
-        write_summary(failure_comment(message))
+        advisory = relay_service_unavailable(exc)
+        comment = unavailable_comment(message) if advisory else failure_comment(message)
+        if advisory:
+            print(
+                f"::warning::{message}；Relay Review Bot 以不可用告警结束，"
+                "不阻塞其它 Required Checks。"
+            )
+        else:
+            print(f"::error::{message}")
+        write_summary(comment)
         try:
             event = json.loads(event_path.read_text(encoding="utf-8"))
             pull_request = event.get("pull_request") or {}
             repository = (event.get("repository") or {}).get("full_name")
             number = pull_request.get("number")
             if repository and number and os.environ.get("GITHUB_TOKEN"):
-                upsert_comment(repository, int(number), failure_comment(message))
+                upsert_comment(repository, int(number), comment)
         except (BotError, OSError, json.JSONDecodeError, ValueError):
             pass
-        return 1
+        return 0 if advisory else 1
 
 
 if __name__ == "__main__":
