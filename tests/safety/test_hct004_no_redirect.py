@@ -5,7 +5,7 @@ Tests for HCT-004 no-redirect keyword scanner.
 import tempfile
 from pathlib import Path
 
-from scripts.scan_no_redirect import PROHIBITED, scan_file
+from scan_no_redirect import PROHIBITED, scan_file
 
 
 class TestScanFile:
