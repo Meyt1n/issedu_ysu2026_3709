@@ -4,8 +4,6 @@ HCT-107: Local password auth, rate limiting, sessions, and PIN challenges.
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import logging
 import secrets
 import time
