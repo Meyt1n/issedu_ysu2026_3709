@@ -31,7 +31,10 @@ class WeatherPayloadRejected(WeatherAdapterError):
     """Raised when the request body contains forbidden fields."""
 
 
-async def fetch_weather(city_code: str | None = None, district_code: str | None = None) -> dict[str, Any]:
+async def fetch_weather(
+    city_code: str | None = None,
+    district_code: str | None = None,
+) -> dict[str, Any]:
     """Fetch weather action cards for a location.
 
     Only city_code and district_code are sent — no health data.

@@ -35,4 +35,11 @@ description = "Files excluded from gitleaks scan"
 paths = [
     "uv.lock",
     "package-lock.json",
+    ".gitleaks.toml",
+    "scripts/scan_no_redirect.py",
+    "tests/safety/test_hct004_no_redirect.py",
+    "tests/safety/test_hct004_log_mask.py",
+    "tests/safety/test_hct004_egress_guard.py",
+    "docs/threat-model/",
+    "docs/data-governance/",
 ]

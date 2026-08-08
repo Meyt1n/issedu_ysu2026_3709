@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import get_session
-from app.weather_adapter import fetch_weather
 from app.models import (
     AccessAudit,
     CareAuthorization,
@@ -17,6 +16,7 @@ from app.models import (
     MemberStateProjection,
     OutboxMessage,
 )
+from app.weather_adapter import fetch_weather
 from app.schemas import (
     AccessAuditRead,
     AuthorizationCreate,
