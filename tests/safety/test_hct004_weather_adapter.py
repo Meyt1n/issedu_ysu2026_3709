@@ -54,3 +54,47 @@ class TestWeatherAdapterPayloadRejection:
         # Wait — we DID add it above. But the function may still be blocked
         # because there's no real server. The key point is it doesn't crash.
         assert "action_cards" in result
+
+
+class TestActionCards:
+    def test_high_temperature_warning(self):
+        from app.weather_adapter import generate_action_cards
+
+        result = generate_action_cards({"temperature": 37, "condition": "sunny"})
+        assert result["status"] == "ok"
+        assert len(result["action_cards"]) == 1
+        assert result["action_cards"][0]["level"] == "warning"
+        assert "高温" in result["action_cards"][0]["message"]
+
+    def test_low_temperature_warning(self):
+        from app.weather_adapter import generate_action_cards
+
+        result = generate_action_cards({"temperature": 0, "condition": "clear"})
+        assert any("低温" in c["message"] for c in result["action_cards"])
+
+    def test_rain_condition(self):
+        from app.weather_adapter import generate_action_cards
+
+        result = generate_action_cards({"temperature": 20, "condition": "rain"})
+        assert any("雨" in c["message"] for c in result["action_cards"])
+
+    def test_high_aqi_warning(self):
+        from app.weather_adapter import generate_action_cards
+
+        result = generate_action_cards({"temperature": 25, "aqi": 200})
+        assert any("污染" in c["message"] for c in result["action_cards"])
+
+    def test_normal_weather_no_cards(self):
+        from app.weather_adapter import generate_action_cards
+
+        result = generate_action_cards({"temperature": 22, "condition": "cloudy", "aqi": 50})
+        assert result["action_cards"] == []
+
+    def test_no_health_data_in_cards(self):
+        from app.weather_adapter import generate_action_cards
+
+        result = generate_action_cards({"temperature": 38, "aqi": 200})
+        for card in result["action_cards"]:
+            assert "drug" not in card["message"]
+            assert "disease" not in card["message"]
+            assert "member" not in card["message"]
