@@ -5,9 +5,10 @@ Each rule is a pure function: facts → list of alerts. Alerts carry source even
 """
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
