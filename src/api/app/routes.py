@@ -1,4 +1,5 @@
 import logging
+import secrets
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import NoReturn
@@ -8,6 +9,13 @@ from fastapi.responses import FileResponse
 from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
 
+from app.auth import (
+    authenticate,
+    generate_pin_challenge,
+    logout,
+    register_account,
+    verify_pin,
+)
 from app.config import get_settings
 from app.db import get_session
 from app.file_upload import delete_file_tree, validate_and_store
@@ -702,3 +710,49 @@ def delete_file(
         actor_id, storage_key, len(deleted),
     )
     return {"storage_key": storage_key, "deleted_paths": len(deleted)}
+
+
+# ── HCT-107: Local auth ────────────────────────────────────────────
+
+
+@router.post("/auth/register", status_code=status.HTTP_201_CREATED)
+def auth_register(
+    actor_id: str,
+    password: str,
+) -> dict:
+    register_account(actor_id, password)
+    return {"status": "registered", "actor_id": actor_id}
+
+
+@router.post("/auth/login")
+def auth_login(
+    actor_id: str,
+    password: str,
+) -> dict:
+    return authenticate(actor_id, password)
+
+
+@router.post("/auth/logout")
+def auth_logout(session_token: str) -> dict:
+    logout(session_token)
+    return {"status": "logged_out"}
+
+
+@router.post("/auth/pin-challenge")
+def auth_pin_challenge(
+    actor_id: str = Depends(get_actor_id),
+) -> dict:
+    session_token = secrets.token_hex(16)
+    return generate_pin_challenge(actor_id, "confirm_high_risk", session_token)
+
+
+@router.post("/auth/pin-verify")
+def auth_pin_verify(
+    pin: str,
+    action: str = "confirm_high_risk",
+    session_token: str = "",
+) -> dict:
+    ok = verify_pin(pin, action, session_token)
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="PIN_INVALID")
+    return {"status": "confirmed"}
