@@ -5,11 +5,13 @@ description = "HomeCare Twin local-first family care API foundation"
 requires-python = ">=3.11,<3.12"
 dependencies = [
   "alembic>=1.14,<2",
+  "bcrypt>=4.2,<5",
   "fastapi>=0.115,<0.116",
   "opencv-python-headless>=4.10,<5",
   "pydantic-settings>=2.7,<3",
   "psutil>=6.1,<8",
   "pymysql>=1.1,<2",
+  "python-multipart>=0.0.9,<1",
   "sqlalchemy>=2.0.36,<2.1",
   "uvicorn[standard]>=0.34,<0.35",
 ]

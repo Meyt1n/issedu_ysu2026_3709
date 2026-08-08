@@ -29,6 +29,16 @@ class Settings(BaseSettings):
     egress_default_deny: bool = True
     egress_weather_whitelist: str = ""
     log_mask_enabled: bool = True
+    upload_allowed_extensions: str = ".jpg,.jpeg,.png,.pdf,.mp4,.mov"
+    upload_max_size_bytes: int = 10 * 1024 * 1024
+
+    @property
+    def upload_allowed_ext_set(self) -> set[str]:
+        return {
+            ext.strip().lower()
+            for ext in self.upload_allowed_extensions.split(",")
+            if ext.strip()
+        }
 
     @property
     def cors_origin_list(self) -> list[str]:

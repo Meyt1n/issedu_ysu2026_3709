@@ -1,12 +1,24 @@
+import logging
+import secrets
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import NoReturn
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
 
+from app.auth import (
+    authenticate,
+    generate_pin_challenge,
+    logout,
+    register_account,
+    verify_pin,
+)
 from app.config import get_settings
 from app.db import get_session
+from app.file_upload import delete_file_tree, validate_and_store
 from app.models import (
     AccessAudit,
     CareAuthorization,
@@ -39,6 +51,8 @@ from app.security import (
     require_household_owner,
 )
 from app.weather_adapter import fetch_weather
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1")
 settings = get_settings()
@@ -646,3 +660,99 @@ async def weather_action_cards(
     No health data is included. This endpoint never blocks on weather failure.
     """
     return await fetch_weather(city_code=city_code, district_code=district_code)
+
+
+# ── HCT-104: File upload & download ────────────────────────────────
+
+
+@router.post("/files/upload", status_code=status.HTTP_201_CREATED)
+async def upload_file(
+    file: UploadFile = File(...),
+    actor_id: str = Depends(get_actor_id),
+) -> dict:
+    """Upload a file with validation, store with random key."""
+    result = await validate_and_store(file)
+    logger.info(
+        "FILE_UPLOADED actor=%s key=%s size=%d",
+        actor_id, result["storage_key"], result["size_bytes"],
+    )
+    return result
+
+
+@router.get("/files/{storage_key}")
+def download_file(
+    storage_key: str,
+    actor_id: str = Depends(get_actor_id),
+) -> FileResponse:
+    """Download a previously uploaded file by storage key."""
+    settings = get_settings()
+    root = Path(settings.file_root).resolve()
+    target = (root / storage_key).resolve()
+
+    if not str(target).startswith(str(root)):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="FILE_NOT_FOUND")
+    if not target.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="FILE_NOT_FOUND")
+
+    logger.info("FILE_DOWNLOADED actor=%s key=%s", actor_id, storage_key)
+    return FileResponse(str(target))
+
+
+@router.delete("/files/{storage_key}")
+def delete_file(
+    storage_key: str,
+    actor_id: str = Depends(get_actor_id),
+) -> dict:
+    """Delete a file and its thumbnails/cache/index entries."""
+    deleted = delete_file_tree(storage_key)
+    logger.info(
+        "FILE_DELETED actor=%s key=%s deleted_paths=%d",
+        actor_id, storage_key, len(deleted),
+    )
+    return {"storage_key": storage_key, "deleted_paths": len(deleted)}
+
+
+# ── HCT-107: Local auth ────────────────────────────────────────────
+
+
+@router.post("/auth/register", status_code=status.HTTP_201_CREATED)
+def auth_register(
+    actor_id: str,
+    password: str,
+) -> dict:
+    register_account(actor_id, password)
+    return {"status": "registered", "actor_id": actor_id}
+
+
+@router.post("/auth/login")
+def auth_login(
+    actor_id: str,
+    password: str,
+) -> dict:
+    return authenticate(actor_id, password)
+
+
+@router.post("/auth/logout")
+def auth_logout(session_token: str) -> dict:
+    logout(session_token)
+    return {"status": "logged_out"}
+
+
+@router.post("/auth/pin-challenge")
+def auth_pin_challenge(
+    actor_id: str = Depends(get_actor_id),
+) -> dict:
+    session_token = secrets.token_hex(16)
+    return generate_pin_challenge(actor_id, "confirm_high_risk", session_token)
+
+
+@router.post("/auth/pin-verify")
+def auth_pin_verify(
+    pin: str,
+    action: str = "confirm_high_risk",
+    session_token: str = "",
+) -> dict:
+    ok = verify_pin(pin, action, session_token)
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="PIN_INVALID")
+    return {"status": "confirmed"}
