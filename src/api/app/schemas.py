@@ -155,3 +155,33 @@ class MemberStateRead(BaseModel):
     state: dict[str, Any]
     last_event_id: str | None
     updated_at: datetime
+
+
+# ── HCT-307: Risk evidence schemas ──────────────────────────────────
+
+
+class RiskAlertRead(BaseModel):
+    """Risk alert as returned by the rules engine. Evidence is desensitized."""
+
+    rule_id: str
+    level: str  # SEVERE | WARNING | INFO | TIP
+    message: str
+    source_event_ids: list[str] = Field(default_factory=list)
+    created_at: datetime | None = None
+
+
+class RiskListResponse(BaseModel):
+    """Risk list for a household member."""
+
+    member_id: str
+    alerts: list[RiskAlertRead]
+    total: int
+    severe_count: int
+    warning_count: int
+
+
+class RiskDetailResponse(BaseModel):
+    """Single risk detail with linked source events."""
+
+    alert: RiskAlertRead
+    source_events: list[dict[str, Any]] = Field(default_factory=list)
