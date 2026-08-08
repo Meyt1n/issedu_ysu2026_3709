@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     ollama_model: str = "unavailable"
     ollama_timeout_seconds: float = 30.0
     weather_adapter: str = "disabled"
+    weather_api_url: str = ""
+    weather_api_timeout_seconds: float = 3.0
+    egress_default_deny: bool = True
+    egress_weather_whitelist: str = ""
+    log_mask_enabled: bool = True
 
     @property
     def cors_origin_list(self) -> list[str]:
