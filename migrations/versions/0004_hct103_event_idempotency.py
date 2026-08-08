@@ -1,7 +1,7 @@
 """HCT-103: add idempotency_key and compensates_event_id to health_event.
 
 Revision ID: 0004_hct103_event_idempotency
-Revises: 0003_hct102_authorization_security
+Revises: 0003_hct102_auth_security
 Create Date: 2026-08-08
 """
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0004_hct103_event_idempotency"
-down_revision: str | None = "0003_hct102_authorization_security"
+down_revision: str | None = "0003_hct102_auth_security"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
