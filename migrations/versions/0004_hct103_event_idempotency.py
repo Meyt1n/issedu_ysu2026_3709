@@ -22,12 +22,7 @@ def upgrade() -> None:
             sa.Column("idempotency_key", sa.String(128), nullable=True),
         )
         batch_op.add_column(
-            sa.Column(
-                "compensates_event_id",
-                sa.String(36),
-                sa.ForeignKey("health_event.id", ondelete="SET NULL"),
-                nullable=True,
-            ),
+            sa.Column("compensates_event_id", sa.String(36), nullable=True),
         )
         batch_op.create_index(
             "ix_health_event_idempotency_key", ["idempotency_key"]
