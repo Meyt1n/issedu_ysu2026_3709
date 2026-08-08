@@ -32,6 +32,13 @@ backups/
 *.sqlite3
 *.db
 
+# Versioned governance artifacts and metadata-only audit tests
+!docs/data/
+!docs/data/**
+!tests/data/
+!tests/data/**
+tests/data/__pycache__/
+
 # Editors / OS
 .idea/
 .vscode/
