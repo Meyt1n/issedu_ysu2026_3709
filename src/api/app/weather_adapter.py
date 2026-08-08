@@ -83,7 +83,7 @@ async def fetch_weather(
                 "aqi": data.get("aqi"),
                 "action_cards": data.get("action_cards", []),
             }
-            return {k: v for k, v in safe.items() if v is not None}
+            return generate_action_cards(safe)
     except httpx.TimeoutException:
         logger.warning("weather_adapter: timeout after %.1fs", settings.weather_api_timeout_seconds)
         return {"status": "timeout", "action_cards": []}
@@ -93,3 +93,44 @@ async def fetch_weather(
     except Exception:
         logger.exception("weather_adapter: unexpected error")
         return {"status": "error", "action_cards": []}
+
+
+def generate_action_cards(weather_data: dict[str, Any]) -> dict[str, Any]:
+    """Generate environment action cards from weather data.
+
+    Never includes health data — only environment-based recommendations.
+    """
+    cards: list[dict[str, str]] = []
+    temp = weather_data.get("temperature")
+    condition = str(weather_data.get("condition", "")).lower()
+    humidity = weather_data.get("humidity")
+    aqi = weather_data.get("aqi")
+
+    if temp is not None:
+        if temp > 35:
+            cards.append(
+                {"level": "warning", "message": "高温预警：建议减少户外活动，注意防暑降温"}
+            )
+        elif temp > 30:
+            cards.append({"level": "info", "message": "天气较热：注意补充水分"})
+        elif temp < 5:
+            cards.append({"level": "warning", "message": "低温提醒：注意保暖，预防感冒"})
+
+    if condition and condition in ("rain", "snow", "storm", "thunderstorm"):
+        cards.append({"level": "info", "message": "雨雪天气：出行注意安全，携带雨具"})
+
+    if isinstance(humidity, (int, float)) and humidity > 90:
+        cards.append({"level": "info", "message": "高湿度提醒：注意防潮"})
+
+    if isinstance(aqi, (int, float)) and aqi > 150:
+        cards.append({"level": "warning", "message": "空气污染：建议减少开窗通风"})
+
+    return {
+        "status": "ok",
+        "temperature": temp,
+        "humidity": humidity,
+        "condition": condition,
+        "wind": weather_data.get("wind"),
+        "aqi": aqi,
+        "action_cards": cards,
+    }
