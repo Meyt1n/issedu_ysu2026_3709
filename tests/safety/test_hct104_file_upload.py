@@ -6,7 +6,7 @@ import io
 from pathlib import Path
 
 import pytest
-from fastapi import UploadFile
+from fastapi import HTTPException, UploadFile
 
 from app.config import get_settings
 from app.file_upload import (
@@ -27,16 +27,16 @@ class TestValidateFilename:
         assert validate_filename("report.pdf") == "report.pdf"
 
     def test_path_traversal_rejected(self):
-        with pytest.raises(Exception) as exc:
+        with pytest.raises(HTTPException) as exc:
             validate_filename("../etc/passwd")
         assert "FILENAME" in str(exc.value.detail)
 
     def test_empty_rejected(self):
-        with pytest.raises(Exception):
+        with pytest.raises(HTTPException):
             validate_filename("")
 
     def test_dotfile_rejected(self):
-        with pytest.raises(Exception):
+        with pytest.raises(HTTPException):
             validate_filename(".hidden")
 
 
@@ -50,7 +50,7 @@ class TestValidateExtension:
     def test_disallowed_ext_rejected(self, monkeypatch):
         settings = get_settings()
         monkeypatch.setattr(settings, "upload_allowed_extensions", ".jpg,.pdf")
-        with pytest.raises(Exception) as exc:
+        with pytest.raises(HTTPException) as exc:
             validate_extension("script.exe")
         assert "NOT_ALLOWED" in str(exc.value.detail)
 
@@ -66,7 +66,7 @@ class TestValidateMagic:
 
     def test_magic_mismatch_rejected(self):
         file = io.BytesIO(b"#!/bin/bash\necho pwned")
-        with pytest.raises(Exception) as exc:
+        with pytest.raises(HTTPException) as exc:
             validate_magic(file, ".jpg")
         assert "MAGIC" in str(exc.value.detail)
 
@@ -79,7 +79,7 @@ class TestValidateSize:
 
     def test_exceeds_limit_rejected(self):
         file = io.BytesIO(b"a" * 2000)
-        with pytest.raises(Exception):
+        with pytest.raises(HTTPException):
             validate_size(file, max_bytes=1024)
 
 
