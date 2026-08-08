@@ -75,4 +75,24 @@ describe('ApiClient authorization contract', () => {
       'http://local.test/api/v1/households/household-1/members/member-1/risks/rule%2Fwith%20spaces',
     ])
   })
+
+  it('loads the authorized member timeline through the API boundary', async () => {
+    const fetcher: typeof fetch = async () => new Response(JSON.stringify([]), { status: 200 })
+    const client = new ApiClient({ baseUrl: 'http://local.test', fetcher })
+    const requests: string[] = []
+    const recordingClient = new ApiClient({
+      baseUrl: 'http://local.test',
+      fetcher: async input => {
+        requests.push(String(input))
+        return fetcher(input)
+      },
+    })
+
+    await client.listMemberTimeline('household-1', 'member-1')
+    await recordingClient.listMemberTimeline('household-1', 'member-1')
+
+    expect(requests).toEqual([
+      'http://local.test/api/v1/households/household-1/members/member-1/timeline',
+    ])
+  })
 })

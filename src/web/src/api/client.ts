@@ -253,6 +253,18 @@ export class ApiClient {
     return this.request(`/api/v1/households/${householdId}/events${query}`, undefined, options)
   }
 
+  listMemberTimeline(
+    householdId: string,
+    memberId: string,
+    options?: RequestOptions,
+  ): Promise<HealthEvent[]> {
+    return this.request(
+      `/api/v1/households/${householdId}/members/${memberId}/timeline`,
+      undefined,
+      options,
+    )
+  }
+
   getMemberState(
     householdId: string,
     memberId: string,

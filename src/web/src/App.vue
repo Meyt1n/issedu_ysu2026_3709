@@ -10,8 +10,11 @@ import { riskLevelLabel, toRiskCardModel } from './risk/riskView'
 import type {
   Authorization,
   AuthorizationAction,
+  CapabilityResponse,
   CreateAuthorizationInput,
+  HealthEvent,
   Household,
+  MemberState,
   Member,
   RequestOptions,
   RiskAlert,
@@ -52,6 +55,12 @@ const riskDetails = ref<Record<string, RiskDetailResponse>>({})
 const loadingRisks = ref(false)
 const riskError = ref('')
 const expandedRiskId = ref<string | null>(null)
+const dashboardMemberId = ref('')
+const dashboardTimeline = ref<HealthEvent[]>([])
+const dashboardState = ref<MemberState | null>(null)
+const capabilities = ref<CapabilityResponse | null>(null)
+const loadingDashboard = ref(false)
+const dashboardError = ref('')
 
 const draft = reactive({
   memberId: '',
@@ -72,6 +81,13 @@ const selectedAuthorization = computed(
 )
 
 const memberNames = computed(() => new Map(members.value.map(member => [member.id, member.display_name])))
+const dashboardMemberName = computed(
+  () => memberNames.value.get(dashboardMemberId.value) ?? 'Selected member',
+)
+const recentTimeline = computed(() => dashboardTimeline.value.slice(0, 4))
+const privacyScopeLabel = computed(
+  () => isOwnerView.value ? 'Owner-managed household scope' : 'API-filtered caregiver scope',
+)
 
 const authorizationPreview = computed(() => {
   const previewActor = previewActorId.value.trim()
@@ -132,6 +148,11 @@ function clearScope(): void {
   riskDetails.value = {}
   riskError.value = ''
   expandedRiskId.value = null
+  dashboardMemberId.value = ''
+  dashboardTimeline.value = []
+  dashboardState.value = null
+  capabilities.value = null
+  dashboardError.value = ''
   resetDraft()
 }
 
@@ -188,10 +209,16 @@ async function loadSelectedHousehold(): Promise<void> {
   riskDetails.value = {}
   riskError.value = ''
   expandedRiskId.value = null
+  dashboardMemberId.value = ''
+  dashboardTimeline.value = []
+  dashboardState.value = null
+  capabilities.value = null
+  dashboardError.value = ''
   try {
     members.value = await apiClient.listMembers(householdId, requestOptions.value)
     draft.memberId = members.value[0]?.id ?? ''
     riskMemberId.value = members.value[0]?.id ?? ''
+    dashboardMemberId.value = members.value[0]?.id ?? ''
 
     try {
       authorizations.value = await apiClient.listAuthorizations(householdId, requestOptions.value)
@@ -201,12 +228,12 @@ async function loadSelectedHousehold(): Promise<void> {
       if (cause instanceof ApiClientError && cause.status === 404) {
         isOwnerView.value = false
         message.value = 'Caregiver view: the API has already filtered this identity to the granted member scope.'
-        await loadMemberRisks()
+        await loadDashboard()
         return
       }
       throw cause
     }
-    await loadMemberRisks()
+    await loadDashboard()
   } catch (cause) {
     members.value = []
     authorizations.value = []
@@ -214,6 +241,36 @@ async function loadSelectedHousehold(): Promise<void> {
     error.value = formatError(cause)
   } finally {
     loadingScope.value = false
+  }
+}
+
+async function loadDashboard(): Promise<void> {
+  const householdId = selectedHouseholdId.value
+  const memberId = dashboardMemberId.value
+  if (!householdId || !memberId) return
+
+  loadingDashboard.value = true
+  dashboardError.value = ''
+  riskMemberId.value = memberId
+  try {
+    const [timelineResult, stateResult, capabilityResult] = await Promise.allSettled([
+      apiClient.listMemberTimeline(householdId, memberId, requestOptions.value),
+      apiClient.getMemberState(householdId, memberId, requestOptions.value),
+      apiClient.getCapabilities(requestOptions.value),
+    ])
+    if (timelineResult.status === 'fulfilled') dashboardTimeline.value = timelineResult.value
+    else dashboardTimeline.value = []
+    if (stateResult.status === 'fulfilled') dashboardState.value = stateResult.value
+    else dashboardState.value = null
+    if (capabilityResult.status === 'fulfilled') capabilities.value = capabilityResult.value
+    else capabilities.value = null
+
+    await loadMemberRisks()
+    if (timelineResult.status === 'rejected' || stateResult.status === 'rejected') {
+      dashboardError.value = 'Some permitted dashboard data is currently unavailable. No hidden data is inferred.'
+    }
+  } finally {
+    loadingDashboard.value = false
   }
 }
 
@@ -372,8 +429,8 @@ async function revokeAuthorization(authorization: Authorization): Promise<void> 
     <header class="topbar">
       <div>
         <p class="eyebrow">HomeCare Twin</p>
-        <h1>Care access</h1>
-        <p class="subtitle">Household health data stays local. Grants are limited by member, field, action, purpose, and expiry.</p>
+        <h1>Household overview</h1>
+        <p class="subtitle">Local household operations, bounded by member, purpose, and current API authorization.</p>
       </div>
       <p class="privacy-badge">Local-only health data</p>
     </header>
@@ -409,7 +466,80 @@ async function revokeAuthorization(authorization: Authorization): Promise<void> 
 
     <section v-if="loadingScope" class="state-panel" aria-live="polite">Loading the permitted household scope.</section>
 
-    <section v-else-if="selectedHouseholdId && isOwnerView" class="owner-layout">
+    <section v-if="selectedHouseholdId && dashboardMemberId" class="dashboard-overview" aria-labelledby="overview-title">
+      <div class="dashboard-heading">
+        <div>
+          <p class="section-label">Daily view</p>
+          <h2 id="overview-title">{{ dashboardMemberName }}</h2>
+        </div>
+        <label class="dashboard-member-select">
+          Member
+          <select v-model="dashboardMemberId" :disabled="loadingDashboard" @change="loadDashboard">
+            <option v-for="member in members" :key="member.id" :value="member.id">{{ member.display_name }}</option>
+          </select>
+        </label>
+      </div>
+
+      <p v-if="dashboardError" class="notice error" role="alert">{{ dashboardError }}</p>
+      <div class="overview-grid">
+        <section class="overview-item">
+          <p class="section-label">Visible scope</p>
+          <strong>{{ privacyScopeLabel }}</strong>
+          <span>Identity: {{ actorId || 'Not set' }}</span>
+          <span>Purpose: {{ accessPurpose || 'Not set' }}</span>
+        </section>
+        <section class="overview-item">
+          <p class="section-label">Local status</p>
+          <strong>{{ capabilities ? 'API connected' : 'API status unavailable' }}</strong>
+          <span>{{ capabilities?.available.length ?? 0 }} local capabilities reported</span>
+          <span>Network egress remains policy-controlled</span>
+        </section>
+        <section class="overview-item">
+          <p class="section-label">Event projection</p>
+          <strong>{{ dashboardState?.state.events_count ?? 0 }} confirmed events</strong>
+          <span>{{ dashboardState?.last_event_id ? 'Current projection available' : 'No projected event yet' }}</span>
+          <span>Event details remain API-authorized</span>
+        </section>
+        <section class="overview-item">
+          <p class="section-label">Risk signals</p>
+          <strong>{{ riskList?.total ?? 0 }} active signals</strong>
+          <span>{{ riskList?.severe_count ?? 0 }} severe · {{ riskList?.warning_count ?? 0 }} warning</span>
+          <span>{{ riskError ? 'Risk dependency unavailable' : 'Desensitized evidence only' }}</span>
+        </section>
+      </div>
+
+      <div class="dashboard-columns">
+        <section class="dashboard-section" aria-labelledby="timeline-title">
+          <div class="panel-heading">
+            <div>
+              <p class="section-label">Recent activity</p>
+              <h2 id="timeline-title">Event timeline</h2>
+            </div>
+            <span class="section-status">{{ loadingDashboard ? 'Loading' : `${dashboardTimeline.length} visible` }}</span>
+          </div>
+          <p v-if="!loadingDashboard && recentTimeline.length === 0" class="empty-state">No confirmed event summary is available for this member.</p>
+          <ul v-else class="timeline-list">
+            <li v-for="event in recentTimeline" :key="event.id">
+              <strong>{{ event.event_type }}</strong>
+              <span>{{ event.confirmation_status }}</span>
+              <span>{{ new Date(event.created_at).toLocaleString() }}</span>
+            </li>
+          </ul>
+        </section>
+        <section class="dashboard-section" aria-labelledby="reminder-title">
+          <div class="panel-heading">
+            <div>
+              <p class="section-label">Care actions</p>
+              <h2 id="reminder-title">Tasks and reminders</h2>
+            </div>
+            <span class="section-status">API dependency</span>
+          </div>
+          <p class="empty-state">No read-only task or reminder summary is available from the current API contract. This page does not infer planned care actions.</p>
+        </section>
+      </div>
+    </section>
+
+    <section v-if="selectedHouseholdId && isOwnerView" class="owner-layout">
       <section class="panel grant-editor" aria-labelledby="editor-title">
         <div class="panel-heading">
           <div>
