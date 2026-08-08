@@ -911,7 +911,7 @@ def skip_plan_endpoint(
         session, household, member_id, actor_id, "WRITE_EVENTS", "health_events", access_purpose,
     ):
         _raise_resource_not_found()
-    from app.care_plan import check_escalation, skip_plan
+    from app.care_plan import skip_plan
 
     event = skip_plan(member_id, household_id, plan_event_id, reason, actor_id)
     session.add(event)
