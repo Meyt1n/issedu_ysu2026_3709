@@ -40,6 +40,12 @@ paths = [
     "tests/safety/test_hct004_no_redirect.py",
     "tests/safety/test_hct004_log_mask.py",
     "tests/safety/test_hct004_egress_guard.py",
+    "tests/safety/test_hct004_weather_adapter.py",
+    "tests/safety/test_hct107_local_auth.py",
+    "tests/unit/test_hct302_rules.py",
+    "tests/unit/test_hct303_alerts.py",
+    "tests/integration/test_hct301_projection.py",
+    "src/api/app/rules.py",
     "docs/threat-model/",
     "docs/data-governance/",
 ]
