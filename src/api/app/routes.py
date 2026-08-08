@@ -826,3 +826,95 @@ def run_rules_endpoint(
     logger.info("RULES_RUN member=%s alerts=%d", member_id, len(alerts))
     return [{"rule_id": a.rule_id, "level": a.level, "message": a.message,
              "source_event_ids": a.source_event_ids} for a in alerts]
+
+
+# ── HCT-304/308: Care plans & escalation ───────────────────────────
+
+
+@router.post(
+    "/households/{household_id}/members/{member_id}/plans/confirm",
+    status_code=status.HTTP_201_CREATED,
+)
+def confirm_plan_endpoint(
+    household_id: str,
+    member_id: str,
+    plan_event_id: str,
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> HealthEventRead:
+    household = session.get(Household, household_id)
+    member = session.get(Member, member_id)
+    if household is None or member is None or member.household_id != household_id:
+        _raise_resource_not_found()
+    if not has_authorized_action(
+        session, household, member_id, actor_id, "WRITE_EVENTS", "health_events", access_purpose,
+    ):
+        _raise_resource_not_found()
+    from app.care_plan import confirm_plan
+
+    event = confirm_plan(member_id, household_id, plan_event_id, actor_id)
+    session.add(event)
+    session.commit()
+    session.refresh(event)
+    return HealthEventRead.model_validate(event)
+
+
+@router.post(
+    "/households/{household_id}/members/{member_id}/plans/defer",
+    status_code=status.HTTP_201_CREATED,
+)
+def defer_plan_endpoint(
+    household_id: str,
+    member_id: str,
+    plan_event_id: str,
+    delay_hours: int = 4,
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> HealthEventRead:
+    household = session.get(Household, household_id)
+    member = session.get(Member, member_id)
+    if household is None or member is None or member.household_id != household_id:
+        _raise_resource_not_found()
+    if not has_authorized_action(
+        session, household, member_id, actor_id, "WRITE_EVENTS", "health_events", access_purpose,
+    ):
+        _raise_resource_not_found()
+    from app.care_plan import defer_plan
+
+    event = defer_plan(member_id, household_id, plan_event_id, delay_hours, actor_id)
+    session.add(event)
+    session.commit()
+    session.refresh(event)
+    return HealthEventRead.model_validate(event)
+
+
+@router.post(
+    "/households/{household_id}/members/{member_id}/plans/skip",
+    status_code=status.HTTP_201_CREATED,
+)
+def skip_plan_endpoint(
+    household_id: str,
+    member_id: str,
+    plan_event_id: str,
+    reason: str = "",
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> HealthEventRead:
+    household = session.get(Household, household_id)
+    member = session.get(Member, member_id)
+    if household is None or member is None or member.household_id != household_id:
+        _raise_resource_not_found()
+    if not has_authorized_action(
+        session, household, member_id, actor_id, "WRITE_EVENTS", "health_events", access_purpose,
+    ):
+        _raise_resource_not_found()
+    from app.care_plan import check_escalation, skip_plan
+
+    event = skip_plan(member_id, household_id, plan_event_id, reason, actor_id)
+    session.add(event)
+    session.commit()
+    session.refresh(event)
+    return HealthEventRead.model_validate(event)
