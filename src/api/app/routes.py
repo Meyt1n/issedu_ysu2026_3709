@@ -481,6 +481,39 @@ def append_health_event(
     ):
         _raise_resource_not_found()
 
+    # ── HCT-103: 幂等键去重 ──────────────────────────────────
+    if payload.idempotency_key is not None:
+        existing = session.scalars(
+            select(HealthEvent).where(
+                HealthEvent.idempotency_key == payload.idempotency_key
+            )
+        ).first()
+        if existing is not None:
+            if (
+                existing.event_type != payload.event_type
+                or existing.payload != payload.payload
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="IDEMPOTENCY_CONFLICT",
+                )
+            return existing
+
+    # ── HCT-103: 补偿事件校验 ────────────────────────────────
+    compensates_event = None
+    if payload.compensates_event_id is not None:
+        compensates_event = session.get(HealthEvent, payload.compensates_event_id)
+        if compensates_event is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="COMPENSATES_EVENT_NOT_FOUND",
+            )
+        if compensates_event.household_id != household.id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="COMPENSATES_EVENT_WRONG_HOUSEHOLD",
+            )
+
     is_confirmed = payload.confirmation_status == "CONFIRMED"
     event = HealthEvent(
         household_id=household.id,
@@ -492,6 +525,8 @@ def append_health_event(
         evidence=payload.evidence,
         created_by=actor_id,
         confirmed_by=actor_id if is_confirmed else None,
+        idempotency_key=payload.idempotency_key,
+        compensates_event_id=payload.compensates_event_id,
     )
     session.add(event)
     session.flush()
@@ -517,6 +552,10 @@ def append_health_event(
             )
             session.add(projection)
         current_state = dict(projection.state or {})
+        # HCT-103: 补偿事件覆写投影中对应字段，保留原始事件链
+        if compensates_event is not None:
+            current_state["compensated_event_id"] = compensates_event.id
+            current_state["compensated_event_type"] = compensates_event.event_type
         current_state["last_event_type"] = event.event_type
         current_state["last_event_payload"] = event.payload
         current_state["events_count"] = int(current_state.get("events_count", 0)) + 1

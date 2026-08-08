@@ -125,6 +125,8 @@ class HealthEventCreate(BaseModel):
     confirmation_status: Literal["CONFIRMED", "UNCONFIRMED"] = "UNCONFIRMED"
     payload: dict[str, Any] = Field(min_length=1)
     evidence: dict[str, Any] = Field(default_factory=dict)
+    idempotency_key: str | None = Field(default=None, max_length=128)
+    compensates_event_id: str | None = Field(default=None, max_length=36)
 
 
 class HealthEventRead(BaseModel):
@@ -140,6 +142,8 @@ class HealthEventRead(BaseModel):
     evidence: dict[str, Any]
     created_by: str
     confirmed_by: str | None
+    idempotency_key: str | None
+    compensates_event_id: str | None
     created_at: datetime
 
 

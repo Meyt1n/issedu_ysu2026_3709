@@ -101,6 +101,15 @@ class HealthEvent(Base):
     created_by: Mapped[str] = mapped_column(String(120), nullable=False)
     # 待确认事实可以先保存，但只有 CONFIRMED 事件才有确认人。
     confirmed_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # HCT-103: 幂等键与补偿事件
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String(128), nullable=True, index=True, unique=True
+    )
+    compensates_event_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("health_event.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
