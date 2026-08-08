@@ -38,6 +38,7 @@ from app.security import (
     has_authorized_action,
     require_household_owner,
 )
+from app.weather_adapter import fetch_weather
 
 router = APIRouter(prefix="/api/v1")
 settings = get_settings()
@@ -593,3 +594,16 @@ def read_member_state(
     if projection is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="STATE_NOT_FOUND")
     return projection
+
+
+@router.get("/weather/action-cards", response_model=dict)
+async def weather_action_cards(
+    city_code: str | None = None,
+    district_code: str | None = None,
+) -> dict:
+    """Fetch weather action cards for the given coarse location.
+
+    Only city_code and district_code are sent to the external weather API.
+    No health data is included. This endpoint never blocks on weather failure.
+    """
+    return await fetch_weather(city_code=city_code, district_code=district_code)
