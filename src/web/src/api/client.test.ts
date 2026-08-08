@@ -52,4 +52,27 @@ describe('ApiClient authorization contract', () => {
       requestId: 'request-1',
     })
   })
+
+  it('loads member risks and encodes a rule id for risk detail', async () => {
+    const requests: string[] = []
+    const fetcher: typeof fetch = async input => {
+      requests.push(String(input))
+      return new Response(JSON.stringify({
+        member_id: 'member-1',
+        alerts: [],
+        total: 0,
+        severe_count: 0,
+        warning_count: 0,
+      }), { status: 200 })
+    }
+    const client = new ApiClient({ baseUrl: 'http://local.test', fetcher })
+
+    await client.listMemberRisks('household-1', 'member-1')
+    await client.getRiskDetail('household-1', 'member-1', 'rule/with spaces')
+
+    expect(requests).toEqual([
+      'http://local.test/api/v1/households/household-1/members/member-1/risks',
+      'http://local.test/api/v1/households/household-1/members/member-1/risks/rule%2Fwith%20spaces',
+    ])
+  })
 })

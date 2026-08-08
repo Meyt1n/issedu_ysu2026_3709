@@ -114,6 +114,24 @@ legend { color: #3d5960; font-size: 13px; font-weight: 800; padding: 0 4px; }
 .preview-list li { border-top: 1px solid #dfe7e7; display: grid; gap: 4px; padding: 12px 0; }
 .preview-list span { color: #526a70; font-size: 13px; }
 .caregiver-panel { margin-top: 22px; }
+.risk-panel { margin-top: 22px; }
+.risk-member-select { flex: 0 0 220px; font-size: 13px; font-weight: 700; }
+.risk-summary { color: #526a70; font-size: 13px; margin: 0 0 12px; }
+.risk-list,
+.source-list { list-style: none; margin: 0; padding: 0; }
+.risk-card { border-top: 1px solid #dfe7e7; }
+.risk-card-toggle { align-items: center; background: transparent; border: 0; border-radius: 0; color: #182b31; display: grid; gap: 10px; grid-template-columns: auto minmax(0, 1fr) auto auto; justify-items: start; min-height: 58px; padding: 12px 0; text-align: left; width: 100%; }
+.risk-card-toggle:hover:not(:disabled) { background: #f3f7f6; }
+.risk-level { border-left: 3px solid #5b7d83; color: #315860; font-size: 11px; font-weight: 800; padding: 4px 7px; text-transform: uppercase; }
+.risk-level[data-level="SEVERE"] { border-left-color: #b24034; color: #82291f; }
+.risk-level[data-level="WARNING"] { border-left-color: #b27a23; color: #865914; }
+.risk-message { font-size: 14px; font-weight: 700; overflow-wrap: anywhere; }
+.risk-source-count,
+.risk-card-toggle > span:last-child { color: #587076; font-size: 12px; }
+.risk-detail { border-top: 1px solid #edf1f1; padding: 4px 0 14px 14px; }
+.source-list { display: grid; gap: 8px; }
+.source-list li { border-left: 2px solid #9bb9b9; display: grid; gap: 3px; padding-left: 10px; }
+.source-list span { color: #587076; font-size: 12px; }
 .member-list { display: grid; gap: 8px; }
 .member-list li { border-left: 3px solid #218269; padding: 7px 10px; }
 footer { color: #667b80; font-size: 12px; margin: 28px 0 0; text-align: center; }
@@ -129,5 +147,9 @@ footer { color: #667b80; font-size: 12px; margin: 28px 0 0; text-align: center; 
   .grant-editor,
   .preview-panel { grid-column: auto; grid-row: auto; }
   .identity-bar button { width: 100%; }
+  .risk-member-select { width: 100%; }
+  .risk-card-toggle { align-items: start; grid-template-columns: auto minmax(0, 1fr); }
+  .risk-source-count,
+  .risk-card-toggle > span:last-child { grid-column: 2; }
   .row-actions { display: grid; grid-template-columns: 1fr 1fr; }
 }
