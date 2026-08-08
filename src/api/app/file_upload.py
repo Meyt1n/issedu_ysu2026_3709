@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
 import secrets
 from pathlib import Path
 from typing import BinaryIO
@@ -77,7 +76,7 @@ def validate_size(file: BinaryIO, max_bytes: int | None = None) -> int:
     """Measure file size; reject if exceeds limit."""
     settings = get_settings()
     limit = max_bytes if max_bytes is not None else settings.max_upload_bytes
-    file.seek(0, os.SEEK_END)
+    file.seek(0, 2)  # SEEK_END
     size = file.tell()
     file.seek(0)
     if size > limit:

@@ -44,6 +44,8 @@ from app.security import (
 )
 from app.weather_adapter import fetch_weather
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/v1")
 settings = get_settings()
 
