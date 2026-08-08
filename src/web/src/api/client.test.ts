@@ -1,0 +1,55 @@
+import { describe, expect, it } from 'vitest'
+
+import { ApiClient } from './client'
+
+describe('ApiClient authorization contract', () => {
+  it('loads households and members through the shared identity headers', async () => {
+    const requests: Array<{ url: string; headers: Headers }> = []
+    const fetcher: typeof fetch = async (input, init) => {
+      requests.push({ url: String(input), headers: new Headers(init?.headers) })
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    const client = new ApiClient({ baseUrl: 'http://local.test', fetcher })
+
+    await client.listHouseholds({ actorId: 'owner', accessPurpose: 'family-care' })
+    await client.listMembers('household-1', { actorId: 'owner', accessPurpose: 'family-care' })
+
+    expect(requests.map(request => request.url)).toEqual([
+      'http://local.test/api/v1/households',
+      'http://local.test/api/v1/households/household-1/members',
+    ])
+    expect(requests[0]?.headers.get('X-Actor-Id')).toBe('owner')
+    expect(requests[0]?.headers.get('X-Access-Purpose')).toBe('family-care')
+    expect(requests[1]?.headers.get('Accept')).toBe('application/json')
+  })
+
+  it('preserves version conflict details for optimistic authorization edits', async () => {
+    const fetcher: typeof fetch = async () =>
+      new Response(
+        JSON.stringify({
+          error: {
+            code: 'AUTHORIZATION_VERSION_CONFLICT',
+            message: 'Authorization version changed',
+            details: { expected_version: 1, actual_version: 2 },
+            request_id: 'request-1',
+          },
+        }),
+        { status: 409 },
+      )
+    const client = new ApiClient({ fetcher })
+
+    await expect(
+      client.updateAuthorization('household-1', 'authorization-1', {
+        expected_version: 1,
+        purpose: 'family-care',
+      }),
+    ).rejects.toMatchObject({
+      status: 409,
+      code: 'AUTHORIZATION_VERSION_CONFLICT',
+      requestId: 'request-1',
+    })
+  })
+})

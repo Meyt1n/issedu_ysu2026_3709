@@ -132,6 +132,10 @@ export class ApiClient {
     return this.request('/api/v1/meta/capabilities', undefined, options)
   }
 
+  listHouseholds(options?: RequestOptions): Promise<Household[]> {
+    return this.request('/api/v1/households', undefined, options)
+  }
+
   createHousehold(
     input: CreateHouseholdInput,
     options?: RequestOptions,
@@ -151,6 +155,17 @@ export class ApiClient {
       method: 'POST',
       body: JSON.stringify(input),
     }, options)
+  }
+
+  listMembers(
+    householdId: string,
+    options?: RequestOptions,
+  ): Promise<Member[]> {
+    return this.request(
+      `/api/v1/households/${householdId}/members`,
+      undefined,
+      options,
+    )
   }
 
   createAuthorization(
