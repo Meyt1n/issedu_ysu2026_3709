@@ -1,11 +1,10 @@
 """HCT-301: Timeline and projection integration tests."""
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.models import HealthEvent, MemberStateProjection
-from app.projection import build_relationship_graph, get_timeline, rebuild_projection
+from app.models import HealthEvent
+from app.projection import build_relationship_graph, get_timeline
 
 
 class TestTimeline:
