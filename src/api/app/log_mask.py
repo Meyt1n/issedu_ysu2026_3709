@@ -18,7 +18,8 @@ _SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ),
     ("bearer_token", re.compile(r"bearer\s+[A-Za-z0-9_\-\.]+", re.I)),
     ("basic_auth", re.compile(r"basic\s+[A-Za-z0-9+/=]+", re.I)),
-    ("password_in_json", re.compile(r'"password"\s*:\s*"[^"]*"', re.I)),
+    ("password_in_json", re.compile(r'"password"\s*[:=]\s*"[^"]*"', re.I)),
+    ("password_equals", re.compile(r'password\s*=\s*"[^"]*"', re.I)),
     ("token_in_json", re.compile(r'"(?:access_)?token"\s*:\s*"[^"]*"', re.I)),
     ("secret_in_json", re.compile(r'"(?:secret|api_key|private_key)"\s*:\s*"[^"]*"', re.I)),
     ("connection_string", re.compile(r"://[^:@]+:[^@]+@", re.I)),
@@ -27,11 +28,18 @@ _SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 # ── Health field patterns ────────────────────────────────────────
 _HEALTH_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
-        "health_payload",
+        "health_kv",
         re.compile(
-            r'"(?:payload|evidence|state)"\s*:\s*\{[^}]{0,200}'
-            r'(?:disease|drug|allergy|symptom|diagnosis|report|prescription|'
-            r'medication|dosage|blood_pressure|heart_rate)',
+            r'"(?:disease|drug_name|drug|allergy|symptom|diagnosis|'
+            r'report|prescription|medication|dosage|blood_pressure|heart_rate)"'
+            r'\s*:\s*"[^"]{2,}"',
+            re.I,
+        ),
+    ),
+    (
+        "health_payload_block",
+        re.compile(
+            r'"(?:payload|evidence|state)"\s*:\s*\{[^}]{0,200}\}',
             re.I,
         ),
     ),
