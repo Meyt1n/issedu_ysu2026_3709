@@ -25,7 +25,8 @@ PIN_TTL_SECONDS = 300
 _password_hashes: dict[str, str] = {}  # actor_id → bcrypt hash
 _failed_attempts: dict[str, list[float]] = defaultdict(list)
 _sessions: dict[str, dict[str, Any]] = {}  # session_token → {actor_id, expires_at}
-_pin_challenges: dict[str, dict[str, Any]] = {}  # pin_code → {actor_id, action, session_token, expires_at, used}
+# pin_code → {actor_id, action, session_token, expires_at, used}
+_pin_challenges: dict[str, dict[str, Any]] = {}
 
 
 def hash_password(password: str) -> str:
