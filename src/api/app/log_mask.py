@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Set
 
 # ── Secret patterns ──────────────────────────────────────────────
 _SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [

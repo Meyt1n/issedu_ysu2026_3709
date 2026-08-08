@@ -9,7 +9,7 @@ useDefault = true
 [[rules]]
 id = "homecare-secrets"
 description = "API keys, tokens, passwords in any file"
-regex = "(?i)(api[_-]?key|access[_-]?token|private[_-]?key|app[_-]?secret)\\s*[:=]\\s*[\"']?(?!change-me|YOUR_|REPLACE_|xxxxx|test_only)[^\"'\\s]{8,}[\"']?"
+regex = "(?i)(api[_-]?key|access[_-]?token|private[_-]?key|app[_-]?secret)\\s*[:=]\\s*[\"'][^\"']{8,}[\"']"
 tags = ["secret", "homecare"]
 
 [[rules]]
