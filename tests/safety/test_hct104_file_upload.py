@@ -3,7 +3,6 @@ HCT-104: Secure file upload tests.
 """
 
 import io
-import os
 from pathlib import Path
 
 import pytest
