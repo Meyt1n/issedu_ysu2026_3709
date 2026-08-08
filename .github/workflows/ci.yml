@@ -51,7 +51,7 @@ jobs:
         run: uv sync --frozen
 
       - name: Lint Python
-        run: uv run ruff check src/api tests migrations
+        run: uv run ruff check src/api src/ai scripts tests migrations
 
       - name: Upgrade a clean SQLite database
         env:

@@ -20,3 +20,11 @@
 页面信息架构与文案以[产品信息架构与页面设计](../../docs/vibe-coding/18-产品信息架构与页面设计.md)为准。产品不提供购药、问诊、广告或佣金导流入口。
 
 开发命令：`npm ci` 后执行 `npm run dev:web`；生产构建执行 `npm run build:web`。
+
+## 当前前端基础层
+
+`src/api/types.ts` 定义当前 P0 API 的请求和响应类型，`src/api/client.ts` 提供统一请求入口。前端调用 API 时必须通过 `ApiClient`，不要在页面组件中重复实现请求、开发身份头、幂等键或错误解析。
+
+当前客户端只封装仓库已有的接口：健康检查、能力查询、创建家庭、创建成员、创建/撤销授权、追加已确认手工事件、事件列表和成员状态投影。家庭列表、成员列表、授权列表、字段可见范围和统一 OpenAPI 错误信封仍需后端冻结后再接入；前端不得用假数据补齐这些接口。
+
+网络不可用时客户端返回 `ApiClientError`，错误码为 `DEPENDENCY_UNAVAILABLE`；HTTP 错误同时兼容当前 FastAPI 的 `detail` 和目标契约的 `error.code/message/details/request_id` 结构。`X-Actor-Id` 仅用于开发环境演示，不能视为生产认证方案。

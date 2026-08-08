@@ -35,6 +35,7 @@ def test_confirmed_event_is_append_only_and_projects_state(
         json={
             "member_id": member_id,
             "event_type": "MEDICINE_ADDED",
+            "confirmation_status": "CONFIRMED",
             "payload": {"name": "示例药品", "confirmation": "manual"},
             "evidence": {"source": "manual-entry"},
         },
@@ -60,7 +61,41 @@ def test_confirmed_event_is_append_only_and_projects_state(
     outbox = db_session.scalars(select(OutboxMessage)).all()
     assert len(outbox) == 1
     assert outbox[0].event_id == event_id
+    assert outbox[0].topic == "health_event.created"
     assert outbox[0].dispatched is False
+
+
+def test_unconfirmed_event_is_retained_but_does_not_project_state(
+    client: TestClient, db_session: Session
+) -> None:
+    household_id, member_id = create_household_and_member(client)
+    event = client.post(
+        f"/api/v1/households/{household_id}/events",
+        headers={"X-Actor-Id": "owner"},
+        json={
+            "member_id": member_id,
+            "event_type": "MEDICINE_ADDED",
+            "confirmation_status": "UNCONFIRMED",
+            "payload": {"name": "待复核药品"},
+        },
+    )
+    assert event.status_code == 201
+    event_body = event.json()
+    assert event_body["confirmation_status"] == "UNCONFIRMED"
+    assert event_body["confirmed_by"] is None
+
+    # 待复核事实可查询，但没有正式状态投影。
+    state = client.get(
+        f"/api/v1/households/{household_id}/members/{member_id}/state",
+        headers={"X-Actor-Id": "owner"},
+    )
+    assert state.status_code == 404
+
+    outbox = db_session.scalars(select(OutboxMessage)).all()
+    assert len(outbox) == 1
+    assert outbox[0].event_id == event_body["id"]
+    assert outbox[0].topic == "health_event.pending"
+    assert outbox[0].payload["confirmation_status"] == "UNCONFIRMED"
 
 
 def test_revoked_authorization_immediately_blocks_reading(client: TestClient) -> None:
@@ -73,7 +108,7 @@ def test_revoked_authorization_immediately_blocks_reading(client: TestClient) ->
             "grantee_actor_id": "daughter",
             "data_fields": ["health_events"],
             "actions": ["READ_EVENTS"],
-            "purpose": "照护任务摘要",
+            "purpose": "care-summary",
             "valid_until": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
         },
     )
@@ -89,7 +124,7 @@ def test_revoked_authorization_immediately_blocks_reading(client: TestClient) ->
 
     allowed = client.get(
         f"/api/v1/households/{household_id}/events",
-        headers={"X-Actor-Id": "daughter"},
+        headers={"X-Actor-Id": "daughter", "X-Access-Purpose": "care-summary"},
     )
     assert allowed.status_code == 200
     assert len(allowed.json()) == 1
@@ -97,15 +132,16 @@ def test_revoked_authorization_immediately_blocks_reading(client: TestClient) ->
     revoke = client.post(
         f"/api/v1/households/{household_id}/authorizations/{authorization_id}/revoke",
         headers={"X-Actor-Id": "owner"},
+        json={"expected_version": 1},
     )
     assert revoke.status_code == 200
 
     blocked = client.get(
         f"/api/v1/households/{household_id}/events",
-        headers={"X-Actor-Id": "daughter"},
+        headers={"X-Actor-Id": "daughter", "X-Access-Purpose": "care-summary"},
     )
-    assert blocked.status_code == 403
-    assert blocked.json()["detail"] == "EVENT_READ_NOT_AUTHORIZED"
+    assert blocked.status_code == 404
+    assert blocked.json()["detail"] == "RESOURCE_NOT_FOUND"
 
 
 def test_cross_household_member_write_is_rejected(client: TestClient) -> None:
@@ -115,4 +151,4 @@ def test_cross_household_member_write_is_rejected(client: TestClient) -> None:
         headers={"X-Actor-Id": "other-family"},
         json={"display_name": "越权成员"},
     )
-    assert response.status_code == 403
+    assert response.status_code == 404

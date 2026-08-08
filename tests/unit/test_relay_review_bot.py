@@ -5,6 +5,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 SCRIPT = Path(__file__).resolve().parents[2] / ".github" / "scripts" / "relay_review_bot.py"
 SPEC = importlib.util.spec_from_file_location("relay_review_bot", SCRIPT)
 assert SPEC and SPEC.loader
@@ -12,18 +14,37 @@ BOT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(BOT)
 
 
-def review(*, completion: str = "complete", priority: str | None = None) -> dict:
-    must_fix = []
-    if priority:
-        must_fix.append(
-            {
-                "priority": priority,
-                "location": "src/example.py:1",
-                "issue": "示例问题",
-                "impact": "示例影响",
-                "recommendation": "示例建议",
-            }
-        )
+def finding(priority: str) -> dict:
+    return {
+        "priority": priority,
+        "location": "src/example.py:1",
+        "issue": "示例问题",
+        "impact": "示例影响",
+        "recommendation": "示例建议",
+    }
+
+
+def risk(priority: str) -> dict:
+    return {
+        "priority": priority,
+        "area": "quality",
+        "description": "示例风险",
+        "mitigation": "示例缓解措施",
+    }
+
+
+def review(
+    *,
+    completion: str = "complete",
+    priorities: tuple[str, ...] = (),
+    risk_priorities: tuple[str, ...] = (),
+    needs_human_reviewer: bool = False,
+) -> dict:
+    blocking_priorities = {"P0", "P1"}
+    has_blocking_finding = any(
+        priority in blocking_priorities
+        for priority in (*priorities, *risk_priorities)
+    )
     return {
         "task_completion": completion,
         "summary": "审查结论",
@@ -34,11 +55,11 @@ def review(*, completion: str = "complete", priority: str | None = None) -> dict
                 "evidence": "tests/unit/test_relay_review_bot.py",
             }
         ],
-        "must_fix": must_fix,
-        "risks": [],
+        "must_fix": [finding(priority) for priority in priorities],
+        "risks": [risk(priority) for priority in risk_priorities],
         "review_conclusion": {
-            "needs_human_reviewer": False,
-            "recommend_merge": completion == "complete" and not priority,
+            "needs_human_reviewer": needs_human_reviewer,
+            "recommend_merge": completion == "complete" and not has_blocking_finding,
             "reason": "测试结论",
         },
     }
@@ -49,14 +70,53 @@ def test_extract_json_accepts_fenced_model_output() -> None:
     assert value["task_completion"] == "complete"
 
 
-def test_review_gate_blocks_incomplete_and_p1() -> None:
-    assert BOT.review_requires_failure(review(completion="partial"))
-    assert BOT.review_requires_failure(review(priority="P1"))
-
-
-def test_review_gate_allows_complete_without_p0_or_p1() -> None:
-    value = review(priority="P2")
+def test_complete_task_with_pending_human_review_still_passes_task_gate() -> None:
+    value = review(needs_human_reviewer=True)
     BOT.validate_review(value)
+    assert not BOT.review_requires_failure(value)
+    assert not value["review_conclusion"]["needs_human_reviewer"]
+    assert value["review_conclusion"]["recommend_merge"]
+    rendered = BOT.render_review(value, "0123456789abcdef")
+    assert "merge 即代表完成人工复核" in rendered
+
+
+def test_review_gate_blocks_incomplete_but_not_risk_findings() -> None:
+    assert BOT.review_requires_failure(review(completion="partial"))
+    value = review(priorities=("P1",), risk_priorities=("P0",))
+    BOT.validate_review(value)
+    assert not BOT.review_requires_failure(value)
+    rendered = BOT.render_review(value, "0123456789abcdef")
+    assert "[P1]" in rendered
+    assert "[P0/quality]" in rendered
+
+
+def test_incomplete_task_still_blocks_with_only_p2_findings() -> None:
+    value = review(completion="incomplete", priorities=("P2",), risk_priorities=("P2",))
+    BOT.validate_review(value)
+    assert BOT.review_requires_failure(value)
+
+
+@pytest.mark.parametrize(
+    ("priorities", "risk_priorities"),
+    [
+        (("P2",), ()),
+        ((), ("P2",)),
+        (("P2",), ("P2", "P2")),
+    ],
+)
+def test_complete_with_only_p2_findings_passes(
+    priorities: tuple[str, ...], risk_priorities: tuple[str, ...]
+) -> None:
+    value = review(priorities=priorities, risk_priorities=risk_priorities)
+    BOT.validate_review(value)
+    assert value["review_conclusion"]["recommend_merge"]
+    assert not BOT.review_requires_failure(value)
+
+
+def test_complete_with_p2_and_p1_is_advisory() -> None:
+    value = review(priorities=("P2", "P1"), risk_priorities=("P2",))
+    BOT.validate_review(value)
+    assert value["review_conclusion"]["recommend_merge"]
     assert not BOT.review_requires_failure(value)
 
 

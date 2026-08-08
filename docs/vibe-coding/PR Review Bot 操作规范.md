@@ -6,7 +6,7 @@
 
 本规范把“任务是否完成、有哪些缺口、是否存在风险”变成可重复的 PR 流程。Relay Review Bot 是配置在 GitHub Actions 中的中转 AI 审查器，不是官方 OpenAI Codex Review，也不是 GitHub Copilot Review。
 
-Bot 只能辅助审查，不能替代人工复核，不能执行 PR 中的代码，不能决定合并，也不能给出诊断、处方、停药、换药或剂量建议。PR 正文和代码 diff 会发送到配置的中转 API，因此不得提交真实健康数据、药品图片、密钥、模型权重、日志或缓存。
+Bot 只能辅助审查，不能执行 PR 中的代码，也不能给出诊断、处方、停药、换药或剂量建议。仓库不设置额外第二人 approval，维护者 merge 即代表人工复核完成；PR 正文和代码 diff 会发送到配置的中转 API，因此不得提交真实健康数据、药品图片、密钥、模型权重、日志或缓存。
 
 ## 2. 角色分工
 
@@ -14,7 +14,7 @@ Bot 只能辅助审查，不能替代人工复核，不能执行 PR 中的代码
 |---|---|
 | 任务负责人 | 建立 Issue/Story，填写 FR/NFR、验收标准、范围、非目标、测试和回滚；实现并修复 PR |
 | Relay Review Bot | 检查任务完成度、验收证据、P0/P1/P2 风险，发布一条可更新的 PR 评论并返回状态 |
-| 小组长/人工复核人 | 检查实现是否符合需求、API、隐私和安全规范；高风险任务必须安排第二名人工复核人 |
+| 合并人/维护者 | 在 merge 前检查实现是否符合需求、API、隐私、安全、风险和回滚规范；merge 记录即为人工复核证据 |
 | 项目负责人 | 分配任务、确认验收、处理阻塞和事实源冲突，合并通过全部门禁的 PR |
 
 负责人和复核人不能混淆。涉及授权、撤权、健康事件、删除、规则、模型、知识或隐私的高风险变更，负责人不得自我复核。
@@ -53,9 +53,9 @@ PR 正文必须使用 `.github/pull_request_template.md`，并逐项填写：
 
 ```powershell
 git diff --check
-uv run ruff check src/api tests migrations .github/scripts/validate_pr_metadata.py .github/scripts/relay_review_bot.py
+uv run ruff check src/api tests migrations .github/scripts/relay_review_bot.py
 uv run pytest
-python -m py_compile .github/scripts/validate_pr_metadata.py .github/scripts/relay_review_bot.py
+python -m py_compile .github/scripts/relay_review_bot.py
 docker compose config --quiet
 ```
 
@@ -65,14 +65,13 @@ docker compose config --quiet
 
 PR 创建、更新、重新打开、转为 Ready for review 或正文编辑时，按以下顺序观察检查：
 
-1. `Task association and risk metadata`：读取 PR 元数据，验证 Issue、Story、FR/NFR、范围、证据和安全声明；它不执行 PR 分支代码。
-2. `Mandatory development docs`：检查开发入口和必读文档。
-3. `Backend lint, migration and tests`：运行后端 lint、迁移和测试。
-4. `Frontend typecheck and build`：运行前端类型检查和构建。
-5. `Secret scan`：扫描疑似密钥和敏感内容。
-6. `Relay Review Bot`：读取 PR 正文、diff、Story 和规则文档，通过配置的中转 API 审查并更新 PR 评论。
+1. `Mandatory development docs`：检查开发入口和必读文档。
+2. `Backend lint, migration and tests`：运行后端 lint、迁移和测试。
+3. `Frontend typecheck and build`：运行前端类型检查和构建。
+4. `Secret scan`：扫描疑似密钥和敏感内容。
+5. `Relay Review Bot`：读取 PR 正文、diff、Story 和规则文档，通过配置的中转 API 审查并更新 PR 评论。
 
-Relay Review Bot 只对同仓库 PR 自动运行。fork PR 不获得中转 Secret，仍必须通过不需要外部密钥的任务门禁、CI 和人工复核。
+Relay Review Bot 只对同仓库且在专用 `Issue` 字段绑定 `Closes/Fixes/Resolves #<编号>` 的 PR 自动运行。无 Issue 绑定的会议记录、维护性或资料 PR 会成功跳过 Bot，不消耗中转额度；CI 和 Secret Scan 仍按原规则运行。fork PR 不获得中转 Secret，仍必须通过不需要外部密钥的门禁。
 
 ## 6. 如何阅读 Relay Review Bot 结果
 
@@ -82,43 +81,47 @@ Bot 评论固定包含 5 部分：
 2. `验收标准核对`：每条标准对应可定位的文件、行、测试或演示证据；
 3. `必须修改`：列出 P0/P1/P2、位置、问题、影响和建议；
 4. `风险`：列出安全、隐私、授权、医疗安全、数据、部署和质量风险；
-5. `复核结论`：是否需要第二位人工复核、是否建议合并。
+5. `复核结论`：是否建议合并；本仓库不要求额外第二人 approval，merge 即代表人工复核完成。
 
-以下任一情况会使 `Relay Review Bot` 失败：
+`task_completion` 只判断 PR 声明的技术验收标准。PR 正文中的“待人工复核”“复核人尚未确认”或“人工复核前不标记 Story 为已验证”，应记录到“复核结论”，不能单独导致 `partial`；只有明确的人工验收标准未完成，或人工复核发现具体技术标准未满足时，才影响任务完成结论。权限审查还必须遵循事实源：家庭 owner 的明确管理员权限不能仅凭“子女/照护者”角色名称被判为越权，规范冲突应标记为待人工确认。
 
-- 任务不是 `complete`；
-- 存在 P0 或 P1 必须修改项/风险；
-- 未配置 API、接口调用失败、模型返回非法 JSON；
-- PR 正文或 diff 命中疑似密钥模式。
+以下情况需要区分处理：
 
-只有 P2 建议时 Bot 可以通过，但 P2 仍应由负责人判断是否修复。
+- 任务不是 `complete`：Relay Check 失败，必须修复任务或补充验收证据；
+- 网络超时、连接不可达、408/429/5xx 服务端错误或模型响应无法解析：记录不可用告警，Relay Check 以降级成功结束，不阻塞其它 Required Checks；
+- API 未配置、协议配置错误、鉴权/权限错误、GitHub 请求错误或工作流自身错误：仍然失败，不能用“中转服务故障”掩盖配置和治理问题；
+- PR 正文或 diff 命中疑似密钥模式：仍然失败，并停止把内容发送到中转服务；
+- GitHub 权限或工作流本身失败：仍然失败，不能把仓库治理故障伪装成中转服务不可用。
+
+P0/P1/P2 必须修改项和风险都保留真实优先级并写入评论，但不自动让 Check 失败；P2 建议可以忽略，P0/P1 由负责人和合并人决定是否处理。不要为了合并而把真实风险改标为 P2；merge 代表维护者已看到并承担本次变更的人工复核责任。
 
 ## 7. 失败后的处理
 
-### 7.1 任务门禁失败
+### 7.1 PR 元数据不完整
 
-修正 PR 正文、Issue、Story、FR/NFR 或必填证据，再推送一次。不要通过修改检查名称、删除工作流或勾选空声明绕过门禁。
+PR 作者必须修正 PR 正文、Issue、Story、FR/NFR 或必填证据。仓库不再运行独立的任务元数据自动门禁，这些内容由 Relay Review Bot 辅助检查，并由合并人在 merge 前最终核对。
 
-### 7.2 Relay Review Bot 失败
+### 7.2 Relay Review Bot 失败或不可用
 
-1. 先判断是配置/API 故障还是任务/代码缺口；
-2. 按评论中的文件、行和验收标准修复；
+1. 先判断是配置/API 故障还是任务未完成；
+2. 任务未完成时，按评论中的文件、行和验收标准修复；
 3. 增加或更新测试、迁移、OpenAPI、文档和回滚证据；
-4. 推送后等待 Bot 重新审查；
-5. 对不准确的 P2 建议在 PR 中说明理由，不把模型结论当成事实。
+4. 中转服务网络超时、不可达、408/429/5xx 或返回非法结果时，Bot 会写入告警并以降级成功结束；维护者仍需自行完成最终检查，不得声称已经获得 AI Review；配置、协议、鉴权和权限错误仍需修复；
+5. 服务恢复后可在 Actions 中重新运行 Relay Review Bot，补充正式审查记录；
+6. 只有风险建议时，不要求为了让 Check 变绿而修改代码或降低等级；负责人记录接受、延期或另建 Issue 的决定，不把模型结论当成事实。
 
 ### 7.3 高风险问题
 
-P0/P1、越权、数据外泄、未确认视觉结果入库、错误用药判断和不可回滚破坏必须暂停合并，建立或关联 Issue，并指定第二位人工复核人。
+P0/P1、越权、数据外泄、未确认视觉结果入库、错误用药判断和不可回滚破坏必须在合并前明确记录风险、影响和回滚方案；它们仍不自动改变 Relay Check，但维护者不得用“merge 即复核”掩盖未理解的问题。
 
-## 8. 人工复核与合并
+## 8. 合并即人工复核
 
 合并前必须满足：
 
-- 所有 Required Checks 通过；
+- 所有 Required Checks 通过；Relay 若处于中转服务降级状态，必须已有告警且由合并人完成替代检查；
 - 所有 Review conversation 已解决；
-- 普通任务完成人工检查；
-- 高风险任务有第二位人工复核；
+- 合并人完成需求、证据、风险和回滚检查；
+- 不要求额外第二人 approval；
 - 需求、Story、需求追踪矩阵、API/OpenAPI、迁移、测试和文档已同步；
 - 没有把 Mock、截图、固定回复或 Notebook 当作完整能力；
 - 已确认回滚方式和网络出口影响。
@@ -143,9 +146,9 @@ P0/P1、越权、数据外泄、未确认视觉结果入库、错误用药判断
 每次修改门禁后，可建立一个“故意不完整”的测试 PR 验证阻断能力：
 
 1. 创建独立测试 Issue，明确写出一个未实现的验收条件；
-2. PR 正文按模板完整填写，确保任务格式门禁能够通过；
+2. PR 正文按模板完整填写，确保任务元数据可由 Bot 和合并人核对；
 3. 提交无害的文档或测试夹具，但不实现 Issue 要求的功能；
-4. 预期 CI 和任务门禁通过，Relay Review Bot 判定 `partial`/`incomplete` 并失败；
+4. 预期 CI 通过，Relay Review Bot 判定 `partial`/`incomplete` 并失败；
 5. 截图或保存 Bot 评论、Actions 日志和检查结果；
 6. 关闭测试 PR 和测试 Issue，不得合并测试夹具，不得把测试失败伪装成成功。
 

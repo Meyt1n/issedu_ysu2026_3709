@@ -6,7 +6,9 @@ requires-python = ">=3.11,<3.12"
 dependencies = [
   "alembic>=1.14,<2",
   "fastapi>=0.115,<0.116",
+  "opencv-python-headless>=4.10,<5",
   "pydantic-settings>=2.7,<3",
+  "psutil>=6.1,<8",
   "pymysql>=1.1,<2",
   "sqlalchemy>=2.0.36,<2.1",
   "uvicorn[standard]>=0.34,<0.35",
@@ -25,14 +27,14 @@ package = false
 default-groups = ["dev"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src/api"]
+pythonpath = ["src/api", "src", "scripts"]
 testpaths = ["tests"]
 addopts = "-q --strict-markers"
 
 [tool.ruff]
 target-version = "py311"
 line-length = 100
-src = ["src/api", "tests"]
+src = ["src/api", "src/ai", "scripts", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]

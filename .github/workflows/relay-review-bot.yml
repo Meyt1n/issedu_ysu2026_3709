@@ -29,7 +29,15 @@ jobs:
         with:
           ref: ${{ github.event.repository.default_branch }}
 
+      - name: Determine whether a bound Issue requires Relay Review
+        id: eligibility
+        env:
+          PR_EVENT_PATH: ${{ github.event_path }}
+          PYTHONUTF8: "1"
+        run: python .github/scripts/relay_review_eligibility.py
+
       - name: Run relay review
+        if: steps.eligibility.outputs.review_required == 'true'
         env:
           GITHUB_EVENT_PATH: ${{ github.event_path }}
           GITHUB_TOKEN: ${{ github.token }}
@@ -40,3 +48,9 @@ jobs:
           REVIEW_MAX_DIFF_CHARS: ${{ vars.REVIEW_MAX_DIFF_CHARS }}
           REVIEW_API_TIMEOUT_SECONDS: ${{ vars.REVIEW_API_TIMEOUT_SECONDS }}
         run: python .github/scripts/relay_review_bot.py
+
+      - name: Skip relay review for PRs without an Issue binding
+        if: steps.eligibility.outputs.review_required != 'true'
+        run: |
+          echo "::notice::No Closes/Fixes/Resolves reference in the dedicated Issue field; Relay Review Bot skipped."
+          echo "CI, secret scan, and other required checks remain unchanged."

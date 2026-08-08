@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     embedding_version: str = "unavailable"
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "unavailable"
+    ollama_timeout_seconds: float = 30.0
     weather_adapter: str = "disabled"
 
     @property

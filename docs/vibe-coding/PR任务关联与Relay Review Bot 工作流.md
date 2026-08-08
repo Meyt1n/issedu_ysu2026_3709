@@ -6,7 +6,7 @@
 
 ## 1. 适用范围
 
-每个提交到 GitHub `master` 的 PR 都必须绑定一个 GitHub Issue、一个仓库 Story 和对应 FR/NFR。一个 PR 只解决一个主要任务；独立任务必须新建 Issue 和 PR。
+功能 PR 必须绑定一个 GitHub Issue、一个仓库 Story 和对应 FR/NFR。会议记录、维护性或纯资料 PR 可以不绑定 Issue，并进入 Relay Review Bot 白名单；一个功能 PR 只解决一个主要任务，独立任务必须新建 Issue 和 PR。
 
 ```text
 GitHub Issue 任务
@@ -14,10 +14,9 @@ GitHub Issue 任务
       ├── Story：HCT-xxx
       ├── FR/NFR：FR-xx、NFR-xx
       └── 一个 Pull Request
-              ├── 自动任务门禁
               ├── Relay Review Bot
               ├── CI / Secret Scan
-              └── 高风险变更的第二人人工复核
+              └── 合并人核对元数据并完成最终人工复核
 ```
 
 ## 2. PR 必须填写的内容
@@ -32,9 +31,9 @@ PR 必须使用 `.github/pull_request_template.md`，填写：
 
 `Closes #<Issue>` 只填写当前 PR 解决的主要任务。相关但不由本 PR 完成的任务使用 `Related to #<Issue>`，不要混入当前任务验收范围。
 
-## 3. 自动任务门禁
+## 3. 任务元数据核对
 
-`.github/workflows/pr-task-governance.yml` 在 PR 创建、正文或提交更新、重新打开和转为 Ready for review 时运行。它只读取 PR 元数据并在默认分支执行可信校验脚本，不 checkout 或执行 PR 分支代码。它至少验证：
+仓库不运行独立的 `Task association and risk metadata` 自动检查。PR 作者填写模板后，Relay Review Bot 可辅助识别缺失项，合并人必须在 merge 前核对：
 
 1. 只有一个 `Closes/Fixes/Resolves #<Issue>`，且对应真实 Issue；
 2. 存在仓库中的 `HCT-xxx` Story 文件、FR/NFR、负责人、复核人、变更范围和明确非目标；
@@ -42,15 +41,19 @@ PR 必须使用 `.github/pull_request_template.md`，填写：
 4. 必读工作流、数据安全、AI/医疗安全、视觉确认、需求追踪、API/OpenAPI 同步和高风险复核声明已勾选；
 5. 不允许用空白、`TBD`、`TODO`、`通过` 或“见上文”冒充交付证据。
 
-自动任务门禁只检查交付格式和最低证据，不判断业务是否正确。业务完成性由 Relay Review Bot、CI 和人工复核共同判断。
+元数据核对不判断业务是否正确。业务完成性由 Relay Review Bot、CI 和合并人的最终检查共同判断；Relay 不可用或被白名单跳过时，合并人承担完整核对责任。
 
-任务门禁只授予 `contents: read`、`issues: read` 和 `pull-requests: read`；Relay Review Bot 另外需要 `issues: write` 和 `pull-requests: write` 以更新一条审查评论。两类工作流都不需要 checkout 或执行 PR 分支代码，Bot 的写权限仅用于 PR 评论。
+### 3.1 无 Issue 绑定白名单
+
+Relay Review Bot 只审查专用 `Issue` 字段中包含 `Closes/Fixes/Resolves #<编号>` 的 PR。没有该字段或只有 `Related to #<编号>` 的 PR 会由工作流返回成功并跳过中转 API，不消耗 Review Bot 额度；验收正文中偶然出现的 `Closes #...` 不会触发审查。该白名单只针对 Relay Review Bot，不会绕过 CI、Secret Scan、其它 Required Check 或合并人的元数据核对；没有 Issue 的功能 PR 仍应补齐任务绑定。
+
+Relay Review Bot 需要 `contents: read`、`issues: write` 和 `pull-requests: write` 以读取审查上下文并更新一条审查评论。工作流不 checkout 或执行 PR 分支代码，Bot 的写权限仅用于 PR 评论。
 
 ## 4. Relay Review Bot 审查协议
 
 `.github/workflows/relay-review-bot.yml` 使用 `pull_request_target` 在可信的默认分支脚本上运行。它读取 PR 元数据、完整 diff、PR 正文、关联 Story 和关键工程规则，调用项目配置的 OpenAI-compatible Chat Completions 中转接口，并在 PR 中更新一条带固定标记的审查评论，同时写入 Actions Summary。
 
-它不是官方 OpenAI Codex Review，也不是 GitHub Copilot Review。它只审查，不执行 PR 中的代码，不拥有仓库写入权限以外的业务权限；模型输出不能替代高风险变更的第二位人工复核。
+它不是官方 OpenAI Codex Review，也不是 GitHub Copilot Review。它只审查，不执行 PR 中的代码，不拥有仓库写入权限以外的业务权限；本仓库不设置额外第二人 approval，维护者 merge 即代表完成人工复核。
 
 审查结果必须包含以下结构：
 
@@ -68,12 +71,12 @@ PR 必须使用 `.github/pull_request_template.md`，填写：
 - P0/P1/P2、领域：描述、缓解措施
 
 ## 复核结论
-- 是否需要第二位人工复核；是否建议合并
+- 是否建议合并；merge 即代表人工复核完成
 ```
 
-Bot 至少检查：任务和 Story 是否真的完成；验收证据是否可定位；测试、迁移、依赖、API/OpenAPI、文档和回滚是否同步；健康数据和密钥是否泄露；授权、撤权、过期、字段级可见范围和审计；健康事件是否确认、追加写并保护一致性；AI 是否越过证据边界进行诊断、处方、停药、换药或剂量判断。
+Bot 至少检查：任务和 Story 是否真的完成；验收证据是否可定位；测试、迁移、依赖、API/OpenAPI、文档和回滚是否同步；健康数据和密钥是否泄露；授权、撤权、过期、字段级可见范围和审计；健康事件是否确认、追加写并保护一致性；AI 是否越过证据边界进行诊断、处方、停药、换药或剂量判断。Bot 必须把“待人工复核/尚未把 Story 标为已验证”与技术验收完成度分开：前者不再作为额外合并门槛，除非它本身是明确技术验收标准，否则不能单独把任务判为未完成。权限审查必须先读取事实源，区分家庭 owner 的明确管理员权限与非 owner 照护者的字段级授权，发现规范冲突时列出冲突而不是自行猜测。
 
-阻断规则：任务结论不是“完成”，或存在 P0/P1 的必须修改项/风险，Job 失败；只有 P2 质量建议时 Job 可通过，但仍会在评论中列出。模型调用失败、返回非法 JSON、未配置接口或发现疑似密钥时 Job 失败，不能伪装成通过。
+阻断规则：仅当任务结论不是“完成”时 Relay Check 因审查结论失败；P0/P1/P2 必须修改项和风险仍按模型返回的真实等级写入评论，但不自动阻断 Relay Check。这样任务完成度是合并审查第一优先级，风险检测作为第二优先级提示。中转 API 网络超时、不可达、408/429/5xx 或返回非法 JSON 时，Job 写入“中转服务不可用”告警并以降级成功结束，不阻塞其它 Required Checks；这不代表任务已通过 AI Review，维护者仍须完成最终人工检查。API 未配置、协议错误、鉴权/权限错误、GitHub 权限或工作流自身错误仍然失败。
 
 ## 5. 中转服务配置
 
@@ -88,7 +91,7 @@ Bot 至少检查：任务和 Story 是否真的完成；验收证据是否可定
 | Variable（可选） | `REVIEW_MAX_DIFF_CHARS` | 发送给模型的 diff 上限，默认 120000 |
 | Variable（可选） | `REVIEW_API_TIMEOUT_SECONDS` | 请求超时秒数，默认 120 |
 
-中转 Bot 默认只对同仓库 PR 运行，以避免把仓库密钥暴露给 fork PR。fork PR 仍会运行不需要密钥的任务门禁和 CI；需要审查时应由维护者在可信分支发起或采用人工复核。
+中转 Bot 只对同仓库且有 Issue 绑定的 PR 运行，以避免把仓库密钥暴露给 fork PR 或无任务资料 PR。fork PR 仍会运行不需要密钥的 CI；无 Issue 绑定的 PR 由白名单跳过 Bot。
 
 这是明确的网络出口：PR 正文和代码 diff 会发送到配置的中转服务。项目不得在 PR 中提交真实健康数据、药品图片、生产密钥、模型权重、运行日志或其他敏感信息；健康数据默认不出网的产品承诺不因 Review Bot 改变。若中转服务不满足团队隐私要求，不得配置它，改走人工 Review。
 
@@ -100,18 +103,18 @@ Bot 至少检查：任务和 Story 是否真的完成；验收证据是否可定
 - `Backend lint, migration and tests`；
 - `Frontend typecheck and build`；
 - `Secret scan`；
-- `Task association and risk metadata`；
-- `Relay Review Bot`（先让工作流在 master 上成功运行一次，再加入 Required Checks，避免在工作流尚未进入基线时阻塞当前 PR）。
 
-所有 Review 对话必须解决；高风险授权、健康事件、删除、规则、模型、知识或隐私变更必须等待第二位人工复核。CI 或 Bot 通过不等于业务任务已经完成。
+`Task association and risk metadata` 已移除，`Relay Review Bot` 当前为非阻塞辅助检查。功能 PR 的 Issue、Story、FR/NFR、验收证据和风险信息仍是强制流程要求，由合并人在 merge 前核对。
+
+所有 Review 对话必须解决；维护者在合并前检查风险、证据和回滚，merge 动作即代表人工复核完成，不再等待第二位人工 approval。CI 或 Bot 通过不等于业务任务已经完成。
 
 ## 7. 未通过处理
 
-1. 任务门禁失败：先修正 PR 元数据和证据；
-2. Relay Review Bot 发现未完成项或 P0/P1 风险：在原 PR 分支修复，补充测试/文档/验收证据后重新运行；
-3. 中转接口故障或隐私条件不满足：停止合并，记录原因并由人工复核；
+1. PR 元数据或证据不完整：作者补充后，由 Relay Review Bot 和合并人重新核对；
+2. Relay Review Bot 发现未完成项：在原 PR 分支修复，补充测试/文档/验收证据后重新运行；仅发现风险项时保留评论和真实优先级，由负责人和合并人决定是否处理，不要求为了通过 Check 而修改或降级问题；
+3. 中转接口故障：保留不可用告警，不阻塞其它门禁；维护者完成任务、证据、风险和回滚检查后可以合并，服务恢复后再补跑 Review；隐私条件不满足则不得调用中转服务；
 4. 需求冲突或事实源不一致：建立 ADR 或评审 Issue，禁止自行猜测；
-5. 所有门禁和人工复核通过后，才能把 Story 更新为“已验证”。
+5. 所有 Required Checks 通过且维护者 merge 后，才能把 Story 更新为“已验证”；merge 记录就是本仓库的人工复核证据。
 
 ## 8. 官方 Review 的关闭边界
 
