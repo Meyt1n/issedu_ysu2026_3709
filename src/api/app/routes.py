@@ -43,6 +43,9 @@ from app.schemas import (
     MemberCreate,
     MemberRead,
     MemberStateRead,
+    RiskAlertRead,
+    RiskDetailResponse,
+    RiskListResponse,
 )
 from app.security import (
     get_access_purpose,
@@ -918,3 +921,103 @@ def skip_plan_endpoint(
     session.commit()
     session.refresh(event)
     return HealthEventRead.model_validate(event)
+
+
+# ── HCT-307: Risk evidence API ─────────────────────────────────────
+
+
+@router.get(
+    "/households/{household_id}/members/{member_id}/risks",
+    response_model=RiskListResponse,
+)
+def list_risks(
+    household_id: str,
+    member_id: str,
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> dict:
+    household = session.get(Household, household_id)
+    member = session.get(Member, member_id)
+    if household is None or member is None or member.household_id != household_id:
+        _raise_resource_not_found()
+    if not has_authorized_action(
+        session, household, member_id, actor_id, "READ_EVENTS", "health_events", access_purpose,
+    ):
+        _raise_resource_not_found()
+    from app.projection import build_relationship_graph, get_timeline
+    from app.rules import apply_daily_budget, dedup_alerts, run_rules
+
+    events = get_timeline(session, member_id)
+    facts = build_relationship_graph(events)
+    raw = run_rules(facts)
+    deduped = dedup_alerts(raw)
+    budgeted = apply_daily_budget(deduped)
+
+    alerts = [
+        RiskAlertRead(
+            rule_id=a.rule_id,
+            level=a.level,
+            message=a.message,
+            source_event_ids=a.source_event_ids,
+        )
+        for a in budgeted
+    ]
+    return RiskListResponse(
+        member_id=member_id,
+        alerts=alerts,
+        total=len(alerts),
+        severe_count=sum(1 for a in alerts if a.level == "SEVERE"),
+        warning_count=sum(1 for a in alerts if a.level == "WARNING"),
+    )
+
+
+@router.get(
+    "/households/{household_id}/members/{member_id}/risks/{rule_id}",
+    response_model=RiskDetailResponse,
+)
+def get_risk_detail(
+    household_id: str,
+    member_id: str,
+    rule_id: str,
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> dict:
+    household = session.get(Household, household_id)
+    member = session.get(Member, member_id)
+    if household is None or member is None or member.household_id != household_id:
+        _raise_resource_not_found()
+    if not has_authorized_action(
+        session, household, member_id, actor_id, "READ_EVENTS", "health_events", access_purpose,
+    ):
+        _raise_resource_not_found()
+    from app.projection import build_relationship_graph, get_timeline
+    from app.rules import run_rules
+
+    events = get_timeline(session, member_id)
+    facts = build_relationship_graph(events)
+    alerts = run_rules(facts, rule_ids=[rule_id])
+    if not alerts:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RISK_NOT_FOUND")
+
+    alert = alerts[0]
+    sources: list[dict] = []
+    for eid in alert.source_event_ids:
+        evt = session.get(HealthEvent, eid)
+        if evt is not None:
+            sources.append({
+                "id": evt.id,
+                "event_type": evt.event_type,
+                "confirmation_status": evt.confirmation_status,
+                "created_at": evt.created_at.isoformat() if evt.created_at else None,
+            })
+    return RiskDetailResponse(
+        alert=RiskAlertRead(
+            rule_id=alert.rule_id,
+            level=alert.level,
+            message=alert.message,
+            source_event_ids=alert.source_event_ids,
+        ),
+        source_events=sources,
+    )
