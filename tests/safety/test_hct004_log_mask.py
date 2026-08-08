@@ -3,9 +3,6 @@ Tests for HCT-004 log masking — secrets and health field redaction.
 """
 
 import logging
-import re
-
-import pytest
 
 from app.log_mask import (
     REDACTED,

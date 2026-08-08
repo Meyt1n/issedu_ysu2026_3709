@@ -2,12 +2,9 @@
 Tests for HCT-004 egress guard — default-deny network egress.
 """
 
-import pytest
-
 from app.egress_guard import (
     FORBIDDEN_EGRESS_FIELDS,
     allowed_weather_payload,
-    get_whitelist,
     is_egress_allowed,
     validate_egress_payload,
 )
