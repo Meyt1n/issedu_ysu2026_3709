@@ -14,6 +14,8 @@ import type {
   Member,
   MemberState,
   RequestOptions,
+  RiskDetailResponse,
+  RiskListResponse,
   UpdateAuthorizationInput,
 } from './types'
 
@@ -258,6 +260,31 @@ export class ApiClient {
   ): Promise<MemberState> {
     return this.request(
       `/api/v1/households/${householdId}/members/${memberId}/state`,
+      undefined,
+      options,
+    )
+  }
+
+  listMemberRisks(
+    householdId: string,
+    memberId: string,
+    options?: RequestOptions,
+  ): Promise<RiskListResponse> {
+    return this.request(
+      `/api/v1/households/${householdId}/members/${memberId}/risks`,
+      undefined,
+      options,
+    )
+  }
+
+  getRiskDetail(
+    householdId: string,
+    memberId: string,
+    ruleId: string,
+    options?: RequestOptions,
+  ): Promise<RiskDetailResponse> {
+    return this.request(
+      `/api/v1/households/${householdId}/members/${memberId}/risks/${encodeURIComponent(ruleId)}`,
       undefined,
       options,
     )

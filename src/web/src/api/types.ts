@@ -134,6 +134,36 @@ export interface MemberState {
   updated_at: string
 }
 
+export type RiskLevel = 'SEVERE' | 'WARNING' | 'INFO' | 'TIP' | string
+
+export interface RiskAlert {
+  rule_id: string
+  level: RiskLevel
+  message: string
+  source_event_ids: string[]
+  created_at: string | null
+}
+
+export interface RiskListResponse {
+  member_id: string
+  alerts: RiskAlert[]
+  total: number
+  severe_count: number
+  warning_count: number
+}
+
+export interface RiskSourceEvent {
+  id: string
+  event_type: string
+  confirmation_status: string
+  created_at: string | null
+}
+
+export interface RiskDetailResponse {
+  alert: RiskAlert
+  source_events: RiskSourceEvent[]
+}
+
 export interface RequestOptions {
   actorId?: string
   accessPurpose?: string

@@ -6,6 +6,7 @@ import {
   isAuthorizationActive,
 } from './authorization/authorizationView'
 import { ApiClientError, apiClient } from './api/client'
+import { riskLevelLabel, toRiskCardModel } from './risk/riskView'
 import type {
   Authorization,
   AuthorizationAction,
@@ -13,6 +14,9 @@ import type {
   Household,
   Member,
   RequestOptions,
+  RiskAlert,
+  RiskDetailResponse,
+  RiskListResponse,
   UpdateAuthorizationInput,
 } from './api/types'
 
@@ -42,6 +46,12 @@ const saving = ref(false)
 const message = ref('Enter a development identity to load its households.')
 const error = ref('')
 const formError = ref('')
+const riskMemberId = ref('')
+const riskList = ref<RiskListResponse | null>(null)
+const riskDetails = ref<Record<string, RiskDetailResponse>>({})
+const loadingRisks = ref(false)
+const riskError = ref('')
+const expandedRiskId = ref<string | null>(null)
 
 const draft = reactive({
   memberId: '',
@@ -117,6 +127,11 @@ function clearScope(): void {
   selectedAuthorizationId.value = null
   previewActorId.value = ''
   isOwnerView.value = false
+  riskMemberId.value = ''
+  riskList.value = null
+  riskDetails.value = {}
+  riskError.value = ''
+  expandedRiskId.value = null
   resetDraft()
 }
 
@@ -168,9 +183,15 @@ async function loadSelectedHousehold(): Promise<void> {
   authorizations.value = []
   selectedAuthorizationId.value = null
   previewActorId.value = ''
+  riskMemberId.value = ''
+  riskList.value = null
+  riskDetails.value = {}
+  riskError.value = ''
+  expandedRiskId.value = null
   try {
     members.value = await apiClient.listMembers(householdId, requestOptions.value)
     draft.memberId = members.value[0]?.id ?? ''
+    riskMemberId.value = members.value[0]?.id ?? ''
 
     try {
       authorizations.value = await apiClient.listAuthorizations(householdId, requestOptions.value)
@@ -180,10 +201,12 @@ async function loadSelectedHousehold(): Promise<void> {
       if (cause instanceof ApiClientError && cause.status === 404) {
         isOwnerView.value = false
         message.value = 'Caregiver view: the API has already filtered this identity to the granted member scope.'
+        await loadMemberRisks()
         return
       }
       throw cause
     }
+    await loadMemberRisks()
   } catch (cause) {
     members.value = []
     authorizations.value = []
@@ -191,6 +214,51 @@ async function loadSelectedHousehold(): Promise<void> {
     error.value = formatError(cause)
   } finally {
     loadingScope.value = false
+  }
+}
+
+async function loadMemberRisks(): Promise<void> {
+  const householdId = selectedHouseholdId.value
+  const memberId = riskMemberId.value
+  if (!householdId || !memberId) {
+    riskList.value = null
+    return
+  }
+
+  loadingRisks.value = true
+  riskError.value = ''
+  expandedRiskId.value = null
+  try {
+    riskList.value = await apiClient.listMemberRisks(householdId, memberId, requestOptions.value)
+    riskDetails.value = {}
+  } catch (cause) {
+    riskList.value = null
+    riskError.value = formatError(cause)
+  } finally {
+    loadingRisks.value = false
+  }
+}
+
+async function toggleRiskDetail(alert: RiskAlert): Promise<void> {
+  if (expandedRiskId.value === alert.rule_id) {
+    expandedRiskId.value = null
+    return
+  }
+
+  expandedRiskId.value = alert.rule_id
+  if (riskDetails.value[alert.rule_id]) return
+
+  try {
+    const detail = await apiClient.getRiskDetail(
+      selectedHouseholdId.value,
+      riskMemberId.value,
+      alert.rule_id,
+      requestOptions.value,
+    )
+    riskDetails.value = { ...riskDetails.value, [alert.rule_id]: detail }
+  } catch (cause) {
+    expandedRiskId.value = null
+    riskError.value = formatError(cause)
   }
 }
 
@@ -456,6 +524,49 @@ async function revokeAuthorization(authorization: Authorization): Promise<void> 
       <ul v-else class="member-list">
         <li v-for="member in members" :key="member.id">{{ member.display_name }}</li>
       </ul>
+    </section>
+
+    <section v-if="selectedHouseholdId && riskMemberId" class="panel risk-panel" aria-labelledby="risk-title">
+      <div class="panel-heading">
+        <div>
+          <p class="section-label">Confirmed evidence</p>
+          <h2 id="risk-title">Risk signals</h2>
+        </div>
+        <label class="risk-member-select">
+          Member
+          <select v-model="riskMemberId" :disabled="loadingRisks" @change="loadMemberRisks">
+            <option v-for="member in members" :key="member.id" :value="member.id">{{ member.display_name }}</option>
+          </select>
+        </label>
+      </div>
+
+      <p v-if="loadingRisks" class="state-panel" aria-live="polite">Loading permitted risk signals.</p>
+      <p v-else-if="riskError" class="notice error" role="alert">{{ riskError }}</p>
+      <p v-else-if="riskList && riskList.alerts.length === 0" class="empty-state">No active risk signals were returned for this member.</p>
+      <template v-else-if="riskList">
+        <p class="risk-summary">{{ riskList.total }} signals · {{ riskList.severe_count }} severe · {{ riskList.warning_count }} warning</p>
+        <ul class="risk-list">
+          <li v-for="alert in riskList.alerts" :key="alert.rule_id" class="risk-card">
+            <button type="button" class="risk-card-toggle" :aria-expanded="expandedRiskId === alert.rule_id" @click="toggleRiskDetail(alert)">
+              <span class="risk-level" :data-level="alert.level">{{ riskLevelLabel(alert.level) }}</span>
+              <span class="risk-message">{{ alert.message }}</span>
+              <span class="risk-source-count">{{ toRiskCardModel(alert).sourceCount }} source events</span>
+              <span aria-hidden="true">{{ expandedRiskId === alert.rule_id ? 'Hide' : 'View evidence' }}</span>
+            </button>
+            <div v-if="expandedRiskId === alert.rule_id" class="risk-detail">
+              <p class="preview-note">Evidence is limited to the API's desensitized summary. This page never loads health event payloads.</p>
+              <p v-if="riskDetails[alert.rule_id]?.source_events.length === 0" class="empty-state">Evidence is unavailable for this signal.</p>
+              <ul v-else class="source-list">
+                <li v-for="source in riskDetails[alert.rule_id]?.source_events ?? []" :key="source.id">
+                  <strong>{{ source.event_type }}</strong>
+                  <span>{{ source.confirmation_status }}</span>
+                  <span>{{ source.created_at ? new Date(source.created_at).toLocaleString() : 'Time unavailable' }}</span>
+                </li>
+              </ul>
+            </div>
+          </li>
+        </ul>
+      </template>
     </section>
 
     <footer>Teaching demonstration only. This page does not diagnose, prescribe, or make medication decisions.</footer>
