@@ -1,0 +1,51 @@
+# Gitleaks configuration for HomeCare Twin
+# HCT-004: Enhanced rules covering secrets and health data patterns.
+
+title: "HomeCare Twin Gitleaks Config"
+
+[extend]
+# Extend default rules and add our own
+useDefault = true
+
+[[rules]]
+id = "homecare-secret-keywords-zh"
+description = "Chinese/English secret keywords in any file"
+regex = '''(?i)(api[_-]?key|access[_-]?token|private[_-]?key|app[_-]?secret|password|mysql[_-]?password|root[_-]?password)\s*[:=]\s*["']?(?!change-me|YOUR_|REPLACE_ME|xxxxx|test_only|example)[^"'\s]{8,}["']?'''
+tags = ["secret", "homecare"]
+
+[[rules]]
+id = "homecare-jwt-token-in-code"
+description = "JWT or base64 tokens that look like secrets"
+regex = '''eyJ[A-Za-z0-9_\-]{50,}'''
+tags = ["secret", "homecare"]
+
+[[rules]]
+id = "homecare-health-payload-in-logs"
+description = "Health event payload keys that should never appear in code/logs as literals"
+regex = '''"[^"]*(?:disease|drug_name|allergy|diagnosis|prescription|medication|patient_name)[^"]*"\s*:\s*"[^"]{3,}"'''
+tags = ["health", "homecare"]
+
+[[rules]]
+id = "homecare-member-display-name-literal"
+description = "Hardcoded display names that look like real person names"
+regex = '''display_name["\s:=]+[一-鿿]{2,4}'''
+tags = ["health", "homecare"]
+
+[[rules]]
+id = "homecare-no-redirect-keyword"
+description = "Prohibited redirect/purchase/consultation/ad keywords in source"
+regex = '''(?i)(buy[_-]?medicine|purchase[_-]?drug|online[_-]?consult|telemedicine|ad[_-]?redirect|commission[_-]?link|affiliate[_-]?link|pharmacy[_-]?link|问诊|购药|买药|导流|广告链接|佣金)'''
+tags = ["compliance", "homecare"]
+
+[[rules]]
+id = "homecare-connection-string"
+description = "Database connection strings with embedded credentials"
+regex = '''(?i)(mysql|postgres|sqlite|mongodb|redis)://[^:@\s]+:[^:@\s]+@'''
+tags = ["secret", "homecare"]
+
+[allowlist]
+description = "Allowlist for gitleaks false positives"
+paths = [
+    '''uv\.lock''',
+    '''package-lock\.json''',
+]
