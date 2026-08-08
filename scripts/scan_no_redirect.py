@@ -67,7 +67,10 @@ def main() -> int:
         return 1
 
     # Only scan source files and manifests, skip .git / node_modules / __pycache__ / venv
-    skip_dirs = {".git", "node_modules", "__pycache__", ".venv", "venv", ".tox", "dist", ".mypy_cache"}
+    skip_dirs = {
+        ".git", "node_modules", "__pycache__", ".venv", "venv", ".tox",
+        "dist", ".mypy_cache",
+    }
     extensions = {
         ".py", ".ts", ".vue", ".js", ".json", ".toml", ".yaml", ".yml",
         ".md", ".html", ".css", ".env.example",

@@ -16,7 +16,6 @@ from app.models import (
     MemberStateProjection,
     OutboxMessage,
 )
-from app.weather_adapter import fetch_weather
 from app.schemas import (
     AccessAuditRead,
     AuthorizationCreate,
@@ -39,6 +38,7 @@ from app.security import (
     has_authorized_action,
     require_household_owner,
 )
+from app.weather_adapter import fetch_weather
 
 router = APIRouter(prefix="/api/v1")
 settings = get_settings()
