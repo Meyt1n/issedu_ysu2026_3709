@@ -29,9 +29,6 @@ def upgrade() -> None:
                 nullable=True,
             ),
         )
-        batch_op.create_unique_constraint(
-            "uq_health_event_idempotency_key", ["idempotency_key"]
-        )
         batch_op.create_index(
             "ix_health_event_idempotency_key", ["idempotency_key"]
         )
@@ -40,6 +37,5 @@ def upgrade() -> None:
 def downgrade() -> None:
     with op.batch_alter_table("health_event") as batch_op:
         batch_op.drop_index("ix_health_event_idempotency_key")
-        batch_op.drop_constraint("uq_health_event_idempotency_key")
         batch_op.drop_column("compensates_event_id")
         batch_op.drop_column("idempotency_key")
