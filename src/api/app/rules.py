@@ -4,13 +4,10 @@ HCT-302: Finite rule engine V1 — expiry, low stock, duplicates, allergies, int
 Each rule is a pure function: facts → list of alerts. Alerts carry source event IDs.
 """
 
-from __future__ import annotations
-
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from collections.abc import Callable
-from typing import Any
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
