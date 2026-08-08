@@ -87,7 +87,7 @@ $env:MYSQL_USER='homecare'
 $env:MYSQL_PASSWORD='change-me'
 $env:MYSQL_ROOT_PASSWORD='change-me-root'
 docker compose up -d --wait --wait-timeout 60 db
-$env:DATABASE_URL='mysql+pymysql://homecare:change-me@localhost:3307/homecare?charset=utf8mb4'
+$env:DATABASE_URL = 'mysql+pymysql://' + $env:MYSQL_USER + ':' + $env:MYSQL_PASSWORD + '@localhost:' + $env:MYSQL_PORT + '/' + $env:MYSQL_DATABASE + '?charset=utf8mb4'
 uv run alembic upgrade head
 uv run python scripts/hct003_probe.py mysql --database-url $env:DATABASE_URL --strict
 ```
