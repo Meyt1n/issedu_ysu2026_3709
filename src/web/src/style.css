@@ -66,7 +66,7 @@ button:focus-visible { outline: 3px solid #68afbc; outline-offset: 2px; }
 
 .identity-bar,
 .household-bar {
-  align-items: end;
+  align-items: flex-end;
   gap: 14px;
   border-top: 1px solid #d5dfdf;
   border-bottom: 1px solid #d5dfdf;
@@ -129,5 +129,5 @@ footer { color: #667b80; font-size: 12px; margin: 28px 0 0; text-align: center; 
   .grant-editor,
   .preview-panel { grid-column: auto; grid-row: auto; }
   .identity-bar button { width: 100%; }
-  .row-actions { grid-template-columns: 1fr 1fr; }
+  .row-actions { display: grid; grid-template-columns: 1fr 1fr; }
 }
