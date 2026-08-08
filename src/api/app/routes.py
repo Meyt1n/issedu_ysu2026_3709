@@ -756,3 +756,73 @@ def auth_pin_verify(
     if not ok:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="PIN_INVALID")
     return {"status": "confirmed"}
+
+
+# ── HCT-301: Event timeline & projection ───────────────────────────
+
+
+@router.get("/households/{household_id}/members/{member_id}/timeline")
+def member_timeline(
+    household_id: str,
+    member_id: str,
+    since: str | None = None,
+    until: str | None = None,
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> list[HealthEventRead]:
+    household = session.get(Household, household_id)
+    member = session.get(Member, member_id)
+    if household is None or member is None or member.household_id != household_id:
+        _raise_resource_not_found()
+    if not has_authorized_action(
+        session, household, member_id, actor_id, "READ_EVENTS", "health_events", access_purpose,
+    ):
+        _raise_resource_not_found()
+
+    from app.projection import get_timeline
+
+    since_dt = datetime.fromisoformat(since) if since else None
+    until_dt = datetime.fromisoformat(until) if until else None
+    events = get_timeline(session, member_id, since=since_dt, until=until_dt)
+    return [HealthEventRead.model_validate(e) for e in events]
+
+
+@router.post("/households/{household_id}/members/{member_id}/projection/rebuild")
+def rebuild_member_projection(
+    household_id: str,
+    member_id: str,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> dict:
+    household = session.get(Household, household_id)
+    if household is None or household.created_by != actor_id:
+        _raise_resource_not_found()
+    from app.projection import rebuild_projection
+
+    proj = rebuild_projection(session, member_id, household_id)
+    return {"member_id": member_id, "state": proj.state, "last_event_id": proj.last_event_id}
+
+
+# ── HCT-302: Rules engine ──────────────────────────────────────────
+
+
+@router.post("/households/{household_id}/rules/run")
+def run_rules_endpoint(
+    household_id: str,
+    member_id: str,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> list[dict]:
+    household = session.get(Household, household_id)
+    if household is None:
+        _raise_resource_not_found()
+    from app.projection import build_relationship_graph, get_timeline
+    from app.rules import run_rules
+
+    events = get_timeline(session, member_id)
+    facts = build_relationship_graph(events)
+    alerts = run_rules(facts)
+    logger.info("RULES_RUN member=%s alerts=%d", member_id, len(alerts))
+    return [{"rule_id": a.rule_id, "level": a.level, "message": a.message,
+             "source_event_ids": a.source_event_ids} for a in alerts]
