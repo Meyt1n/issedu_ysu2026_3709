@@ -3,7 +3,7 @@
 import json
 import re
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -55,6 +55,25 @@ def _docker_compose_config_ok(profile: str) -> bool:
     return result.returncode == 0
 
 
+def _docker_compose_config_json(profile: str) -> dict:
+    """Get docker compose config as JSON for a profile, skip if docker unavailable."""
+    compose_path = Path(__file__).resolve().parents[3] / "docker-compose.yml"
+    if not compose_path.exists():
+        return {}
+    result = subprocess.run(
+        [
+            "docker", "compose",
+            "-f", str(compose_path),
+            "--profile", profile,
+            "config", "--format", "json",
+        ],
+        capture_output=True, text=True, timeout=30,
+    )
+    if result.returncode != 0:
+        return {}
+    return json.loads(result.stdout)
+
+
 def test_backup_ps1_syntax():
     """backup.ps1 passes PowerShell syntax check."""
     _ps_syntax_check(BACKUP_SCRIPTS / "backup.ps1")
@@ -69,7 +88,7 @@ def test_version_manifest_schema():
     """version_manifest.json keys match the expected schema."""
     sample = {
         "backup_id": "hct-backup-test",
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "timestamp_utc": datetime.now(UTC).isoformat(),
         "git_commit": "d38bc8b97c68ff1744e65d2fc08489a43c3f1446",
         "git_commit_short": "d38bc8b",
         "migration_head": "0002_allow_pending_health_events",
@@ -108,13 +127,13 @@ def test_file_manifest_schema():
         "source_root": "./data/files",
         "total_files": 3,
         "total_bytes": 1048576,
-        "collected_utc": datetime.now(timezone.utc).isoformat(),
+        "collected_utc": datetime.now(UTC).isoformat(),
         "files": [
             {
                 "relative_path": "uploads/example.jpg",
                 "size": 512000,
                 "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-                "modified_utc": datetime.now(timezone.utc).isoformat(),
+                "modified_utc": datetime.now(UTC).isoformat(),
             }
         ],
     }
@@ -190,17 +209,13 @@ def test_docker_compose_dev_profile_config():
 
 def test_basic_profile_excludes_ollama():
     """basic profile does NOT include ollama service."""
-    compose_path = Path(__file__).resolve().parents[3] / "docker-compose.yml"
-    if not compose_path.exists():
+    config = _docker_compose_config_json("basic")
+    if not config:
         return
-
-    result = subprocess.run(
-        ["docker", "compose", "-f", str(compose_path), "--profile", "basic", "config", "--format", "json"],
-        capture_output=True, text=True, timeout=30,
-    )
-    config = json.loads(result.stdout)
     services = list(config.get("services", {}).keys())
-    assert "ollama" not in services, f"basic profile should not include ollama, got: {services}"
+    assert "ollama" not in services, (
+        f"basic profile should not include ollama, got: {services}"
+    )
     assert "db" in services
     assert "api" in services
     assert "web" in services
@@ -208,14 +223,10 @@ def test_basic_profile_excludes_ollama():
 
 def test_enhanced_profile_includes_ollama():
     """enhanced profile includes ollama service."""
-    compose_path = Path(__file__).resolve().parents[3] / "docker-compose.yml"
-    if not compose_path.exists():
+    config = _docker_compose_config_json("enhanced")
+    if not config:
         return
-
-    result = subprocess.run(
-        ["docker", "compose", "-f", str(compose_path), "--profile", "enhanced", "config", "--format", "json"],
-        capture_output=True, text=True, timeout=30,
-    )
-    config = json.loads(result.stdout)
     services = list(config.get("services", {}).keys())
-    assert "ollama" in services, f"enhanced profile should include ollama, got: {services}"
+    assert "ollama" in services, (
+        f"enhanced profile should include ollama, got: {services}"
+    )
