@@ -1,9 +1,9 @@
-"""HCT-408 备份校验与版本清单测试（无需 Docker 运行）"""
+"""HCT-408 部署校验与版本清单测试（无需 Docker 运行）"""
 
 import json
 import re
 import subprocess
-from datetime import UTC, datetime
+from datetime import datetime, UTC
 from pathlib import Path
 
 
