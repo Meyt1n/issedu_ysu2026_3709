@@ -10,7 +10,6 @@ import math
 import re
 from collections import Counter
 from datetime import UTC, datetime
-from typing import Any
 
 from sqlalchemy import JSON, Column, DateTime, Integer, String, Text, func, select
 from sqlalchemy.orm import Session
@@ -220,12 +219,15 @@ def retrieve(
         raise ValueError("EMPTY_QUERY")
 
     # 1. Permission pre-filter: load active docs, check scope
+    now = datetime.now(UTC)
     stmt = (
         select(KnowledgeDocument)
         .where(KnowledgeDocument.status == "active")
         .where(
-            (KnowledgeDocument.effective_from.is_(None) | (KnowledgeDocument.effective_from <= datetime.now(UTC))),
-            (KnowledgeDocument.effective_until.is_(None) | (KnowledgeDocument.effective_until > datetime.now(UTC))),
+            (KnowledgeDocument.effective_from.is_(None)
+             | (KnowledgeDocument.effective_from <= now)),
+            (KnowledgeDocument.effective_until.is_(None)
+             | (KnowledgeDocument.effective_until > now)),
         )
     )
     all_docs = session.scalars(stmt).all()
