@@ -95,4 +95,54 @@ describe('ApiClient authorization contract', () => {
       'http://local.test/api/v1/households/household-1/members/member-1/timeline',
     ])
   })
+
+  it('uses browser multipart boundaries for quality checks and uploads', async () => {
+    const requests: RequestInit[] = []
+    const fetcher: typeof fetch = async (_input, init) => {
+      requests.push(init ?? {})
+      const body = init?.body as FormData
+      const isQuality = body?.get('media_type') === 'image'
+      return new Response(JSON.stringify(isQuality
+        ? { decision: 'PASS', quality_receipt: 'receipt' }
+        : { storage_key: 'stored.png', hash: 'a'.repeat(64), hash_algo: 'sha256' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    const client = new ApiClient({ baseUrl: 'http://local.test', fetcher })
+    const file = new File(['image'], 'box.png', { type: 'image/png' })
+
+    await client.checkVisionQuality(file, { actorId: 'owner' })
+    await client.uploadFile(file, { actorId: 'owner' })
+
+    expect(requests).toHaveLength(2)
+    for (const request of requests) {
+      const headers = new Headers(request.headers)
+      expect(headers.has('Content-Type')).toBe(false)
+      expect(headers.get('X-Actor-Id')).toBe('owner')
+      expect(request.body).toBeInstanceOf(FormData)
+    }
+  })
+
+  it('creates and cleans up vision tasks through encoded local API paths', async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = []
+    const fetcher: typeof fetch = async (input, init) => {
+      requests.push({ url: String(input), init: init ?? {} })
+      return new Response(JSON.stringify({ deleted: true }), { status: 200 })
+    }
+    const client = new ApiClient({ baseUrl: 'http://local.test', fetcher })
+
+    await client.createVisionTask({
+      file_id: 'stored.png',
+      quality_receipt: 'signed-receipt',
+      idempotency_key: 'request-1',
+    }, { actorId: 'owner' })
+    await client.deleteUploadedFile('folder/name.png', { actorId: 'owner' })
+
+    expect(requests[0]?.url).toBe('http://local.test/api/v1/vision-tasks')
+    expect(requests[0]?.init.method).toBe('POST')
+    expect(new Headers(requests[0]?.init.headers).get('Content-Type')).toBe('application/json')
+    expect(requests[1]?.url).toBe('http://local.test/api/v1/files/folder%2Fname.png')
+    expect(requests[1]?.init.method).toBe('DELETE')
+  })
 })

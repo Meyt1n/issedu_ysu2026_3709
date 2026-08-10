@@ -17,7 +17,8 @@ case "$target" in
     ;;
   api)
     uv run alembic upgrade head
-    uv run uvicorn app.main:app --app-dir src/api --reload --host 0.0.0.0 --port 8000
+    PYTHONPATH="$repo_root/src/api:$repo_root/src${PYTHONPATH:+:$PYTHONPATH}" \
+      uv run uvicorn app.main:app --app-dir src/api --reload --host 0.0.0.0 --port 8000
     ;;
   web)
     npm run dev:web

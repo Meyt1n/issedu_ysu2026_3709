@@ -72,6 +72,7 @@ switch ($Target) {
     }
     "api" {
         Invoke-CheckedCommand { uv run alembic upgrade head }
+        $env:PYTHONPATH = "$RepoRoot\src\api$([IO.Path]::PathSeparator)$RepoRoot\src"
         Invoke-CheckedCommand { uv run uvicorn app.main:app --app-dir src/api --reload --host 0.0.0.0 --port 8000 }
     }
     "web" {

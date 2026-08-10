@@ -15,6 +15,6 @@ COPY alembic.ini ./
 COPY migrations ./migrations
 COPY src ./src
 
-ENV PYTHONPATH=/app/src/api
+ENV PYTHONPATH=/app/src/api:/app/src
 
 CMD ["sh", "-c", "uv run --no-sync alembic upgrade head && uv run --no-sync uvicorn app.main:app --host 0.0.0.0 --port 8000"]

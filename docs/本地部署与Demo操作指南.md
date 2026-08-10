@@ -131,6 +131,18 @@ curl.exe -X POST http://localhost:8000/api/v1/vision-quality/check `
 
 当前凭证使用 Demo 单进程内存密钥，默认 10 分钟有效；API 重启后旧凭证失效。正式多 worker 部署必须使用持久化签名密钥或数据库质量记录，不得通过关闭凭证检查解决失效问题。
 
+Web Demo 可直接演示同一流程：
+
+```powershell
+.\scripts\start.ps1 api
+# 另开一个终端
+.\scripts\start.ps1 web
+```
+
+打开 `http://127.0.0.1:5173`，填写开发身份后，在“先检查图片，再进入识别”区域选择 JPEG/PNG。页面只在浏览器内生成预览；`RETAKE` 明确停止，`PASS` 后由用户点击创建本地 OCR 任务。页面会核对质量检查与持久化上传的 SHA-256，并且不会显示服务端路径、文件摘要或质量凭证。切换身份或替换图片会使旧结果失效。
+
+Windows 本地开发代理固定使用 `127.0.0.1`，避免 `localhost` 解析为 IPv6 而 API 仅监听 IPv4。API 启动脚本和容器必须同时包含 `src/api` 与 `src` 的 Python 导入路径，否则质量模块无法加载。
+
 ## 5. 后续必须补齐
 
 - 正式 Ollama 业务工具、输出 Schema、模型登记、GPU/CPU 和模型权重哈希；

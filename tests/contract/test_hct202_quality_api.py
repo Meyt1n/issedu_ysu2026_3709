@@ -34,6 +34,12 @@ def _check_quality(client, content: bytes, actor_id: str = "demo-owner"):
     )
 
 
+def _tamper_receipt(receipt: str) -> str:
+    encoded, signature = receipt.split(".", maxsplit=1)
+    replacement = "A" if signature[0] != "A" else "B"
+    return f"{encoded}.{replacement}{signature[1:]}"
+
+
 def test_quality_api_returns_versioned_local_result_and_receipt(client) -> None:
     response = _check_quality(client, _encode_demo_image())
 
@@ -149,7 +155,7 @@ def test_vision_task_rejects_tampered_or_different_file_receipt(
     )
     tampered = client.post(
         "/api/v1/vision-tasks",
-        json={"file_id": file_id, "quality_receipt": receipt[:-1] + "A"},
+        json={"file_id": file_id, "quality_receipt": _tamper_receipt(receipt)},
         headers={"X-Actor-ID": "demo-owner"},
     )
 

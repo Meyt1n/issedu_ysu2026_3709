@@ -53,6 +53,8 @@ def test_cross_platform_start_scripts_expose_lifecycle_commands() -> None:
     assert "/api/v1/health/db" in shell
     assert "check_http_health.py" in powershell
     assert "check_http_health.py" in shell
+    assert 'src\\api$([IO.Path]::PathSeparator)$RepoRoot\\src' in powershell
+    assert '$repo_root/src/api:$repo_root/src' in shell
     assert "docker compose down --volumes" not in powershell
     assert "docker compose down --volumes" not in shell
 
@@ -120,6 +122,14 @@ def test_container_images_are_pinned_to_verified_digests() -> None:
     assert "python:3.11-slim@sha256:" in api_dockerfile
     assert "node:22-alpine@sha256:" in web_dockerfile
     assert "nginx:1.27-alpine@sha256:" in web_dockerfile
+
+
+def test_api_runtime_can_import_api_and_local_ai_packages() -> None:
+    compose = read_repo_file("docker-compose.yml")
+    api_dockerfile = read_repo_file("docker/api.Dockerfile")
+
+    assert compose.count("PYTHONPATH: /app/src/api:/app/src") == 2
+    assert "ENV PYTHONPATH=/app/src/api:/app/src" in api_dockerfile
 
 
 def test_env_example_uses_non_secret_placeholders() -> None:
