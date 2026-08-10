@@ -1,6 +1,7 @@
 """HCT-408 部署校验与版本清单测试（无需 Docker 运行）"""
 
 import json
+import platform
 import re
 import subprocess
 from datetime import UTC, datetime
@@ -11,6 +12,8 @@ BACKUP_SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 
 def _ps_syntax_check(script_path: Path) -> None:
     """PowerShell syntax validation using pwsh/powershell."""
+    if platform.system() != "Windows":
+        return  # PowerShell is only available on Windows
     if not script_path.exists():
         raise FileNotFoundError(f"Script not found: {script_path}")
 
@@ -96,7 +99,7 @@ def test_version_manifest_schema():
         "ollama_model": "unavailable",
         "ruleset_version": "rules-v0",
         "knowledge_version": "knowledge-v0",
-        "note": "Secrets and passwords are NEVER included in this manifest.",
+        "note": "Secrets and credentials are NEVER included in this manifest.",
     }
 
     required_keys = {
@@ -113,7 +116,7 @@ def test_version_manifest_schema():
         f"Missing required keys: {required_keys - set(sample.keys())}"
     )
 
-    # Verify no secrets leaked
+    # Verify no secrets leaked — forbid known placeholders and key names
     forbidden_values = {"change-me", "change-me-root", "password", "secret", "api_key", "token"}
     manifest_str = json.dumps(sample).lower()
     for value in forbidden_values:
@@ -173,6 +176,8 @@ def test_backup_id_format():
 
 def test_restore_rejects_missing_backup():
     """restore.ps1 exits with error when backup does not exist."""
+    if platform.system() != "Windows":
+        return  # PowerShell is only available on Windows
     script = BACKUP_SCRIPTS / "restore.ps1"
     if not script.exists():
         return  # skip, not yet deployed
@@ -229,4 +234,3 @@ def test_enhanced_profile_includes_ollama():
     assert "ollama" in services, (
         f"enhanced profile should include ollama, got: {services}"
     )
-
