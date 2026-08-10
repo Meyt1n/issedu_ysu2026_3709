@@ -38,6 +38,14 @@ from app.models import (
     MemberStateProjection,
     OutboxMessage,
 )
+from app.review import (
+    ReviewTask,
+    confirm_review,
+    correct_review,
+    get_review_task,
+    list_pending_reviews,
+    skip_review,
+)
 from app.schemas import (
     AccessAuditRead,
     AuthorizationCreate,
@@ -60,6 +68,10 @@ from app.schemas import (
     ProjectionCheckpointRead,
     ProjectionReplayRead,
     ProjectionReplayRequest,
+    ReviewTaskConfirm,
+    ReviewTaskCorrect,
+    ReviewTaskRead,
+    ReviewTaskSkip,
     RiskAlertRead,
     RiskDetailResponse,
     RiskListResponse,
@@ -134,6 +146,7 @@ def capabilities() -> CapabilityResponse:
             "audit-outbox",
             "event-compensation-replay",
             "outbox-recovery-worker",
+            "review-task",
         ],
         unavailable=["vision", "ocr", "barcode", "rag", "llm", "weather"],
     )
@@ -1081,6 +1094,232 @@ def skip_plan_endpoint(
     session.commit()
     session.refresh(event)
     return HealthEventRead.model_validate(event)
+
+
+# ── HCT-207: Manual review API ────────────────────────────────────────
+
+
+def _commit_review_event(
+    session: Session,
+    *,
+    household: Household,
+    member_id: str,
+    actor_id: str,
+    idempotency_key: str | None,
+    correlation_id: str,
+    event_dict: dict,
+) -> None:
+    member = session.get(Member, member_id)
+    if member is None or member.household_id != household.id:
+        _raise_resource_not_found()
+    try:
+        append_health_event_transaction(
+            session,
+            household=household,
+            member=member,
+            actor_id=actor_id,
+            idempotency_key=idempotency_key,
+            correlation_id=correlation_id,
+            payload=HealthEventCreate(
+                member_id=member.id,
+                event_type=event_dict["event_type"],
+                source="MANUAL",
+                confirmation_status="CONFIRMED",
+                payload=event_dict["payload"],
+                evidence={
+                    **event_dict["evidence"],
+                    "event_source": event_dict["source"],
+                },
+            ),
+        )
+    except IdempotencyConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="IDEMPOTENCY_KEY_CONFLICT",
+        ) from exc
+
+
+@router.get(
+    "/households/{household_id}/members/{member_id}/review-tasks",
+    response_model=list[ReviewTaskRead],
+)
+def list_review_tasks(
+    household_id: str,
+    member_id: str,
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> list[ReviewTask]:
+    household = session.get(Household, household_id)
+    member = session.get(Member, member_id)
+    if household is None or member is None or member.household_id != household_id:
+        _raise_resource_not_found()
+    if not has_authorized_action(
+        session,
+        household,
+        member_id,
+        actor_id,
+        "READ_EVENTS",
+        "health_events",
+        access_purpose,
+    ):
+        _raise_resource_not_found()
+    return list_pending_reviews(session, household_id, member_id)
+
+
+@router.get(
+    "/households/{household_id}/review-tasks/{task_id}",
+    response_model=ReviewTaskRead,
+)
+def get_review_task_endpoint(
+    household_id: str,
+    task_id: str,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> ReviewTask:
+    task = get_review_task(session, task_id)
+    if task is None or task.household_id != household_id:
+        _raise_resource_not_found()
+    if task.household_id != household_id:
+        _raise_resource_not_found()
+    # Verify actor has read access to this household
+    household = session.get(Household, household_id)
+    if household is None or household.created_by != actor_id:
+        _raise_resource_not_found()
+    return task
+
+
+@router.post(
+    "/households/{household_id}/review-tasks/{task_id}/confirm",
+    response_model=ReviewTaskRead,
+    status_code=status.HTTP_200_OK,
+)
+def confirm_review_endpoint(
+    household_id: str,
+    task_id: str,
+    payload: ReviewTaskConfirm,
+    request: Request,
+    actor_id: str = Depends(get_actor_id),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    session: Session = Depends(get_session),
+) -> ReviewTask:
+    task = get_review_task(session, task_id)
+    if task is None or task.household_id != household_id:
+        _raise_resource_not_found()
+
+    household = session.get(Household, household_id)
+    if household is None or household.created_by != actor_id:
+        _raise_resource_not_found()
+
+    candidates = task.candidates or []
+    selected = candidates[0] if payload.selected_index is None and len(candidates) == 1 else None
+    if payload.selected_index is not None:
+        if payload.selected_index < 0 or payload.selected_index >= len(candidates):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="SELECTED_INDEX_OUT_OF_RANGE",
+            )
+        selected = candidates[payload.selected_index]
+    if selected is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="REVIEW_CANDIDATE_REQUIRED",
+        )
+
+    updated_task, event_dict = confirm_review(
+        session,
+        task,
+        actor_id=actor_id,
+        selected_candidate=selected,
+        confirmation_note=payload.confirmation_note,
+        idempotency_key=idempotency_key,
+    )
+
+    _commit_review_event(
+        session,
+        household=household,
+        member_id=task.member_id,
+        actor_id=actor_id,
+        idempotency_key=idempotency_key,
+        correlation_id=getattr(request.state, "request_id", None) or secrets.token_hex(16),
+        event_dict=event_dict,
+    )
+    session.refresh(updated_task)
+    return updated_task
+
+
+@router.post(
+    "/households/{household_id}/review-tasks/{task_id}/correct",
+    response_model=ReviewTaskRead,
+    status_code=status.HTTP_200_OK,
+)
+def correct_review_endpoint(
+    household_id: str,
+    task_id: str,
+    payload: ReviewTaskCorrect,
+    request: Request,
+    actor_id: str = Depends(get_actor_id),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    session: Session = Depends(get_session),
+) -> ReviewTask:
+    task = get_review_task(session, task_id)
+    if task is None or task.household_id != household_id:
+        _raise_resource_not_found()
+
+    household = session.get(Household, household_id)
+    if household is None or household.created_by != actor_id:
+        _raise_resource_not_found()
+
+    updated_task, event_dict = correct_review(
+        session,
+        task,
+        actor_id=actor_id,
+        manual_payload=payload.manual_payload,
+        correction_note=payload.correction_note,
+        idempotency_key=idempotency_key,
+    )
+
+    _commit_review_event(
+        session,
+        household=household,
+        member_id=task.member_id,
+        actor_id=actor_id,
+        idempotency_key=idempotency_key,
+        correlation_id=getattr(request.state, "request_id", None) or secrets.token_hex(16),
+        event_dict=event_dict,
+    )
+    session.refresh(updated_task)
+    return updated_task
+
+
+@router.post(
+    "/households/{household_id}/review-tasks/{task_id}/skip",
+    response_model=ReviewTaskRead,
+)
+def skip_review_endpoint(
+    household_id: str,
+    task_id: str,
+    payload: ReviewTaskSkip,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> ReviewTask:
+    task = get_review_task(session, task_id)
+    if task is None or task.household_id != household_id:
+        _raise_resource_not_found()
+
+    household = session.get(Household, household_id)
+    if household is None or household.created_by != actor_id:
+        _raise_resource_not_found()
+
+    updated_task = skip_review(
+        session,
+        task,
+        actor_id=actor_id,
+        reason=payload.reason,
+    )
+    session.commit()
+    session.refresh(updated_task)
+    return updated_task
 
 
 # ── HCT-307: Risk evidence API ─────────────────────────────────────

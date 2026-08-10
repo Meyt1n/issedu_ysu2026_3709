@@ -261,3 +261,50 @@ class RiskDetailResponse(BaseModel):
 
     alert: RiskAlertRead
     source_events: list[dict[str, Any]] = Field(default_factory=list)
+
+
+# ── HCT-207: Manual review schemas ────────────────────────────────────
+
+
+class CandidateItem(BaseModel):
+    drug_name: str
+    confidence: float | None = None
+    evidence: list[str] = Field(default_factory=list)
+    dosage: str | None = None
+    frequency: str | None = None
+
+
+class ReviewTaskConfirm(BaseModel):
+    selected_index: int | None = None
+    confirmation_note: str | None = None
+
+
+class ReviewTaskCorrect(BaseModel):
+    manual_payload: dict[str, Any] = Field(min_length=1)
+    correction_note: str | None = None
+
+
+class ReviewTaskSkip(BaseModel):
+    reason: str = ""
+
+
+class ReviewTaskRead(BaseModel):
+    """Review task for API responses (Pydantic version)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    vision_task_id: str
+    household_id: str
+    member_id: str
+    status: str
+    fusion_status: str | None = None
+    candidates: list[dict[str, Any]] = Field(default_factory=list)
+    selected_candidate: dict[str, Any] | None = None
+    manual_payload: dict[str, Any] | None = None
+    model_version: str | None = None
+    rule_version: str | None = None
+    confirmed_by: str | None = None
+    confirmed_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime

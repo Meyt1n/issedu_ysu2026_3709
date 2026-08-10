@@ -136,7 +136,7 @@ def test_alembic_has_a_single_head() -> None:
     config = Config(str(REPO_ROOT / "alembic.ini"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_heads() == ["0005_hct103_event_recovery"]
+    assert scripts.get_heads() == ["0006_hct207_review_task"]
     assert all(len(revision) <= 32 for revision in scripts.get_heads())
 
 
