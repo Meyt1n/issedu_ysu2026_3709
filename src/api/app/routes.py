@@ -62,7 +62,6 @@ from app.schemas import (
     HealthResponse,
     HouseholdCreate,
     HouseholdRead,
-    KnowledgeChunkRead,
     KnowledgeDocumentCreate,
     KnowledgeDocumentRead,
     KnowledgeRetrieveRequest,
@@ -93,9 +92,7 @@ from app.security import (
     require_household_owner,
 )
 from app.tool_call import (
-    build_degrade_response,
     get_approved_tools,
-    OllamaClient,
     run_assistant,
 )
 from app.vision_tasks import (

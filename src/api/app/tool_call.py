@@ -19,13 +19,10 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import httpx
-import math
-import re
 from pydantic import BaseModel, Field, ValidationError
 
 logger = logging.getLogger(__name__)
