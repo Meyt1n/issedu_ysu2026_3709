@@ -8,6 +8,9 @@ import pytest
 from pydantic import ValidationError
 
 from app.tool_call import (
+    HealthAssistantOutput,
+    OllamaClient,
+    ToolDefinition,
     _check_medical_boundary,
     _contains_external_links,
     _parse_loose_output,
@@ -15,9 +18,6 @@ from app.tool_call import (
     get_approved_tools,
     get_tool,
     is_tool_allowed,
-    HealthAssistantOutput,
-    OllamaClient,
-    ToolDefinition,
     run_assistant,
 )
 
