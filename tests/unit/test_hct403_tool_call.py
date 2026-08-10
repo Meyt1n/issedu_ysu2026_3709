@@ -21,7 +21,6 @@ from app.tool_call import (
     run_assistant,
 )
 
-
 # ── Tool whitelist ────────────────────────────────────────────────────
 
 
