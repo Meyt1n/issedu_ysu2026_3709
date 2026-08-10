@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import secrets
 from datetime import UTC, datetime
@@ -46,6 +47,8 @@ from app.schemas import (
     RiskAlertRead,
     RiskDetailResponse,
     RiskListResponse,
+    VisionTaskCreate,
+    VisionTaskRead,
 )
 from app.review import (
     confirm_review,
@@ -60,6 +63,13 @@ from app.security import (
     get_actor_id,
     has_authorized_action,
     require_household_owner,
+)
+from app.vision_tasks import (
+    create_vision_task,
+    get_vision_task,
+    list_vision_tasks,
+    transition_status,
+    VisionTaskStatus,
 )
 from app.weather_adapter import fetch_weather
 
@@ -124,8 +134,9 @@ def capabilities() -> CapabilityResponse:
             "field-authorization",
             "audit-outbox",
             "review-task",          # HCT-207
+            "vision-task",          # HCT-204
         ],
-        unavailable=["vision", "ocr", "barcode", "rag", "llm", "weather"],
+        unavailable=["rag", "llm", "weather"],
     )
 
 
@@ -930,6 +941,130 @@ def skip_plan_endpoint(
     session.commit()
     session.refresh(event)
     return HealthEventRead.model_validate(event)
+
+
+# ── HCT-204: Vision task API ─────────────────────────────────────────
+
+
+@router.post(
+    "/vision-tasks",
+    response_model=VisionTaskRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_vision_task_endpoint(
+    payload: VisionTaskCreate,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> VisionTask:
+    """Create a new vision processing task.
+
+    The *file_id* must already exist in the secure file store (uploaded via
+    /files/upload).  The task is queued asynchronously and a worker picks it
+    up later.  Use the idempotency key to avoid duplicate tasks on retry.
+    """
+    settings = get_settings()
+    file_root = Path(settings.file_root).resolve()
+    target = (file_root / payload.file_id).resolve()
+
+    # Security: only allow files inside the upload root
+    if not str(target).startswith(str(file_root)):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="FILE_NOT_FOUND",
+        )
+    if not target.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="FILE_NOT_FOUND",
+        )
+
+    # Compute input digest for integrity tracking.
+    try:
+        input_digest = _file_digest(str(target))
+    except Exception:
+        input_digest = None
+
+    task = create_vision_task(
+        session,
+        household_id="system",
+        created_by=actor_id,
+        file_id=payload.file_id,
+        member_id=payload.member_id,
+        task_type=payload.task_type,
+        idempotency_key=payload.idempotency_key,
+        model_threshold=payload.model_threshold,
+        input_digest=input_digest,
+        preprocess_version="opencv-quality-v1",
+        schema_version="vision-result-v1",
+        code_version="hct-204-v1",
+        data_version="hct-201-dataset-v1",
+    )
+    session.commit()
+    session.refresh(task)
+    logger.info("VISION_TASK_ENQUEUED task=%s actor=%s", task.id, actor_id)
+    return task
+
+
+@router.get("/vision-tasks/{task_id}", response_model=VisionTaskRead)
+def get_vision_task_endpoint(
+    task_id: str,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> VisionTask:
+    task = get_vision_task(session, task_id)
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="VISION_TASK_NOT_FOUND")
+    return task
+
+
+@router.get("/households/{household_id}/vision-tasks", response_model=list[VisionTaskRead])
+def list_vision_tasks_endpoint(
+    household_id: str,
+    member_id: str | None = None,
+    status: str | None = None,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> list[VisionTask]:
+    # Verify actor has read access to the household
+    household = session.get(Household, household_id)
+    if household is None or household.created_by != actor_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="HOUSEHOLD_NOT_FOUND")
+
+    if status is not None and status not in {s.value for s in VisionTaskStatus}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"INVALID_STATUS: {status}",
+        )
+
+    return list_vision_tasks(session, household_id, member_id=member_id, status=status)
+
+
+@router.post("/vision-tasks/{task_id}/cancel", response_model=VisionTaskRead)
+def cancel_vision_task_endpoint(
+    task_id: str,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> VisionTask:
+    """Cancel a queued or running vision task."""
+    task = get_vision_task(session, task_id)
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="VISION_TASK_NOT_FOUND")
+
+    if task.status in (VisionTaskStatus.SUCCEEDED, VisionTaskStatus.FAILED,
+                       VisionTaskStatus.TIMEOUT, VisionTaskStatus.CANCELLED):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"VISION_TASK_ALREADY_{task.status.upper()}",
+        )
+
+    updated = transition_status(
+        session, task, VisionTaskStatus.CANCELLED,
+        error_code="CANCELLED_BY_USER",
+        error_message=f"Cancelled by {actor_id}",
+    )
+    session.commit()
+    session.refresh(updated)
+    return updated
 
 
 # ── HCT-207: Manual review API ────────────────────────────────────────
