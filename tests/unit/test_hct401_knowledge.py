@@ -22,12 +22,12 @@ from app.knowledge import (
 
 # ── Helpers ────────────────────────────────────────────────────────────
 
-def _make_doc(db_session, *, title="Test Doc", content="阿莫西林 说明书 用法用量", **kw):
+def _make_doc(db_session, *, title="Test Doc", content="阿莫西林 说明书 用法用量", kw_source="test", **kw):
     return add_document(
         db_session,
         title=title,
         content=content,
-        source="test",
+        source=kw_source,
         created_by="test-actor",
         **kw,
     )
@@ -170,7 +170,7 @@ class TestRetrieval:
         assert all("过期" not in r["title"] for r in results)
 
     def test_results_include_source_metadata(self, db_session):
-        _make_doc(db_session, content="知识库测试 内容", source="auth_package_insert")
+        _make_doc(db_session, content="知识库测试 内容", kw_source="auth_package_insert")
         db_session.commit()
 
         results = retrieve(db_session, query="知识库测试", actor_id="u1")
