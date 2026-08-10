@@ -61,6 +61,13 @@ const dashboardState = ref<MemberState | null>(null)
 const capabilities = ref<CapabilityResponse | null>(null)
 const loadingDashboard = ref(false)
 const dashboardError = ref('')
+const refreshingRules = ref(false)
+const carePlanEventId = ref('')
+const deferHours = ref(4)
+const skipReason = ref('')
+const pendingCareAction = ref<'confirm' | 'defer' | 'skip' | null>(null)
+const careActionMessage = ref('')
+const careActionError = ref('')
 
 const draft = reactive({
   memberId: '',
@@ -109,6 +116,12 @@ const canSave = computed(
     isFutureDate(draft.validUntil),
 )
 
+const canSubmitCarePlan = computed(
+  () =>
+    Boolean(selectedHouseholdId.value && dashboardMemberId.value && carePlanEventId.value.trim()) &&
+    deferHours.value >= 1,
+)
+
 function localDateTimeInput(daysFromNow: number): string {
   const date = new Date()
   date.setDate(date.getDate() + daysFromNow)
@@ -153,6 +166,13 @@ function clearScope(): void {
   dashboardState.value = null
   capabilities.value = null
   dashboardError.value = ''
+  refreshingRules.value = false
+  carePlanEventId.value = ''
+  deferHours.value = 4
+  skipReason.value = ''
+  pendingCareAction.value = null
+  careActionMessage.value = ''
+  careActionError.value = ''
   resetDraft()
 }
 
@@ -214,6 +234,13 @@ async function loadSelectedHousehold(): Promise<void> {
   dashboardState.value = null
   capabilities.value = null
   dashboardError.value = ''
+  refreshingRules.value = false
+  carePlanEventId.value = ''
+  deferHours.value = 4
+  skipReason.value = ''
+  pendingCareAction.value = null
+  careActionMessage.value = ''
+  careActionError.value = ''
   try {
     members.value = await apiClient.listMembers(householdId, requestOptions.value)
     draft.memberId = members.value[0]?.id ?? ''
@@ -293,6 +320,62 @@ async function loadMemberRisks(): Promise<void> {
     riskError.value = formatError(cause)
   } finally {
     loadingRisks.value = false
+  }
+}
+
+async function runMemberRules(): Promise<void> {
+  const householdId = selectedHouseholdId.value
+  const memberId = riskMemberId.value
+  if (!householdId || !memberId) return
+
+  refreshingRules.value = true
+  riskError.value = ''
+  try {
+    const alerts = await apiClient.runMemberRules(
+      householdId,
+      memberId,
+      { ...requestOptions.value, idempotencyKey: createIdempotencyKey() },
+    )
+    await loadMemberRisks()
+    message.value = `Risk evaluation completed. ${alerts.length} signal${alerts.length === 1 ? '' : 's'} returned.`
+  } catch (cause) {
+    riskError.value = formatError(cause)
+  } finally {
+    refreshingRules.value = false
+  }
+}
+
+async function submitCarePlanAction(action: 'confirm' | 'defer' | 'skip'): Promise<void> {
+  const householdId = selectedHouseholdId.value
+  const memberId = dashboardMemberId.value
+  const planEventId = carePlanEventId.value.trim()
+  if (!householdId || !memberId || !planEventId || !canSubmitCarePlan.value) return
+  if (action === 'skip' && !skipReason.value.trim()) {
+    careActionError.value = 'Add a reason before skipping this care plan.'
+    return
+  }
+
+  pendingCareAction.value = action
+  careActionError.value = ''
+  careActionMessage.value = ''
+  const options = { ...requestOptions.value, idempotencyKey: createIdempotencyKey() }
+
+  try {
+    if (action === 'confirm') {
+      await apiClient.confirmCarePlan(householdId, memberId, planEventId, options)
+      careActionMessage.value = 'Care plan confirmed and recorded.'
+    } else if (action === 'defer') {
+      await apiClient.deferCarePlan(householdId, memberId, planEventId, deferHours.value, options)
+      careActionMessage.value = `Care plan deferred by ${deferHours.value} hour${deferHours.value === 1 ? '' : 's'}.`
+    } else {
+      await apiClient.skipCarePlan(householdId, memberId, planEventId, skipReason.value.trim(), options)
+      careActionMessage.value = 'Care plan skip recorded.'
+    }
+    await loadDashboard()
+  } catch (cause) {
+    careActionError.value = formatError(cause)
+  } finally {
+    pendingCareAction.value = null
   }
 }
 
@@ -530,11 +613,37 @@ async function revokeAuthorization(authorization: Authorization): Promise<void> 
           <div class="panel-heading">
             <div>
               <p class="section-label">Care actions</p>
-              <h2 id="reminder-title">Tasks and reminders</h2>
+              <h2 id="reminder-title">Care plan</h2>
             </div>
-            <span class="section-status">API dependency</span>
+            <span class="section-status">Write access required</span>
           </div>
-          <p class="empty-state">No read-only task or reminder summary is available from the current API contract. This page does not infer planned care actions.</p>
+          <form class="care-plan-form" @submit.prevent="submitCarePlanAction('confirm')">
+            <label>
+              Plan event ID
+              <input v-model.trim="carePlanEventId" autocomplete="off" required placeholder="Plan event ID" />
+            </label>
+            <div class="care-action-row">
+              <button type="submit" :disabled="!canSubmitCarePlan || pendingCareAction !== null">
+                {{ pendingCareAction === 'confirm' ? 'Confirming' : 'Confirm' }}
+              </button>
+              <label>
+                Delay hours
+                <input v-model.number="deferHours" type="number" min="1" max="168" required />
+              </label>
+              <button type="button" :disabled="!canSubmitCarePlan || pendingCareAction !== null" @click="submitCarePlanAction('defer')">
+                {{ pendingCareAction === 'defer' ? 'Deferring' : 'Defer' }}
+              </button>
+            </div>
+            <label>
+              Skip reason
+              <input v-model.trim="skipReason" autocomplete="off" placeholder="Reason for skipping" />
+            </label>
+            <button type="button" class="danger-button" :disabled="!canSubmitCarePlan || pendingCareAction !== null" @click="submitCarePlanAction('skip')">
+              {{ pendingCareAction === 'skip' ? 'Recording' : 'Skip plan' }}
+            </button>
+            <p v-if="careActionError" class="form-error" role="alert">{{ careActionError }}</p>
+            <p v-else-if="careActionMessage" class="action-success" role="status">{{ careActionMessage }}</p>
+          </form>
         </section>
       </div>
     </section>
@@ -662,6 +771,9 @@ async function revokeAuthorization(authorization: Authorization): Promise<void> 
           <p class="section-label">Confirmed evidence</p>
           <h2 id="risk-title">Risk signals</h2>
         </div>
+        <button type="button" class="quiet-button" :disabled="loadingRisks || refreshingRules" @click="runMemberRules">
+          {{ refreshingRules ? 'Evaluating' : 'Re-evaluate' }}
+        </button>
         <label class="risk-member-select">
           Member
           <select v-model="riskMemberId" :disabled="loadingRisks" @change="loadMemberRisks">
