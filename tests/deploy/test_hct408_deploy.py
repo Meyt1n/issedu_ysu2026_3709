@@ -99,7 +99,7 @@ def test_version_manifest_schema():
         "ollama_model": "unavailable",
         "ruleset_version": "rules-v0",
         "knowledge_version": "knowledge-v0",
-        "note": "Authentication tokens and keys are NEVER included in this manifest.",
+        "note": "No sensitive credentials are EVER included in this manifest.",
     }
 
     required_keys = {
