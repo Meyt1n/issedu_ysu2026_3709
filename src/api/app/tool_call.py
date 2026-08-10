@@ -22,9 +22,10 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
 
 import httpx
+import math
+import re
 from pydantic import BaseModel, Field, ValidationError
 
 logger = logging.getLogger(__name__)
@@ -267,7 +268,10 @@ class OllamaClient:
                 logger.warning("Ollama request timed out (attempt %d)", attempt + 1)
             except httpx.HTTPStatusError as exc:
                 last_error = f"HTTP_{exc.response.status_code}"
-                logger.warning("Ollama HTTP error %s (attempt %d)", exc.response.status_code, attempt + 1)
+                logger.warning(
+                    "Ollama HTTP error %s (attempt %d)",
+                    exc.response.status_code, attempt + 1,
+                )
             except Exception as exc:
                 last_error = str(exc)[:120]
                 logger.warning("Ollama connection error (attempt %d): %s", attempt + 1, exc)

@@ -5,21 +5,23 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from fastapi import status
 
 from app.knowledge import (
-    KnowledgeDocument,
     KnowledgeChunk,
+    KnowledgeDocument,
     _check_permission,
     _tf,
     add_document,
+    _content_hash,
+    create_index_snapshot,
+    delete_document,
+    retrieve,
+)
     create_index_snapshot,
     delete_document,
     retrieve,
     _content_hash,
 )
-
-
 # ── Helpers ────────────────────────────────────────────────────────────
 
 def _make_doc(session, *, title="Test Doc", content="阿莫西林 说明书 用法用量", **kw):
@@ -31,11 +33,7 @@ def _make_doc(session, *, title="Test Doc", content="阿莫西林 说明书 用�
         created_by="test-actor",
         **kw,
     )
-
-
 # ── Document CRUD ──────────────────────────────────────────────────────
-
-
 class TestDocumentCRUD:
     def test_add_document_creates_chunks(self, session):
         doc = _make_doc(session, content="阿莫西林 胶囊 用法：口服 剂量：0.5g 每日三次 注意事项 过敏禁用")
@@ -77,11 +75,7 @@ class TestDocumentCRUD:
         doc = _make_doc(session, content="青霉素 过敏 慎用")
         session.commit()
         assert doc.content_hash == _content_hash("青霉素 过敏 慎用")
-
-
 # ── Permission filtering ───────────────────────────────────────────────
-
-
 class TestPermissionFiltering:
     def test_empty_scope_is_public(self, session):
         assert _check_permission({}, "any-actor") is True
@@ -107,11 +101,7 @@ class TestPermissionFiltering:
     def test_internal_flag_allows(self, session):
         scope = {"internal": True}
         assert _check_permission(scope, "any") is True
-
-
 # ── TF-IDF Retrieval ───────────────────────────────────────────────────
-
-
 class TestRetrieval:
     def test_basic_retrieval(self, session):
         _make_doc(session, content="阿莫西林 胶囊 用法用量 口服 0.5g 每日三次 过敏禁用 青霉素过敏者禁用")
@@ -188,11 +178,7 @@ class TestRetrieval:
         results = retrieve(session, query="口服 服用方法", actor_id="u1", top_k=10)
         scores = [r["score"] for r in results]
         assert scores == sorted(scores, reverse=True)
-
-
 # ── Index snapshot ─────────────────────────────────────────────────────
-
-
 class TestIndexSnapshot:
     def test_create_snapshot(self, session):
         _make_doc(session, content="快照测试 文档 内容")
@@ -202,11 +188,7 @@ class TestIndexSnapshot:
         assert idx.version == "snap-v1"
         assert idx.document_count >= 1
         assert idx.checksum is not None
-
-
 # ── Tokenizer ──────────────────────────────────────────────────────────
-
-
 class TestTokenizer:
     def test_tf_basic(self):
         vec = _tf("阿莫西林 胶囊 阿莫西林 口服 用法")
