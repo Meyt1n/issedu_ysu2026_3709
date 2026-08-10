@@ -237,3 +237,63 @@ export interface RequestOptions {
   idempotencyKey?: string
   signal?: AbortSignal
 }
+
+export interface VisionQualityMetric {
+  value: number
+  passed: boolean
+  unit: string
+  threshold: Record<string, number>
+}
+
+export interface VisionQualityResponse {
+  schema_version: string
+  config_version: string
+  media_type: 'image' | 'video'
+  decision: 'PASS' | 'RETAKE'
+  allow_downstream: boolean
+  source: {
+    source_id: string
+    sha256: string
+    digest_scope: string
+  }
+  metrics: Record<string, VisionQualityMetric>
+  thresholds: Record<string, number | string>
+  reasons: string[]
+  retake_prompts: string[]
+  correction: Record<string, unknown> | null
+  frames: Array<Record<string, unknown>>
+  limitations: string[]
+  quality_receipt: string | null
+}
+
+export interface UploadedFile {
+  original_name: string
+  storage_key: string
+  size_bytes: number
+  hash_algo: 'sha256' | string
+  hash: string
+  extension: string
+}
+
+export interface CreateVisionTaskInput {
+  file_id: string
+  member_id?: string
+  task_type?: string
+  idempotency_key?: string
+  quality_receipt: string
+}
+
+export interface VisionTask {
+  id: string
+  household_id: string
+  member_id: string | null
+  file_id: string
+  task_type: string
+  status: string
+  error_code: string | null
+  error_message: string | null
+  preprocess_version: string | null
+  input_digest: string | null
+  created_by: string
+  created_at: string
+}
