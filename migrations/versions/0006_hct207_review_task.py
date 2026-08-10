@@ -1,11 +1,11 @@
 """HCT-207: review_task table for manual review workflow."""
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 # revision identifiers, used by Alembic.
-revision = "0005_hct207_review_task"
-down_revision = "0004_hct103_event_idempotency"
+revision = "0006_hct207_review_task"
+down_revision = "0005_hct103_event_recovery"
 branch_labels = None
 depends_on = None
 

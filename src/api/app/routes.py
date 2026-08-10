@@ -1,11 +1,10 @@
-import hashlib
 import logging
 import secrets
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import NoReturn
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
@@ -19,6 +18,16 @@ from app.auth import (
 )
 from app.config import get_settings
 from app.db import get_session
+from app.event_service import (
+    CheckpointInvalidError,
+    EventAlreadySupersededError,
+    IdempotencyConflictError,
+    append_compensation_transaction,
+    append_health_event_transaction,
+    create_projection_checkpoint,
+    dispatch_outbox_batch,
+    replay_member_projection,
+)
 from app.file_upload import delete_file_tree, validate_and_store
 from app.models import (
     AccessAudit,
@@ -28,6 +37,15 @@ from app.models import (
     Member,
     MemberStateProjection,
     OutboxMessage,
+    VisionTask,
+)
+from app.review import (
+    ReviewTask,
+    confirm_review,
+    correct_review,
+    get_review_task,
+    list_pending_reviews,
+    skip_review,
 )
 from app.schemas import (
     AccessAuditRead,
@@ -36,6 +54,7 @@ from app.schemas import (
     AuthorizationRevoke,
     AuthorizationUpdate,
     CapabilityResponse,
+    HealthEventCompensationCreate,
     HealthEventCreate,
     HealthEventRead,
     HealthResponse,
@@ -44,19 +63,21 @@ from app.schemas import (
     MemberCreate,
     MemberRead,
     MemberStateRead,
+    OutboxDispatchRead,
+    OutboxDispatchRequest,
+    OutboxRead,
+    ProjectionCheckpointRead,
+    ProjectionReplayRead,
+    ProjectionReplayRequest,
+    ReviewTaskConfirm,
+    ReviewTaskCorrect,
+    ReviewTaskRead,
+    ReviewTaskSkip,
     RiskAlertRead,
     RiskDetailResponse,
     RiskListResponse,
     VisionTaskCreate,
     VisionTaskRead,
-)
-from app.review import (
-    confirm_review,
-    correct_review,
-    create_review_task,
-    get_review_task,
-    list_pending_reviews,
-    skip_review,
 )
 from app.security import (
     get_access_purpose,
@@ -65,11 +86,12 @@ from app.security import (
     require_household_owner,
 )
 from app.vision_tasks import (
+    VisionTaskStatus,
+    _file_digest,
     create_vision_task,
     get_vision_task,
     list_vision_tasks,
     transition_status,
-    VisionTaskStatus,
 )
 from app.weather_adapter import fetch_weather
 
@@ -133,8 +155,10 @@ def capabilities() -> CapabilityResponse:
             "household-member",
             "field-authorization",
             "audit-outbox",
-            "review-task",          # HCT-207
-            "vision-task",          # HCT-204
+            "event-compensation-replay",
+            "outbox-recovery-worker",
+            "review-task",
+            "vision-task",
         ],
         unavailable=["rag", "llm", "weather"],
     )
@@ -497,8 +521,10 @@ def list_authorization_audits(
 def append_health_event(
     household_id: str,
     payload: HealthEventCreate,
+    request: Request,
     actor_id: str = Depends(get_actor_id),
     access_purpose: str | None = Depends(get_access_purpose),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     session: Session = Depends(get_session),
 ) -> HealthEvent:
     household = session.get(Household, household_id)
@@ -518,90 +544,133 @@ def append_health_event(
     ):
         _raise_resource_not_found()
 
-    # ── HCT-103: 幂等键去重 ──────────────────────────────────
-    if payload.idempotency_key is not None:
-        existing = session.scalars(
-            select(HealthEvent).where(
-                HealthEvent.idempotency_key == payload.idempotency_key
-            )
-        ).first()
-        if existing is not None:
-            if (
-                existing.event_type != payload.event_type
-                or existing.payload != payload.payload
-            ):
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="IDEMPOTENCY_CONFLICT",
-                )
-            return existing
+    if (
+        idempotency_key is not None
+        and payload.idempotency_key is not None
+        and idempotency_key.strip() != payload.idempotency_key.strip()
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="IDEMPOTENCY_KEY_CONFLICT",
+        )
+    effective_key = idempotency_key or payload.idempotency_key
+    correlation_id = getattr(request.state, "request_id", None) or request.headers.get(
+        settings.request_id_header, ""
+    )
 
-    # ── HCT-103: 补偿事件校验 ────────────────────────────────
-    compensates_event = None
-    if payload.compensates_event_id is not None:
-        compensates_event = session.get(HealthEvent, payload.compensates_event_id)
-        if compensates_event is None:
+    try:
+        if payload.compensates_event_id is None:
+            return append_health_event_transaction(
+                session,
+                household=household,
+                member=member,
+                actor_id=actor_id,
+                idempotency_key=effective_key,
+                correlation_id=correlation_id,
+                payload=payload,
+            )
+
+        target = session.get(HealthEvent, payload.compensates_event_id)
+        if target is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="COMPENSATES_EVENT_NOT_FOUND",
             )
-        if compensates_event.household_id != household.id:
+        if target.household_id != household.id:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="COMPENSATES_EVENT_WRONG_HOUSEHOLD",
             )
-
-    is_confirmed = payload.confirmation_status == "CONFIRMED"
-    event = HealthEvent(
-        household_id=household.id,
-        member_id=member.id,
-        event_type=payload.event_type,
-        source=payload.source,
-        confirmation_status=payload.confirmation_status,
-        payload=payload.payload,
-        evidence=payload.evidence,
-        created_by=actor_id,
-        confirmed_by=actor_id if is_confirmed else None,
-        idempotency_key=payload.idempotency_key,
-        compensates_event_id=payload.compensates_event_id,
-    )
-    session.add(event)
-    session.flush()
-    session.add(
-        OutboxMessage(
-            event_id=event.id,
-            topic="health_event.created" if is_confirmed else "health_event.pending",
-            payload={
-                "event_id": event.id,
-                "household_id": household.id,
-                "member_id": member.id,
-                "confirmation_status": event.confirmation_status,
-            },
+        return append_compensation_transaction(
+            session,
+            household=household,
+            member=member,
+            target=target,
+            actor_id=actor_id,
+            idempotency_key=effective_key,
+            correlation_id=correlation_id,
+            payload=HealthEventCompensationCreate(
+                event_type=payload.event_type,
+                payload=payload.payload,
+                evidence=payload.evidence,
+                reason="legacy compensation request",
+                occurred_at=payload.occurred_at,
+            ),
         )
-    )
-    if is_confirmed:
-        projection = session.get(MemberStateProjection, member.id)
-        if projection is None:
-            projection = MemberStateProjection(
-                member_id=member.id,
-                household_id=household.id,
-                state={},
-            )
-            session.add(projection)
-        current_state = dict(projection.state or {})
-        # HCT-103: 补偿事件覆写投影中对应字段，保留原始事件链
-        if compensates_event is not None:
-            current_state["compensated_event_id"] = compensates_event.id
-            current_state["compensated_event_type"] = compensates_event.event_type
-        current_state["last_event_type"] = event.event_type
-        current_state["last_event_payload"] = event.payload
-        current_state["events_count"] = int(current_state.get("events_count", 0)) + 1
-        projection.state = current_state
-        projection.last_event_id = event.id
-        projection.updated_at = datetime.now(UTC)
-    session.commit()
-    session.refresh(event)
-    return event
+    except IdempotencyConflictError as exc:
+        detail = (
+            "IDEMPOTENCY_KEY_CONFLICT"
+            if idempotency_key is not None
+            else "IDEMPOTENCY_CONFLICT"
+        )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail) from exc
+    except EventAlreadySupersededError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ValueError as exc:
+        code = str(exc)
+        if code == "IDEMPOTENCY_KEY_INVALID":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=code,
+            ) from exc
+        if code == "UNCONFIRMED_EVENT_CANNOT_BE_COMPENSATED":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=code) from exc
+        raise
+
+
+@router.post(
+    "/households/{household_id}/events/{event_id}/compensations",
+    response_model=HealthEventRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def compensate_health_event(
+    household_id: str,
+    event_id: str,
+    payload: HealthEventCompensationCreate,
+    request: Request,
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    session: Session = Depends(get_session),
+) -> HealthEvent:
+    household = session.get(Household, household_id)
+    target = session.get(HealthEvent, event_id)
+    if household is None or target is None or target.household_id != household.id:
+        _raise_resource_not_found()
+    member = session.get(Member, target.member_id)
+    if member is None or not has_authorized_action(
+        session,
+        household,
+        member.id,
+        actor_id,
+        "WRITE_EVENTS",
+        "health_events",
+        access_purpose,
+    ):
+        _raise_resource_not_found()
+    try:
+        return append_compensation_transaction(
+            session,
+            household=household,
+            member=member,
+            target=target,
+            actor_id=actor_id,
+            idempotency_key=idempotency_key,
+            correlation_id=getattr(request.state, "request_id", ""),
+            payload=payload,
+        )
+    except (IdempotencyConflictError, EventAlreadySupersededError) as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ValueError as exc:
+        code = str(exc)
+        if code == "IDEMPOTENCY_KEY_INVALID":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=code,
+            ) from exc
+        if code == "UNCONFIRMED_EVENT_CANNOT_BE_COMPENSATED":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=code) from exc
+        raise
 
 
 @router.get("/households/{household_id}/events", response_model=list[HealthEventRead])
@@ -638,7 +707,7 @@ def list_health_events(
         query = query.where(HealthEvent.member_id.in_(allowed_member_ids))
     elif member_id is not None:
         query = query.where(HealthEvent.member_id == member_id)
-    return list(session.scalars(query.order_by(HealthEvent.created_at)).all())
+    return list(session.scalars(query.order_by(HealthEvent.sequence_no)).all())
 
 
 @router.get(
@@ -670,6 +739,102 @@ def read_member_state(
     if projection is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="STATE_NOT_FOUND")
     return projection
+
+
+def _require_household_member(
+    session: Session,
+    household_id: str,
+    member_id: str,
+) -> Member:
+    member = session.get(Member, member_id)
+    if member is None or member.household_id != household_id:
+        _raise_resource_not_found()
+    return member
+
+
+@router.post(
+    "/households/{household_id}/members/{member_id}/state/checkpoints",
+    response_model=ProjectionCheckpointRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def checkpoint_member_state(
+    household_id: str,
+    member_id: str,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+):
+    require_household_owner(session, household_id, actor_id)
+    _require_household_member(session, household_id, member_id)
+    projection = session.get(MemberStateProjection, member_id)
+    if projection is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="STATE_NOT_FOUND")
+    try:
+        return create_projection_checkpoint(session, projection=projection, actor_id=actor_id)
+    except CheckpointInvalidError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
+@router.post(
+    "/households/{household_id}/members/{member_id}/state/replay",
+    response_model=ProjectionReplayRead,
+)
+def replay_member_state(
+    household_id: str,
+    member_id: str,
+    payload: ProjectionReplayRequest,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+):
+    require_household_owner(session, household_id, actor_id)
+    _require_household_member(session, household_id, member_id)
+    try:
+        return replay_member_projection(
+            session,
+            household_id=household_id,
+            member_id=member_id,
+            checkpoint_id=payload.checkpoint_id,
+        )
+    except CheckpointInvalidError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
+@router.get(
+    "/households/{household_id}/outbox",
+    response_model=list[OutboxRead],
+)
+def list_outbox_messages(
+    household_id: str,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> list[OutboxMessage]:
+    require_household_owner(session, household_id, actor_id)
+    return list(
+        session.scalars(
+            select(OutboxMessage)
+            .join(HealthEvent, HealthEvent.id == OutboxMessage.event_id)
+            .where(HealthEvent.household_id == household_id)
+            .order_by(HealthEvent.member_id, HealthEvent.sequence_no)
+        ).all()
+    )
+
+
+@router.post(
+    "/households/{household_id}/outbox/dispatch",
+    response_model=OutboxDispatchRead,
+)
+def dispatch_household_outbox(
+    household_id: str,
+    payload: OutboxDispatchRequest,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+):
+    require_household_owner(session, household_id, actor_id)
+    return dispatch_outbox_batch(
+        session,
+        household_id=household_id,
+        max_messages=payload.max_messages,
+        stale_after=timedelta(seconds=payload.stale_after_seconds),
+    )
 
 
 @router.get("/weather/action-cards", response_model=dict)
@@ -1070,6 +1235,46 @@ def cancel_vision_task_endpoint(
 # ── HCT-207: Manual review API ────────────────────────────────────────
 
 
+def _commit_review_event(
+    session: Session,
+    *,
+    household: Household,
+    member_id: str,
+    actor_id: str,
+    idempotency_key: str | None,
+    correlation_id: str,
+    event_dict: dict,
+) -> None:
+    member = session.get(Member, member_id)
+    if member is None or member.household_id != household.id:
+        _raise_resource_not_found()
+    try:
+        append_health_event_transaction(
+            session,
+            household=household,
+            member=member,
+            actor_id=actor_id,
+            idempotency_key=idempotency_key,
+            correlation_id=correlation_id,
+            payload=HealthEventCreate(
+                member_id=member.id,
+                event_type=event_dict["event_type"],
+                source="MANUAL",
+                confirmation_status="CONFIRMED",
+                payload=event_dict["payload"],
+                evidence={
+                    **event_dict["evidence"],
+                    "event_source": event_dict["source"],
+                },
+            ),
+        )
+    except IdempotencyConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="IDEMPOTENCY_KEY_CONFLICT",
+        ) from exc
+
+
 @router.get(
     "/households/{household_id}/members/{member_id}/review-tasks",
     response_model=list[ReviewTaskRead],
@@ -1129,8 +1334,9 @@ def confirm_review_endpoint(
     household_id: str,
     task_id: str,
     payload: ReviewTaskConfirm,
+    request: Request,
     actor_id: str = Depends(get_actor_id),
-    idempotency_key: str | None = None,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     session: Session = Depends(get_session),
 ) -> ReviewTask:
     task = get_review_task(session, task_id)
@@ -1141,15 +1347,20 @@ def confirm_review_endpoint(
     if household is None or household.created_by != actor_id:
         _raise_resource_not_found()
 
-    selected = None
+    candidates = task.candidates or []
+    selected = candidates[0] if payload.selected_index is None and len(candidates) == 1 else None
     if payload.selected_index is not None:
-        candidates = task.candidates or []
         if payload.selected_index < 0 or payload.selected_index >= len(candidates):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="SELECTED_INDEX_OUT_OF_RANGE",
             )
         selected = candidates[payload.selected_index]
+    if selected is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="REVIEW_CANDIDATE_REQUIRED",
+        )
 
     updated_task, event_dict = confirm_review(
         session,
@@ -1160,35 +1371,15 @@ def confirm_review_endpoint(
         idempotency_key=idempotency_key,
     )
 
-    # Write health event in same transaction
-    from app.models import HealthEvent, OutboxMessage
-
-    event = HealthEvent(
-        household_id=household_id,
+    _commit_review_event(
+        session,
+        household=household,
         member_id=task.member_id,
-        event_type=event_dict["event_type"],
-        source=event_dict["source"],
-        confirmation_status=event_dict["confirmation_status"],
-        payload=event_dict["payload"],
-        evidence=event_dict["evidence"],
-        created_by=actor_id,
-        confirmed_by=actor_id,
+        actor_id=actor_id,
+        idempotency_key=idempotency_key,
+        correlation_id=getattr(request.state, "request_id", None) or secrets.token_hex(16),
+        event_dict=event_dict,
     )
-    session.add(event)
-    session.flush()
-    session.add(
-        OutboxMessage(
-            event_id=event.id,
-            topic="health_event.confirmed",
-            payload={
-                "event_id": event.id,
-                "household_id": household_id,
-                "member_id": task.member_id,
-                "review_task_id": task.id,
-            },
-        )
-    )
-    session.commit()
     session.refresh(updated_task)
     return updated_task
 
@@ -1202,8 +1393,9 @@ def correct_review_endpoint(
     household_id: str,
     task_id: str,
     payload: ReviewTaskCorrect,
+    request: Request,
     actor_id: str = Depends(get_actor_id),
-    idempotency_key: str | None = None,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     session: Session = Depends(get_session),
 ) -> ReviewTask:
     task = get_review_task(session, task_id)
@@ -1223,35 +1415,15 @@ def correct_review_endpoint(
         idempotency_key=idempotency_key,
     )
 
-    # Write health event in same transaction
-    from app.models import HealthEvent, OutboxMessage
-
-    event = HealthEvent(
-        household_id=household_id,
+    _commit_review_event(
+        session,
+        household=household,
         member_id=task.member_id,
-        event_type=event_dict["event_type"],
-        source=event_dict["source"],
-        confirmation_status=event_dict["confirmation_status"],
-        payload=event_dict["payload"],
-        evidence=event_dict["evidence"],
-        created_by=actor_id,
-        confirmed_by=actor_id,
+        actor_id=actor_id,
+        idempotency_key=idempotency_key,
+        correlation_id=getattr(request.state, "request_id", None) or secrets.token_hex(16),
+        event_dict=event_dict,
     )
-    session.add(event)
-    session.flush()
-    session.add(
-        OutboxMessage(
-            event_id=event.id,
-            topic="health_event.corrected",
-            payload={
-                "event_id": event.id,
-                "household_id": household_id,
-                "member_id": task.member_id,
-                "review_task_id": task.id,
-            },
-        )
-    )
-    session.commit()
     session.refresh(updated_task)
     return updated_task
 

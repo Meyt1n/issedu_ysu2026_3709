@@ -1,11 +1,11 @@
 """HCT-204: vision_task table for asynchronous OCR / barcode processing."""
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 # revision identifiers, used by Alembic.
-revision = "0006_hct204_vision_task"
-down_revision = "0005_hct207_review_task"
+revision = "0007_hct204_vision_task"
+down_revision = "0006_hct207_review_task"
 branch_labels = None
 depends_on = None
 
@@ -41,6 +41,9 @@ def upgrade() -> None:
         sa.Column("created_by", sa.String(120), nullable=False),
         sa.Column(
             "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
         ),
     )
     sa.Index("ix_vision_household", "vision_task", "household_id", "created_at")

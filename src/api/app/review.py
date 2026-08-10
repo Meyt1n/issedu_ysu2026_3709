@@ -14,15 +14,17 @@ Design
 """
 from __future__ import annotations
 
-import enum
 import logging
-from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import JSON, Column, DateTime, String, Enum as SQLEnum, func, select
+from sqlalchemy import JSON, Column, DateTime, String, func, select
+from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import Session
+
+from app.models import Base
 
 logger = logging.getLogger(__name__)
 
@@ -30,14 +32,14 @@ logger = logging.getLogger(__name__)
 # ── Enums ──────────────────────────────────────────────────────────────
 
 
-class ReviewStatus(str, enum.Enum):
+class ReviewStatus(StrEnum):
     PENDING_REVIEW = "PENDING_REVIEW"
     CONFIRMED = "CONFIRMED"
     CORRECTED = "CORRECTED"
     SKIPPED = "SKIPPED"
 
 
-class FusionStatus(str, enum.Enum):
+class FusionStatus(StrEnum):
     MATCHED = "MATCHED"
     CONFLICT = "CONFLICT"
     UNKNOWN = "UNKNOWN"
@@ -47,7 +49,7 @@ class FusionStatus(str, enum.Enum):
 # ── ORM model ──────────────────────────────────────────────────────────
 
 
-class ReviewTask:
+class ReviewTask(Base):
     """Lightweight review-task row.
 
     Stored in table ``review_task``.  The ORM class is defined here (rather

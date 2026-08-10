@@ -28,7 +28,7 @@
 
 > **P0 过渡方案**：当前实现使用 FastAPI 默认错误格式（`{"detail":"..."}`），P1 统一为上述 `error.code` 格式。前端应兼容两种格式。
 
-错误码至少区分 `UNAUTHENTICATED`、`FORBIDDEN_MEMBER`、`CONSENT_REVOKED`、`VALIDATION_ERROR`、`AUTHORIZATION_VERSION_CONFLICT`、`FILE_REJECTED`、`MODEL_UNAVAILABLE`、`EVIDENCE_CONFLICT`、`EVIDENCE_INSUFFICIENT`、`RULE_VERSION_MISMATCH` 和 `RATE_LIMITED`。
+错误码至少区分 `UNAUTHENTICATED`、`FORBIDDEN_MEMBER`、`CONSENT_REVOKED`、`VALIDATION_ERROR`、`AUTHORIZATION_VERSION_CONFLICT`、`IDEMPOTENCY_KEY_CONFLICT`、`EVENT_ALREADY_SUPERSEDED`、`OUT_OF_ORDER`、`CHECKPOINT_INVALID`、`FILE_REJECTED`、`MODEL_UNAVAILABLE`、`EVIDENCE_CONFLICT`、`EVIDENCE_INSUFFICIENT`、`RULE_VERSION_MISMATCH` 和 `RATE_LIMITED`。
 
 ## 2. 核心接口基线
 
@@ -52,7 +52,12 @@
 | GET | `/api/v1/households/{id}/authorization-audits` | Owner 查询授权与访问审计 | ✅ |
 | POST | `/api/v1/households/{id}/events` | 追加健康事件 | ✅ |
 | GET | `/api/v1/households/{id}/events` | 查询事件列表 | ✅ |
+| POST | `/api/v1/households/{id}/events/{event_id}/compensations` | 追加补偿事件 | ✅ |
 | GET | `/api/v1/households/{id}/members/{mid}/state` | 查询成员状态投影 | ✅ |
+| POST | `/api/v1/households/{id}/members/{mid}/state/checkpoints` | 创建投影 checkpoint | ✅ |
+| POST | `/api/v1/households/{id}/members/{mid}/state/replay` | 从空状态/checkpoint 重放 | ✅ |
+| GET | `/api/v1/households/{id}/outbox` | Owner 查询 outbox 恢复状态 | ✅ |
+| POST | `/api/v1/households/{id}/outbox/dispatch` | Owner 手工触发恢复批次 | ✅ |
 
 P0 错误格式：当前使用 FastAPI 默认 `{"detail":"..."}`，P1 统一为 `{"error":{"code":"...","message":"...","details":{},"request_id":"..."}}`。
 
@@ -61,6 +66,10 @@ P0 权限边界的事实源是：owner 可访问本家庭成员目录和健康�
 授权创建返回 `grantor_actor_id`、`version=1`、`created_at` 和 `updated_at`。更新请求至少包含一个变更字段及 `expected_version`；撤权请求包含 `expected_version`。数据库只在当前版本相等时更新并把版本加一，否则返回 `409 AUTHORIZATION_VERSION_CONFLICT`。已撤销授权不可再次修改。
 
 `access_audit` 是追加写最小证明：记录授权 ID、操作者、动作、数据域、目的、允许/拒绝、原因和前后版本，不记录健康正文、证据或状态快照。授权审计只允许本家庭 Owner 查询。已有审计时禁止通过数据库 downgrade 删除历史记录。
+
+HCT-103 事件写入支持最长 128 位 `Idempotency-Key`。家庭、key、操作、操作者和规范请求体相同则返回原事件；同 key 对应不同指纹返回 `409 IDEMPOTENCY_KEY_CONFLICT`。事件响应包含成员内 `sequence_no`、发生/记录时间、`correlation_id`、`causation_id`、`supersedes_event_id` 和 `schema_version`。补偿只能引用本家庭、本成员的已确认事件，原事件不可修改。
+
+事件、最小 outbox 和在线投影在同一事务提交。outbox 不保存健康 payload，只保存事件引用、成员序号、确认状态和 Schema 版本；自动 worker 及手工恢复接口使用 `PENDING/PROCESSING/FAILED/DISPATCHED`、尝试次数、锁和稳定错误码。投影返回 `last_sequence`、`version` 和状态哈希；重放只允许家庭 Owner，checkpoint 哈希或家庭/成员不匹配返回 `409 CHECKPOINT_INVALID`。
 
 ### 2.2 P1+ 未来规划接口
 

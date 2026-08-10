@@ -14,8 +14,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
-import time
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
@@ -91,7 +89,7 @@ def _file_digest(path: str) -> str:
 
 def transition_status(
     session: Session,
-    task: "VisionTask",  # type: ignore[name-defined]
+    task: VisionTask,  # type: ignore[name-defined]
     next_status: str,
     *,
     result: dict[str, Any] | None = None,
@@ -102,7 +100,7 @@ def transition_status(
     schema_version: str | None = None,
     code_version: str | None = None,
     data_version: str | None = None,
-) -> "VisionTask":  # noqa: F821
+) -> VisionTask:  # noqa: F821
     """Apply a validated state transition.
 
     Returns the updated task.
@@ -132,7 +130,11 @@ def transition_status(
             values["error_message"] = error_message or _ERROR_CODES.get(error_code, "")
 
     # Version tracking — recorded on terminal transitions
-    if next_status in (VisionTaskStatus.SUCCEEDED, VisionTaskStatus.FAILED, VisionTaskStatus.TIMEOUT):
+    if next_status in (
+        VisionTaskStatus.SUCCEEDED,
+        VisionTaskStatus.FAILED,
+        VisionTaskStatus.TIMEOUT,
+    ):
         if model_version is not None:
             values["model_version"] = model_version
         if preprocess_version is not None:
@@ -158,7 +160,13 @@ def transition_status(
         task.started_at = values["started_at"]
     if "finished_at" in values:
         task.finished_at = values["finished_at"]
-    for field in ("model_version", "preprocess_version", "schema_version", "code_version", "data_version"):
+    for field in (
+        "model_version",
+        "preprocess_version",
+        "schema_version",
+        "code_version",
+        "data_version",
+    ):
         if field in values:
             setattr(task, field, values[field])
 
@@ -180,6 +188,7 @@ def create_vision_task(
     file_id: str,
     member_id: str | None = None,
     task_type: str = "ocr",
+    status: str = VisionTaskStatus.QUEUED,
     idempotency_key: str | None = None,
     model_threshold: float | None = None,
     input_digest: str | None = None,
@@ -188,7 +197,7 @@ def create_vision_task(
     schema_version: str | None = None,
     code_version: str | None = None,
     data_version: str | None = None,
-) -> "VisionTask":  # noqa: F821
+) -> VisionTask:  # noqa: F821
     """Create a new vision task.  Idempotent — returns existing task if the
     idempotency key matches a queued or running task."""
     if idempotency_key is not None:
@@ -207,7 +216,7 @@ def create_vision_task(
         member_id=member_id,
         file_id=file_id,
         task_type=task_type,
-        status=VisionTaskStatus.QUEUED,
+        status=status,
         idempotency_key=idempotency_key,
         input_digest=input_digest,
         preprocess_version=preprocess_version,
@@ -224,7 +233,7 @@ def create_vision_task(
     return task
 
 
-def get_vision_task(session: Session, task_id: str) -> "VisionTask | None":  # noqa: F821
+def get_vision_task(session: Session, task_id: str) -> VisionTask | None:  # noqa: F821
     return session.get(VisionTask, task_id)
 
 
@@ -234,7 +243,7 @@ def list_vision_tasks(
     member_id: str | None = None,
     status: str | None = None,
     limit: int = 50,
-) -> list["VisionTask"]:  # noqa: F821
+) -> list[VisionTask]:  # noqa: F821
     stmt = (
         select(VisionTask)
         .where(VisionTask.household_id == household_id)

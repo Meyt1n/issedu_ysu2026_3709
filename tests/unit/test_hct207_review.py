@@ -14,18 +14,25 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from fastapi import status
+from fastapi import HTTPException
 
 from app.review import (
+    FusionStatus,
     ReviewStatus,
+    ReviewTask,
     confirm_review,
     correct_review,
     create_review_task,
-    FusionStatus,
     get_review_task,
     list_pending_reviews,
     skip_review,
 )
+
+
+@pytest.fixture
+def session(db_session):
+    """Compatibility alias for the repository-wide database fixture."""
+    return db_session
 
 
 # ── Helpers ────────────────────────────────────────────────────────────
@@ -38,7 +45,7 @@ def _make_task(
     member_id: str | None = None,
     fusion_status: FusionStatus = FusionStatus.MATCHED,
     candidates: list | None = None,
-) -> "ReviewTask":  # type: ignore[name-defined]  # noqa: F821
+) -> ReviewTask:
     return create_review_task(
         session,
         vision_task_id=str(uuid.uuid4()),
@@ -66,8 +73,8 @@ class TestReviewLifecycle:
         assert len(fetched.candidates) == 1
 
     def test_list_pending(self, session):
-        t1 = _make_task(session, household_id="h1", member_id="m1")
-        t2 = _make_task(session, household_id="h1", member_id="m2")
+        _make_task(session, household_id="h1", member_id="m1")
+        _make_task(session, household_id="h1", member_id="m2")
         _make_task(session, household_id="h2", member_id="m3")
         session.commit()
 
@@ -138,7 +145,7 @@ class TestIdempotency:
         )
         session.commit()
 
-        with pytest.raises(Exception):  # IDEMPOTENCY_KEY_REUSED
+        with pytest.raises(HTTPException):  # IDEMPOTENCY_KEY_REUSED
             confirm_review(
                 session, task, actor_id="a1",
                 idempotency_key="key-2",
@@ -150,7 +157,7 @@ class TestIdempotency:
         confirm_review(session, task, actor_id="a1")
         session.commit()
 
-        with pytest.raises(Exception):  # REVIEW_ALREADY_CONFIRMED
+        with pytest.raises(HTTPException):  # REVIEW_ALREADY_CONFIRMED
             confirm_review(session, task, actor_id="a1")
         session.rollback()
 
@@ -159,7 +166,7 @@ class TestIdempotency:
         correct_review(session, task, actor_id="a1", manual_payload={"x": 1})
         session.commit()
 
-        with pytest.raises(Exception):  # REVIEW_ALREADY_CORRECTED
+        with pytest.raises(HTTPException):  # REVIEW_ALREADY_CORRECTED
             confirm_review(session, task, actor_id="a1")
         session.rollback()
 
@@ -168,7 +175,7 @@ class TestIdempotency:
         confirm_review(session, task, actor_id="a1")
         session.commit()
 
-        with pytest.raises(Exception):
+        with pytest.raises(HTTPException):
             skip_review(session, task, actor_id="a1")
         session.rollback()
 
@@ -227,6 +234,6 @@ class TestConcurrentSafety:
         session.commit()
 
         # Confirm should now fail
-        with pytest.raises(Exception):  # REVIEW_ALREADY_SKIPPED
+        with pytest.raises(HTTPException):  # REVIEW_ALREADY_SKIPPED
             confirm_review(session, task, actor_id="a1")
         session.rollback()

@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173"
     database_url: str = "sqlite+pysqlite:///./homecare-dev.sqlite3"
     request_id_header: str = "X-Request-ID"
+    outbox_poll_seconds: float = 2.0
+    outbox_batch_size: int = 100
+    outbox_stale_seconds: int = 300
     file_root: str = "./data/files"
     max_upload_bytes: int = 10 * 1024 * 1024
     vision_model_version: str = "unavailable"

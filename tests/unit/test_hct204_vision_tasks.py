@@ -5,18 +5,23 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from fastapi import status
+from fastapi import HTTPException
 
 from app.models import VisionTask
 from app.vision_tasks import (
-    VisionTaskStatus,
     _VALID_TRANSITIONS,
-    _can_transition,
+    VisionTaskStatus,
     create_vision_task,
     get_vision_task,
     list_vision_tasks,
     transition_status,
 )
+
+
+@pytest.fixture
+def session(db_session):
+    """Compatibility alias for the repository-wide database fixture."""
+    return db_session
 
 
 # ── Helpers ────────────────────────────────────────────────────────────
@@ -107,7 +112,7 @@ class TestStateMachine:
         task = _make_task(session, status=VisionTaskStatus(current))
         session.commit()
 
-        with pytest.raises(Exception):  # HTTPException 409
+        with pytest.raises(HTTPException):
             transition_status(session, task, VisionTaskStatus(illegal))
         session.rollback()
 
@@ -118,7 +123,7 @@ class TestStateMachine:
             task = _make_task(session, status=terminal)
             session.commit()
             for next_ in VisionTaskStatus:
-                with pytest.raises(Exception):
+                with pytest.raises(HTTPException):
                     transition_status(session, task, next_)
             session.rollback()
 
