@@ -19,6 +19,12 @@ SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 WINDOWS_ABSOLUTE_RE = re.compile(r"^[A-Za-z]:[\\/]")
 FORBIDDEN_RELEASE_STATUSES = {"APPROVED", "PUBLISHED", "RELEASED", "PRODUCTION"}
 ALLOWED_STATUSES = {"EXPERIMENTAL_UNRELEASED", "REVOKED", "UNAVAILABLE"}
+EXPECTED_HARD_NEGATIVE_IDS = frozenset(
+    {
+        "hct201-v1-hard-negative-00-90370b074a64",
+        "hct201-v1-hard-negative-01-440b01bd90f1",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -82,6 +88,16 @@ def verify_weights(record: dict[str, Any], weights_path: Path) -> list[AuditFind
             )
         ]
     expected = record.get("artifacts", {}).get("weights_sha256")
+    expected_size = record.get("artifacts", {}).get("weights_size_bytes")
+    actual_size = weights_path.stat().st_size
+    if actual_size != expected_size:
+        return [
+            AuditFinding(
+                "WEIGHTS_SIZE_MISMATCH",
+                "$.artifacts.weights_size_bytes",
+                f"registered size does not match external artifact; actual={actual_size}",
+            )
+        ]
     actual = _sha256_file(weights_path)
     if actual != expected:
         return [
@@ -159,7 +175,12 @@ def audit_registry(record: dict[str, Any]) -> list[AuditFinding]:
         for field in ("weights_sha256", "weights_size_bytes", "stored_outside_git"):
             _required(artifacts, field, findings)
         _require_sha256(artifacts.get("weights_sha256"), "$.artifacts.weights_sha256", findings)
-        for field in ("evaluation_report_sha256", "threshold_report_sha256"):
+        for field in (
+            "evaluation_report_sha256",
+            "threshold_report_sha256",
+            "benchmark_cpu_report_sha256",
+            "benchmark_gpu_report_sha256",
+        ):
             _require_sha256(artifacts.get(field), f"$.artifacts.{field}", findings)
         if artifacts.get("stored_outside_git") is not True:
             findings.append(
@@ -203,7 +224,8 @@ def audit_registry(record: dict[str, Any]) -> list[AuditFinding]:
             if (
                 not isinstance(expected_ids, list)
                 or len(expected_ids) != len(set(expected_ids))
-                or set(actual_ids) != set(expected_ids)
+                or set(expected_ids) != EXPECTED_HARD_NEGATIVE_IDS
+                or set(actual_ids) != EXPECTED_HARD_NEGATIVE_IDS
                 or len(actual_ids) != len(set(actual_ids))
             ):
                 findings.append(
@@ -213,6 +235,34 @@ def audit_registry(record: dict[str, Any]) -> list[AuditFinding]:
                         "hard-negative records must exactly match the fixed expected sample IDs",
                     )
                 )
+        performance = evaluation.get("performance")
+        if not isinstance(performance, dict) or performance.get("status") != "MEASURED":
+            findings.append(
+                AuditFinding(
+                    "PERFORMANCE_NOT_MEASURED",
+                    "$.evaluation.performance",
+                    "CPU/GPU latency and resource evidence are required for this record",
+                )
+            )
+        else:
+            for mode in ("cpu", "gpu"):
+                metrics = performance.get(mode)
+                if not isinstance(metrics, dict):
+                    findings.append(
+                        AuditFinding(
+                            "MISSING_PERFORMANCE_MODE",
+                            f"$.evaluation.performance.{mode}",
+                            "missing benchmark metrics",
+                        )
+                    )
+                    continue
+                for field in (
+                    "images",
+                    "latency_p95_ms",
+                    "throughput_images_per_second",
+                    "peak_memory_bytes",
+                ):
+                    _required(metrics, field, findings)
             if not all(
                 item.get("false_positive") is True
                 and isinstance(item.get("confidence"), int | float)

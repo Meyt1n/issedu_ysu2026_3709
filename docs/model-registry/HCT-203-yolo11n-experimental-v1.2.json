@@ -38,7 +38,9 @@
     "weights_size_bytes": 5499089,
     "stored_outside_git": true,
     "evaluation_report_sha256": "f6edf1566ecf3bc0c41ea0fd460aaf71f2cce634c9436767116d1c6739160a7f",
-    "threshold_report_sha256": "fe3a9b496628d41c6cf548e74a077fcb2ade8ce2591ce496bb429c235b6c29f9"
+    "threshold_report_sha256": "fe3a9b496628d41c6cf548e74a077fcb2ade8ce2591ce496bb429c235b6c29f9",
+    "benchmark_cpu_report_sha256": "cfc7f2b3821f9688cdbf7d8f2447fbdc941ca0ce9253cc6b65eaf4cc5881aa62",
+    "benchmark_gpu_report_sha256": "79beb621e907d5c4c1fe02b25d8c4a124b4cf425c70f46fa1ce650148e827a25"
   },
   "evaluation": {
     "status": "EXPERIMENTAL_UNRELEASED",
@@ -70,10 +72,26 @@
       }
     ],
     "performance": {
-      "status": "NOT_MEASURED",
-      "cpu_p95_ms": null,
-      "gpu_p95_ms": null,
-      "peak_memory_bytes": null
+      "status": "MEASURED",
+      "protocol": "single-image inference, batch 1, 640px, confidence 0.25, 2 warmup iterations",
+      "input_set_sha256": "eeca28b6bfdea7b4549d87fa5dfd5c6aa67dcf43a17595183567e1832cd70eae",
+      "cpu": {
+        "images": 147,
+        "latency_mean_ms": 90.014,
+        "latency_p50_ms": 87.718,
+        "latency_p95_ms": 111.592,
+        "throughput_images_per_second": 11.103,
+        "peak_memory_bytes": 462049280
+      },
+      "gpu": {
+        "images": 147,
+        "latency_mean_ms": 15.915,
+        "latency_p50_ms": 15.7,
+        "latency_p95_ms": 19.056,
+        "throughput_images_per_second": 62.621,
+        "peak_memory_bytes": 835166208,
+        "cuda_peak_allocated_bytes": 69124096
+      }
     }
   },
   "intended_uses": [
@@ -91,7 +109,6 @@
     "HCT-201 dataset has no APPROVED records and no approved fixed or unknown set",
     "original training code was not committed, so exact training reproduction is partial",
     "both available hard-negative samples were false positives at confidence 0.25",
-    "CPU/GPU latency, throughput and peak-memory measurements are missing",
     "R3 model release review is not complete"
   ],
   "approved_by": null,

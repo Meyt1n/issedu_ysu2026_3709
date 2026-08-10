@@ -21,7 +21,8 @@
 - `docs/stories/HCT-203-D1-*`；
 - `docs/model-registry/HCT-203-*` 和 `docs/model-cards/HCT-203-*`；
 - `scripts/hct203_model_registry_audit.py`；
-- `tests/unit/test_hct203_model_registry_audit.py`；
+- `scripts/hct203_benchmark.py`；
+- `tests/unit/test_hct203_model_registry_audit.py` 和 `test_hct203_benchmark.py`；
 - `docs/vibe-coding/12-需求追踪矩阵.md`。
 
 明确不做：不提交图片、标签、模型权重、缓存、本机路径或真实健康数据；不重跑训练，
@@ -55,13 +56,20 @@ uv run ruff check scripts/hct203_model_registry_audit.py tests/unit/test_hct203_
 uv run pytest tests/unit/test_hct203_model_registry_audit.py
 uv run python scripts/hct203_model_registry_audit.py --registry docs/model-registry/HCT-203-yolo11n-experimental-v1.2.json
 uv run python scripts/hct203_model_registry_audit.py --registry docs/model-registry/HCT-203-yolo11n-experimental-v1.2.json --weights <受控训练机外置权重>
+python scripts/hct203_benchmark.py --weights <外置权重> --images-dir <候选测试图目录> --device cpu --output <仓库外报告>
+python scripts/hct203_benchmark.py --weights <外置权重> --images-dir <候选测试图目录> --device 0 --output <仓库外报告>
 uv run pytest
 git diff --check
 ```
 
 人工验收检查登记与模型卡均显示 `EXPERIMENTAL_UNRELEASED`，权重不在 Git；使用受控外置
-权重运行实哈希校验并取得 `VERIFIED`；两个困难负样本误检、未测性能、未批准数据和原训练
-代码未跟踪均为可见阻断。
+权重运行实哈希校验并取得 `VERIFIED`；两个困难负样本误检、完整 OCR/条码/融合性能未测、
+未批准数据和原训练代码未跟踪均为可见阻断。
+
+性能实测使用 147 张候选测试图：CPU P95 111.592 ms、11.103 图/秒、峰值 RSS
+462,049,280 bytes；GPU P95 19.056 ms、62.621 图/秒、峰值 RSS 835,166,208 bytes、CUDA
+allocated 69,124,096 bytes。报告只保存在受控训练机并登记哈希；它不是获批固定集或完整 OCR
+管线性能。
 
 ## 风险和回滚
 

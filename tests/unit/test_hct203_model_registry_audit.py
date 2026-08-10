@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from pathlib import Path
 
@@ -30,6 +31,8 @@ def valid_registry() -> dict:
             "stored_outside_git": True,
             "evaluation_report_sha256": "d" * 64,
             "threshold_report_sha256": "e" * 64,
+            "benchmark_cpu_report_sha256": "f" * 64,
+            "benchmark_gpu_report_sha256": "0" * 64,
         },
         "evaluation": {
             "test": {
@@ -41,11 +44,37 @@ def valid_registry() -> dict:
                 "map50_95": 0.927,
                 "confidence": 0.25,
             },
-            "expected_hard_negative_sample_ids": ["hard-negative-1", "hard-negative-2"],
-            "hard_negatives": [
-                {"sample_id": "hard-negative-1", "false_positive": True, "confidence": 0.88},
-                {"sample_id": "hard-negative-2", "false_positive": True, "confidence": 0.76},
+            "expected_hard_negative_sample_ids": [
+                "hct201-v1-hard-negative-00-90370b074a64",
+                "hct201-v1-hard-negative-01-440b01bd90f1",
             ],
+            "hard_negatives": [
+                {
+                    "sample_id": "hct201-v1-hard-negative-00-90370b074a64",
+                    "false_positive": True,
+                    "confidence": 0.88,
+                },
+                {
+                    "sample_id": "hct201-v1-hard-negative-01-440b01bd90f1",
+                    "false_positive": True,
+                    "confidence": 0.76,
+                },
+            ],
+            "performance": {
+                "status": "MEASURED",
+                "cpu": {
+                    "images": 147,
+                    "latency_p95_ms": 100.0,
+                    "throughput_images_per_second": 10.0,
+                    "peak_memory_bytes": 1000,
+                },
+                "gpu": {
+                    "images": 147,
+                    "latency_p95_ms": 10.0,
+                    "throughput_images_per_second": 100.0,
+                    "peak_memory_bytes": 2000,
+                },
+            },
         },
         "intended_uses": ["propose OCR crop regions"],
         "prohibited_uses": ["identify medicine"],
@@ -88,7 +117,11 @@ def test_rejects_posix_and_file_uri_paths() -> None:
 def test_rejects_hidden_hard_negative_failure_and_missing_blockers() -> None:
     record = valid_registry()
     record["evaluation"]["hard_negatives"] = [
-        {"sample_id": "hard-negative-1", "false_positive": False, "confidence": 0.88}
+        {
+            "sample_id": "hct201-v1-hard-negative-00-90370b074a64",
+            "false_positive": False,
+            "confidence": 0.88,
+        }
     ]
     record["release_blockers"] = []
 
@@ -98,6 +131,16 @@ def test_rejects_hidden_hard_negative_failure_and_missing_blockers() -> None:
         "MISSING_FIELD",
         "MISSING_RELEASE_BLOCKERS",
     } <= codes(record)
+
+
+def test_rejects_self_redefined_hard_negative_set() -> None:
+    record = valid_registry()
+    record["evaluation"]["expected_hard_negative_sample_ids"] = ["replacement-sample"]
+    record["evaluation"]["hard_negatives"] = [
+        {"sample_id": "replacement-sample", "false_positive": True, "confidence": 0.99}
+    ]
+
+    assert "HARD_NEGATIVE_SET_MISMATCH" in codes(record)
 
 
 def test_rejects_misrepresented_original_reproducibility() -> None:
@@ -112,12 +155,15 @@ def test_verifies_external_weights_content_and_rejects_mismatch(tmp_path: Path) 
     weights.write_bytes(b"controlled synthetic weights fixture")
     record = valid_registry()
 
-    import hashlib
-
     record["artifacts"]["weights_sha256"] = hashlib.sha256(weights.read_bytes()).hexdigest()
+    record["artifacts"]["weights_size_bytes"] = weights.stat().st_size
     assert verify_weights(record, weights) == []
 
     weights.write_bytes(b"tampered fixture")
+    findings = verify_weights(record, weights)
+    assert [finding.code for finding in findings] == ["WEIGHTS_SIZE_MISMATCH"]
+
+    record["artifacts"]["weights_size_bytes"] = weights.stat().st_size
     findings = verify_weights(record, weights)
     assert [finding.code for finding in findings] == ["WEIGHTS_HASH_MISMATCH"]
 
