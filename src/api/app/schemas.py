@@ -127,6 +127,15 @@ class HealthEventCreate(BaseModel):
     evidence: dict[str, Any] = Field(default_factory=dict)
     idempotency_key: str | None = Field(default=None, max_length=128)
     compensates_event_id: str | None = Field(default=None, max_length=36)
+    occurred_at: datetime | None = None
+
+
+class HealthEventCompensationCreate(BaseModel):
+    event_type: str = Field(min_length=1, max_length=80)
+    payload: dict[str, Any] = Field(min_length=1)
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    reason: str = Field(min_length=1, max_length=240)
+    occurred_at: datetime | None = None
 
 
 class HealthEventRead(BaseModel):
@@ -135,6 +144,7 @@ class HealthEventRead(BaseModel):
     id: str
     household_id: str
     member_id: str
+    sequence_no: int
     event_type: str
     source: str
     confirmation_status: str
@@ -144,6 +154,12 @@ class HealthEventRead(BaseModel):
     confirmed_by: str | None
     idempotency_key: str | None
     compensates_event_id: str | None
+    occurred_at: datetime
+    recorded_at: datetime = Field(validation_alias="created_at")
+    correlation_id: str
+    causation_id: str | None
+    supersedes_event_id: str | None
+    schema_version: int
     created_at: datetime
 
 
@@ -154,7 +170,67 @@ class MemberStateRead(BaseModel):
     household_id: str
     state: dict[str, Any]
     last_event_id: str | None
+    last_sequence: int
+    version: int
+    state_hash: str | None
     updated_at: datetime
+
+
+class ProjectionCheckpointRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    member_id: str
+    household_id: str
+    last_sequence: int
+    last_event_id: str | None
+    state_hash: str
+    created_by: str
+    created_at: datetime
+
+
+class ProjectionReplayRequest(BaseModel):
+    checkpoint_id: str | None = None
+
+
+class ProjectionReplayRead(BaseModel):
+    member_id: str
+    checkpoint_id: str | None
+    events_replayed: int
+    previous_state_hash: str | None
+    rebuilt_state_hash: str
+    consistent_with_online: bool
+    last_sequence: int
+    projection_version: int
+
+
+class OutboxRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    event_id: str
+    topic: str
+    status: str
+    attempts: int
+    available_at: datetime
+    locked_at: datetime | None
+    dispatched_at: datetime | None
+    last_error: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class OutboxDispatchRequest(BaseModel):
+    max_messages: int = Field(default=100, ge=1, le=500)
+    stale_after_seconds: int = Field(default=300, ge=30, le=3600)
+
+
+class OutboxDispatchRead(BaseModel):
+    inspected: int
+    dispatched: int
+    failed: int
+    out_of_order: int
+    recovered_stale: int
 
 
 # ── HCT-307: Risk evidence schemas ──────────────────────────────────
@@ -185,3 +261,167 @@ class RiskDetailResponse(BaseModel):
 
     alert: RiskAlertRead
     source_events: list[dict[str, Any]] = Field(default_factory=list)
+
+
+# ── HCT-207: Manual review schemas ────────────────────────────────────
+
+
+class CandidateItem(BaseModel):
+    drug_name: str
+    confidence: float | None = None
+    evidence: list[str] = Field(default_factory=list)
+    dosage: str | None = None
+    frequency: str | None = None
+
+
+class ReviewTaskConfirm(BaseModel):
+    selected_index: int | None = None
+    confirmation_note: str | None = None
+
+
+class ReviewTaskCorrect(BaseModel):
+    manual_payload: dict[str, Any] = Field(min_length=1)
+    correction_note: str | None = None
+
+
+class ReviewTaskSkip(BaseModel):
+    reason: str = ""
+
+
+class ReviewTaskRead(BaseModel):
+    """Review task for API responses (Pydantic version)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    vision_task_id: str
+    household_id: str
+    member_id: str
+    status: str
+    fusion_status: str | None = None
+    candidates: list[dict[str, Any]] = Field(default_factory=list)
+    selected_candidate: dict[str, Any] | None = None
+    manual_payload: dict[str, Any] | None = None
+    model_version: str | None = None
+    rule_version: str | None = None
+    confirmed_by: str | None = None
+    confirmed_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+# ── HCT-204: Vision task schemas ──────────────────────────────────────
+
+
+class VisionTaskCreate(BaseModel):
+    file_id: str = Field(min_length=1, description="Reference to an uploaded file")
+    member_id: str | None = Field(default=None)
+    task_type: str = Field(default="ocr", min_length=1, max_length=40)
+    idempotency_key: str | None = Field(default=None, max_length=128)
+    model_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class VisionTaskRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    household_id: str
+    member_id: str | None
+    file_id: str
+    task_type: str
+    status: str
+    error_code: str | None = None
+    error_message: str | None = None
+    result: dict[str, Any] | None = None
+    preprocess_version: str | None = None
+    model_version: str | None = None
+    model_threshold: float | None = None
+    schema_version: str | None = None
+    code_version: str | None = None
+    data_version: str | None = None
+    input_digest: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    created_by: str
+    created_at: datetime
+
+
+# ── HCT-401: Knowledge / RAG schemas ──────────────────────────────────
+
+
+class KnowledgeDocumentCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    content: str = Field(min_length=1)
+    source: str = Field(min_length=1, max_length=120)
+    license: str = Field(default="internal", max_length=60)
+    version: str = Field(default="1.0", max_length=40)
+    permission_scope: dict[str, Any] = Field(default_factory=dict)
+    effective_from: datetime | None = None
+    effective_until: datetime | None = None
+
+
+class KnowledgeDocumentRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    title: str
+    source: str
+    license: str
+    version: str
+    content_hash: str
+    permission_scope: dict[str, Any]
+    status: str
+    effective_from: datetime | None = None
+    effective_until: datetime | None = None
+    created_by: str
+    created_at: datetime
+
+
+class KnowledgeChunkRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    document_id: str
+    chunk_index: int
+    text: str
+    locator: str | None = None
+
+
+class KnowledgeRetrieveRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=1000)
+    household_id: str | None = None
+    member_id: str | None = None
+    top_k: int = Field(default=5, ge=1, le=20)
+
+
+class KnowledgeRetrieveResponse(BaseModel):
+    query: str
+    results: list[dict[str, Any]] = Field(default_factory=list)
+    total: int = 0
+    query_id: str | None = None
+    degraded: bool = False
+    degrade_reason: str | None = None
+
+
+# ── HCT-403: Ollama tool calling schemas ────────────────────────────
+
+
+class AssistantMessage(BaseModel):
+    role: str
+    content: str | None = None
+
+
+class AssistantRequest(BaseModel):
+    messages: list[dict[str, Any]] = Field(min_length=1)
+    model: str = Field(default="llama3.2:3b", max_length=64)
+    temperature: float = Field(default=0.3, ge=0.0, le=2.0)
+    max_tokens: int = Field(default=512, ge=1, le=4096)
+
+
+class AssistantResponse(BaseModel):
+    answer: str
+    sources: list[str] = Field(default_factory=list)
+    confidence: str = "low"
+    escalate: bool = False
+    degraded: bool = False
+    degrade_reason: str | None = None

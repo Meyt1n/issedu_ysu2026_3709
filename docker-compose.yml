@@ -2,6 +2,7 @@ services:
   db:
     image: mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb
     restart: unless-stopped
+    profiles: ["basic", "enhanced", "dev"]
     environment:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-homecare}
       MYSQL_USER: ${MYSQL_USER:-homecare}
@@ -11,6 +12,7 @@ services:
       - "--character-set-server=utf8mb4"
       - "--collation-server=utf8mb4_unicode_ci"
       - "--default-time-zone=+00:00"
+      - "--log-bin-trust-function-creators=1"
     ports:
       - "${MYSQL_PORT:-3306}:3306"
     volumes:
@@ -26,12 +28,16 @@ services:
       context: .
       dockerfile: docker/api.Dockerfile
     restart: unless-stopped
+    profiles: ["basic", "enhanced", "dev"]
     environment:
       APP_ENV: ${APP_ENV:-development}
       ALLOW_DEV_ACTOR_HEADER: ${ALLOW_DEV_ACTOR_HEADER:-true}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
       DATABASE_URL: mysql+pymysql://${MYSQL_USER:-homecare}:${MYSQL_PASSWORD:-change-me}@db:3306/${MYSQL_DATABASE:-homecare}?charset=utf8mb4
       PYTHONPATH: /app/src/api
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://localhost:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-unavailable}
+      OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-30}
     depends_on:
       db:
         condition: service_healthy
@@ -45,11 +51,35 @@ services:
       retries: 20
       start_period: 10s
 
+  outbox-worker:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    restart: unless-stopped
+    command: ["uv", "run", "--no-sync", "python", "-m", "app.outbox_worker", "--loop"]
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      DATABASE_URL: mysql+pymysql://${MYSQL_USER:-homecare}:${MYSQL_PASSWORD:-change-me}@db:3306/${MYSQL_DATABASE:-homecare}?charset=utf8mb4
+      PYTHONPATH: /app/src/api
+      OUTBOX_POLL_SECONDS: ${OUTBOX_POLL_SECONDS:-2}
+      OUTBOX_BATCH_SIZE: ${OUTBOX_BATCH_SIZE:-100}
+      OUTBOX_STALE_SECONDS: ${OUTBOX_STALE_SECONDS:-300}
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/homecare-outbox-worker.ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
   web:
     build:
       context: .
       dockerfile: docker/web.Dockerfile
     restart: unless-stopped
+    profiles: ["basic", "enhanced", "dev"]
     depends_on:
       api:
         condition: service_healthy
@@ -62,5 +92,25 @@ services:
       retries: 20
       start_period: 5s
 
+  ollama:
+    image: ollama/ollama:0.5.7@sha256:1e7db6ec3588e66d8ed56be25ecfa1aef5d1e44be6f86c7dfc09eb59f33d0bd8
+    restart: unless-stopped
+    profiles: ["enhanced", "dev"]
+    environment:
+      OLLAMA_KEEP_ALIVE: 300s
+      OLLAMA_NUM_PARALLEL: 1
+      OLLAMA_HOST: 0.0.0.0
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -f http://127.0.0.1:11434/api/tags || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
 volumes:
   mysql_data:
+  ollama_models:

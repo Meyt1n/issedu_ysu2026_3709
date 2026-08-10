@@ -102,8 +102,11 @@ def test_http_health_checker_rejects_non_loopback_url() -> None:
 def test_compose_has_locatable_health_checks_for_all_services() -> None:
     compose = read_repo_file("docker-compose.yml")
 
-    assert all(f"  {service}:" in compose for service in ("db", "api", "web"))
-    assert compose.count("healthcheck:") == 3
+    assert all(
+        f"  {service}:" in compose
+        for service in ("db", "api", "outbox-worker", "web", "ollama")
+    )
+    assert compose.count("healthcheck:") == 5
     assert "condition: service_healthy" in compose
     assert "wget --spider" in compose or "urllib.request" in compose
 
@@ -133,7 +136,7 @@ def test_alembic_has_a_single_head() -> None:
     config = Config(str(REPO_ROOT / "alembic.ini"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_heads() == ["0004_hct103_event_idempotency"]
+    assert scripts.get_heads() == ["0008_hct403_tool_call"]
     assert all(len(revision) <= 32 for revision in scripts.get_heads())
 
 

@@ -93,6 +93,7 @@ class HealthEvent(Base):
     member_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("member.id", ondelete="CASCADE"), nullable=False
     )
+    sequence_no: Mapped[int] = mapped_column(Integer, nullable=False)
     event_type: Mapped[str] = mapped_column(String(80), nullable=False)
     source: Mapped[str] = mapped_column(String(40), nullable=False)
     confirmation_status: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -101,14 +102,22 @@ class HealthEvent(Base):
     created_by: Mapped[str] = mapped_column(String(120), nullable=False)
     # 待确认事实可以先保存，但只有 CONFIRMED 事件才有确认人。
     confirmed_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    # HCT-103: 幂等键与补偿事件
-    idempotency_key: Mapped[str | None] = mapped_column(
-        String(128), nullable=True, index=True, unique=True
-    )
+    # HCT-103: 幂等键、兼容补偿引用与可重放事件元数据。
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    request_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    correlation_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    causation_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     compensates_event_id: Mapped[str | None] = mapped_column(
         String(36),
         ForeignKey("health_event.id", ondelete="SET NULL"),
         nullable=True,
+    )
+    supersedes_event_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("health_event.id", ondelete="RESTRICT"), nullable=True
+    )
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -123,7 +132,18 @@ class OutboxMessage(Base):
     topic: Mapped[str] = mapped_column(String(120), nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     dispatched: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="PENDING")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), server_default=func.now()
+    )
 
 
 class MemberStateProjection(Base):
@@ -137,7 +157,30 @@ class MemberStateProjection(Base):
     )
     state: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     last_event_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    last_sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    state_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ProjectionCheckpoint(Base):
+    __tablename__ = "projection_checkpoint"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    member_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("member.id", ondelete="CASCADE"), nullable=False
+    )
+    household_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("household.id", ondelete="CASCADE"), nullable=False
+    )
+    last_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    last_event_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    state: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    state_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), server_default=func.now()
+    )
 
 
 Index("ix_member_household_actor", Member.household_id, Member.actor_id)
@@ -147,8 +190,84 @@ Index(
     HealthEvent.member_id,
     HealthEvent.created_at,
 )
+Index(
+    "uq_event_household_member_sequence",
+    HealthEvent.household_id,
+    HealthEvent.member_id,
+    HealthEvent.sequence_no,
+    unique=True,
+)
+Index(
+    "uq_event_household_idempotency",
+    HealthEvent.household_id,
+    HealthEvent.idempotency_key,
+    unique=True,
+)
+Index("uq_event_supersedes", HealthEvent.supersedes_event_id, unique=True)
+Index("ix_event_correlation", HealthEvent.correlation_id)
+Index("uq_outbox_event", OutboxMessage.event_id, unique=True)
+Index("ix_outbox_status_available", OutboxMessage.status, OutboxMessage.available_at)
+Index(
+    "uq_checkpoint_member_sequence",
+    ProjectionCheckpoint.member_id,
+    ProjectionCheckpoint.last_sequence,
+    unique=True,
+)
 Index("ix_auth_household_member", CareAuthorization.household_id, CareAuthorization.member_id)
 Index("ix_auth_grantor_actor_id", CareAuthorization.grantor_actor_id)
 Index("ix_auth_grantee_actor_id", CareAuthorization.grantee_actor_id)
 Index("ix_audit_household_time", AccessAudit.household_id, AccessAudit.created_at)
 Index("ix_audit_authorization", AccessAudit.authorization_id)
+
+
+# ── HCT-204: Vision task ───────────────────────────────────────────────
+
+
+class VisionTask(Base):
+    """Tracks the lifecycle of an asynchronous vision (OCR / barcode) job.
+
+    Status transitions
+    ------------------
+    queued  → running → succeeded | failed | timeout
+    any     → cancelled
+    """
+
+    __tablename__ = "vision_task"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    household_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("household.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    member_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    file_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    task_type: Mapped[str] = mapped_column(String(40), nullable=False, default="ocr")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # Idempotency: the client-provided key; unique to prevent duplicate jobs.
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String(128), nullable=True, unique=True, index=True
+    )
+    # Input integrity reference (sha256 hex or similar hash of the source file).
+    input_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Versioning — all sub-systems contributing to this task.
+    preprocess_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    model_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    model_threshold: Mapped[float | None] = mapped_column(nullable=True)
+    schema_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    code_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    data_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Result blob — candidate detections / OCR text / barcode values.
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        server_default=func.now(),
+        onupdate=lambda: datetime.now(UTC),
+    )

@@ -3,6 +3,7 @@ import type {
   ApiErrorCode,
   ApiErrorEnvelope,
   Authorization,
+  CompensateHealthEventInput,
   CreateAuthorizationInput,
   CreateHealthEventInput,
   CreateHouseholdInput,
@@ -13,6 +14,10 @@ import type {
   Household,
   Member,
   MemberState,
+  OutboxDispatchResult,
+  OutboxMessage,
+  ProjectionCheckpoint,
+  ProjectionReplayResult,
   RequestOptions,
   RiskAlert,
   RiskDetailResponse,
@@ -240,9 +245,22 @@ export class ApiClient {
       body: JSON.stringify({
         ...input,
         source: 'MANUAL',
-        confirmation_status: 'CONFIRMED',
+        confirmation_status: input.confirmation_status ?? 'CONFIRMED',
       }),
     }, options)
+  }
+
+  compensateHealthEvent(
+    householdId: string,
+    eventId: string,
+    input: CompensateHealthEventInput,
+    options?: RequestOptions,
+  ): Promise<HealthEvent> {
+    return this.request(
+      `/api/v1/households/${householdId}/events/${eventId}/compensations`,
+      { method: 'POST', body: JSON.stringify(input) },
+      options,
+    )
   }
 
   listHealthEvents(
@@ -274,6 +292,55 @@ export class ApiClient {
     return this.request(
       `/api/v1/households/${householdId}/members/${memberId}/state`,
       undefined,
+      options,
+    )
+  }
+
+  createProjectionCheckpoint(
+    householdId: string,
+    memberId: string,
+    options?: RequestOptions,
+  ): Promise<ProjectionCheckpoint> {
+    return this.request(
+      `/api/v1/households/${householdId}/members/${memberId}/state/checkpoints`,
+      { method: 'POST' },
+      options,
+    )
+  }
+
+  replayMemberState(
+    householdId: string,
+    memberId: string,
+    checkpointId?: string,
+    options?: RequestOptions,
+  ): Promise<ProjectionReplayResult> {
+    return this.request(
+      `/api/v1/households/${householdId}/members/${memberId}/state/replay`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ checkpoint_id: checkpointId }),
+      },
+      options,
+    )
+  }
+
+  listOutboxMessages(
+    householdId: string,
+    options?: RequestOptions,
+  ): Promise<OutboxMessage[]> {
+    return this.request(`/api/v1/households/${householdId}/outbox`, undefined, options)
+  }
+
+  dispatchOutbox(
+    householdId: string,
+    options?: RequestOptions,
+  ): Promise<OutboxDispatchResult> {
+    return this.request(
+      `/api/v1/households/${householdId}/outbox/dispatch`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ max_messages: 50, stale_after_seconds: 300 }),
+      },
       options,
     )
   }
