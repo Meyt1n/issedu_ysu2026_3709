@@ -60,6 +60,11 @@ from app.schemas import (
     HealthResponse,
     HouseholdCreate,
     HouseholdRead,
+    KnowledgeChunkRead,
+    KnowledgeDocumentCreate,
+    KnowledgeDocumentRead,
+    KnowledgeRetrieveRequest,
+    KnowledgeRetrieveResponse,
     MemberCreate,
     MemberRead,
     MemberStateRead,
@@ -1106,6 +1111,159 @@ def skip_plan_endpoint(
     session.commit()
     session.refresh(event)
     return HealthEventRead.model_validate(event)
+
+
+# ── HCT-401: Knowledge store & RAG ──────────────────────────────────
+
+
+@router.post(
+    "/knowledge/documents",
+    response_model=KnowledgeDocumentRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_knowledge_document(
+    payload: KnowledgeDocumentCreate,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> KnowledgeDocument:
+    """Register a new knowledge document with auto-chunking."""
+    from app.knowledge import add_document
+    doc = add_document(
+        session,
+        title=payload.title,
+        content=payload.content,
+        source=payload.source,
+        created_by=actor_id,
+        license=payload.license,
+        version=payload.version,
+        permission_scope=payload.permission_scope,
+        effective_from=payload.effective_from,
+        effective_until=payload.effective_until,
+    )
+    session.commit()
+    session.refresh(doc)
+    return KnowledgeDocumentRead.model_validate(doc)
+
+
+@router.get("/knowledge/documents", response_model=list[KnowledgeDocumentRead])
+def list_knowledge_documents(
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> list[KnowledgeDocument]:
+    """List active documents visible to the caller."""
+    from app.knowledge import _check_permission
+    stmt = (
+        select(KnowledgeDocument)
+        .where(KnowledgeDocument.status == "active")
+        .order_by(KnowledgeDocument.created_at.desc())
+    )
+    docs = session.scalars(stmt).all()
+    return [
+        d for d in docs
+        if _check_permission(d.permission_scope, actor_id)
+    ]
+
+
+@router.get("/knowledge/documents/{doc_id}", response_model=KnowledgeDocumentRead)
+def get_knowledge_document(
+    doc_id: str,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> KnowledgeDocument:
+    from app.knowledge import _check_permission
+    doc = session.get(KnowledgeDocument, doc_id)
+    if doc is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="DOCUMENT_NOT_FOUND")
+    if not _check_permission(doc.permission_scope, actor_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="DOCUMENT_NOT_FOUND")
+    return doc
+
+
+@router.post(
+    "/knowledge/retrieve",
+    response_model=KnowledgeRetrieveResponse,
+)
+def retrieve_knowledge(
+    payload: KnowledgeRetrieveRequest,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> KnowledgeRetrieveResponse:
+    """TF-IDF retrieval with pre-filter permission gate.
+
+    Returns a structured degrade response if no authorised documents exist
+    or the index is empty — never exposes cross-family content.
+    """
+    from app.knowledge import retrieve, log_query
+
+    try:
+        results = retrieve(
+            session,
+            query=payload.query,
+            actor_id=actor_id,
+            household_id=payload.household_id,
+            member_id=payload.member_id,
+            top_k=payload.top_k,
+        )
+        log_entry = log_query(
+            session,
+            query_text=payload.query,
+            actor_id=actor_id,
+            household_id=payload.household_id,
+            member_id=payload.member_id,
+            top_chunk_ids=[r["chunk_id"] for r in results],
+            returned_count=len(results),
+        )
+        session.commit()
+        return KnowledgeRetrieveResponse(
+            query=payload.query,
+            results=results,
+            total=len(results),
+            query_id=log_entry.id,
+        )
+    except ValueError as exc:
+        session.rollback()
+        reason = str(exc)
+        return KnowledgeRetrieveResponse(
+            query=payload.query,
+            results=[],
+            total=0,
+            degraded=True,
+            degrade_reason=reason,
+        )
+
+
+@router.delete("/knowledge/documents/{doc_id}")
+def delete_knowledge_document(
+    doc_id: str,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> dict:
+    from app.knowledge import delete_document
+    doc = session.get(KnowledgeDocument, doc_id)
+    if doc is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="DOCUMENT_NOT_FOUND")
+    if not delete_document(session, doc_id, deleted_by=actor_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="DOCUMENT_NOT_FOUND")
+    session.commit()
+    return {"status": "deleted", "document_id": doc_id}
+
+
+@router.post("/knowledge/index/snapshot")
+def create_knowledge_index_snapshot(
+    version: str,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> dict:
+    from app.knowledge import create_index_snapshot
+    idx = create_index_snapshot(session, version=version, created_by=actor_id)
+    session.commit()
+    return {
+        "index_id": idx.id,
+        "version": idx.version,
+        "document_count": idx.document_count,
+        "chunk_count": idx.chunk_count,
+        "checksum": idx.checksum,
+    }
 
 
 # ── HCT-204: Vision task API ─────────────────────────────────────────

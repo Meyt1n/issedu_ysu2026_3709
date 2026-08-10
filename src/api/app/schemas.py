@@ -344,3 +344,61 @@ class VisionTaskRead(BaseModel):
     finished_at: datetime | None = None
     created_by: str
     created_at: datetime
+
+
+# ── HCT-401: Knowledge / RAG schemas ──────────────────────────────────
+
+
+class KnowledgeDocumentCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    content: str = Field(min_length=1)
+    source: str = Field(min_length=1, max_length=120)
+    license: str = Field(default="internal", max_length=60)
+    version: str = Field(default="1.0", max_length=40)
+    permission_scope: dict[str, Any] = Field(default_factory=dict)
+    effective_from: datetime | None = None
+    effective_until: datetime | None = None
+
+
+class KnowledgeDocumentRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    title: str
+    source: str
+    license: str
+    version: str
+    content_hash: str
+    permission_scope: dict[str, Any]
+    status: str
+    effective_from: datetime | None = None
+    effective_until: datetime | None = None
+    created_by: str
+    created_at: datetime
+
+
+class KnowledgeChunkRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    document_id: str
+    chunk_index: int
+    text: str
+    locator: str | None = None
+
+
+class KnowledgeRetrieveRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=1000)
+    household_id: str | None = None
+    member_id: str | None = None
+    top_k: int = Field(default=5, ge=1, le=20)
+
+
+class KnowledgeRetrieveResponse(BaseModel):
+    query: str
+    results: list[dict[str, Any]] = Field(default_factory=list)
+    total: int = 0
+    query_id: str | None = None
+    degraded: bool = False
+    degrade_reason: str | None = None
+
