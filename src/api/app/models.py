@@ -218,3 +218,56 @@ Index("ix_auth_grantor_actor_id", CareAuthorization.grantor_actor_id)
 Index("ix_auth_grantee_actor_id", CareAuthorization.grantee_actor_id)
 Index("ix_audit_household_time", AccessAudit.household_id, AccessAudit.created_at)
 Index("ix_audit_authorization", AccessAudit.authorization_id)
+
+
+# ── HCT-204: Vision task ───────────────────────────────────────────────
+
+
+class VisionTask(Base):
+    """Tracks the lifecycle of an asynchronous vision (OCR / barcode) job.
+
+    Status transitions
+    ------------------
+    queued  → running → succeeded | failed | timeout
+    any     → cancelled
+    """
+
+    __tablename__ = "vision_task"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    household_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("household.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    member_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    file_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    task_type: Mapped[str] = mapped_column(String(40), nullable=False, default="ocr")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # Idempotency: the client-provided key; unique to prevent duplicate jobs.
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String(128), nullable=True, unique=True, index=True
+    )
+    # Input integrity reference (sha256 hex or similar hash of the source file).
+    input_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Versioning — all sub-systems contributing to this task.
+    preprocess_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    model_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    model_threshold: Mapped[float | None] = mapped_column(nullable=True)
+    schema_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    code_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    data_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Result blob — candidate detections / OCR text / barcode values.
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        server_default=func.now(),
+        onupdate=lambda: datetime.now(UTC),
+    )

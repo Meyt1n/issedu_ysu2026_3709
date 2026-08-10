@@ -308,3 +308,39 @@ class ReviewTaskRead(BaseModel):
     confirmed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+
+
+# ── HCT-204: Vision task schemas ──────────────────────────────────────
+
+
+class VisionTaskCreate(BaseModel):
+    file_id: str = Field(min_length=1, description="Reference to an uploaded file")
+    member_id: str | None = Field(default=None)
+    task_type: str = Field(default="ocr", min_length=1, max_length=40)
+    idempotency_key: str | None = Field(default=None, max_length=128)
+    model_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class VisionTaskRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    household_id: str
+    member_id: str | None
+    file_id: str
+    task_type: str
+    status: str
+    error_code: str | None = None
+    error_message: str | None = None
+    result: dict[str, Any] | None = None
+    preprocess_version: str | None = None
+    model_version: str | None = None
+    model_threshold: float | None = None
+    schema_version: str | None = None
+    code_version: str | None = None
+    data_version: str | None = None
+    input_digest: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    created_by: str
+    created_at: datetime
