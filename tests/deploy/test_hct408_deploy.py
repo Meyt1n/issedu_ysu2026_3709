@@ -1,10 +1,10 @@
 """HCT-408 部署校验与版本清单测试（无需 Docker 运行）"""
 
-from datetime import UTC, datetime
 import json
-from pathlib import Path
 import re
 import subprocess
+from datetime import UTC, datetime
+from pathlib import Path
 
 BACKUP_SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 
@@ -229,3 +229,4 @@ def test_enhanced_profile_includes_ollama():
     assert "ollama" in services, (
         f"enhanced profile should include ollama, got: {services}"
     )
+
