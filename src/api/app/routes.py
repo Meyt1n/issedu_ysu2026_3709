@@ -47,6 +47,14 @@ from app.schemas import (
     RiskDetailResponse,
     RiskListResponse,
 )
+from app.review import (
+    confirm_review,
+    correct_review,
+    create_review_task,
+    get_review_task,
+    list_pending_reviews,
+    skip_review,
+)
 from app.security import (
     get_access_purpose,
     get_actor_id,
@@ -115,6 +123,7 @@ def capabilities() -> CapabilityResponse:
             "household-member",
             "field-authorization",
             "audit-outbox",
+            "review-task",          # HCT-207
         ],
         unavailable=["vision", "ocr", "barcode", "rag", "llm", "weather"],
     )
@@ -921,6 +930,225 @@ def skip_plan_endpoint(
     session.commit()
     session.refresh(event)
     return HealthEventRead.model_validate(event)
+
+
+# ── HCT-207: Manual review API ────────────────────────────────────────
+
+
+@router.get(
+    "/households/{household_id}/members/{member_id}/review-tasks",
+    response_model=list[ReviewTaskRead],
+)
+def list_review_tasks(
+    household_id: str,
+    member_id: str,
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> list[ReviewTask]:
+    household = session.get(Household, household_id)
+    member = session.get(Member, member_id)
+    if household is None or member is None or member.household_id != household_id:
+        _raise_resource_not_found()
+    if not has_authorized_action(
+        session,
+        household,
+        member_id,
+        actor_id,
+        "READ_EVENTS",
+        "health_events",
+        access_purpose,
+    ):
+        _raise_resource_not_found()
+    return list_pending_reviews(session, household_id, member_id)
+
+
+@router.get(
+    "/households/{household_id}/review-tasks/{task_id}",
+    response_model=ReviewTaskRead,
+)
+def get_review_task_endpoint(
+    household_id: str,
+    task_id: str,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> ReviewTask:
+    task = get_review_task(session, task_id)
+    if task is None or task.household_id != household_id:
+        _raise_resource_not_found()
+    if task.household_id != household_id:
+        _raise_resource_not_found()
+    # Verify actor has read access to this household
+    household = session.get(Household, household_id)
+    if household is None or household.created_by != actor_id:
+        _raise_resource_not_found()
+    return task
+
+
+@router.post(
+    "/households/{household_id}/review-tasks/{task_id}/confirm",
+    response_model=ReviewTaskRead,
+    status_code=status.HTTP_200_OK,
+)
+def confirm_review_endpoint(
+    household_id: str,
+    task_id: str,
+    payload: ReviewTaskConfirm,
+    actor_id: str = Depends(get_actor_id),
+    idempotency_key: str | None = None,
+    session: Session = Depends(get_session),
+) -> ReviewTask:
+    task = get_review_task(session, task_id)
+    if task is None or task.household_id != household_id:
+        _raise_resource_not_found()
+
+    household = session.get(Household, household_id)
+    if household is None or household.created_by != actor_id:
+        _raise_resource_not_found()
+
+    selected = None
+    if payload.selected_index is not None:
+        candidates = task.candidates or []
+        if payload.selected_index < 0 or payload.selected_index >= len(candidates):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="SELECTED_INDEX_OUT_OF_RANGE",
+            )
+        selected = candidates[payload.selected_index]
+
+    updated_task, event_dict = confirm_review(
+        session,
+        task,
+        actor_id=actor_id,
+        selected_candidate=selected,
+        confirmation_note=payload.confirmation_note,
+        idempotency_key=idempotency_key,
+    )
+
+    # Write health event in same transaction
+    from app.models import HealthEvent, OutboxMessage
+
+    event = HealthEvent(
+        household_id=household_id,
+        member_id=task.member_id,
+        event_type=event_dict["event_type"],
+        source=event_dict["source"],
+        confirmation_status=event_dict["confirmation_status"],
+        payload=event_dict["payload"],
+        evidence=event_dict["evidence"],
+        created_by=actor_id,
+        confirmed_by=actor_id,
+    )
+    session.add(event)
+    session.flush()
+    session.add(
+        OutboxMessage(
+            event_id=event.id,
+            topic="health_event.confirmed",
+            payload={
+                "event_id": event.id,
+                "household_id": household_id,
+                "member_id": task.member_id,
+                "review_task_id": task.id,
+            },
+        )
+    )
+    session.commit()
+    session.refresh(updated_task)
+    return updated_task
+
+
+@router.post(
+    "/households/{household_id}/review-tasks/{task_id}/correct",
+    response_model=ReviewTaskRead,
+    status_code=status.HTTP_200_OK,
+)
+def correct_review_endpoint(
+    household_id: str,
+    task_id: str,
+    payload: ReviewTaskCorrect,
+    actor_id: str = Depends(get_actor_id),
+    idempotency_key: str | None = None,
+    session: Session = Depends(get_session),
+) -> ReviewTask:
+    task = get_review_task(session, task_id)
+    if task is None or task.household_id != household_id:
+        _raise_resource_not_found()
+
+    household = session.get(Household, household_id)
+    if household is None or household.created_by != actor_id:
+        _raise_resource_not_found()
+
+    updated_task, event_dict = correct_review(
+        session,
+        task,
+        actor_id=actor_id,
+        manual_payload=payload.manual_payload,
+        correction_note=payload.correction_note,
+        idempotency_key=idempotency_key,
+    )
+
+    # Write health event in same transaction
+    from app.models import HealthEvent, OutboxMessage
+
+    event = HealthEvent(
+        household_id=household_id,
+        member_id=task.member_id,
+        event_type=event_dict["event_type"],
+        source=event_dict["source"],
+        confirmation_status=event_dict["confirmation_status"],
+        payload=event_dict["payload"],
+        evidence=event_dict["evidence"],
+        created_by=actor_id,
+        confirmed_by=actor_id,
+    )
+    session.add(event)
+    session.flush()
+    session.add(
+        OutboxMessage(
+            event_id=event.id,
+            topic="health_event.corrected",
+            payload={
+                "event_id": event.id,
+                "household_id": household_id,
+                "member_id": task.member_id,
+                "review_task_id": task.id,
+            },
+        )
+    )
+    session.commit()
+    session.refresh(updated_task)
+    return updated_task
+
+
+@router.post(
+    "/households/{household_id}/review-tasks/{task_id}/skip",
+    response_model=ReviewTaskRead,
+)
+def skip_review_endpoint(
+    household_id: str,
+    task_id: str,
+    payload: ReviewTaskSkip,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> ReviewTask:
+    task = get_review_task(session, task_id)
+    if task is None or task.household_id != household_id:
+        _raise_resource_not_found()
+
+    household = session.get(Household, household_id)
+    if household is None or household.created_by != actor_id:
+        _raise_resource_not_found()
+
+    updated_task = skip_review(
+        session,
+        task,
+        actor_id=actor_id,
+        reason=payload.reason,
+    )
+    session.commit()
+    session.refresh(updated_task)
+    return updated_task
 
 
 # ── HCT-307: Risk evidence API ─────────────────────────────────────
