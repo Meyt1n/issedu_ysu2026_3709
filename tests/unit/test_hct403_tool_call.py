@@ -6,7 +6,6 @@ import json
 
 import pytest
 from pydantic import ValidationError
-
 from app.tool_call import (
     HealthAssistantOutput,
     OllamaClient,
