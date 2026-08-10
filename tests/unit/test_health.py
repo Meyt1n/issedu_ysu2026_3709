@@ -9,7 +9,7 @@ def test_health_and_capability_contract(client: TestClient) -> None:
     capabilities = client.get("/api/v1/meta/capabilities")
     assert capabilities.status_code == 200
     assert "manual-health-event" in capabilities.json()["available"]
-    assert "llm" in capabilities.json()["available"] + capabilities.json()["unavailable"]
+    assert "llm" in capabilities.json()["unavailable"]
 
 
 def test_actor_is_required_for_mutating_routes(client: TestClient) -> None:
