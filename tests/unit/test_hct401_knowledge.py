@@ -22,7 +22,14 @@ from app.knowledge import (
 
 # ── Helpers ────────────────────────────────────────────────────────────
 
-def _make_doc(db_session, *, title="Test Doc", content="阿莫西林 说明书 用法用量", kw_source="test", **kw):
+def _make_doc(
+    db_session,
+    *,
+    title="Test Doc",
+    content="阿莫西林 说明书 用法用量",
+    kw_source="test",
+    **kw,
+):
     return add_document(
         db_session,
         title=title,
