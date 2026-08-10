@@ -185,9 +185,9 @@ def _chunk_document(session: Session, doc: KnowledgeDocument) -> None:
         )
         session.add(chunk)
         idx += 1
-        start = end - overlap
-        if start >= end:
+        if end >= len(text):
             break
+        start = end - overlap
 
 
 def delete_document(session: Session, doc_id: str, *, deleted_by: str) -> bool:
@@ -319,10 +319,17 @@ def create_index_snapshot(
     version: str,
     created_by: str,
 ) -> KnowledgeIndex:
-    doc_count = session.scalars(
-        select(KnowledgeDocument.id).where(KnowledgeDocument.status == "active")
-    ).unique().count()
-    chunk_count = session.scalars(select(KnowledgeChunk.id)).count()
+    doc_count = int(
+        session.scalar(
+            select(func.count())
+            .select_from(KnowledgeDocument)
+            .where(KnowledgeDocument.status == "active")
+        )
+        or 0
+    )
+    chunk_count = int(
+        session.scalar(select(func.count()).select_from(KnowledgeChunk)) or 0
+    )
     checksum = hashlib.sha256(
         json.dumps([c.id for c in session.scalars(select(KnowledgeChunk)).all()]).encode()
     ).hexdigest()
