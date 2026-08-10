@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from sqlalchemy import JSON, Column, DateTime, Integer, String, Text, func, select
 from sqlalchemy.orm import Session
 
-from app.models import Base
+from app.models import Base, new_id
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 class KnowledgeDocument(Base):
     __tablename__ = "knowledge_document"
 
-    id = Column(String(36), primary_key=True)
+    id = Column(String(36), primary_key=True, default=new_id)
     title = Column(String(200), nullable=False)
     source = Column(String(120), nullable=False)
     license = Column(String(60), nullable=False, default="internal")
@@ -45,7 +45,7 @@ class KnowledgeDocument(Base):
 class KnowledgeChunk(Base):
     __tablename__ = "knowledge_chunk"
 
-    id = Column(String(36), primary_key=True)
+    id = Column(String(36), primary_key=True, default=new_id)
     document_id = Column(String(36), nullable=False, index=True)
     chunk_index = Column(Integer, nullable=False)
     text = Column(Text, nullable=False)
@@ -56,7 +56,7 @@ class KnowledgeChunk(Base):
 class KnowledgeIndex(Base):
     __tablename__ = "knowledge_index"
 
-    id = Column(String(36), primary_key=True)
+    id = Column(String(36), primary_key=True, default=new_id)
     version = Column(String(40), nullable=False, unique=True)
     document_count = Column(Integer, nullable=False, default=0)
     chunk_count = Column(Integer, nullable=False, default=0)
@@ -68,7 +68,7 @@ class KnowledgeIndex(Base):
 class RetrievalQuery(Base):
     __tablename__ = "retrieval_query"
 
-    id = Column(String(36), primary_key=True)
+    id = Column(String(36), primary_key=True, default=new_id)
     query_text = Column(Text, nullable=False)
     actor_id = Column(String(120), nullable=False)
     household_id = Column(String(36), nullable=True)
@@ -185,9 +185,9 @@ def _chunk_document(session: Session, doc: KnowledgeDocument) -> None:
         )
         session.add(chunk)
         idx += 1
-        start = end - overlap
-        if start >= end:
+        if end == len(text):
             break
+        start = end - overlap
 
 
 def delete_document(session: Session, doc_id: str, *, deleted_by: str) -> bool:
@@ -319,10 +319,10 @@ def create_index_snapshot(
     version: str,
     created_by: str,
 ) -> KnowledgeIndex:
-    doc_count = session.scalars(
+    doc_count = len(session.scalars(
         select(KnowledgeDocument.id).where(KnowledgeDocument.status == "active")
-    ).unique().count()
-    chunk_count = session.scalars(select(KnowledgeChunk.id)).count()
+    ).all())
+    chunk_count = len(session.scalars(select(KnowledgeChunk.id)).all())
     checksum = hashlib.sha256(
         json.dumps([c.id for c in session.scalars(select(KnowledgeChunk)).all()]).encode()
     ).hexdigest()

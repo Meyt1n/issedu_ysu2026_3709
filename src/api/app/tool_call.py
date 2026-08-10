@@ -430,7 +430,7 @@ def _parse_loose_output(text: str) -> HealthAssistantOutput:
     if sources_match:
         raw_srcs = sources_match.group(1)
         sources = [s.strip().strip('"') for s in raw_srcs.split(",") if s.strip()]
-    escalate = escalate_match and escalate_match.group(1).lower() == "true"
+    escalate = bool(escalate_match and escalate_match.group(1).lower() == "true")
 
     return HealthAssistantOutput(
         answer=answer,

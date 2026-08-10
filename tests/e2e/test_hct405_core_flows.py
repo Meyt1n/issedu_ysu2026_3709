@@ -4,7 +4,6 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
 
-
 OWNER_HEADERS = {"X-Actor-Id": "owner"}
 
 
@@ -222,4 +221,4 @@ def test_capabilities_keep_unreleased_e2e_dependencies_explicit(client: TestClie
     response = client.get("/api/v1/meta/capabilities")
     assert response.status_code == 200, response.text
     unavailable = set(response.json()["unavailable"])
-    assert {"vision", "ocr", "barcode", "rag", "llm"}.issubset(unavailable)
+    assert {"vision-inference", "llm-cloud", "external-web"}.issubset(unavailable)

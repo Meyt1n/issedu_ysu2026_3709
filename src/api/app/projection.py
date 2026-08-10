@@ -106,7 +106,7 @@ def get_timeline(
         query = query.where(HealthEvent.created_at >= since)
     if until is not None:
         query = query.where(HealthEvent.created_at <= until)
-    return list(session.scalars(query.order_by(HealthEvent.created_at, HealthEvent.id)).all())
+    return list(session.scalars(query.order_by(HealthEvent.sequence_no)).all())
 
 
 def rebuild_projection(

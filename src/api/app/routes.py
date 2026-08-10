@@ -172,6 +172,7 @@ def capabilities() -> CapabilityResponse:
             "vision-task",
             "knowledge-store",
             "local-assistant",
+            "llm",
         ],
         unavailable=["vision-inference", "llm-cloud", "external-web"],
     )
@@ -1032,6 +1033,36 @@ def run_rules_endpoint(
 # ── HCT-304/308: Care plans & escalation ───────────────────────────
 
 
+def _append_care_plan_action(
+    session: Session,
+    *,
+    household: Household,
+    member: Member,
+    actor_id: str,
+    request: Request,
+    event_type: str,
+    payload: dict[str, object],
+    idempotency_key: str,
+) -> HealthEvent:
+    correlation_id = getattr(request.state, "request_id", None) or request.headers.get(
+        settings.request_id_header, ""
+    )
+    return append_health_event_transaction(
+        session,
+        household=household,
+        member=member,
+        actor_id=actor_id,
+        idempotency_key=idempotency_key,
+        correlation_id=correlation_id,
+        payload=HealthEventCreate(
+            member_id=member.id,
+            event_type=event_type,
+            confirmation_status="CONFIRMED",
+            payload=payload,
+        ),
+    )
+
+
 @router.post(
     "/households/{household_id}/members/{member_id}/plans/confirm",
     status_code=status.HTTP_201_CREATED,
@@ -1040,6 +1071,7 @@ def confirm_plan_endpoint(
     household_id: str,
     member_id: str,
     plan_event_id: str,
+    request: Request,
     actor_id: str = Depends(get_actor_id),
     access_purpose: str | None = Depends(get_access_purpose),
     session: Session = Depends(get_session),
@@ -1052,12 +1084,16 @@ def confirm_plan_endpoint(
         session, household, member_id, actor_id, "WRITE_EVENTS", "health_events", access_purpose,
     ):
         _raise_resource_not_found()
-    from app.care_plan import confirm_plan
-
-    event = confirm_plan(member_id, household_id, plan_event_id, actor_id)
-    session.add(event)
-    session.commit()
-    session.refresh(event)
+    event = _append_care_plan_action(
+        session,
+        household=household,
+        member=member,
+        actor_id=actor_id,
+        request=request,
+        event_type="plan_confirmed",
+        payload={"plan_event_id": plan_event_id, "confirmed_at": datetime.now(UTC).isoformat()},
+        idempotency_key=f"confirm:{plan_event_id}",
+    )
     return HealthEventRead.model_validate(event)
 
 
@@ -1069,6 +1105,7 @@ def defer_plan_endpoint(
     household_id: str,
     member_id: str,
     plan_event_id: str,
+    request: Request,
     delay_hours: int = 4,
     actor_id: str = Depends(get_actor_id),
     access_purpose: str | None = Depends(get_access_purpose),
@@ -1082,12 +1119,20 @@ def defer_plan_endpoint(
         session, household, member_id, actor_id, "WRITE_EVENTS", "health_events", access_purpose,
     ):
         _raise_resource_not_found()
-    from app.care_plan import defer_plan
-
-    event = defer_plan(member_id, household_id, plan_event_id, delay_hours, actor_id)
-    session.add(event)
-    session.commit()
-    session.refresh(event)
+    event = _append_care_plan_action(
+        session,
+        household=household,
+        member=member,
+        actor_id=actor_id,
+        request=request,
+        event_type="plan_deferred",
+        payload={
+            "plan_event_id": plan_event_id,
+            "delay_hours": delay_hours,
+            "deferred_at": datetime.now(UTC).isoformat(),
+        },
+        idempotency_key=f"defer:{plan_event_id}",
+    )
     return HealthEventRead.model_validate(event)
 
 
@@ -1099,6 +1144,7 @@ def skip_plan_endpoint(
     household_id: str,
     member_id: str,
     plan_event_id: str,
+    request: Request,
     reason: str = "",
     actor_id: str = Depends(get_actor_id),
     access_purpose: str | None = Depends(get_access_purpose),
@@ -1112,12 +1158,20 @@ def skip_plan_endpoint(
         session, household, member_id, actor_id, "WRITE_EVENTS", "health_events", access_purpose,
     ):
         _raise_resource_not_found()
-    from app.care_plan import skip_plan
-
-    event = skip_plan(member_id, household_id, plan_event_id, reason, actor_id)
-    session.add(event)
-    session.commit()
-    session.refresh(event)
+    event = _append_care_plan_action(
+        session,
+        household=household,
+        member=member,
+        actor_id=actor_id,
+        request=request,
+        event_type="plan_skipped",
+        payload={
+            "plan_event_id": plan_event_id,
+            "reason": reason,
+            "skipped_at": datetime.now(UTC).isoformat(),
+        },
+        idempotency_key=f"skip:{plan_event_id}",
+    )
     return HealthEventRead.model_validate(event)
 
 
