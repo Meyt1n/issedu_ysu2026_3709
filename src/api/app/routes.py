@@ -1132,7 +1132,7 @@ def create_knowledge_document(
     payload: KnowledgeDocumentCreate,
     actor_id: str = Depends(get_actor_id),
     session: Session = Depends(get_session),
-) -> KnowledgeDocument:
+) -> KnowledgeDocumentRead:
     """Register a new knowledge document with auto-chunking."""
     from app.knowledge import add_document
     doc = add_document(
@@ -1156,7 +1156,7 @@ def create_knowledge_document(
 def list_knowledge_documents(
     actor_id: str = Depends(get_actor_id),
     session: Session = Depends(get_session),
-) -> list[KnowledgeDocument]:
+) -> list[KnowledgeDocumentRead]:
     """List active documents visible to the caller."""
     from app.knowledge import _check_permission
     stmt = (
@@ -1176,7 +1176,7 @@ def get_knowledge_document(
     doc_id: str,
     actor_id: str = Depends(get_actor_id),
     session: Session = Depends(get_session),
-) -> KnowledgeDocument:
+) -> KnowledgeDocumentRead:
     from app.knowledge import _check_permission
     doc = session.get(KnowledgeDocument, doc_id)
     if doc is None:
