@@ -1,6 +1,7 @@
 """HCT-406: Red-team tests for health assistant safety boundaries."""
 
 import pytest
+
 from app.red_team import (
     RED_TEAM_CASES,
     ExpectedBehavior,
@@ -8,7 +9,6 @@ from app.red_team import (
     get_case_by_id,
     get_red_team_cases,
 )
-
 
 # ── Case registry ────────────────────────────────────────────────────
 

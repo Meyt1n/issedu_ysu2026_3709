@@ -6,6 +6,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
+
 from app.knowledge import (
     KnowledgeChunk,
     KnowledgeDocument,
@@ -18,6 +19,7 @@ from app.knowledge import (
     delete_document,
     retrieve,
 )
+
 # ── Helpers ────────────────────────────────────────────────────────────
 
 def _make_doc(session, *, title="Test Doc", content="阿莫西林 说明书 用法用量", **kw):
