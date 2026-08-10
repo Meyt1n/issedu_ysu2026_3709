@@ -103,7 +103,8 @@ def test_compose_has_locatable_health_checks_for_all_services() -> None:
     compose = read_repo_file("docker-compose.yml")
 
     assert all(f"  {service}:" in compose for service in ("db", "api", "web"))
-    assert compose.count("healthcheck:") == 3
+    # compose now has 4 services with healthchecks: db, api, web, ollama
+    assert compose.count("healthcheck:") == 4
     assert "condition: service_healthy" in compose
     assert "wget --spider" in compose or "urllib.request" in compose
 
