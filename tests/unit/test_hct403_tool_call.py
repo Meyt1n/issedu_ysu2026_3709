@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import uuid
 
 import pytest
 from pydantic import ValidationError
@@ -17,6 +16,7 @@ from app.tool_call import (
     get_tool,
     is_tool_allowed,
     HealthAssistantOutput,
+    OllamaClient,
     ToolDefinition,
     run_assistant,
 )
@@ -124,7 +124,7 @@ class TestStructuredOutput:
 
     def test_invalid_json_falls_back(self):
         raw = "This is not valid JSON output"
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             HealthAssistantOutput.model_validate_json(raw)
 
     def test_loose_parse_extracts_answer(self):

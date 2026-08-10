@@ -1,7 +1,5 @@
 """HCT-406: Red-team tests for health assistant safety boundaries."""
 
-from __future__ import annotations
-
 import pytest
 
 from app.red_team import (

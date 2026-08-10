@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -10,17 +11,13 @@ from app.knowledge import (
     KnowledgeChunk,
     KnowledgeDocument,
     _check_permission,
+    _content_hash,
     _tf,
+    _tokenize,
     add_document,
-    _content_hash,
     create_index_snapshot,
     delete_document,
     retrieve,
-)
-    create_index_snapshot,
-    delete_document,
-    retrieve,
-    _content_hash,
 )
 # ── Helpers ────────────────────────────────────────────────────────────
 
@@ -36,11 +33,16 @@ def _make_doc(session, *, title="Test Doc", content="阿莫西林 说明书 用�
 # ── Document CRUD ──────────────────────────────────────────────────────
 class TestDocumentCRUD:
     def test_add_document_creates_chunks(self, session):
-        doc = _make_doc(session, content="阿莫西林 胶囊 用法：口服 剂量：0.5g 每日三次 注意事项 过敏禁用")
+        doc = _make_doc(
+            session,
+            content="阿莫西林 胶囊 用法：口服 剂量：0.5g 每日三次 注意事项 过敏禁用",
+        )
         session.commit()
 
         assert doc.id is not None
-        assert doc.content_hash == _content_hash("阿莫西林 胶囊 用法：口服 剂量：0.5g 每日三次 注意事项 过敏禁用")
+        assert doc.content_hash == _content_hash(
+            "阿莫西林 胶囊 用法：口服 剂量：0.5g 每日三次 注意事项 过敏禁用"
+        )
         chunks = session.query(KnowledgeChunk).filter(
             KnowledgeChunk.document_id == doc.id
         ).all()
@@ -104,7 +106,10 @@ class TestPermissionFiltering:
 # ── TF-IDF Retrieval ───────────────────────────────────────────────────
 class TestRetrieval:
     def test_basic_retrieval(self, session):
-        _make_doc(session, content="阿莫西林 胶囊 用法用量 口服 0.5g 每日三次 过敏禁用 青霉素过敏者禁用")
+        _make_doc(
+            session,
+            content="阿莫西林 胶囊 用法用量 口服 0.5g 每日三次 过敏禁用 青霉素过敏者禁用",
+        )
         session.commit()
 
         results = retrieve(session, query="阿莫西林 用法", actor_id="user-1")
@@ -120,26 +125,29 @@ class TestRetrieval:
         session.commit()
 
         # Authorised household can see first doc only
-        results = retrieve(session, query="阿莫西林 用法", actor_id="u1", household_id="h-authorized")
+        results = retrieve(
+            session, query="阿莫西林 用法", actor_id="u1", household_id="h-authorized"
+        )
         assert all(r["title"] == "Test Doc" for r in results)
 
         # Unauthorised household → degrade
-        results_unauth = retrieve(session, query="阿莫西林", actor_id="u1", household_id="h-other")
+        results_unauth = retrieve(
+            session, query="阿莫西林", actor_id="u1", household_id="h-other"
+        )
         assert len(results_unauth) == 0
 
     def test_empty_query_raises(self, session):
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             retrieve(session, query="   ", actor_id="u1")
 
     def test_no_authorised_docs_raises(self, session):
         _make_doc(session, permission_scope={"created_by": "someone-else"})
         session.commit()
 
-        with pytest.raises(Exception):  # NO_AUTHORISED_DOCUMENTS
+        with pytest.raises(ValueError):  # NO_AUTHORISED_DOCUMENTS
             retrieve(session, query="药品", actor_id="user-1")
 
     def test_expired_document_excluded(self, session):
-        from datetime import timedelta
         past = datetime.now(UTC) - timedelta(days=30)
         future = datetime.now(UTC) + timedelta(days=30)
         _make_doc(

@@ -13,14 +13,12 @@ Design
 * Structured degrade — if Ollama is unreachable or output fails validation,
   fall back to rule-card / static evidence summary.
 """
-from __future__ import annotations
 
 import json
 import logging
 import time
-import uuid
-from dataclasses import dataclass
-from datetime import UTC, datetime
+from dataclasses import dataclass, field
+from typing import Any
 
 import httpx
 from pydantic import BaseModel, Field, ValidationError

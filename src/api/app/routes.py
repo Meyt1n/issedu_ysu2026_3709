@@ -29,6 +29,7 @@ from app.event_service import (
     replay_member_projection,
 )
 from app.file_upload import delete_file_tree, validate_and_store
+from app.knowledge import KnowledgeDocument
 from app.models import (
     AccessAudit,
     CareAuthorization,
@@ -1200,7 +1201,7 @@ def retrieve_knowledge(
     Returns a structured degrade response if no authorised documents exist
     or the index is empty — never exposes cross-family content.
     """
-    from app.knowledge import retrieve, log_query
+    from app.knowledge import log_query, retrieve
 
     try:
         results = retrieve(
