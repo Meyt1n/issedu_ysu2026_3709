@@ -8,7 +8,7 @@
 
 > **当前状态：一期工程骨架已建立，完整 P0 业务仍在实现中。**
 >
-> 仓库当前包含 Vue/FastAPI/MySQL/Alembic 基础工程、家庭/成员/授权、不可变事件、补偿/幂等、可恢复 outbox worker、状态重放、测试和 CI。视觉、规则、RAG、Ollama、天气、完整页面和真实部署仍未交付；实际状态以[需求追踪矩阵](docs/vibe-coding/12-需求追踪矩阵.md)及可复现证据为准。
+> 仓库当前包含 Vue/FastAPI/MySQL/Alembic 基础工程、家庭/成员/授权、不可变事件、兼容幂等与补偿、可恢复 outbox worker、状态重放、规则/风险/计划基础能力、测试和 CI。视觉主链、RAG、完整 Ollama 助手与完整部署验收仍未交付；实际状态以[需求追踪矩阵](docs/vibe-coding/12-需求追踪矩阵.md)及可复现证据为准。
 
 > **使用边界：教学演示，不用于诊断或治疗。**
 >
@@ -41,18 +41,19 @@
 ```mermaid
 flowchart TD
     A["药品图片 / 报告 / 短视频 / 手工录入"] --> B["OpenCV 质量门控、校正、抽帧去重"]
-    B --> C["YOLO 检测包装与关键区域"]
-    C --> D["OCR + 条码 + 包装特征 + 主数据匹配"]
-    D --> E{"MATCHED / CONFLICT / UNKNOWN / REVIEW"}
-    E --> F["人工确认或修正"]
-    F --> G["追加不可覆盖的 health_event"]
-    G --> H["重建成员状态与关系投影"]
-    H --> I["确定性规则计算风险和任务"]
-    I --> J["RAG 检索版本化证据"]
-    J --> K["本地 LLM 解释并输出引用"]
-    K --> L["本人或授权照护者确认，审计留痕"]
-    F --> M["困难样本池"]
-    M --> N["审核、追加训练、固定集评测、发布或回滚 V2"]
+    B --> C["全图 OCR 主链路"]
+    C --> D["YOLO 辅助包装/条码区域定位"]
+    D --> E["条码解码 + 规则/主数据/LLM 字段抽取"]
+    E --> F{"MATCHED / CONFLICT / UNKNOWN / REVIEW"}
+    F --> G["人工确认或修正"]
+    G --> H["追加不可覆盖的 health_event"]
+    H --> I["重建成员状态与关系投影"]
+    I --> J["确定性规则计算风险和任务"]
+    J --> K["RAG 检索版本化证据"]
+    K --> L["本地 LLM 解释并输出引用"]
+    L --> M["本人或授权照护者确认，审计留痕"]
+    G --> N["困难样本池"]
+    N --> O["审核、追加训练、固定集评测、发布或回滚 V2"]
 ```
 
 视觉系统允许拒识。只有 `MATCHED` 且人工确认的药品可参与风险计算；LLM 不计算风险等级，只解释规则结果。
@@ -68,7 +69,7 @@ flowchart TB
     API --> ORCH["AI 编排与输出校验"]
     AUTH --> DB[("MySQL 事实主库")]
     EVENT --> DB
-    ORCH --> CV["OpenCV / YOLO / PaddleOCR / 条码"]
+    ORCH --> CV["OpenCV / OCR / YOLO 辅助 / 条码"]
     ORCH --> RULE["关系投影与版本化规则"]
     ORCH --> RAG["FAISS 或 Qdrant + 版本化文档"]
     ORCH --> LLM["Ollama 本地量化模型"]
@@ -82,7 +83,7 @@ flowchart TB
 - Web：Vue 3、TypeScript、Vite、Element Plus、ECharts；
 - API：Python 3.11、FastAPI、Pydantic、SQLAlchemy 2、Alembic；
 - 数据：MySQL 8；向量检索在 P0 从 FAISS 起步，确需服务化时评审 Qdrant；
-- 视觉：OpenCV、YOLO11n 基线、PaddleOCR、条码解析；YOLO26n 仅作对照实验，是否采用由固定评估集决定；
+- 视觉：OpenCV 质量门控、PaddleOCR/本地 OCR、条码解析，YOLO11n 仅作包装/条码区域辅助；YOLO26n 仅作对照实验，是否采用由固定评估集决定；
 - 大模型：LLaMA Factory 进行 4-bit QLoRA，Ollama 本地部署；模型学习工具调用、引用、解释和拒答，不学习并替代医学事实库；
 - 测试：pytest、httpx、Playwright、固定视觉/LLM/安全评估集；
 - 部署：Docker Compose，提供基础档、增强档和研发档。
@@ -95,8 +96,8 @@ flowchart TB
 |---|---|---|
 | 1 | 范围、医疗边界、数据字典、标注规范、环境 | 评审记录、ADR、数据卡草案 |
 | 2 | Vue/FastAPI/MySQL 骨架，成员、授权、事件模型 | 迁移、OpenAPI、权限测试 |
-| 3 | 自采授权数据、YOLO 基线、图片/视频预处理 | 数据集 V1、模型 V1、评测报告 |
-| 4 | OCR、条码、候选融合与人工复核 | 从扫描到确认的纵向闭环 |
+| 3 | 自采授权数据、图片/视频预处理、YOLO 辅助定位基线 | 数据集 V1、辅助模型 V1、评测报告 |
+| 4 | OCR 主链路、条码解码、字段抽取、候选融合与人工复核 | 从拍照到确认的纵向闭环 |
 | 5 | 时间线、关系投影、风险规则与告警预算 | 规则测试、风险证据链 |
 | 6 | 计划确认、照护升级、天气行动卡、大屏 | 任务闭环与指标页面 |
 | 7 | RAG、QLoRA 对照、Ollama 工具调用和安全回归 | 带引用回答、微调对照、安全报告 |

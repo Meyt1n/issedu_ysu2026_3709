@@ -1,0 +1,51 @@
+# HomeCare Twin gitleaks config (HCT-004)
+# Extends default rules and adds health-data / no-redirect patterns.
+
+title = "HomeCare Twin Gitleaks Config"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "homecare-secrets"
+description = "API keys, tokens, passwords in any file"
+regex = "(?i)(api[_-]?key|access[_-]?token|private[_-]?key|app[_-]?secret)\\s*[:=]\\s*[\"'][^\"']{8,}[\"']"
+tags = ["secret", "homecare"]
+
+[[rules]]
+id = "homecare-health-payload"
+description = "Health event payload keys in code or logs"
+regex = "\"(disease|drug_name|allergy|diagnosis|prescription|medication)\"\\s*:\\s*\"[^\"]{3,}\""
+tags = ["health", "homecare"]
+
+[[rules]]
+id = "homecare-no-redirect"
+description = "Prohibited drug purchase, consultation, ad redirect keywords"
+regex = "(?i)(buy[_-]?medicine|purchase[_-]?drug|online[_-]?consult|telemedicine|ad[_-]?redirect|commission[_-]?link|affiliate[_-]?link|pharmacy[_-]?link)"
+tags = ["compliance", "homecare"]
+
+[[rules]]
+id = "homecare-connection-strings"
+description = "Database connection strings with embedded passwords"
+regex = "(?i)(mysql|postgres|sqlite|mongodb|redis)://[^:@\\s]+:[^:@\\s]+@"
+tags = ["secret", "homecare"]
+
+[allowlist]
+description = "Files excluded from gitleaks scan"
+paths = [
+    "uv.lock",
+    "package-lock.json",
+    ".gitleaks.toml",
+    "scripts/scan_no_redirect.py",
+    "tests/safety/test_hct004_no_redirect.py",
+    "tests/safety/test_hct004_log_mask.py",
+    "tests/safety/test_hct004_egress_guard.py",
+    "tests/safety/test_hct004_weather_adapter.py",
+    "tests/safety/test_hct107_local_auth.py",
+    "tests/unit/test_hct302_rules.py",
+    "tests/unit/test_hct303_alerts.py",
+    "tests/integration/test_hct301_projection.py",
+    "src/api/app/rules.py",
+    "docs/threat-model/",
+    "docs/data-governance/",
+]

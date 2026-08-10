@@ -9,8 +9,8 @@ from typing import Any
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0004_hct103_event_recovery"
-down_revision: str | None = "0003_hct102_auth_security"
+revision: str = "0005_hct103_event_recovery"
+down_revision: str | None = "0004_hct103_event_idempotency"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -67,7 +67,6 @@ def _drop_immutability_triggers() -> None:
 
 def upgrade() -> None:
     op.add_column("health_event", sa.Column("sequence_no", sa.Integer(), nullable=True))
-    op.add_column("health_event", sa.Column("idempotency_key", sa.String(length=128)))
     op.add_column("health_event", sa.Column("request_fingerprint", sa.String(length=64)))
     op.add_column("health_event", sa.Column("correlation_id", sa.String(length=120)))
     op.add_column("health_event", sa.Column("causation_id", sa.String(length=36)))
@@ -295,5 +294,4 @@ def downgrade() -> None:
         batch_op.drop_column("causation_id")
         batch_op.drop_column("correlation_id")
         batch_op.drop_column("request_fingerprint")
-        batch_op.drop_column("idempotency_key")
         batch_op.drop_column("sequence_no")

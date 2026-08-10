@@ -103,9 +103,10 @@ def test_compose_has_locatable_health_checks_for_all_services() -> None:
     compose = read_repo_file("docker-compose.yml")
 
     assert all(
-        f"  {service}:" in compose for service in ("db", "api", "outbox-worker", "web")
+        f"  {service}:" in compose
+        for service in ("db", "api", "outbox-worker", "web", "ollama")
     )
-    assert compose.count("healthcheck:") == 4
+    assert compose.count("healthcheck:") == 5
     assert "condition: service_healthy" in compose
     assert "wget --spider" in compose or "urllib.request" in compose
 
@@ -135,7 +136,7 @@ def test_alembic_has_a_single_head() -> None:
     config = Config(str(REPO_ROOT / "alembic.ini"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_heads() == ["0004_hct103_event_recovery"]
+    assert scripts.get_heads() == ["0005_hct103_event_recovery"]
     assert all(len(revision) <= 32 for revision in scripts.get_heads())
 
 

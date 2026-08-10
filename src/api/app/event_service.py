@@ -221,6 +221,7 @@ def _append_event(
         request_fingerprint=fingerprint,
         correlation_id=correlation_id,
         causation_id=causation_id,
+        compensates_event_id=supersedes_event_id,
         supersedes_event_id=supersedes_event_id,
         schema_version=1,
         occurred_at=occurred_at or datetime.now(UTC),

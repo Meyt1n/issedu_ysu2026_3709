@@ -27,6 +27,21 @@ class Settings(BaseSettings):
     ollama_model: str = "unavailable"
     ollama_timeout_seconds: float = 30.0
     weather_adapter: str = "disabled"
+    weather_api_url: str = ""
+    weather_api_timeout_seconds: float = 3.0
+    egress_default_deny: bool = True
+    egress_weather_whitelist: str = ""
+    log_mask_enabled: bool = True
+    upload_allowed_extensions: str = ".jpg,.jpeg,.png,.pdf,.mp4,.mov"
+    upload_max_size_bytes: int = 10 * 1024 * 1024
+
+    @property
+    def upload_allowed_ext_set(self) -> set[str]:
+        return {
+            ext.strip().lower()
+            for ext in self.upload_allowed_extensions.split(",")
+            if ext.strip()
+        }
 
     @property
     def cors_origin_list(self) -> list[str]:

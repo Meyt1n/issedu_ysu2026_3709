@@ -1,491 +1,704 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 
+import {
+  buildAuthorizationPreview,
+  isAuthorizationActive,
+} from './authorization/authorizationView'
 import { ApiClientError, apiClient } from './api/client'
-import type { CapabilityResponse, HealthResponse } from './api/types'
+import { riskLevelLabel, toRiskCardModel } from './risk/riskView'
+import type {
+  Authorization,
+  AuthorizationAction,
+  CapabilityResponse,
+  CreateAuthorizationInput,
+  HealthEvent,
+  Household,
+  MemberState,
+  Member,
+  RequestOptions,
+  RiskAlert,
+  RiskDetailResponse,
+  RiskListResponse,
+  UpdateAuthorizationInput,
+} from './api/types'
 
-type DesignId =
-  | 'forest'
-  | 'night'
-  | 'paper'
-  | 'solar'
-  | 'cobalt'
-  | 'mono'
-  | 'tide'
-  | 'ember'
-  | 'mist'
-  | 'signal'
-
-type PreviewView = 'dashboard' | 'evidence' | 'pages'
-
-interface DesignOption {
-  id: DesignId
-  name: string
-  label: string
-  description: string
-  cue: string
-  bestFor: string
-  palette: [string, string, string]
-}
-
-const designs: DesignOption[] = [
-  {
-    id: 'forest',
-    name: '森系可信域',
-    label: 'Calm Care',
-    description: '低刺激、亲和、让隐私与确认感自然出现。',
-    cue: '温和但不软弱',
-    bestFor: '家庭日常',
-    palette: ['#b9e0cd', '#3e816d', '#f4c970'],
-  },
-  {
-    id: 'night',
-    name: '夜航监护台',
-    label: 'Night Watch',
-    description: '深色高对比，适合全天候查看任务与升级。',
-    cue: '安静的值守感',
-    bestFor: '照护大屏',
-    palette: ['#213c4c', '#65d7bf', '#ffbd70'],
-  },
-  {
-    id: 'paper',
-    name: '纸上档案',
-    label: 'Care Journal',
-    description: '像一本有证据链的家庭照护记录册。',
-    cue: '编辑部式可信度',
-    bestFor: '档案与时间线',
-    palette: ['#e9d9bf', '#9d5139', '#203d39'],
-  },
-  {
-    id: 'solar',
-    name: '日光提醒',
-    label: 'Sunlit Routine',
-    description: '暖色和大圆角把任务变成可理解的日常节奏。',
-    cue: '轻快、可亲、好记',
-    bestFor: '家庭成员',
-    palette: ['#f5c75f', '#e47455', '#3c7565'],
-  },
-  {
-    id: 'cobalt',
-    name: '蓝图协作',
-    label: 'Blueprint Ops',
-    description: '冷静的蓝紫系统感，突出状态、版本和责任人。',
-    cue: '像产品蓝图一样清楚',
-    bestFor: '运营工作台',
-    palette: ['#c3c9ff', '#5c55e8', '#e88fc9'],
-  },
-  {
-    id: 'mono',
-    name: '黑白临床档案',
-    label: 'Monochrome Record',
-    description: '去掉装饰，把事实、状态与动作放到最前面。',
-    cue: '极简、直接、可审计',
-    bestFor: '管理端',
-    palette: ['#e8e8e3', '#111111', '#b9b9b2'],
-  },
-  {
-    id: 'tide',
-    name: '海风蓝图',
-    label: 'Tide & Trust',
-    description: '清透蓝色和波纹层次，传达本地运行的稳定感。',
-    cue: '清爽、宽松、可靠',
-    bestFor: '家庭总览',
-    palette: ['#b9e6ef', '#2889a3', '#f0b46d'],
-  },
-  {
-    id: 'ember',
-    name: '琥珀调度',
-    label: 'Amber Dispatch',
-    description: '暖橙作为行动信号，强调风险等级而不是制造焦虑。',
-    cue: '有行动力的温暖',
-    bestFor: '风险与计划',
-    palette: ['#4a302a', '#ff9f62', '#ffe3a6'],
-  },
-  {
-    id: 'mist',
-    name: '轻雾照护',
-    label: 'Soft Signal',
-    description: '柔和紫雾与层叠卡片，适合解释型 AI 与证据阅读。',
-    cue: '耐心、轻盈、留白多',
-    bestFor: '本地助手',
-    palette: ['#ddd6fa', '#7b67cb', '#efb5c5'],
-  },
-  {
-    id: 'signal',
-    name: '信号仪表',
-    label: 'Signal Grid',
-    description: '模块化网格把事件、状态、版本和降级路径排列清楚。',
-    cue: '信息密度与秩序',
-    bestFor: '模型实验室',
-    palette: ['#d9f2df', '#2a8f62', '#e85b55'],
-  },
-]
-
-const pages = [
-  ['P0-01', '家庭总览', '变化、待确认风险、今日任务与隐私状态', '⌂'],
-  ['P0-02', '成员健康档案', '只展示当前操作者获权的事实、来源与时间线', '◉'],
-  ['P0-03', '视觉扫描中心', '质量门控、多渠道证据与四态候选展示', '▣'],
-  ['P0-04', '人工复核中心', '对照原证据，确认、修正或拒绝识别结果', '↺'],
-  ['P0-05', '家庭健康图谱', '由已确认事件重建成员、药品与照护关系', '⌘'],
-  ['P0-06', '用药安全中心', '规则等级、证据、版本与处理状态', '△'],
-  ['P0-07', '健康计划中心', '区分医嘱事实与安全时间窗内的提醒策略', '◷'],
-  ['P0-08', '本地健康助手', '先展示事实、规则和文档，再给出受限解释', '✦'],
-  ['P0-09', '家庭健康大屏', '只显示非敏感聚合、任务与本地运行状态', '◫'],
-  ['P0-10', '模型实验室', '固定集指标、版本、发布与回滚状态', '⌁'],
+const FIELD_OPTIONS = [
+  { value: 'health_events', label: 'Confirmed health events' },
 ] as const
 
-const selectedId = ref<DesignId>('forest')
-const activeView = ref<PreviewView>('dashboard')
-const selectedTask = ref(0)
-const apiState = ref<'checking' | 'connected' | 'offline'>('checking')
-const apiVersion = ref('')
-const capability = ref<CapabilityResponse | null>(null)
-const toast = ref('')
+const ACTION_OPTIONS: Array<{ value: AuthorizationAction; label: string }> = [
+  { value: 'READ_EVENTS', label: 'View confirmed events' },
+  { value: 'WRITE_EVENTS', label: 'Add confirmed events' },
+]
 
-const selectedDesign = computed(
-  () => designs.find((design) => design.id === selectedId.value) ?? designs[0],
+const purposePattern = /^[A-Za-z0-9._:-]{1,64}$/
+
+const actorId = ref('')
+const accessPurpose = ref('family-care')
+const households = ref<Household[]>([])
+const members = ref<Member[]>([])
+const authorizations = ref<Authorization[]>([])
+const selectedHouseholdId = ref('')
+const selectedAuthorizationId = ref<string | null>(null)
+const previewActorId = ref('')
+const isOwnerView = ref(false)
+const loadingHouseholds = ref(false)
+const loadingScope = ref(false)
+const saving = ref(false)
+const message = ref('Enter a development identity to load its households.')
+const error = ref('')
+const formError = ref('')
+const riskMemberId = ref('')
+const riskList = ref<RiskListResponse | null>(null)
+const riskDetails = ref<Record<string, RiskDetailResponse>>({})
+const loadingRisks = ref(false)
+const riskError = ref('')
+const expandedRiskId = ref<string | null>(null)
+const dashboardMemberId = ref('')
+const dashboardTimeline = ref<HealthEvent[]>([])
+const dashboardState = ref<MemberState | null>(null)
+const capabilities = ref<CapabilityResponse | null>(null)
+const loadingDashboard = ref(false)
+const dashboardError = ref('')
+
+const draft = reactive({
+  memberId: '',
+  granteeActorId: '',
+  dataFields: ['health_events'] as string[],
+  actions: ['READ_EVENTS'] as AuthorizationAction[],
+  purpose: 'family-care',
+  validUntil: localDateTimeInput(7),
+})
+
+const requestOptions = computed<RequestOptions>(() => ({
+  actorId: actorId.value.trim() || undefined,
+  accessPurpose: accessPurpose.value.trim() || undefined,
+}))
+
+const selectedAuthorization = computed(
+  () => authorizations.value.find(item => item.id === selectedAuthorizationId.value) ?? null,
 )
 
-const rootClasses = computed(() => [
-  'app-root',
-  `theme-${selectedDesign.value.id}`,
-  `layout-${selectedDesign.value.id}`,
-])
+const memberNames = computed(() => new Map(members.value.map(member => [member.id, member.display_name])))
+const dashboardMemberName = computed(
+  () => memberNames.value.get(dashboardMemberId.value) ?? 'Selected member',
+)
+const recentTimeline = computed(() => dashboardTimeline.value.slice(0, 4))
+const privacyScopeLabel = computed(
+  () => isOwnerView.value ? 'Owner-managed household scope' : 'API-filtered caregiver scope',
+)
 
-const apiLabel = computed(() => {
-  if (apiState.value === 'checking') return '正在检查服务'
-  if (apiState.value === 'connected') return `API 在线${apiVersion.value ? ` · v${apiVersion.value}` : ''}`
-  return 'API 离线 · 保留原型预览'
+const authorizationPreview = computed(() => {
+  const previewActor = previewActorId.value.trim()
+  if (!previewActor) return []
+
+  return buildAuthorizationPreview(authorizations.value, previewActor).map(scope => ({
+    ...scope,
+    memberName: memberNames.value.get(scope.memberId) ?? 'Authorized member',
+  }))
 })
 
-const availableCount = computed(() => capability.value?.available.length ?? 0)
+const canSave = computed(
+  () =>
+    draft.memberId.length > 0 &&
+    draft.granteeActorId.trim().length > 0 &&
+    draft.dataFields.length > 0 &&
+    draft.actions.length > 0 &&
+    purposePattern.test(draft.purpose) &&
+    isFutureDate(draft.validUntil),
+)
 
-function swatchStyle(design: DesignOption): Record<string, string> {
-  return {
-    '--swatch-a': design.palette[0],
-    '--swatch-b': design.palette[1],
-    '--swatch-c': design.palette[2],
+function localDateTimeInput(daysFromNow: number): string {
+  const date = new Date()
+  date.setDate(date.getDate() + daysFromNow)
+  date.setSeconds(0, 0)
+  const timezoneOffset = date.getTimezoneOffset() * 60_000
+  return new Date(date.getTime() - timezoneOffset).toISOString().slice(0, 16)
+}
+
+function isFutureDate(value: string): boolean {
+  const timestamp = Date.parse(value)
+  return Number.isFinite(timestamp) && timestamp > Date.now()
+}
+
+function createIdempotencyKey(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `web-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+function formatError(cause: unknown): string {
+  if (cause instanceof ApiClientError) {
+    if (cause.code === 'DEPENDENCY_UNAVAILABLE') return 'The local API is unavailable. No data was changed.'
+    if (cause.status === 401) return 'Sign in is required before this request can continue.'
+    if (cause.status === 404) return 'This resource is unavailable for the current identity.'
+    if (cause.status === 409) return 'The authorization changed elsewhere. Reload before trying again.'
   }
+  return 'The request could not be completed. No health data is shown from this page.'
 }
 
-function showToast(message: string) {
-  toast.value = message
-  window.setTimeout(() => {
-    toast.value = ''
-  }, 2400)
+function clearScope(): void {
+  selectedHouseholdId.value = ''
+  members.value = []
+  authorizations.value = []
+  selectedAuthorizationId.value = null
+  previewActorId.value = ''
+  isOwnerView.value = false
+  riskMemberId.value = ''
+  riskList.value = null
+  riskDetails.value = {}
+  riskError.value = ''
+  expandedRiskId.value = null
+  dashboardMemberId.value = ''
+  dashboardTimeline.value = []
+  dashboardState.value = null
+  capabilities.value = null
+  dashboardError.value = ''
+  resetDraft()
 }
 
-function selectDesign(id: DesignId) {
-  selectedId.value = id
-  activeView.value = 'dashboard'
-  try {
-    window.localStorage.setItem('homecare-twin-design', id)
-  } catch {
-    // Local preference is optional in the prototype.
+function resetDraft(): void {
+  selectedAuthorizationId.value = null
+  formError.value = ''
+  draft.memberId = members.value[0]?.id ?? ''
+  draft.granteeActorId = ''
+  draft.dataFields = ['health_events']
+  draft.actions = ['READ_EVENTS']
+  draft.purpose = 'family-care'
+  draft.validUntil = localDateTimeInput(7)
+}
+
+async function loadHouseholds(): Promise<void> {
+  const currentActor = actorId.value.trim()
+  if (!currentActor) {
+    clearScope()
+    error.value = 'Enter a development identity before loading households.'
+    return
   }
-  const design = designs.find((item) => item.id === id)
-  if (design) showToast(`已切换：${design.name}`)
-}
 
-function rememberDesign() {
-  showToast(`已记下「${selectedDesign.value.name}」，可继续比较其他方向`)
-}
-
-async function loadServiceState() {
+  loadingHouseholds.value = true
+  error.value = ''
+  clearScope()
   try {
-    const [health, capabilities] = await Promise.all([
-      apiClient.getHealth(),
-      apiClient.getCapabilities(),
-    ])
-    const response = health as HealthResponse
-    apiVersion.value = response.version
-    capability.value = capabilities
-    apiState.value = 'connected'
-  } catch (error) {
-    if (error instanceof ApiClientError) {
-      apiState.value = 'offline'
-    } else {
-      apiState.value = 'offline'
+    households.value = await apiClient.listHouseholds(requestOptions.value)
+    if (households.value.length === 0) {
+      message.value = 'No household is visible to this identity.'
+      return
     }
+    selectedHouseholdId.value = households.value[0]?.id ?? ''
+    await loadSelectedHousehold()
+  } catch (cause) {
+    households.value = []
+    error.value = formatError(cause)
+  } finally {
+    loadingHouseholds.value = false
   }
 }
 
-onMounted(() => {
+async function loadSelectedHousehold(): Promise<void> {
+  const householdId = selectedHouseholdId.value
+  if (!householdId) return
+
+  loadingScope.value = true
+  error.value = ''
+  members.value = []
+  authorizations.value = []
+  selectedAuthorizationId.value = null
+  previewActorId.value = ''
+  riskMemberId.value = ''
+  riskList.value = null
+  riskDetails.value = {}
+  riskError.value = ''
+  expandedRiskId.value = null
+  dashboardMemberId.value = ''
+  dashboardTimeline.value = []
+  dashboardState.value = null
+  capabilities.value = null
+  dashboardError.value = ''
   try {
-    const stored = window.localStorage.getItem('homecare-twin-design') as DesignId | null
-    if (stored && designs.some((design) => design.id === stored)) selectedId.value = stored
-  } catch {
-    // Local preference is optional in the prototype.
+    members.value = await apiClient.listMembers(householdId, requestOptions.value)
+    draft.memberId = members.value[0]?.id ?? ''
+    riskMemberId.value = members.value[0]?.id ?? ''
+    dashboardMemberId.value = members.value[0]?.id ?? ''
+
+    try {
+      authorizations.value = await apiClient.listAuthorizations(householdId, requestOptions.value)
+      isOwnerView.value = true
+      message.value = 'Owner view: manage grants and preview a caregiver scope.'
+    } catch (cause) {
+      if (cause instanceof ApiClientError && cause.status === 404) {
+        isOwnerView.value = false
+        message.value = 'Caregiver view: the API has already filtered this identity to the granted member scope.'
+        await loadDashboard()
+        return
+      }
+      throw cause
+    }
+    await loadDashboard()
+  } catch (cause) {
+    members.value = []
+    authorizations.value = []
+    isOwnerView.value = false
+    error.value = formatError(cause)
+  } finally {
+    loadingScope.value = false
   }
-  void loadServiceState()
-})
+}
+
+async function loadDashboard(): Promise<void> {
+  const householdId = selectedHouseholdId.value
+  const memberId = dashboardMemberId.value
+  if (!householdId || !memberId) return
+
+  loadingDashboard.value = true
+  dashboardError.value = ''
+  riskMemberId.value = memberId
+  try {
+    const [timelineResult, stateResult, capabilityResult] = await Promise.allSettled([
+      apiClient.listMemberTimeline(householdId, memberId, requestOptions.value),
+      apiClient.getMemberState(householdId, memberId, requestOptions.value),
+      apiClient.getCapabilities(requestOptions.value),
+    ])
+    if (timelineResult.status === 'fulfilled') dashboardTimeline.value = timelineResult.value
+    else dashboardTimeline.value = []
+    if (stateResult.status === 'fulfilled') dashboardState.value = stateResult.value
+    else dashboardState.value = null
+    if (capabilityResult.status === 'fulfilled') capabilities.value = capabilityResult.value
+    else capabilities.value = null
+
+    await loadMemberRisks()
+    if (timelineResult.status === 'rejected' || stateResult.status === 'rejected') {
+      dashboardError.value = 'Some permitted dashboard data is currently unavailable. No hidden data is inferred.'
+    }
+  } finally {
+    loadingDashboard.value = false
+  }
+}
+
+async function loadMemberRisks(): Promise<void> {
+  const householdId = selectedHouseholdId.value
+  const memberId = riskMemberId.value
+  if (!householdId || !memberId) {
+    riskList.value = null
+    return
+  }
+
+  loadingRisks.value = true
+  riskError.value = ''
+  expandedRiskId.value = null
+  try {
+    riskList.value = await apiClient.listMemberRisks(householdId, memberId, requestOptions.value)
+    riskDetails.value = {}
+  } catch (cause) {
+    riskList.value = null
+    riskError.value = formatError(cause)
+  } finally {
+    loadingRisks.value = false
+  }
+}
+
+async function toggleRiskDetail(alert: RiskAlert): Promise<void> {
+  if (expandedRiskId.value === alert.rule_id) {
+    expandedRiskId.value = null
+    return
+  }
+
+  expandedRiskId.value = alert.rule_id
+  if (riskDetails.value[alert.rule_id]) return
+
+  try {
+    const detail = await apiClient.getRiskDetail(
+      selectedHouseholdId.value,
+      riskMemberId.value,
+      alert.rule_id,
+      requestOptions.value,
+    )
+    riskDetails.value = { ...riskDetails.value, [alert.rule_id]: detail }
+  } catch (cause) {
+    expandedRiskId.value = null
+    riskError.value = formatError(cause)
+  }
+}
+
+function editAuthorization(authorization: Authorization): void {
+  selectedAuthorizationId.value = authorization.id
+  draft.memberId = authorization.member_id
+  draft.granteeActorId = authorization.grantee_actor_id
+  draft.dataFields = [...authorization.data_fields]
+  draft.actions = [...authorization.actions]
+  draft.purpose = authorization.purpose
+  draft.validUntil = toLocalDateTimeInput(authorization.valid_until)
+  formError.value = ''
+}
+
+function toLocalDateTimeInput(value: string): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return localDateTimeInput(7)
+  const timezoneOffset = date.getTimezoneOffset() * 60_000
+  return new Date(date.getTime() - timezoneOffset).toISOString().slice(0, 16)
+}
+
+function updateSelectedFields(value: string, checked: boolean): void {
+  draft.dataFields = checked
+    ? [...new Set([...draft.dataFields, value])]
+    : draft.dataFields.filter(field => field !== value)
+}
+
+function updateSelectedActions(value: AuthorizationAction, checked: boolean): void {
+  draft.actions = checked
+    ? [...new Set([...draft.actions, value])]
+    : draft.actions.filter(action => action !== value)
+}
+
+async function saveAuthorization(): Promise<void> {
+  if (!selectedHouseholdId.value || !canSave.value) {
+    formError.value = 'Choose a member, a caregiver identity, at least one field and action, a valid purpose code, and a future expiry.'
+    return
+  }
+
+  const validUntil = new Date(draft.validUntil).toISOString()
+  saving.value = true
+  formError.value = ''
+  try {
+    const existing = selectedAuthorization.value
+    if (existing) {
+      const input: UpdateAuthorizationInput = {
+        expected_version: existing.version,
+        data_fields: [...draft.dataFields],
+        actions: [...draft.actions],
+        purpose: draft.purpose,
+        valid_until: validUntil,
+      }
+      const updated = await apiClient.updateAuthorization(
+        selectedHouseholdId.value,
+        existing.id,
+        input,
+        { ...requestOptions.value, idempotencyKey: createIdempotencyKey() },
+      )
+      authorizations.value = authorizations.value.map(item => (item.id === updated.id ? updated : item))
+      message.value = 'Authorization updated. The preview now reflects the new active scope.'
+    } else {
+      const input: CreateAuthorizationInput = {
+        member_id: draft.memberId,
+        grantee_actor_id: draft.granteeActorId.trim(),
+        data_fields: [...draft.dataFields],
+        actions: [...draft.actions],
+        purpose: draft.purpose,
+        valid_until: validUntil,
+      }
+      const created = await apiClient.createAuthorization(
+        selectedHouseholdId.value,
+        input,
+        { ...requestOptions.value, idempotencyKey: createIdempotencyKey() },
+      )
+      authorizations.value = [...authorizations.value, created]
+      message.value = 'Authorization created. The preview now reflects the new active scope.'
+    }
+    resetDraft()
+  } catch (cause) {
+    formError.value = formatError(cause)
+  } finally {
+    saving.value = false
+  }
+}
+
+async function revokeAuthorization(authorization: Authorization): Promise<void> {
+  if (!selectedHouseholdId.value || !isAuthorizationActive(authorization)) return
+
+  saving.value = true
+  error.value = ''
+  try {
+    const revoked = await apiClient.revokeAuthorization(
+      selectedHouseholdId.value,
+      authorization.id,
+      authorization.version,
+      { ...requestOptions.value, idempotencyKey: createIdempotencyKey() },
+    )
+    authorizations.value = authorizations.value.map(item => (item.id === revoked.id ? revoked : item))
+    if (selectedAuthorizationId.value === authorization.id) resetDraft()
+    message.value = 'Authorization revoked. It is removed from the caregiver preview immediately.'
+  } catch (cause) {
+    error.value = formatError(cause)
+  } finally {
+    saving.value = false
+  }
+}
 </script>
 
 <template>
-  <div :class="rootClasses">
-    <div class="ambient ambient-one" aria-hidden="true"></div>
-    <div class="ambient ambient-two" aria-hidden="true"></div>
-
-    <header class="site-header">
-      <a class="brand" href="#top" aria-label="返回家健镜视觉方向评选顶部">
-        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-        <span class="brand-lockup">
-          <strong>家健镜</strong>
-          <small>HOMECARE TWIN · DESIGN BOARD</small>
-        </span>
-      </a>
-
-      <nav class="primary-nav" aria-label="原型导航">
-        <button
-          class="nav-link"
-          :class="{ active: activeView === 'dashboard' }"
-          type="button"
-          @click="activeView = 'dashboard'"
-        >
-          体验预览
-        </button>
-        <button
-          class="nav-link"
-          :class="{ active: activeView === 'pages' }"
-          type="button"
-          @click="activeView = 'pages'"
-        >
-          10 页信息架构
-        </button>
-        <button
-          class="nav-link"
-          :class="{ active: activeView === 'evidence' }"
-          type="button"
-          @click="activeView = 'evidence'"
-        >
-          证据链示例
-        </button>
-      </nav>
-
-      <div class="header-status">
-        <div class="privacy-chip"><span class="pulse-dot"></span> 本地可信域 · 默认不出网</div>
-        <div class="api-chip" :class="`api-${apiState}`">
-          <span class="api-dot"></span>{{ apiLabel }}<span v-if="apiState === 'connected'" class="api-count">{{ availableCount }} 项</span>
-        </div>
+  <main class="workspace">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">HomeCare Twin</p>
+        <h1>Household overview</h1>
+        <p class="subtitle">Local household operations, bounded by member, purpose, and current API authorization.</p>
       </div>
+      <p class="privacy-badge">Local-only health data</p>
     </header>
 
-    <main id="top">
-      <section class="hero section-width">
-        <div class="hero-copy">
-          <span class="eyebrow">视觉方向评选 · 10 个候选方案</span>
-          <h1>让每个变化，<em>都有证据</em>可追溯。</h1>
-          <p class="hero-lede">
-            家健镜是本地优先的家庭居家照护教学演示系统。这里把同一套 P0 信息架构做成十种视觉气质，方便团队先选方向，再进入真实 API 与状态实现。
-          </p>
-          <div class="hero-actions">
-            <button class="button button-primary" type="button" @click="activeView = 'dashboard'">
-              浏览当前方案 <span aria-hidden="true">↗</span>
-            </button>
-            <button class="button button-quiet" type="button" @click="rememberDesign">
-              记下这套风格
-            </button>
-          </div>
-          <div class="hero-footnote">
-            <span class="footnote-mark">✓</span>
-            <span>识别只是候选，确认后才进入健康记录。</span>
-            <span class="footnote-divider"></span>
-            <span>当前仅为 UI 视觉原型。</span>
-          </div>
-        </div>
+    <section class="identity-bar" aria-label="Development session">
+      <label>
+        Development identity
+        <input v-model="actorId" autocomplete="off" placeholder="Actor ID" @change="clearScope" />
+      </label>
+      <label>
+        Access purpose code
+        <input v-model="accessPurpose" autocomplete="off" placeholder="family-care" @change="clearScope" />
+      </label>
+      <button type="button" :disabled="loadingHouseholds" @click="loadHouseholds">
+        {{ loadingHouseholds ? 'Loading' : 'Load households' }}
+      </button>
+    </section>
 
-        <div class="hero-art" aria-label="产品闭环示意">
-          <div class="art-note art-note-top">P0 / CARE LOOP</div>
-          <div class="art-board">
-            <div class="art-board-head">
-              <span class="art-window-dots"><i></i><i></i><i></i></span>
-              <span>family_state / local</span>
-              <span class="art-live">LIVE</span>
-            </div>
-            <div class="art-board-main">
-              <div class="art-score">
-                <span>已确认事件</span>
-                <strong>12</strong>
-                <small>↑ 2 条 / 本周</small>
-              </div>
-              <div class="art-wave" aria-hidden="true">
-                <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
-              </div>
-              <div class="art-list">
-                <div><span class="mini-icon mini-green">✓</span><span>证据已确认</span><b>03</b></div>
-                <div><span class="mini-icon mini-amber">!</span><span>等待人工复核</span><b>01</b></div>
-                <div><span class="mini-icon mini-blue">↗</span><span>本地规则运行</span><b>OK</b></div>
-              </div>
-            </div>
-          </div>
-          <div class="art-sticker">NO<br />DIAGNOSIS</div>
-          <div class="art-note art-note-bottom">facts → rules → care</div>
-        </div>
-      </section>
+    <p v-if="error" class="notice error" role="alert">{{ error }}</p>
+    <p v-else class="notice" role="status">{{ message }}</p>
 
-      <section class="style-section section-width" aria-labelledby="style-heading">
-        <div class="section-heading">
+    <section v-if="households.length > 0" class="household-bar" aria-label="Household selection">
+      <label>
+        Household
+        <select v-model="selectedHouseholdId" :disabled="loadingScope" @change="loadSelectedHousehold">
+          <option v-for="household in households" :key="household.id" :value="household.id">
+            {{ household.name }}
+          </option>
+        </select>
+      </label>
+      <span class="view-status">{{ isOwnerView ? 'Owner management view' : 'Caregiver filtered view' }}</span>
+    </section>
+
+    <section v-if="loadingScope" class="state-panel" aria-live="polite">Loading the permitted household scope.</section>
+
+    <section v-if="selectedHouseholdId && dashboardMemberId" class="dashboard-overview" aria-labelledby="overview-title">
+      <div class="dashboard-heading">
+        <div>
+          <p class="section-label">Daily view</p>
+          <h2 id="overview-title">{{ dashboardMemberName }}</h2>
+        </div>
+        <label class="dashboard-member-select">
+          Member
+          <select v-model="dashboardMemberId" :disabled="loadingDashboard" @change="loadDashboard">
+            <option v-for="member in members" :key="member.id" :value="member.id">{{ member.display_name }}</option>
+          </select>
+        </label>
+      </div>
+
+      <p v-if="dashboardError" class="notice error" role="alert">{{ dashboardError }}</p>
+      <div class="overview-grid">
+        <section class="overview-item">
+          <p class="section-label">Visible scope</p>
+          <strong>{{ privacyScopeLabel }}</strong>
+          <span>Identity: {{ actorId || 'Not set' }}</span>
+          <span>Purpose: {{ accessPurpose || 'Not set' }}</span>
+        </section>
+        <section class="overview-item">
+          <p class="section-label">Local status</p>
+          <strong>{{ capabilities ? 'API connected' : 'API status unavailable' }}</strong>
+          <span>{{ capabilities?.available.length ?? 0 }} local capabilities reported</span>
+          <span>Network egress remains policy-controlled</span>
+        </section>
+        <section class="overview-item">
+          <p class="section-label">Event projection</p>
+          <strong>{{ dashboardState?.state.events_count ?? 0 }} confirmed events</strong>
+          <span>{{ dashboardState?.last_event_id ? 'Current projection available' : 'No projected event yet' }}</span>
+          <span>Event details remain API-authorized</span>
+        </section>
+        <section class="overview-item">
+          <p class="section-label">Risk signals</p>
+          <strong>{{ riskList?.total ?? 0 }} active signals</strong>
+          <span>{{ riskList?.severe_count ?? 0 }} severe · {{ riskList?.warning_count ?? 0 }} warning</span>
+          <span>{{ riskError ? 'Risk dependency unavailable' : 'Desensitized evidence only' }}</span>
+        </section>
+      </div>
+
+      <div class="dashboard-columns">
+        <section class="dashboard-section" aria-labelledby="timeline-title">
+          <div class="panel-heading">
+            <div>
+              <p class="section-label">Recent activity</p>
+              <h2 id="timeline-title">Event timeline</h2>
+            </div>
+            <span class="section-status">{{ loadingDashboard ? 'Loading' : `${dashboardTimeline.length} visible` }}</span>
+          </div>
+          <p v-if="!loadingDashboard && recentTimeline.length === 0" class="empty-state">No confirmed event summary is available for this member.</p>
+          <ul v-else class="timeline-list">
+            <li v-for="event in recentTimeline" :key="event.id">
+              <strong>{{ event.event_type }}</strong>
+              <span>{{ event.confirmation_status }}</span>
+              <span>{{ new Date(event.created_at).toLocaleString() }}</span>
+            </li>
+          </ul>
+        </section>
+        <section class="dashboard-section" aria-labelledby="reminder-title">
+          <div class="panel-heading">
+            <div>
+              <p class="section-label">Care actions</p>
+              <h2 id="reminder-title">Tasks and reminders</h2>
+            </div>
+            <span class="section-status">API dependency</span>
+          </div>
+          <p class="empty-state">No read-only task or reminder summary is available from the current API contract. This page does not infer planned care actions.</p>
+        </section>
+      </div>
+    </section>
+
+    <section v-if="selectedHouseholdId && isOwnerView" class="owner-layout">
+      <section class="panel grant-editor" aria-labelledby="editor-title">
+        <div class="panel-heading">
           <div>
-            <span class="section-number">01 / 视觉方向</span>
-            <h2 id="style-heading">同一套业务，十种气质。</h2>
+            <p class="section-label">Authorization editor</p>
+            <h2 id="editor-title">{{ selectedAuthorization ? 'Edit grant' : 'Create grant' }}</h2>
           </div>
-          <p>点击任意卡片，预览相同家庭总览在不同视觉系统中的表现。</p>
+          <button v-if="selectedAuthorization" type="button" class="quiet-button" @click="resetDraft">New grant</button>
         </div>
 
-        <div class="style-grid">
-          <button
-            v-for="(design, index) in designs"
-            :key="design.id"
-            class="style-option"
-            :class="{ selected: selectedId === design.id }"
-            type="button"
-            :aria-pressed="selectedId === design.id"
-            @click="selectDesign(design.id)"
-          >
-            <span class="style-swatch" :style="swatchStyle(design)">
-              <span class="swatch-number">{{ String(index + 1).padStart(2, '0') }}</span>
-              <span class="swatch-light"></span>
-              <span class="swatch-dark"></span>
-            </span>
-            <span class="style-option-copy">
-              <span class="style-option-topline"><small>{{ design.label }}</small><span>{{ design.bestFor }}</span></span>
-              <strong>{{ design.name }}</strong>
-              <span>{{ design.description }}</span>
-            </span>
-            <span class="style-arrow" aria-hidden="true">↗</span>
-          </button>
-        </div>
+        <form @submit.prevent="saveAuthorization">
+          <label>
+            Caregiver identity
+            <input v-model="draft.granteeActorId" autocomplete="off" required placeholder="Caregiver actor ID" />
+          </label>
+          <label>
+            Household member
+            <select v-model="draft.memberId" required>
+              <option v-for="member in members" :key="member.id" :value="member.id">{{ member.display_name }}</option>
+            </select>
+          </label>
+          <fieldset>
+            <legend>Data fields</legend>
+            <label v-for="field in FIELD_OPTIONS" :key="field.value" class="check-row">
+              <input
+                type="checkbox"
+                :checked="draft.dataFields.includes(field.value)"
+                @change="updateSelectedFields(field.value, ($event.target as HTMLInputElement).checked)"
+              />
+              {{ field.label }}
+            </label>
+          </fieldset>
+          <fieldset>
+            <legend>Allowed actions</legend>
+            <label v-for="action in ACTION_OPTIONS" :key="action.value" class="check-row">
+              <input
+                type="checkbox"
+                :checked="draft.actions.includes(action.value)"
+                @change="updateSelectedActions(action.value, ($event.target as HTMLInputElement).checked)"
+              />
+              {{ action.label }}
+            </label>
+          </fieldset>
+          <label>
+            Purpose code
+            <input v-model="draft.purpose" pattern="[A-Za-z0-9._:-]{1,64}" required placeholder="family-care" />
+            <small>ASCII code, 1-64 characters: letters, digits, period, underscore, colon, or hyphen.</small>
+          </label>
+          <label>
+            Expiry
+            <input v-model="draft.validUntil" type="datetime-local" required />
+          </label>
+          <p v-if="formError" class="form-error" role="alert">{{ formError }}</p>
+          <button type="submit" :disabled="saving || !canSave">{{ saving ? 'Saving' : selectedAuthorization ? 'Save changes' : 'Create grant' }}</button>
+        </form>
       </section>
 
-      <section class="preview-section section-width" aria-labelledby="preview-heading">
-        <div class="section-heading preview-heading">
+      <section class="panel grants-panel" aria-labelledby="grants-title">
+        <div class="panel-heading">
           <div>
-            <span class="section-number">02 / 当前预览</span>
-            <h2 id="preview-heading">{{ selectedDesign.name }}</h2>
+            <p class="section-label">Current scope</p>
+            <h2 id="grants-title">Active grants</h2>
           </div>
-          <div class="preview-heading-side">
-            <span class="selected-tag">已选方向</span>
-            <span>{{ selectedDesign.cue }}</span>
-          </div>
+          <button type="button" class="quiet-button" :disabled="loadingScope" @click="loadSelectedHousehold">Refresh</button>
         </div>
 
-        <div class="preview-tabs" role="tablist" aria-label="产品原型预览内容">
-          <button class="preview-tab" :class="{ active: activeView === 'dashboard' }" type="button" @click="activeView = 'dashboard'">家庭总览</button>
-          <button class="preview-tab" :class="{ active: activeView === 'evidence' }" type="button" @click="activeView = 'evidence'">多证据复核</button>
-          <button class="preview-tab" :class="{ active: activeView === 'pages' }" type="button" @click="activeView = 'pages'">十页导航</button>
-        </div>
-
-        <div class="preview-window">
-          <div class="preview-chrome">
-            <span class="chrome-dots"><i></i><i></i><i></i></span>
-            <span class="chrome-route">homecare-twin / {{ activeView === 'dashboard' ? 'family-overview' : activeView === 'evidence' ? 'evidence-review' : 'p0-information-architecture' }}</span>
-            <span class="chrome-contract">P0 UI CONCEPT · SAMPLE DATA</span>
-          </div>
-
-          <div class="product-preview" :class="`preview-layout-${selectedDesign.id}`">
-            <aside class="preview-sidebar">
-              <div class="preview-brand"><span class="tiny-mark">✦</span><span>家健镜<small>LOCAL CARE</small></span></div>
-              <div class="sidebar-label">家庭工作台</div>
-              <button class="side-nav active" type="button" @click="activeView = 'dashboard'"><span>⌂</span>家庭总览<i>4</i></button>
-              <button class="side-nav" type="button" @click="activeView = 'evidence'"><span>◌</span>待复核任务<i class="side-alert">1</i></button>
-              <button class="side-nav" type="button" @click="activeView = 'pages'"><span>⌘</span>关系与事件</button>
-              <button class="side-nav" type="button" @click="activeView = 'dashboard'"><span>◷</span>计划中心</button>
-              <div class="sidebar-label sidebar-label-bottom">运行状态</div>
-              <div class="sidebar-local"><span class="pulse-dot"></span><span><strong>本地模式</strong><small>健康数据默认不出网</small></span></div>
-              <div class="sidebar-user"><span class="user-avatar">林</span><span><strong>林女士</strong><small>当前查看成员</small></span><span class="user-chevron">⌄</span></div>
-            </aside>
-
-            <div class="preview-content">
-              <div class="preview-topline">
-                <div>
-                  <span class="preview-breadcrumb">家庭总览 <b>/</b> 周五 · 08.08</span>
-                  <h3>{{ activeView === 'dashboard' ? '今天的照护，从确认开始。' : activeView === 'evidence' ? '每个结论，都能回到证据。' : '十个页面，串起一条照护闭环。' }}</h3>
-                </div>
-                <button class="member-switch" type="button"><span class="user-avatar">林</span><span>林女士</span><span class="user-chevron">⌄</span></button>
-              </div>
-
-              <div class="metric-row">
-                <div class="metric-card metric-focus"><span>待确认事项</span><strong>04</strong><small>其中 1 条需要人工复核</small><i>↗</i></div>
-                <div class="metric-card"><span>今日任务</span><strong>07</strong><small>已处理 3 / 7 项</small><i>◷</i></div>
-                <div class="metric-card"><span>普通提醒预算</span><strong>2 <em>条</em></strong><small>严重事项不受预算压制</small><i>◎</i></div>
-                <div class="metric-card"><span>本地服务</span><strong class="metric-ok">正常</strong><small>规则引擎 · 版本 R1.3</small><i>⌁</i></div>
-              </div>
-
-              <div v-if="activeView === 'dashboard'" class="dashboard-grid">
-                <section class="preview-panel timeline-panel">
-                  <div class="panel-title"><div><span class="panel-kicker">RECENT CHANGES</span><h4>最近发生了什么</h4></div><button type="button">查看全部 ↗</button></div>
-                  <div class="timeline-list">
-                    <div class="timeline-item"><span class="timeline-dot dot-green">✓</span><div><strong>手工事件已确认</strong><p>林女士 · 过敏史字段 · 08:42</p></div><span class="item-status status-confirmed">CONFIRMED</span></div>
-                    <div class="timeline-item"><span class="timeline-dot dot-amber">!</span><div><strong>一条药品识别进入复核</strong><p>OCR 与包装主数据存在差异 · 08:17</p></div><span class="item-status status-review">REVIEW</span></div>
-                    <div class="timeline-item"><span class="timeline-dot dot-blue">↗</span><div><strong>照护授权范围更新</strong><p>张先生 · 仅可查看用药摘要 · 昨日</p></div><span class="item-status status-audit">AUDIT</span></div>
-                  </div>
-                  <div class="timeline-footer"><span>事实来源 · 事件 / 授权 / 复核</span><span>本地记录</span></div>
-                </section>
-
-                <section class="preview-panel risk-panel">
-                  <div class="panel-title"><div><span class="panel-kicker">NEEDS ATTENTION</span><h4>待确认风险</h4></div><span class="risk-count">2 项</span></div>
-                  <button class="risk-card risk-high" type="button" @click="activeView = 'evidence'" @keydown.enter="activeView = 'evidence'">
-                    <span class="risk-level"><i></i> HIGH</span><strong>识别结果需要人工复核</strong><p>不要让最高分候选自动进入正式记录。</p><span class="risk-action">查看证据 <b>↗</b></span>
-                  </button>
-                  <button class="risk-card risk-general" type="button"><span class="risk-level"><i></i> GENERAL</span><strong>普通提醒已合并</strong><p>今日合并 3 条，预算还剩 2 条。</p><span class="risk-action">查看摘要 <b>↗</b></span></button>
-                  <div class="budget-bar"><span>告警预算</span><div><i></i><i></i><i class="empty"></i><i class="empty"></i><i class="empty"></i></div><b>2 / 5</b></div>
-                </section>
-              </div>
-
-              <div v-else-if="activeView === 'evidence'" class="evidence-grid">
-                <section class="preview-panel scan-panel">
-                  <div class="panel-title"><div><span class="panel-kicker">ORIGINAL EVIDENCE</span><h4>原始影像 · 本地处理</h4></div><span class="frame-label">FRAME 03 / 08</span></div>
-                  <div class="scan-canvas">
-                    <div class="scan-grid-lines"></div>
-                    <div class="fake-pack"><span>家庭常备</span><strong>药品<br />包装</strong><small>DEMO SAMPLE</small></div>
-                    <span class="scan-box box-one"><b>包装区域</b></span><span class="scan-box box-two"><b>日期区域</b></span>
-                    <span class="scan-corner corner-tl"></span><span class="scan-corner corner-br"></span>
-                    <span class="scan-cross">+</span>
-                  </div>
-                  <div class="scan-meta"><span><i class="meta-dot green"></i>质量检查通过</span><span>本地帧提取 · 08:17</span></div>
-                </section>
-                <section class="preview-panel evidence-panel">
-                  <div class="panel-title"><div><span class="panel-kicker">FUSED EVIDENCE</span><h4>多渠道证据</h4></div><span class="review-pill">REVIEW</span></div>
-                  <div class="evidence-list">
-                    <div class="evidence-row"><span class="evidence-icon">Y</span><div><strong>YOLO 包装检测</strong><small>包装区域 · 0.94 · V1.0</small></div><b class="evidence-pass">通过</b></div>
-                    <div class="evidence-row"><span class="evidence-icon">O</span><div><strong>OCR 文字识别</strong><small>药品名字段 · 与主数据不一致</small></div><b class="evidence-warn">冲突</b></div>
-                    <div class="evidence-row"><span class="evidence-icon">#</span><div><strong>条码 / 包装特征</strong><small>未读到条码 · 等待补拍</small></div><b class="evidence-warn">缺失</b></div>
-                    <div class="evidence-row"><span class="evidence-icon">M</span><div><strong>本地主数据候选</strong><small>2 个候选 · 需要人工选择</small></div><b class="evidence-warn">待选</b></div>
-                  </div>
-                  <div class="evidence-callout"><span>i</span><p>当前结果不会进入正式健康状态。确认、修正、拒绝三种动作均会留下审计记录。</p></div>
-                  <div class="evidence-actions"><button class="mini-action action-primary" type="button" @click="showToast('原型动作：进入人工确认流程')">进入复核 ↗</button><button class="mini-action" type="button" @click="showToast('原型动作：保持待补拍')">补拍</button></div>
-                </section>
-              </div>
-
-              <div v-else class="page-map-grid">
-                <button v-for="page in pages" :key="page[0]" class="page-map-card" type="button" @click="showToast(`${page[1]}：${page[2]}`)">
-                  <span class="page-map-icon">{{ page[3] }}</span><span class="page-map-code">{{ page[0] }}</span><strong>{{ page[1] }}</strong><p>{{ page[2] }}</p><span class="page-map-arrow">↗</span>
-                </button>
-              </div>
+        <p v-if="authorizations.length === 0" class="empty-state">No caregiver grant has been created for this household.</p>
+        <ul v-else class="grant-list">
+          <li v-for="authorization in authorizations" :key="authorization.id" class="grant-row">
+            <div>
+              <p class="grant-title">{{ memberNames.get(authorization.member_id) ?? 'Authorized member' }}</p>
+              <p class="grant-meta">{{ authorization.grantee_actor_id }} | {{ authorization.purpose }} | version {{ authorization.version }}</p>
+              <p class="grant-meta">{{ authorization.data_fields.join(', ') }} | {{ authorization.actions.join(', ') }}</p>
+              <p class="grant-meta">{{ isAuthorizationActive(authorization) ? `Expires ${new Date(authorization.valid_until).toLocaleString()}` : authorization.revoked_at ? 'Revoked' : 'Expired' }}</p>
             </div>
+            <div class="row-actions">
+              <button type="button" class="quiet-button" :disabled="saving || !isAuthorizationActive(authorization)" @click="editAuthorization(authorization)">Edit</button>
+              <button type="button" class="danger-button" :disabled="saving || !isAuthorizationActive(authorization)" @click="revokeAuthorization(authorization)">Revoke</button>
+            </div>
+          </li>
+        </ul>
+      </section>
+
+      <section class="panel preview-panel" aria-labelledby="preview-title">
+        <div class="panel-heading">
+          <div>
+            <p class="section-label">Caregiver preview</p>
+            <h2 id="preview-title">Visible scope only</h2>
           </div>
         </div>
+        <label>
+          Preview caregiver identity
+          <input v-model="previewActorId" autocomplete="off" placeholder="Caregiver actor ID" />
+        </label>
+        <p class="preview-note">This preview uses grant metadata only. It never loads health event content; the API remains responsible for field filtering on a caregiver request.</p>
+        <p v-if="previewActorId && authorizationPreview.length === 0" class="empty-state">No active fields are granted to this caregiver.</p>
+        <ul v-else-if="authorizationPreview.length > 0" class="preview-list">
+          <li v-for="scope in authorizationPreview" :key="scope.authorizationId">
+            <strong>{{ scope.memberName }}</strong>
+            <span>{{ scope.fields.join(', ') }}</span>
+            <span>{{ scope.actions.join(', ') }}</span>
+            <span>{{ scope.purpose }} until {{ new Date(scope.validUntil).toLocaleString() }}</span>
+          </li>
+        </ul>
       </section>
+    </section>
 
-      <section class="principles-section section-width" aria-labelledby="principles-heading">
-        <div class="section-heading principle-heading">
-          <div><span class="section-number">03 / 设计底线</span><h2 id="principles-heading">风格可以变，边界不能变。</h2></div>
-          <p>十个候选都使用相同的产品硬承诺，选定后可继续接入真实状态与 API。</p>
+    <section v-else-if="selectedHouseholdId" class="panel caregiver-panel" aria-labelledby="caregiver-title">
+      <p class="section-label">Filtered caregiver scope</p>
+      <h2 id="caregiver-title">Members available to this identity</h2>
+      <p class="preview-note">Only the API decides whether a member or event is returned. This view does not infer or reveal ungranted fields.</p>
+      <p v-if="members.length === 0" class="empty-state">No member is available for the current identity and purpose code.</p>
+      <ul v-else class="member-list">
+        <li v-for="member in members" :key="member.id">{{ member.display_name }}</li>
+      </ul>
+    </section>
+
+    <section v-if="selectedHouseholdId && riskMemberId" class="panel risk-panel" aria-labelledby="risk-title">
+      <div class="panel-heading">
+        <div>
+          <p class="section-label">Confirmed evidence</p>
+          <h2 id="risk-title">Risk signals</h2>
         </div>
-        <div class="principle-grid">
-          <article class="principle-card"><span class="principle-icon">⌂</span><div><span>01 / PRIVACY</span><h3>健康数据默认不出网</h3><p>顶部常驻本地可信域状态；网络、天气与云端扩展都要可见、可审计。</p></div></article>
-          <article class="principle-card"><span class="principle-icon">✓</span><div><span>02 / CONFIRMATION</span><h3>识别结果必须人工确认</h3><p>MATCHED、CONFLICT、UNKNOWN、REVIEW 都先留在待处理状态。</p></div></article>
-          <article class="principle-card"><span class="principle-icon">✦</span><div><span>03 / EVIDENCE</span><h3>先依据，再解释</h3><p>风险等级来自规则；助手没有事实、规则和文档引用时应拒答。</p></div></article>
-        </div>
-        <div class="boundary-note"><span class="boundary-symbol">!</span><span><strong>教学演示，不替代医疗诊断。</strong> 家健镜不提供诊断、处方、停药、换药、剂量判断、购药、问诊或广告导流。</span><span class="boundary-code">BOUNDARY / P0</span></div>
-      </section>
-    </main>
+        <label class="risk-member-select">
+          Member
+          <select v-model="riskMemberId" :disabled="loadingRisks" @change="loadMemberRisks">
+            <option v-for="member in members" :key="member.id" :value="member.id">{{ member.display_name }}</option>
+          </select>
+        </label>
+      </div>
 
-    <footer class="site-footer section-width">
-      <span>家健镜 HomeCare Twin · P0 UI concept board</span>
-      <span>当前方向：{{ selectedDesign.name }} · 仅用于视觉评选</span>
-    </footer>
+      <p v-if="loadingRisks" class="state-panel" aria-live="polite">Loading permitted risk signals.</p>
+      <p v-else-if="riskError" class="notice error" role="alert">{{ riskError }}</p>
+      <p v-else-if="riskList && riskList.alerts.length === 0" class="empty-state">No active risk signals were returned for this member.</p>
+      <template v-else-if="riskList">
+        <p class="risk-summary">{{ riskList.total }} signals · {{ riskList.severe_count }} severe · {{ riskList.warning_count }} warning</p>
+        <ul class="risk-list">
+          <li v-for="alert in riskList.alerts" :key="alert.rule_id" class="risk-card">
+            <button type="button" class="risk-card-toggle" :aria-expanded="expandedRiskId === alert.rule_id" @click="toggleRiskDetail(alert)">
+              <span class="risk-level" :data-level="alert.level">{{ riskLevelLabel(alert.level) }}</span>
+              <span class="risk-message">{{ alert.message }}</span>
+              <span class="risk-source-count">{{ toRiskCardModel(alert).sourceCount }} source events</span>
+              <span aria-hidden="true">{{ expandedRiskId === alert.rule_id ? 'Hide' : 'View evidence' }}</span>
+            </button>
+            <div v-if="expandedRiskId === alert.rule_id" class="risk-detail">
+              <p class="preview-note">Evidence is limited to the API's desensitized summary. This page never loads health event payloads.</p>
+              <p v-if="riskDetails[alert.rule_id]?.source_events.length === 0" class="empty-state">Evidence is unavailable for this signal.</p>
+              <ul v-else class="source-list">
+                <li v-for="source in riskDetails[alert.rule_id]?.source_events ?? []" :key="source.id">
+                  <strong>{{ source.event_type }}</strong>
+                  <span>{{ source.confirmation_status }}</span>
+                  <span>{{ source.created_at ? new Date(source.created_at).toLocaleString() : 'Time unavailable' }}</span>
+                </li>
+              </ul>
+            </div>
+          </li>
+        </ul>
+      </template>
+    </section>
 
-    <Transition name="toast"><div v-if="toast" class="toast" role="status">{{ toast }}</div></Transition>
-  </div>
+    <footer>Teaching demonstration only. This page does not diagnose, prescribe, or make medication decisions.</footer>
+  </main>
 </template>

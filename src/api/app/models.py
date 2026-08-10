@@ -102,10 +102,16 @@ class HealthEvent(Base):
     created_by: Mapped[str] = mapped_column(String(120), nullable=False)
     # 待确认事实可以先保存，但只有 CONFIRMED 事件才有确认人。
     confirmed_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # HCT-103: 幂等键、兼容补偿引用与可重放事件元数据。
     idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
     request_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
     correlation_id: Mapped[str] = mapped_column(String(120), nullable=False)
     causation_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    compensates_event_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("health_event.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     supersedes_event_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("health_event.id", ondelete="RESTRICT"), nullable=True
     )

@@ -21,4 +21,4 @@ uv run alembic revision --autogenerate -m "说明"
 
 自动生成内容必须人工检查。每个迁移 PR 需验证空库升级、已有数据升级、索引/外键、事件和投影兼容、删除传播以及可执行的回滚或前滚修复。禁止手工修改共享数据库绕过迁移。
 
-`0004_hct103_event_recovery` 在已有事件时拒绝 downgrade，因为删除序号、幂等、补偿和重放字段会破坏事实含义。回滚应用时先停止 outbox worker 并保留事件/outbox/checkpoint，数据库使用前滚修复；只有空事件库可降级结构。
+`0005_hct103_event_recovery` 在已有事件时拒绝 downgrade，因为删除序号、幂等、补偿和重放字段会破坏事实含义。回滚应用时先停止 outbox worker 并保留事件/outbox/checkpoint，数据库使用前滚修复；只有空事件库可降级结构。

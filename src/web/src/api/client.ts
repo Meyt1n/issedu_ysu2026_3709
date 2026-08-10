@@ -19,6 +19,8 @@ import type {
   ProjectionCheckpoint,
   ProjectionReplayResult,
   RequestOptions,
+  RiskDetailResponse,
+  RiskListResponse,
   UpdateAuthorizationInput,
 } from './types'
 
@@ -137,6 +139,10 @@ export class ApiClient {
     return this.request('/api/v1/meta/capabilities', undefined, options)
   }
 
+  listHouseholds(options?: RequestOptions): Promise<Household[]> {
+    return this.request('/api/v1/households', undefined, options)
+  }
+
   createHousehold(
     input: CreateHouseholdInput,
     options?: RequestOptions,
@@ -156,6 +162,17 @@ export class ApiClient {
       method: 'POST',
       body: JSON.stringify(input),
     }, options)
+  }
+
+  listMembers(
+    householdId: string,
+    options?: RequestOptions,
+  ): Promise<Member[]> {
+    return this.request(
+      `/api/v1/households/${householdId}/members`,
+      undefined,
+      options,
+    )
   }
 
   createAuthorization(
@@ -227,6 +244,7 @@ export class ApiClient {
       body: JSON.stringify({
         ...input,
         source: 'MANUAL',
+        confirmation_status: input.confirmation_status ?? 'CONFIRMED',
       }),
     }, options)
   }
@@ -251,6 +269,18 @@ export class ApiClient {
   ): Promise<HealthEvent[]> {
     const query = memberId ? `?member_id=${encodeURIComponent(memberId)}` : ''
     return this.request(`/api/v1/households/${householdId}/events${query}`, undefined, options)
+  }
+
+  listMemberTimeline(
+    householdId: string,
+    memberId: string,
+    options?: RequestOptions,
+  ): Promise<HealthEvent[]> {
+    return this.request(
+      `/api/v1/households/${householdId}/members/${memberId}/timeline`,
+      undefined,
+      options,
+    )
   }
 
   getMemberState(
@@ -310,6 +340,31 @@ export class ApiClient {
         method: 'POST',
         body: JSON.stringify({ max_messages: 50, stale_after_seconds: 300 }),
       },
+      options,
+    )
+  }
+
+  listMemberRisks(
+    householdId: string,
+    memberId: string,
+    options?: RequestOptions,
+  ): Promise<RiskListResponse> {
+    return this.request(
+      `/api/v1/households/${householdId}/members/${memberId}/risks`,
+      undefined,
+      options,
+    )
+  }
+
+  getRiskDetail(
+    householdId: string,
+    memberId: string,
+    ruleId: string,
+    options?: RequestOptions,
+  ): Promise<RiskDetailResponse> {
+    return this.request(
+      `/api/v1/households/${householdId}/members/${memberId}/risks/${encodeURIComponent(ruleId)}`,
+      undefined,
       options,
     )
   }

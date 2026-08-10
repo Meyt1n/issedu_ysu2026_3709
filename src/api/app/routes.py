@@ -1,10 +1,21 @@
+import logging
+import secrets
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import NoReturn
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
 
+from app.auth import (
+    authenticate,
+    generate_pin_challenge,
+    logout,
+    register_account,
+    verify_pin,
+)
 from app.config import get_settings
 from app.db import get_session
 from app.event_service import (
@@ -17,6 +28,7 @@ from app.event_service import (
     dispatch_outbox_batch,
     replay_member_projection,
 )
+from app.file_upload import delete_file_tree, validate_and_store
 from app.models import (
     AccessAudit,
     CareAuthorization,
@@ -48,6 +60,9 @@ from app.schemas import (
     ProjectionCheckpointRead,
     ProjectionReplayRead,
     ProjectionReplayRequest,
+    RiskAlertRead,
+    RiskDetailResponse,
+    RiskListResponse,
 )
 from app.security import (
     get_access_purpose,
@@ -55,6 +70,9 @@ from app.security import (
     has_authorized_action,
     require_household_owner,
 )
+from app.weather_adapter import fetch_weather
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1")
 settings = get_settings()
@@ -501,24 +519,77 @@ def append_health_event(
     ):
         _raise_resource_not_found()
 
+    if (
+        idempotency_key is not None
+        and payload.idempotency_key is not None
+        and idempotency_key.strip() != payload.idempotency_key.strip()
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="IDEMPOTENCY_KEY_CONFLICT",
+        )
+    effective_key = idempotency_key or payload.idempotency_key
+    correlation_id = getattr(request.state, "request_id", None) or request.headers.get(
+        settings.request_id_header, ""
+    )
+
     try:
-        return append_health_event_transaction(
+        if payload.compensates_event_id is None:
+            return append_health_event_transaction(
+                session,
+                household=household,
+                member=member,
+                actor_id=actor_id,
+                idempotency_key=effective_key,
+                correlation_id=correlation_id,
+                payload=payload,
+            )
+
+        target = session.get(HealthEvent, payload.compensates_event_id)
+        if target is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="COMPENSATES_EVENT_NOT_FOUND",
+            )
+        if target.household_id != household.id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="COMPENSATES_EVENT_WRONG_HOUSEHOLD",
+            )
+        return append_compensation_transaction(
             session,
             household=household,
             member=member,
+            target=target,
             actor_id=actor_id,
-            idempotency_key=idempotency_key,
-            correlation_id=request.state.request_id,
-            payload=payload,
+            idempotency_key=effective_key,
+            correlation_id=correlation_id,
+            payload=HealthEventCompensationCreate(
+                event_type=payload.event_type,
+                payload=payload.payload,
+                evidence=payload.evidence,
+                reason="legacy compensation request",
+                occurred_at=payload.occurred_at,
+            ),
         )
     except IdempotencyConflictError as exc:
+        detail = (
+            "IDEMPOTENCY_KEY_CONFLICT"
+            if idempotency_key is not None
+            else "IDEMPOTENCY_CONFLICT"
+        )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail) from exc
+    except EventAlreadySupersededError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except ValueError as exc:
-        if str(exc) == "IDEMPOTENCY_KEY_INVALID":
+        code = str(exc)
+        if code == "IDEMPOTENCY_KEY_INVALID":
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=str(exc),
+                detail=code,
             ) from exc
+        if code == "UNCONFIRMED_EVENT_CANNOT_BE_COMPENSATED":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=code) from exc
         raise
 
 
@@ -560,7 +631,7 @@ def compensate_health_event(
             target=target,
             actor_id=actor_id,
             idempotency_key=idempotency_key,
-            correlation_id=request.state.request_id,
+            correlation_id=getattr(request.state, "request_id", ""),
             payload=payload,
         )
     except (IdempotencyConflictError, EventAlreadySupersededError) as exc:
@@ -738,4 +809,375 @@ def dispatch_household_outbox(
         household_id=household_id,
         max_messages=payload.max_messages,
         stale_after=timedelta(seconds=payload.stale_after_seconds),
+    )
+
+
+@router.get("/weather/action-cards", response_model=dict)
+async def weather_action_cards(
+    city_code: str | None = None,
+    district_code: str | None = None,
+) -> dict:
+    """Fetch weather action cards for the given coarse location.
+
+    Only city_code and district_code are sent to the external weather API.
+    No health data is included. This endpoint never blocks on weather failure.
+    """
+    return await fetch_weather(city_code=city_code, district_code=district_code)
+
+
+# ── HCT-104: File upload & download ────────────────────────────────
+
+
+@router.post("/files/upload", status_code=status.HTTP_201_CREATED)
+async def upload_file(
+    file: UploadFile = File(...),
+    actor_id: str = Depends(get_actor_id),
+) -> dict:
+    """Upload a file with validation, store with random key."""
+    result = await validate_and_store(file)
+    logger.info(
+        "FILE_UPLOADED actor=%s key=%s size=%d",
+        actor_id, result["storage_key"], result["size_bytes"],
+    )
+    return result
+
+
+@router.get("/files/{storage_key}")
+def download_file(
+    storage_key: str,
+    actor_id: str = Depends(get_actor_id),
+) -> FileResponse:
+    """Download a previously uploaded file by storage key."""
+    settings = get_settings()
+    root = Path(settings.file_root).resolve()
+    target = (root / storage_key).resolve()
+
+    if not str(target).startswith(str(root)):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="FILE_NOT_FOUND")
+    if not target.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="FILE_NOT_FOUND")
+
+    logger.info("FILE_DOWNLOADED actor=%s key=%s", actor_id, storage_key)
+    return FileResponse(str(target))
+
+
+@router.delete("/files/{storage_key}")
+def delete_file(
+    storage_key: str,
+    actor_id: str = Depends(get_actor_id),
+) -> dict:
+    """Delete a file and its thumbnails/cache/index entries."""
+    deleted = delete_file_tree(storage_key)
+    logger.info(
+        "FILE_DELETED actor=%s key=%s deleted_paths=%d",
+        actor_id, storage_key, len(deleted),
+    )
+    return {"storage_key": storage_key, "deleted_paths": len(deleted)}
+
+
+# ── HCT-107: Local auth ────────────────────────────────────────────
+
+
+@router.post("/auth/register", status_code=status.HTTP_201_CREATED)
+def auth_register(
+    actor_id: str,
+    password: str,
+) -> dict:
+    register_account(actor_id, password)
+    return {"status": "registered", "actor_id": actor_id}
+
+
+@router.post("/auth/login")
+def auth_login(
+    actor_id: str,
+    password: str,
+) -> dict:
+    return authenticate(actor_id, password)
+
+
+@router.post("/auth/logout")
+def auth_logout(session_token: str) -> dict:
+    logout(session_token)
+    return {"status": "logged_out"}
+
+
+@router.post("/auth/pin-challenge")
+def auth_pin_challenge(
+    actor_id: str = Depends(get_actor_id),
+) -> dict:
+    session_token = secrets.token_hex(16)
+    return generate_pin_challenge(actor_id, "confirm_high_risk", session_token)
+
+
+@router.post("/auth/pin-verify")
+def auth_pin_verify(
+    pin: str,
+    action: str = "confirm_high_risk",
+    session_token: str = "",
+) -> dict:
+    ok = verify_pin(pin, action, session_token)
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="PIN_INVALID")
+    return {"status": "confirmed"}
+
+
+# ── HCT-301: Event timeline & projection ───────────────────────────
+
+
+@router.get("/households/{household_id}/members/{member_id}/timeline")
+def member_timeline(
+    household_id: str,
+    member_id: str,
+    since: str | None = None,
+    until: str | None = None,
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> list[HealthEventRead]:
+    household = session.get(Household, household_id)
+    member = session.get(Member, member_id)
+    if household is None or member is None or member.household_id != household_id:
+        _raise_resource_not_found()
+    if not has_authorized_action(
+        session, household, member_id, actor_id, "READ_EVENTS", "health_events", access_purpose,
+    ):
+        _raise_resource_not_found()
+
+    from app.projection import get_timeline
+
+    since_dt = datetime.fromisoformat(since) if since else None
+    until_dt = datetime.fromisoformat(until) if until else None
+    events = get_timeline(session, member_id, since=since_dt, until=until_dt)
+    return [HealthEventRead.model_validate(e) for e in events]
+
+
+@router.post("/households/{household_id}/members/{member_id}/projection/rebuild")
+def rebuild_member_projection(
+    household_id: str,
+    member_id: str,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> dict:
+    household = session.get(Household, household_id)
+    if household is None or household.created_by != actor_id:
+        _raise_resource_not_found()
+    from app.projection import rebuild_projection
+
+    proj = rebuild_projection(session, member_id, household_id)
+    return {"member_id": member_id, "state": proj.state, "last_event_id": proj.last_event_id}
+
+
+# ── HCT-302: Rules engine ──────────────────────────────────────────
+
+
+@router.post("/households/{household_id}/rules/run")
+def run_rules_endpoint(
+    household_id: str,
+    member_id: str,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> list[dict]:
+    household = session.get(Household, household_id)
+    if household is None:
+        _raise_resource_not_found()
+    from app.projection import build_relationship_graph, get_timeline
+    from app.rules import run_rules
+
+    events = get_timeline(session, member_id)
+    facts = build_relationship_graph(events)
+    alerts = run_rules(facts)
+    logger.info("RULES_RUN member=%s alerts=%d", member_id, len(alerts))
+    return [{"rule_id": a.rule_id, "level": a.level, "message": a.message,
+             "source_event_ids": a.source_event_ids} for a in alerts]
+
+
+# ── HCT-304/308: Care plans & escalation ───────────────────────────
+
+
+@router.post(
+    "/households/{household_id}/members/{member_id}/plans/confirm",
+    status_code=status.HTTP_201_CREATED,
+)
+def confirm_plan_endpoint(
+    household_id: str,
+    member_id: str,
+    plan_event_id: str,
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> HealthEventRead:
+    household = session.get(Household, household_id)
+    member = session.get(Member, member_id)
+    if household is None or member is None or member.household_id != household_id:
+        _raise_resource_not_found()
+    if not has_authorized_action(
+        session, household, member_id, actor_id, "WRITE_EVENTS", "health_events", access_purpose,
+    ):
+        _raise_resource_not_found()
+    from app.care_plan import confirm_plan
+
+    event = confirm_plan(member_id, household_id, plan_event_id, actor_id)
+    session.add(event)
+    session.commit()
+    session.refresh(event)
+    return HealthEventRead.model_validate(event)
+
+
+@router.post(
+    "/households/{household_id}/members/{member_id}/plans/defer",
+    status_code=status.HTTP_201_CREATED,
+)
+def defer_plan_endpoint(
+    household_id: str,
+    member_id: str,
+    plan_event_id: str,
+    delay_hours: int = 4,
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> HealthEventRead:
+    household = session.get(Household, household_id)
+    member = session.get(Member, member_id)
+    if household is None or member is None or member.household_id != household_id:
+        _raise_resource_not_found()
+    if not has_authorized_action(
+        session, household, member_id, actor_id, "WRITE_EVENTS", "health_events", access_purpose,
+    ):
+        _raise_resource_not_found()
+    from app.care_plan import defer_plan
+
+    event = defer_plan(member_id, household_id, plan_event_id, delay_hours, actor_id)
+    session.add(event)
+    session.commit()
+    session.refresh(event)
+    return HealthEventRead.model_validate(event)
+
+
+@router.post(
+    "/households/{household_id}/members/{member_id}/plans/skip",
+    status_code=status.HTTP_201_CREATED,
+)
+def skip_plan_endpoint(
+    household_id: str,
+    member_id: str,
+    plan_event_id: str,
+    reason: str = "",
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> HealthEventRead:
+    household = session.get(Household, household_id)
+    member = session.get(Member, member_id)
+    if household is None or member is None or member.household_id != household_id:
+        _raise_resource_not_found()
+    if not has_authorized_action(
+        session, household, member_id, actor_id, "WRITE_EVENTS", "health_events", access_purpose,
+    ):
+        _raise_resource_not_found()
+    from app.care_plan import skip_plan
+
+    event = skip_plan(member_id, household_id, plan_event_id, reason, actor_id)
+    session.add(event)
+    session.commit()
+    session.refresh(event)
+    return HealthEventRead.model_validate(event)
+
+
+# ── HCT-307: Risk evidence API ─────────────────────────────────────
+
+
+@router.get(
+    "/households/{household_id}/members/{member_id}/risks",
+    response_model=RiskListResponse,
+)
+def list_risks(
+    household_id: str,
+    member_id: str,
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> dict:
+    household = session.get(Household, household_id)
+    member = session.get(Member, member_id)
+    if household is None or member is None or member.household_id != household_id:
+        _raise_resource_not_found()
+    if not has_authorized_action(
+        session, household, member_id, actor_id, "READ_EVENTS", "health_events", access_purpose,
+    ):
+        _raise_resource_not_found()
+    from app.projection import build_relationship_graph, get_timeline
+    from app.rules import apply_daily_budget, dedup_alerts, run_rules
+
+    events = get_timeline(session, member_id)
+    facts = build_relationship_graph(events)
+    raw = run_rules(facts)
+    deduped = dedup_alerts(raw)
+    budgeted = apply_daily_budget(deduped)
+
+    alerts = [
+        RiskAlertRead(
+            rule_id=a.rule_id,
+            level=a.level,
+            message=a.message,
+            source_event_ids=a.source_event_ids,
+        )
+        for a in budgeted
+    ]
+    return RiskListResponse(
+        member_id=member_id,
+        alerts=alerts,
+        total=len(alerts),
+        severe_count=sum(1 for a in alerts if a.level == "SEVERE"),
+        warning_count=sum(1 for a in alerts if a.level == "WARNING"),
+    )
+
+
+@router.get(
+    "/households/{household_id}/members/{member_id}/risks/{rule_id}",
+    response_model=RiskDetailResponse,
+)
+def get_risk_detail(
+    household_id: str,
+    member_id: str,
+    rule_id: str,
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> dict:
+    household = session.get(Household, household_id)
+    member = session.get(Member, member_id)
+    if household is None or member is None or member.household_id != household_id:
+        _raise_resource_not_found()
+    if not has_authorized_action(
+        session, household, member_id, actor_id, "READ_EVENTS", "health_events", access_purpose,
+    ):
+        _raise_resource_not_found()
+    from app.projection import build_relationship_graph, get_timeline
+    from app.rules import run_rules
+
+    events = get_timeline(session, member_id)
+    facts = build_relationship_graph(events)
+    alerts = run_rules(facts, rule_ids=[rule_id])
+    if not alerts:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RISK_NOT_FOUND")
+
+    alert = alerts[0]
+    sources: list[dict] = []
+    for eid in alert.source_event_ids:
+        evt = session.get(HealthEvent, eid)
+        if evt is not None:
+            sources.append({
+                "id": evt.id,
+                "event_type": evt.event_type,
+                "confirmation_status": evt.confirmation_status,
+                "created_at": evt.created_at.isoformat() if evt.created_at else None,
+            })
+    return RiskDetailResponse(
+        alert=RiskAlertRead(
+            rule_id=alert.rule_id,
+            level=alert.level,
+            message=alert.message,
+            source_event_ids=alert.source_event_ids,
+        ),
+        source_events=sources,
     )

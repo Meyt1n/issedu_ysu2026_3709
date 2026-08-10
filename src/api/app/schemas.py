@@ -125,6 +125,8 @@ class HealthEventCreate(BaseModel):
     confirmation_status: Literal["CONFIRMED", "UNCONFIRMED"] = "UNCONFIRMED"
     payload: dict[str, Any] = Field(min_length=1)
     evidence: dict[str, Any] = Field(default_factory=dict)
+    idempotency_key: str | None = Field(default=None, max_length=128)
+    compensates_event_id: str | None = Field(default=None, max_length=36)
     occurred_at: datetime | None = None
 
 
@@ -150,6 +152,8 @@ class HealthEventRead(BaseModel):
     evidence: dict[str, Any]
     created_by: str
     confirmed_by: str | None
+    idempotency_key: str | None
+    compensates_event_id: str | None
     occurred_at: datetime
     recorded_at: datetime = Field(validation_alias="created_at")
     correlation_id: str
@@ -217,8 +221,8 @@ class OutboxRead(BaseModel):
 
 
 class OutboxDispatchRequest(BaseModel):
-    max_messages: int = Field(default=50, ge=1, le=500)
-    stale_after_seconds: int = Field(default=300, ge=30, le=86400)
+    max_messages: int = Field(default=100, ge=1, le=500)
+    stale_after_seconds: int = Field(default=300, ge=30, le=3600)
 
 
 class OutboxDispatchRead(BaseModel):
@@ -227,3 +231,33 @@ class OutboxDispatchRead(BaseModel):
     failed: int
     out_of_order: int
     recovered_stale: int
+
+
+# ── HCT-307: Risk evidence schemas ──────────────────────────────────
+
+
+class RiskAlertRead(BaseModel):
+    """Risk alert as returned by the rules engine. Evidence is desensitized."""
+
+    rule_id: str
+    level: str  # SEVERE | WARNING | INFO | TIP
+    message: str
+    source_event_ids: list[str] = Field(default_factory=list)
+    created_at: datetime | None = None
+
+
+class RiskListResponse(BaseModel):
+    """Risk list for a household member."""
+
+    member_id: str
+    alerts: list[RiskAlertRead]
+    total: int
+    severe_count: int
+    warning_count: int
+
+
+class RiskDetailResponse(BaseModel):
+    """Single risk detail with linked source events."""
+
+    alert: RiskAlertRead
+    source_events: list[dict[str, Any]] = Field(default_factory=list)

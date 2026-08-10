@@ -35,7 +35,7 @@
 
 ```json
 {
-  "migration_head": "0004_hct103_event_recovery",
+  "migration_head": "0005_hct103_event_recovery",
   "duplicate_same_id": true,
   "correction_sequence": 2,
   "supersedes_original": true,

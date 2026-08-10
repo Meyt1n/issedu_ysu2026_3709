@@ -4,11 +4,11 @@
 
 ## 1. 当前可执行状态
 
-一期工程骨架已经可以运行健康检查、数据库迁移、家庭/成员/授权、不可变事件、补偿/幂等、outbox worker 和投影重放。HCT-003 已增加 MySQL、OpenCV 质量探针和 Ollama 结构化资源探针，但视觉权重、规则集、RAG、完整 Ollama 业务助手、天气和完整十页仍未实现，不能把资源探针当作完整产品。
+一期工程骨架已经可以运行健康检查、数据库迁移、家庭/成员/授权、不可变事件、兼容幂等与补偿、可恢复 outbox worker 和投影重放。HCT-003 已增加 MySQL、OpenCV 质量探针和 Ollama 结构化资源探针，但视觉主链、RAG、完整 Ollama 业务助手和完整部署验收仍未实现，不能把资源探针当作完整产品。
 
 ### 1.1 干净环境标准复现路径
 
-以下路径是基础档唯一复现入口。`up` 使用 Docker Compose 构建 API/Web/outbox worker，等待 MySQL、API、worker 和 Web 的健康检查，并在 API 容器启动时执行 Alembic 迁移；`down` 默认不删除 `mysql_data` 卷。
+以下路径是 HCT-101 的唯一基础档复现入口。`up` 使用 Docker Compose 构建 API/Web/outbox worker，等待 MySQL、API、worker 和 Web 的健康检查，并在 API 容器启动时执行 Alembic 迁移；`down` 默认不删除 `mysql_data` 卷。
 
 Windows PowerShell：
 
@@ -49,7 +49,7 @@ scripts/start.ps1 migrate
 scripts/start.ps1 api
 ```
 
-另开终端执行 `scripts/start.ps1 web`。Linux/macOS 将脚本名替换为 `scripts/start.sh`。本地进程路径不会自动启动 outbox worker，只用于单步调试；该路径的 `/api/v1/health/db` 使用本地 `DATABASE_URL` 检查数据库，不能代替 Compose 四服务 `health`。
+另开终端执行 `scripts/start.ps1 web`。Linux/macOS 将脚本名替换为 `scripts/start.sh`。本地进程路径不会自动启动 outbox worker；该路径的 `/api/v1/health/db` 使用本地 `DATABASE_URL` 检查数据库，不能代替 Compose 服务级 `health`。
 
 带卷删除数据库前必须先完成备份演练；标准 `down` 不会删除卷。确需清空教学数据库时，必须由负责人单独执行 `docker compose down --volumes` 并记录影响。
 
@@ -89,7 +89,7 @@ $env:MYSQL_USER='homecare'
 $env:MYSQL_PASSWORD='change-me'
 $env:MYSQL_ROOT_PASSWORD='change-me-root'
 docker compose up -d --wait --wait-timeout 60 db
-$env:DATABASE_URL='mysql+pymysql://homecare:change-me@localhost:3307/homecare?charset=utf8mb4'
+$env:DATABASE_URL = 'mysql+pymysql://' + $env:MYSQL_USER + ':' + $env:MYSQL_PASSWORD + '@localhost:' + $env:MYSQL_PORT + '/' + $env:MYSQL_DATABASE + '?charset=utf8mb4'
 uv run alembic upgrade head
 uv run python scripts/hct003_probe.py mysql --database-url $env:DATABASE_URL --strict
 ```
@@ -120,8 +120,8 @@ uv run python scripts/hct003_probe.py ollama --model qwen2.5:7b --strict --timeo
 
 ## 6. 连续 Demo 剧本
 
-1. 上传新药短视频，OpenCV 选择证据帧，YOLO 检测包装和关键区域。
-2. OCR 与条码冲突，系统返回 `CONFLICT`，不自动入库；页面同时展示包装特征、本地主数据和模型版本。
+1. 上传新药短视频或主动拍照，OpenCV 选择质量合格的证据帧，先运行全图 OCR；YOLO 仅辅助检测包装和条码区域。
+2. 条码由专用解码器读取，OCR 与条码或主数据冲突时系统返回 `CONFLICT`，不自动入库；页面同时展示原始 OCR 区域、条码证据、包装特征、本地主数据和各阶段模型版本。
 3. 用户复核并修正错误候选，页面展示 before/after、原因和训练同意未默认勾选。
 4. 用户复核后创建 `MEDICINE_ADDED` 事件，关系投影新增成员—药品—成分关系。
 5. 规则命中一条有限相互作用资料，风险卡展开数据库事实、规则版本、说明书和确认状态。
