@@ -4,7 +4,7 @@
 
 ## 1. 当前可执行状态
 
-一期工程骨架已经可以运行健康检查、数据库迁移、家庭/成员/授权、不可变事件、兼容幂等与补偿、可恢复 outbox worker 和投影重放。HCT-003 已增加 MySQL、OpenCV 质量探针和 Ollama 结构化资源探针，但视觉主链、RAG、完整 Ollama 业务助手和完整部署验收仍未实现，不能把资源探针当作完整产品。
+一期工程骨架已经可以运行健康检查、数据库迁移、家庭/成员/授权、不可变事件、兼容幂等与补偿、可恢复 outbox worker 和投影重放。HCT-003 已增加 MySQL、OpenCV 质量探针和 Ollama 结构化资源探针；HCT-202 正在实现合成样例驱动的本地质量门控。视觉 OCR/YOLO 主链、RAG、完整 Ollama 业务助手和完整部署验收仍未实现，不能把资源探针当作完整产品，也不能把质量门控当作完整识别能力。
 
 ### 1.1 干净环境标准复现路径
 
@@ -108,6 +108,28 @@ uv run python scripts/hct003_probe.py ollama --model qwen2.5:7b --strict --timeo
 示例配置必须只包含占位值，至少覆盖：数据库连接、JWT 密钥路径、文件加密密钥路径、上传限制、原图保留期、视觉/OCR 模型版本、Ollama 地址与模型名、向量索引版本、规则集版本、知识库版本和天气适配器城市编码。
 
 天气请求不得上传姓名、病史、药品或详细住址。生产密钥不能写入仓库、镜像或日志。
+
+### 4.1 HCT-202 合成质量 Demo
+
+以下命令只在内存生成无敏感信息的清晰、模糊、暗光、过曝和尺寸不足样例，用于验证质量 Schema、重拍提示和单图性能，不代表真实药盒阈值已校准：
+
+```powershell
+uv sync --frozen
+uv run python scripts/hct202_quality_demo.py --iterations 50
+```
+
+启动 API 后，直接把当前用户选择的图片提交给质量接口；接口不会通过 `file_id` 读取共享文件区：
+
+```powershell
+curl.exe -X POST http://localhost:8000/api/v1/vision-quality/check `
+  -H "X-Actor-ID: demo-owner" `
+  -F "media_type=image" `
+  -F "file=@C:\path\to\demo.png;type=image/png"
+```
+
+返回 `RETAKE` 或 `allow_downstream=false` 时，Demo 必须展示重拍原因，不得继续自动确认，也不会签发 `quality_receipt`。只有 `PASS` 的短期凭证才能与同一文件 SHA-256、同一操作者和同一配置版本一起创建 `/api/v1/vision-tasks`；缺失、跨用户、过期、篡改或文件不一致均返回冲突。接口响应不包含图片像素、原文件名或本机路径；视频可使用 `media_type=video`、`sample_interval_ms` 和 `max_selected_frames` 表单字段。
+
+当前凭证使用 Demo 单进程内存密钥，默认 10 分钟有效；API 重启后旧凭证失效。正式多 worker 部署必须使用持久化签名密钥或数据库质量记录，不得通过关闭凭证检查解决失效问题。
 
 ## 5. 后续必须补齐
 
