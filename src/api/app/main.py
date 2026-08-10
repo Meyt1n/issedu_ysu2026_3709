@@ -1,3 +1,4 @@
+import re
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
@@ -25,7 +26,13 @@ app.add_middleware(
 
 @app.middleware("http")
 async def request_id_middleware(request: Request, call_next):
-    request_id = request.headers.get(settings.request_id_header, str(uuid4()))
+    supplied = request.headers.get(settings.request_id_header, "").strip()
+    request_id = (
+        supplied
+        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,119}", supplied)
+        else str(uuid4())
+    )
+    request.state.request_id = request_id
     response = await call_next(request)
     response.headers[settings.request_id_header] = request_id
     return response

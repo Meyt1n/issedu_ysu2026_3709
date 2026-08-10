@@ -125,6 +125,15 @@ class HealthEventCreate(BaseModel):
     confirmation_status: Literal["CONFIRMED", "UNCONFIRMED"] = "UNCONFIRMED"
     payload: dict[str, Any] = Field(min_length=1)
     evidence: dict[str, Any] = Field(default_factory=dict)
+    occurred_at: datetime | None = None
+
+
+class HealthEventCompensationCreate(BaseModel):
+    event_type: str = Field(min_length=1, max_length=80)
+    payload: dict[str, Any] = Field(min_length=1)
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    reason: str = Field(min_length=1, max_length=240)
+    occurred_at: datetime | None = None
 
 
 class HealthEventRead(BaseModel):
@@ -133,6 +142,7 @@ class HealthEventRead(BaseModel):
     id: str
     household_id: str
     member_id: str
+    sequence_no: int
     event_type: str
     source: str
     confirmation_status: str
@@ -140,6 +150,12 @@ class HealthEventRead(BaseModel):
     evidence: dict[str, Any]
     created_by: str
     confirmed_by: str | None
+    occurred_at: datetime
+    recorded_at: datetime = Field(validation_alias="created_at")
+    correlation_id: str
+    causation_id: str | None
+    supersedes_event_id: str | None
+    schema_version: int
     created_at: datetime
 
 
@@ -150,4 +166,64 @@ class MemberStateRead(BaseModel):
     household_id: str
     state: dict[str, Any]
     last_event_id: str | None
+    last_sequence: int
+    version: int
+    state_hash: str | None
     updated_at: datetime
+
+
+class ProjectionCheckpointRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    member_id: str
+    household_id: str
+    last_sequence: int
+    last_event_id: str | None
+    state_hash: str
+    created_by: str
+    created_at: datetime
+
+
+class ProjectionReplayRequest(BaseModel):
+    checkpoint_id: str | None = None
+
+
+class ProjectionReplayRead(BaseModel):
+    member_id: str
+    checkpoint_id: str | None
+    events_replayed: int
+    previous_state_hash: str | None
+    rebuilt_state_hash: str
+    consistent_with_online: bool
+    last_sequence: int
+    projection_version: int
+
+
+class OutboxRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    event_id: str
+    topic: str
+    status: str
+    attempts: int
+    available_at: datetime
+    locked_at: datetime | None
+    dispatched_at: datetime | None
+    last_error: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class OutboxDispatchRequest(BaseModel):
+    max_messages: int = Field(default=50, ge=1, le=500)
+    stale_after_seconds: int = Field(default=300, ge=30, le=86400)
+
+
+class OutboxDispatchRead(BaseModel):
+    inspected: int
+    dispatched: int
+    failed: int
+    out_of_order: int
+    recovered_stale: int

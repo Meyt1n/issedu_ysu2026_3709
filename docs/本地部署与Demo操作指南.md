@@ -4,11 +4,11 @@
 
 ## 1. 当前可执行状态
 
-一期工程骨架已经可以运行健康检查、数据库迁移、家庭/成员/授权和手工确认事件链。HCT-003 已增加 MySQL、OpenCV 质量探针和 Ollama 结构化资源探针，但视觉权重、规则集、RAG、完整 Ollama 业务助手、天气和完整十页仍未实现，不能把资源探针当作完整产品。
+一期工程骨架已经可以运行健康检查、数据库迁移、家庭/成员/授权、不可变事件、补偿/幂等、outbox worker 和投影重放。HCT-003 已增加 MySQL、OpenCV 质量探针和 Ollama 结构化资源探针，但视觉权重、规则集、RAG、完整 Ollama 业务助手、天气和完整十页仍未实现，不能把资源探针当作完整产品。
 
 ### 1.1 干净环境标准复现路径
 
-以下路径是 HCT-101 的唯一基础档复现入口。`up` 使用 Docker Compose 构建 API/Web，等待 MySQL、API 和 Web 的健康检查，并在 API 容器启动时执行 Alembic 迁移；`down` 默认不删除 `mysql_data` 卷。
+以下路径是基础档唯一复现入口。`up` 使用 Docker Compose 构建 API/Web/outbox worker，等待 MySQL、API、worker 和 Web 的健康检查，并在 API 容器启动时执行 Alembic 迁移；`down` 默认不删除 `mysql_data` 卷。
 
 Windows PowerShell：
 
@@ -37,7 +37,7 @@ chmod +x scripts/start.sh
 ./scripts/start.sh down
 ```
 
-`health` 会同时检查 Compose 中 API、Web、MySQL 的容器健康状态，并访问 API 与 Web 的 `/health`。默认浏览器入口为 `http://localhost:8080`，API 健康检查为 `http://localhost:8000/health`，OpenAPI 为 `http://localhost:8000/docs`。端口被占用时，在 `.env` 中修改 `API_PORT`、`WEB_PORT` 或 `MYSQL_PORT`，再重新执行 `up`。
+`health` 会同时检查 Compose 中 API、outbox worker、Web、MySQL 的容器健康状态，并访问 API 与 Web 的 `/health`。默认浏览器入口为 `http://localhost:8080`，API 健康检查为 `http://localhost:8000/health`，OpenAPI 为 `http://localhost:8000/docs`。端口被占用时，在 `.env` 中修改 `API_PORT`、`WEB_PORT` 或 `MYSQL_PORT`，再重新执行 `up`。
 
 ### 1.2 本地进程开发路径
 
@@ -49,7 +49,7 @@ scripts/start.ps1 migrate
 scripts/start.ps1 api
 ```
 
-另开终端执行 `scripts/start.ps1 web`。Linux/macOS 将脚本名替换为 `scripts/start.sh`。该路径的 `/api/v1/health/db` 使用本地 `DATABASE_URL` 检查数据库，不能代替 Compose 三服务 `health`。
+另开终端执行 `scripts/start.ps1 web`。Linux/macOS 将脚本名替换为 `scripts/start.sh`。本地进程路径不会自动启动 outbox worker，只用于单步调试；该路径的 `/api/v1/health/db` 使用本地 `DATABASE_URL` 检查数据库，不能代替 Compose 四服务 `health`。
 
 带卷删除数据库前必须先完成备份演练；标准 `down` 不会删除卷。确需清空教学数据库时，必须由负责人单独执行 `docker compose down --volumes` 并记录影响。
 
@@ -57,11 +57,13 @@ scripts/start.ps1 api
 
 | 档位 | 服务 | 适用环境 |
 |---|---|---|
-| 基础档 | Vue、FastAPI、MySQL、规则、轻量 OCR | 低配置电脑；断网仍可管理档案、任务和历史证据；网络出口默认拒绝 |
+| 基础档 | Vue、FastAPI、outbox worker、MySQL、规则、轻量 OCR | 低配置电脑；断网仍可管理档案、任务和历史证据；网络出口默认拒绝 |
 | 增强档 | 基础档 + FAISS/Qdrant + Ollama 量化模型 | 建议 16 GB 以上内存；资源探针已验证，本地证据助手仍待实现 |
 | 研发档 | 增强档 + 数据标注、训练、评测和模型登记 | GPU 工作站或短时云 GPU；不得在家庭端自动训练 |
 
 MySQL、Ollama、向量检索和文件服务默认仅监听本机/容器网络，不暴露公网。
+
+outbox worker 默认每 2 秒处理最多 100 条消息，5 分钟前的 `PROCESSING` 锁视为中断并自动恢复；可通过 `.env` 的 `OUTBOX_POLL_SECONDS`、`OUTBOX_BATCH_SIZE` 和 `OUTBOX_STALE_SECONDS` 调整。维护者可在 OpenAPI 使用家庭 Owner 身份查询 `/api/v1/households/{id}/outbox` 或手工触发 `/outbox/dispatch`。停止 worker 不删除消息；恢复前不得手工修改健康事件。
 
 ## 3. HCT-003 资源探针
 
