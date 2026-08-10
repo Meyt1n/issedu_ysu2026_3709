@@ -2,7 +2,7 @@
 
 > 审计日期：2026-08-10
 >
-> 状态：`QUARANTINED_PRELIMINARY_REVIEW`。本报告只保存公开来源元数据、哈希结论和初审建议，不包含图片、标签、模型权重或本机路径，也不代表 R3 复核通过。
+> 状态：`CANCELLED_DO_NOT_USE`。2026-08-10 项目负责人取消这批 Open Images 候选的人工复核与纳入计划。本报告只保留公开来源元数据、哈希结论和初审建议作为审计证据；不包含图片、标签、模型权重或本机路径，任何样本均不得进入训练或评测。
 
 ## 1. 目的与边界
 
@@ -50,7 +50,7 @@ Open Images 官方说明要求逐图核验许可；因此聚合元数据中的 C
 | `14f3cf0bf538d81c` | 未见目标纸盒或可识别个人信息 | Flickr 落地页 CC BY 2.0；oEmbed 作者别名对应 | `APPROVE_HARD_NEGATIVE` |
 | `15c473ae47357d22` | 未见目标纸盒或可识别个人信息 | Flickr 落地页 CC BY 2.0 | `APPROVE_HARD_NEGATIVE` |
 
-汇总：13 张建议 `APPROVE_HARD_NEGATIVE`，2 张 `REJECT_PRIVACY`，2 张 `REJECT_TARGET_BOX`，3 张 `REVIEW_REQUIRED`。这些是 Agent 初审建议；在 `Shen-huang-123` 完成 R3 逐图复核前，13 张建议通过样本也不能进入训练。
+汇总：初审曾给出 13 张 `APPROVE_HARD_NEGATIVE` 建议、2 张 `REJECT_PRIVACY`、2 张 `REJECT_TARGET_BOX` 和 3 张 `REVIEW_REQUIRED`。项目现已取消整批候选，初审建议全部失效；不再安排逐图复核，也不得据此创建标签或进入训练。
 
 ## 4. 重复与固定集隔离
 
@@ -67,12 +67,12 @@ YOLO11n 50 epoch 候选实验在 147 张 test 上得到 Precision 0.9864、Recal
 
 权重不进入 Git。候选权重 SHA-256 仅登记为 `cedb5b52c1c2a71538c7f31bacc2d46aed0db2b0b7aec09eceb0d3525f5a7d1b`，不代表发布模型。
 
-## 6. 下一步与回滚
+## 6. 取消处置与回滚
 
-1. R3 复核人逐项确认 13 张建议通过样本，填写复核人、日期、许可、隐私和目标排除结论；
-2. 只有最终 `APPROVE_HARD_NEGATIVE` 才能创建空 YOLO 标签并进入新的训练候选；
-3. 新 hard negative 只能加入 train，必须与既有 test/unknown 保持隔离；既有两个 test hard negative 不得进入训练；
-4. 生成 canonical/v1.3 候选后重新运行许可、SHA/pHash、分组、固定集、unknown、删除传播和 manifest 审计，再用同一 test 比较误检；
-5. 任一许可、隐私、目标污染、删除传播或 R3 复核失败时，继续隔离对应样本并保持 v1.2 不变。
+1. 取消并删除人工 `review-checklist.md`，不再为这 20 张候选派生人工批准结论；
+2. 不创建空 YOLO 标签，不生成包含这些样本的 canonical/v1.3，不进入 train/validation/test/unknown；
+3. 既有两个 test hard negative 继续保持测试隔离，不得转入训练；
+4. 外部隔离目录如需清理，应按数据删除流程另行执行并保留最小删除证明，本次不把删除清单等同于删除原图；
+5. 后续若重新启用 Open Images，必须建立新的来源版本、Issue、许可/隐私证据和审计记录，不能恢复使用本批初审建议。
 
-回滚只需停用后续 v1.3 候选入口并恢复 v1.2 隔离 manifest；不得覆盖 v1.2 清单、报告或模型哈希。
+当前训练入口保持 v1.2 隔离状态；不得覆盖 v1.2 清单、报告或模型哈希。
