@@ -49,6 +49,8 @@ from app.review import (
 )
 from app.schemas import (
     AccessAuditRead,
+    AssistantRequest,
+    AssistantResponse,
     AuthorizationCreate,
     AuthorizationRead,
     AuthorizationRevoke,
@@ -89,6 +91,12 @@ from app.security import (
     get_actor_id,
     has_authorized_action,
     require_household_owner,
+)
+from app.tool_call import (
+    build_degrade_response,
+    get_approved_tools,
+    OllamaClient,
+    run_assistant,
 )
 from app.vision_tasks import (
     VisionTaskStatus,
@@ -164,8 +172,10 @@ def capabilities() -> CapabilityResponse:
             "outbox-recovery-worker",
             "review-task",
             "vision-task",
+            "knowledge-store",
+            "local-assistant",
         ],
-        unavailable=["rag", "llm", "weather"],
+        unavailable=["vision-inference", "llm-cloud", "external-web"],
     )
 
 
@@ -1264,6 +1274,43 @@ def create_knowledge_index_snapshot(
         "chunk_count": idx.chunk_count,
         "checksum": idx.checksum,
     }
+
+
+# ── HCT-403: Local assistant (Ollama tool calling) ───────────────────
+
+
+@router.get("/assistant/tools")
+def list_assistant_tools(
+    actor_id: str = Depends(get_actor_id),
+) -> dict:
+    """List all approved tools the local assistant can call."""
+    tools = [t.model_dump() for t in get_approved_tools()]
+    return {"tools": tools, "count": len(tools)}
+
+
+@router.post("/assistant/chat", response_model=AssistantResponse)
+def assistant_chat(
+    payload: AssistantRequest,
+    actor_id: str = Depends(get_actor_id),
+    household_id: str | None = None,
+    member_id: str | None = None,
+) -> AssistantResponse:
+    """Run the local health assistant with Ollama tool calling.
+
+    Falls back to a structured degrade response if the model is unavailable,
+    output fails schema validation, or medical boundary checks are triggered.
+    """
+    result = run_assistant(
+        None,  # db_session is injected inside run_assistant when tools are called
+        messages=payload.messages,
+        actor_id=actor_id,
+        household_id=household_id,
+        member_id=member_id,
+        model=payload.model,
+        max_tokens=payload.max_tokens,
+        temperature=payload.temperature,
+    )
+    return AssistantResponse(**result)
 
 
 # ── HCT-204: Vision task API ─────────────────────────────────────────
