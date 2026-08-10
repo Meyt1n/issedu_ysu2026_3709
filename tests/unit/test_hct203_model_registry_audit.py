@@ -4,7 +4,7 @@ import copy
 import json
 from pathlib import Path
 
-from hct203_model_registry_audit import audit_registry, load_registry
+from hct203_model_registry_audit import audit_registry, load_registry, verify_weights
 
 
 def valid_registry() -> dict:
@@ -28,6 +28,8 @@ def valid_registry() -> dict:
             "weights_sha256": "c" * 64,
             "weights_size_bytes": 5_499_089,
             "stored_outside_git": True,
+            "evaluation_report_sha256": "d" * 64,
+            "threshold_report_sha256": "e" * 64,
         },
         "evaluation": {
             "test": {
@@ -39,8 +41,10 @@ def valid_registry() -> dict:
                 "map50_95": 0.927,
                 "confidence": 0.25,
             },
+            "expected_hard_negative_sample_ids": ["hard-negative-1", "hard-negative-2"],
             "hard_negatives": [
-                {"sample_id": "hard-negative-1", "false_positive": True, "confidence": 0.88}
+                {"sample_id": "hard-negative-1", "false_positive": True, "confidence": 0.88},
+                {"sample_id": "hard-negative-2", "false_positive": True, "confidence": 0.76},
             ],
         },
         "intended_uses": ["propose OCR crop regions"],
@@ -71,16 +75,29 @@ def test_rejects_release_claim_invalid_hash_and_local_path() -> None:
     } <= codes(record)
 
 
+def test_rejects_posix_and_file_uri_paths() -> None:
+    record = valid_registry()
+    record["artifacts"]["posix_location"] = "/home/user/model.pt"
+    record["artifacts"]["uri_location"] = "file:///Users/user/model.pt"
+
+    findings = audit_registry(record)
+
+    assert [finding.code for finding in findings].count("LOCAL_PATH_LEAK") == 2
+
+
 def test_rejects_hidden_hard_negative_failure_and_missing_blockers() -> None:
     record = valid_registry()
     record["evaluation"]["hard_negatives"] = [
-        {"sample_id": "hard-negative-1", "false_positive": False}
+        {"sample_id": "hard-negative-1", "false_positive": False, "confidence": 0.88}
     ]
     record["release_blockers"] = []
 
-    assert {"HARD_NEGATIVE_FAILURE_HIDDEN", "MISSING_FIELD", "MISSING_RELEASE_BLOCKERS"} <= codes(
-        record
-    )
+    assert {
+        "HARD_NEGATIVE_SET_MISMATCH",
+        "HARD_NEGATIVE_FAILURE_HIDDEN",
+        "MISSING_FIELD",
+        "MISSING_RELEASE_BLOCKERS",
+    } <= codes(record)
 
 
 def test_rejects_misrepresented_original_reproducibility() -> None:
@@ -88,6 +105,21 @@ def test_rejects_misrepresented_original_reproducibility() -> None:
     record["training"]["reproducibility_status"] = "FULLY_REPRODUCIBLE"
 
     assert "MISSTATED_REPRODUCIBILITY" in codes(record)
+
+
+def test_verifies_external_weights_content_and_rejects_mismatch(tmp_path: Path) -> None:
+    weights = tmp_path / "best.pt"
+    weights.write_bytes(b"controlled synthetic weights fixture")
+    record = valid_registry()
+
+    import hashlib
+
+    record["artifacts"]["weights_sha256"] = hashlib.sha256(weights.read_bytes()).hexdigest()
+    assert verify_weights(record, weights) == []
+
+    weights.write_bytes(b"tampered fixture")
+    findings = verify_weights(record, weights)
+    assert [finding.code for finding in findings] == ["WEIGHTS_HASH_MISMATCH"]
 
 
 def test_repository_registry_passes() -> None:

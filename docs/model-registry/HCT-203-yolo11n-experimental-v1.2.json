@@ -51,6 +51,10 @@
       "map50_95": 0.9272837549433515,
       "confidence": 0.25
     },
+    "expected_hard_negative_sample_ids": [
+      "hct201-v1-hard-negative-00-90370b074a64",
+      "hct201-v1-hard-negative-01-440b01bd90f1"
+    ],
     "hard_negatives": [
       {
         "sample_id": "hct201-v1-hard-negative-00-90370b074a64",

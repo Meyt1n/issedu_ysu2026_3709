@@ -61,4 +61,5 @@ OCR 或条码证据、直接写入健康事实、触发用药规则，或做诊�
 仓库内机器可读登记位于
 [HCT-203-yolo11n-experimental-v1.2.json](../model-registry/HCT-203-yolo11n-experimental-v1.2.json)。
 审计失败、哈希不一致或数据撤销时，将候选标记为 `REVOKED`/`UNAVAILABLE`，家庭端维持
-`vision_model_version=unavailable`；不得覆盖旧登记或删除失败证据。
+`vision_model_version=unavailable`；受控训练机使用审计器的 `--weights` 参数核对实际制品，
+不一致时命令非零退出并给出 `effective_model_status=UNAVAILABLE`。不得覆盖旧登记或删除失败证据。

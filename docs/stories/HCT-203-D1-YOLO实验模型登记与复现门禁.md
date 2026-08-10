@@ -36,7 +36,8 @@
 - 登记声称 `APPROVED`、`RELEASED` 或 `PRODUCTION`：审计失败；
 - 登记含 Windows/UNC 绝对路径：审计失败；
 - 原训练代码没有提交：必须保留 `PARTIAL_UNTRACKED_ORIGINAL_CODE`，不得伪装为完整复现；
-- 权重哈希不一致：标记候选 `REVOKED`/`UNAVAILABLE`，禁止加载。
+- 受控训练机可通过 `--weights <外置权重>` 计算并比对真实制品 SHA-256；不一致时命令
+  非零退出并输出 `effective_model_status=UNAVAILABLE`，调用方必须禁止加载。审计器不改写历史登记。
 
 ## Given / When / Then
 
@@ -53,12 +54,14 @@ uv sync --frozen
 uv run ruff check scripts/hct203_model_registry_audit.py tests/unit/test_hct203_model_registry_audit.py
 uv run pytest tests/unit/test_hct203_model_registry_audit.py
 uv run python scripts/hct203_model_registry_audit.py --registry docs/model-registry/HCT-203-yolo11n-experimental-v1.2.json
+uv run python scripts/hct203_model_registry_audit.py --registry docs/model-registry/HCT-203-yolo11n-experimental-v1.2.json --weights <受控训练机外置权重>
 uv run pytest
 git diff --check
 ```
 
-人工验收检查登记与模型卡均显示 `EXPERIMENTAL_UNRELEASED`，权重不在 Git，两个困难负样本
-误检、未测性能、未批准数据和原训练代码未跟踪均为可见阻断。
+人工验收检查登记与模型卡均显示 `EXPERIMENTAL_UNRELEASED`，权重不在 Git；使用受控外置
+权重运行实哈希校验并取得 `VERIFIED`；两个困难负样本误检、未测性能、未批准数据和原训练
+代码未跟踪均为可见阻断。
 
 ## 风险和回滚
 

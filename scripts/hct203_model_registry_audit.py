@@ -8,6 +8,7 @@ must never be interpreted as a release approval.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 from dataclasses import dataclass
@@ -50,6 +51,47 @@ def _required(record: dict[str, Any], field: str, findings: list[AuditFinding]) 
 def _require_sha256(value: Any, location: str, findings: list[AuditFinding]) -> None:
     if not isinstance(value, str) or not SHA256_RE.fullmatch(value):
         findings.append(AuditFinding("INVALID_SHA256", location, "expected lowercase SHA-256"))
+
+
+def _is_local_absolute_path(value: str) -> bool:
+    lowered = value.lower()
+    return (
+        WINDOWS_ABSOLUTE_RE.match(value) is not None
+        or value.startswith("\\\\")
+        or value.startswith("/")
+        or lowered.startswith("file://")
+    )
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def verify_weights(record: dict[str, Any], weights_path: Path) -> list[AuditFinding]:
+    """Compare a controlled external weights file with the registered digest."""
+    if not weights_path.is_file():
+        return [
+            AuditFinding(
+                "WEIGHTS_UNAVAILABLE",
+                "$.artifacts.weights_sha256",
+                "external weights file is unavailable",
+            )
+        ]
+    expected = record.get("artifacts", {}).get("weights_sha256")
+    actual = _sha256_file(weights_path)
+    if actual != expected:
+        return [
+            AuditFinding(
+                "WEIGHTS_HASH_MISMATCH",
+                "$.artifacts.weights_sha256",
+                f"registered digest does not match external artifact; actual={actual}",
+            )
+        ]
+    return []
 
 
 def audit_registry(record: dict[str, Any]) -> list[AuditFinding]:
@@ -117,6 +159,8 @@ def audit_registry(record: dict[str, Any]) -> list[AuditFinding]:
         for field in ("weights_sha256", "weights_size_bytes", "stored_outside_git"):
             _required(artifacts, field, findings)
         _require_sha256(artifacts.get("weights_sha256"), "$.artifacts.weights_sha256", findings)
+        for field in ("evaluation_report_sha256", "threshold_report_sha256"):
+            _require_sha256(artifacts.get(field), f"$.artifacts.{field}", findings)
         if artifacts.get("stored_outside_git") is not True:
             findings.append(
                 AuditFinding(
@@ -142,6 +186,7 @@ def audit_registry(record: dict[str, Any]) -> list[AuditFinding]:
                 "confidence",
             ):
                 _required(test, field, findings)
+        expected_ids = evaluation.get("expected_hard_negative_sample_ids")
         hard_negatives = evaluation.get("hard_negatives")
         if not isinstance(hard_negatives, list) or not hard_negatives:
             findings.append(
@@ -151,21 +196,39 @@ def audit_registry(record: dict[str, Any]) -> list[AuditFinding]:
                     "at least one difficult non-target result is required",
                 )
             )
-        elif not any(
-            item.get("false_positive") is True
-            for item in hard_negatives
-            if isinstance(item, dict)
-        ):
-            findings.append(
-                AuditFinding(
-                    "HARD_NEGATIVE_FAILURE_HIDDEN",
-                    "$.evaluation.hard_negatives",
-                    "the known false positives must remain explicit",
+        else:
+            actual_ids = [
+                item.get("sample_id") for item in hard_negatives if isinstance(item, dict)
+            ]
+            if (
+                not isinstance(expected_ids, list)
+                or len(expected_ids) != len(set(expected_ids))
+                or set(actual_ids) != set(expected_ids)
+                or len(actual_ids) != len(set(actual_ids))
+            ):
+                findings.append(
+                    AuditFinding(
+                        "HARD_NEGATIVE_SET_MISMATCH",
+                        "$.evaluation.hard_negatives",
+                        "hard-negative records must exactly match the fixed expected sample IDs",
+                    )
                 )
-            )
+            if not all(
+                item.get("false_positive") is True
+                and isinstance(item.get("confidence"), int | float)
+                for item in hard_negatives
+                if isinstance(item, dict)
+            ):
+                findings.append(
+                    AuditFinding(
+                        "HARD_NEGATIVE_FAILURE_HIDDEN",
+                        "$.evaluation.hard_negatives",
+                        "every fixed hard-negative failure and confidence must remain explicit",
+                    )
+                )
 
     for location, value in _walk_strings(record):
-        if WINDOWS_ABSOLUTE_RE.match(value) or value.startswith("\\\\"):
+        if _is_local_absolute_path(value):
             findings.append(
                 AuditFinding("LOCAL_PATH_LEAK", location, "absolute local path must be removed")
             )
@@ -188,10 +251,28 @@ def load_registry(path: Path) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--registry", required=True, type=Path)
+    parser.add_argument(
+        "--weights",
+        type=Path,
+        help="optional controlled external weights file for content hash verification",
+    )
     args = parser.parse_args()
-    findings = audit_registry(load_registry(args.registry))
+    record = load_registry(args.registry)
+    findings = audit_registry(record)
+    artifact_findings: list[AuditFinding] = []
+    if args.weights is not None:
+        artifact_findings = verify_weights(record, args.weights)
+        findings.extend(artifact_findings)
+    if args.weights is None:
+        artifact_verification = "NOT_REQUESTED"
+    elif artifact_findings:
+        artifact_verification = "FAILED"
+    else:
+        artifact_verification = "VERIFIED"
     result = {
         "status": "PASS" if not findings else "FAIL",
+        "effective_model_status": record.get("release_status") if not findings else "UNAVAILABLE",
+        "artifact_verification": artifact_verification,
         "finding_count": len(findings),
         "findings": [finding.__dict__ for finding in findings],
     }
