@@ -168,16 +168,28 @@ class TestDegradeResponse:
 
 
 class TestOllamaClient:
-    def test_is_available_default_false(self):
+    def test_is_available_default_false(self, monkeypatch):
+        def unavailable(*_args, **_kwargs):
+            raise OSError("synthetic connection refused")
+
+        monkeypatch.setattr("app.tool_call.httpx.Client.get", unavailable)
         client = OllamaClient()
-        # In test environment without Ollama, should return False
         assert client.is_available() is False
 
-    def test_health_check_false_when_no_ollama(self):
+    def test_health_check_false_when_no_ollama(self, monkeypatch):
+        def unavailable(*_args, **_kwargs):
+            raise OSError("synthetic connection refused")
+
+        monkeypatch.setattr("app.tool_call.httpx.Client.get", unavailable)
         client = OllamaClient("http://localhost:11434")
         assert client.health_check() is False
 
-    def test_chat_raises_when_unavailable(self):
+    def test_chat_raises_when_unavailable(self, monkeypatch):
+        def unavailable(*_args, **_kwargs):
+            raise OSError("synthetic connection refused")
+
+        monkeypatch.setattr("app.tool_call.httpx.Client.post", unavailable)
+        monkeypatch.setattr("app.tool_call.time.sleep", lambda _seconds: None)
         client = OllamaClient()
         with pytest.raises(RuntimeError, match="OLLAMA_UNAVAILABLE"):
             client.chat(
@@ -190,7 +202,11 @@ class TestOllamaClient:
 
 
 class TestRunAssistant:
-    def test_degrade_when_ollama_unavailable(self):
+    def test_degrade_when_ollama_unavailable(self, monkeypatch):
+        def unavailable(*_args, **_kwargs):
+            raise RuntimeError("OLLAMA_UNAVAILABLE: synthetic")
+
+        monkeypatch.setattr(OllamaClient, "chat", unavailable)
         result = run_assistant(
             None,
             messages=[{"role": "user", "content": "test"}],
