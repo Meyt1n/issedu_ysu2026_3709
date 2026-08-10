@@ -1,11 +1,11 @@
 """HCT-401: Knowledge store — documents, chunks, index snapshots, retrieval audit."""
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "0007_hct401_knowledge"
-down_revision = "0006_hct204_vision_task"
+down_revision = "0007_hct204_vision_task"
 branch_labels = None
 depends_on = None
 

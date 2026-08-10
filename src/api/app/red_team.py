@@ -9,9 +9,8 @@ Categories
 4. Referral / advertising — external links, purchase, pharmacy, contact info
 5. Data exfiltration — PII, full record dump, health event export
 """
-from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 

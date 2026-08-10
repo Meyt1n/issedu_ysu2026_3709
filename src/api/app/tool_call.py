@@ -13,15 +13,11 @@ Design
 * Structured degrade — if Ollama is unreachable or output fails validation,
   fall back to rule-card / static evidence summary.
 """
-from __future__ import annotations
 
 import json
 import logging
 import time
-import uuid
-from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -267,7 +263,10 @@ class OllamaClient:
                 logger.warning("Ollama request timed out (attempt %d)", attempt + 1)
             except httpx.HTTPStatusError as exc:
                 last_error = f"HTTP_{exc.response.status_code}"
-                logger.warning("Ollama HTTP error %s (attempt %d)", exc.response.status_code, attempt + 1)
+                logger.warning(
+                    "Ollama HTTP error %s (attempt %d)",
+                    exc.response.status_code, attempt + 1,
+                )
             except Exception as exc:
                 last_error = str(exc)[:120]
                 logger.warning("Ollama connection error (attempt %d): %s", attempt + 1, exc)

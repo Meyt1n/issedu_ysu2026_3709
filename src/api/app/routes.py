@@ -29,6 +29,7 @@ from app.event_service import (
     replay_member_projection,
 )
 from app.file_upload import delete_file_tree, validate_and_store
+from app.knowledge import KnowledgeDocument
 from app.models import (
     AccessAudit,
     CareAuthorization,
@@ -62,7 +63,6 @@ from app.schemas import (
     HealthResponse,
     HouseholdCreate,
     HouseholdRead,
-    KnowledgeChunkRead,
     KnowledgeDocumentCreate,
     KnowledgeDocumentRead,
     KnowledgeRetrieveRequest,
@@ -93,9 +93,7 @@ from app.security import (
     require_household_owner,
 )
 from app.tool_call import (
-    build_degrade_response,
     get_approved_tools,
-    OllamaClient,
     run_assistant,
 )
 from app.vision_tasks import (
@@ -1135,7 +1133,7 @@ def create_knowledge_document(
     payload: KnowledgeDocumentCreate,
     actor_id: str = Depends(get_actor_id),
     session: Session = Depends(get_session),
-) -> KnowledgeDocument:
+) -> KnowledgeDocumentRead:
     """Register a new knowledge document with auto-chunking."""
     from app.knowledge import add_document
     doc = add_document(
@@ -1159,7 +1157,7 @@ def create_knowledge_document(
 def list_knowledge_documents(
     actor_id: str = Depends(get_actor_id),
     session: Session = Depends(get_session),
-) -> list[KnowledgeDocument]:
+) -> list[KnowledgeDocumentRead]:
     """List active documents visible to the caller."""
     from app.knowledge import _check_permission
     stmt = (
@@ -1179,7 +1177,7 @@ def get_knowledge_document(
     doc_id: str,
     actor_id: str = Depends(get_actor_id),
     session: Session = Depends(get_session),
-) -> KnowledgeDocument:
+) -> KnowledgeDocumentRead:
     from app.knowledge import _check_permission
     doc = session.get(KnowledgeDocument, doc_id)
     if doc is None:
@@ -1203,7 +1201,7 @@ def retrieve_knowledge(
     Returns a structured degrade response if no authorised documents exist
     or the index is empty — never exposes cross-family content.
     """
-    from app.knowledge import retrieve, log_query
+    from app.knowledge import log_query, retrieve
 
     try:
         results = retrieve(

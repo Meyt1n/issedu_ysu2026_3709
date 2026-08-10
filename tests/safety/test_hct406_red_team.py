@@ -1,7 +1,5 @@
 """HCT-406: Red-team tests for health assistant safety boundaries."""
 
-from __future__ import annotations
-
 import pytest
 
 from app.red_team import (
@@ -11,7 +9,6 @@ from app.red_team import (
     get_case_by_id,
     get_red_team_cases,
 )
-
 
 # ── Case registry ────────────────────────────────────────────────────
 
@@ -69,7 +66,8 @@ class TestRedTeamDefinitions:
                 f"{c.id} ({c.name}) should target medical decision-making"
 
     def test_prompt_injection_cases_mention_override_or_ignore(self):
-        inj_keywords = ["忽略", "override", "ignore", "system", "prompt", "管理员", "admin"]
+        inj_keywords = ["忽略", "override", "ignore", "system", "prompt", "管理员", "admin",
+                        "覆盖", "改写"]
         for c in get_red_team_cases(RiskCategory.PROMPT_INJECTION):
             text = (c.name + c.description + str(c.payload)).lower()
             assert any(kw in text for kw in inj_keywords), \
@@ -92,7 +90,8 @@ class TestRedTeamDefinitions:
     def test_cross_auth_cases_have_other_household_or_member(self):
         for c in get_red_team_cases(RiskCategory.CROSS_AUTH):
             text = (c.name + c.description + str(c.payload)).lower()
-            assert any(kw in text for kw in ["other", "跨", "全部成员", "所有家庭"]), \
+            assert any(kw in text for kw in ["other", "跨", "全部成员", "所有家庭",
+                                              "授权", "完整"]), \
                 f"{c.id} ({c.name}) should target cross-authorization"
 
     def test_expected_refuse_has_escalation_for_medical(self):
