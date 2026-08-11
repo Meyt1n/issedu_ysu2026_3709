@@ -1,10 +1,21 @@
 import logging
 import secrets
+import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import NoReturn
 
-from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Request,
+    UploadFile,
+    status,
+)
 from fastapi.responses import FileResponse
 from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
@@ -28,7 +39,15 @@ from app.event_service import (
     dispatch_outbox_batch,
     replay_member_projection,
 )
-from app.file_upload import delete_file_tree, validate_and_store
+from app.file_upload import (
+    compute_hash,
+    delete_file_tree,
+    validate_and_store,
+    validate_extension,
+    validate_filename,
+    validate_magic,
+    validate_size,
+)
 from app.knowledge import KnowledgeDocument
 from app.models import (
     AccessAudit,
@@ -83,6 +102,7 @@ from app.schemas import (
     RiskAlertRead,
     RiskDetailResponse,
     RiskListResponse,
+    VisionQualityRead,
     VisionTaskCreate,
     VisionTaskRead,
 )
@@ -1368,6 +1388,106 @@ def assistant_chat(
 # ── HCT-204: Vision task API ─────────────────────────────────────────
 
 
+@router.post("/vision-quality/check", response_model=VisionQualityRead)
+async def check_vision_quality(
+    file: UploadFile = File(...),
+    media_type: str = Form(default="image"),
+    sample_interval_ms: int = Form(default=1000, ge=250, le=10_000),
+    max_selected_frames: int = Form(default=30, ge=1, le=120),
+    actor_id: str = Depends(get_actor_id),
+) -> dict:
+    """Check caller-supplied bytes locally; do not read another actor's stored file."""
+    from ai.vision.quality_gate import assess_image, assess_video_file, decode_image
+    from ai.vision.quality_receipt import issue_quality_receipt
+
+    if media_type not in {"image", "video"}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="MEDIA_TYPE_INVALID",
+        )
+    filename = validate_filename(file.filename or "unknown")
+    extension = validate_extension(filename)
+    allowed_for_media = {
+        "image": {".jpg", ".jpeg", ".png"},
+        "video": {".mp4", ".mov"},
+    }
+    if extension not in allowed_for_media[media_type]:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="MEDIA_EXTENSION_MISMATCH",
+        )
+    allowed_content_types = {
+        ".jpg": {"image/jpeg"},
+        ".jpeg": {"image/jpeg"},
+        ".png": {"image/png"},
+        ".mp4": {"video/mp4"},
+        ".mov": {"video/quicktime", "video/x-quicktime"},
+    }
+    if file.content_type not in allowed_content_types[extension]:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="MEDIA_CONTENT_TYPE_MISMATCH",
+        )
+    validate_magic(file.file, extension)
+    validate_size(file.file)
+    input_digest = compute_hash(file.file)
+    source_id = f"upload:{input_digest[:16]}"
+
+    try:
+        thresholds = settings.vision_quality_thresholds()
+        if media_type == "video":
+            temporary_path: Path | None = None
+            try:
+                file.file.seek(0)
+                with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as temporary:
+                    temporary.write(file.file.read())
+                    temporary_path = Path(temporary.name)
+                result = assess_video_file(
+                    temporary_path,
+                    source_id=source_id,
+                    sample_interval_ms=sample_interval_ms,
+                    max_selected_frames=max_selected_frames,
+                    thresholds=thresholds,
+                )
+            finally:
+                if temporary_path is not None:
+                    temporary_path.unlink(missing_ok=True)
+        else:
+            file.file.seek(0)
+            result = assess_image(
+                decode_image(file.file.read()),
+                source_id=source_id,
+                thresholds=thresholds,
+            )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    result["source"]["sha256"] = input_digest
+    result["source"]["digest_scope"] = "uploaded_file_bytes"
+    result["quality_receipt"] = (
+        issue_quality_receipt(
+            actor_id=actor_id,
+            input_digest=input_digest,
+            config_version=result["config_version"],
+        )
+        if result["allow_downstream"]
+        else None
+    )
+
+    logger.info(
+        "VISION_QUALITY_CHECK actor=%s source=%s media=%s decision=%s reasons=%d",
+        actor_id,
+        source_id,
+        media_type,
+        result["decision"],
+        len(result["reasons"]),
+    )
+    return result
+
+
 @router.post(
     "/vision-tasks",
     response_model=VisionTaskRead,
@@ -1389,12 +1509,7 @@ def create_vision_task_endpoint(
     target = (file_root / payload.file_id).resolve()
 
     # Security: only allow files inside the upload root
-    if not str(target).startswith(str(file_root)):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="FILE_NOT_FOUND",
-        )
-    if not target.exists():
+    if not target.is_relative_to(file_root) or not target.is_file():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="FILE_NOT_FOUND",
@@ -1406,6 +1521,26 @@ def create_vision_task_endpoint(
     except Exception:
         input_digest = None
 
+    if input_digest is None or payload.quality_receipt is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="QUALITY_GATE_REQUIRED",
+        )
+    from ai.vision.quality_receipt import verify_quality_receipt
+
+    try:
+        verify_quality_receipt(
+            payload.quality_receipt,
+            actor_id=actor_id,
+            input_digest=input_digest,
+            config_version=settings.vision_quality_config_version,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+
     task = create_vision_task(
         session,
         household_id="system",
@@ -1416,7 +1551,7 @@ def create_vision_task_endpoint(
         idempotency_key=payload.idempotency_key,
         model_threshold=payload.model_threshold,
         input_digest=input_digest,
-        preprocess_version="opencv-quality-v1",
+        preprocess_version=settings.vision_quality_config_version,
         schema_version="vision-result-v1",
         code_version="hct-204-v1",
         data_version="hct-201-dataset-v1",

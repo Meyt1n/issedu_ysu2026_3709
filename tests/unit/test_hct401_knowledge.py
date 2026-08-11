@@ -54,7 +54,7 @@ class TestDocumentCRUD:
         chunks = db_session.query(KnowledgeChunk).filter(
             KnowledgeChunk.document_id == doc.id
         ).all()
-        assert len(chunks) > 0
+        assert len(chunks) == 1
         assert all(c.term_vector for c in chunks)
 
     def test_add_document_with_permission_scope(self, db_session):
