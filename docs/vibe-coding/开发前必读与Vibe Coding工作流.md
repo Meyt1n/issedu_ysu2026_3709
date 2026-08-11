@@ -16,7 +16,7 @@
 6. [项目全生命周期开发流程](19-项目全生命周期开发流程.md)：阶段、Issue、角色、Vibe Coding、PR、验收和交付闭环；
 7. [需求追踪矩阵](12-需求追踪矩阵.md)：唯一进度入口；
 8. [贡献指南](../../CONTRIBUTING.md)：分支、提交、检查和 PR 门禁；
-9. [双仓库解耦与独立克隆说明](双仓库解耦与独立克隆说明.md)：两个仓库的边界、一次性回退和独立 clone 规则。
+9. [双仓库同步说明](../../双仓库同步提交说明.md)：GitHub 合并和内部仓库同步规则。
 
 然后根据任务补读：
 
@@ -117,14 +117,14 @@ PR 必须使用 [PR 质量门禁模板](../../.github/pull_request_template.md)�
 
 ## 5. GitHub、内部仓库和发布
 
-当前 GitHub `master` 是唯一开发和合并入口。内部仓库已与 GitHub 解耦，按[双仓库解耦与独立克隆说明](双仓库解耦与独立克隆说明.md)单独保留和使用：
+当前 GitHub `master` 是唯一开发和合并入口：
 
 1. 功能分支推送到 GitHub；
 2. PR 合并到 GitHub `master`；
-3. 不再由 GitHub Actions 推送、读取或核对内部仓库；
-4. 不再要求两个仓库的 `master` 提交哈希一致；
-5. GitHub clone 与内部 clone 不互加远端、不互相 push；
-6. 禁止从 Git 历史恢复旧的双仓库同步 workflow；如需重新关联，必须先建立新的架构决策并完成评审。
+3. GitHub Actions 自动同步内部仓库 `master`；
+4. 检查两端 `master` 提交哈希一致；
+5. 禁止直接向内部 `master` 提交新历史；
+6. 禁止使用强制推送覆盖共享 `master`。
 
 当前项目以 Required Checks 和维护者合并为主要门禁；不要求额外第二人 approval。需要强制保护时，项目负责人应在 GitHub 分支规则中保留 Required Checks，并明确允许维护者在检查通过后直接合并。
 
