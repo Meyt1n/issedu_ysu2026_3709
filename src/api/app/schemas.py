@@ -443,4 +443,3 @@ class AssistantResponse(BaseModel):
     escalate: bool = False
     degraded: bool = False
     degrade_reason: str | None = None
-

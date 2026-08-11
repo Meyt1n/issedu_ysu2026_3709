@@ -19,6 +19,7 @@ import type {
   ProjectionCheckpoint,
   ProjectionReplayResult,
   RequestOptions,
+  RiskAlert,
   RiskDetailResponse,
   RiskListResponse,
   UpdateAuthorizationInput,
@@ -375,6 +376,59 @@ export class ApiClient {
         method: 'POST',
         body: JSON.stringify({ max_messages: 50, stale_after_seconds: 300 }),
       },
+      options,
+    )
+  }
+
+  runMemberRules(
+    householdId: string,
+    memberId: string,
+    options?: RequestOptions,
+  ): Promise<RiskAlert[]> {
+    return this.request(
+      `/api/v1/households/${householdId}/rules/run?member_id=${encodeURIComponent(memberId)}`,
+      { method: 'POST' },
+      options,
+    )
+  }
+
+  confirmCarePlan(
+    householdId: string,
+    memberId: string,
+    planEventId: string,
+    options?: RequestOptions,
+  ): Promise<HealthEvent> {
+    return this.request(
+      `/api/v1/households/${householdId}/members/${memberId}/plans/confirm?plan_event_id=${encodeURIComponent(planEventId)}`,
+      { method: 'POST' },
+      options,
+    )
+  }
+
+  deferCarePlan(
+    householdId: string,
+    memberId: string,
+    planEventId: string,
+    delayHours: number,
+    options?: RequestOptions,
+  ): Promise<HealthEvent> {
+    return this.request(
+      `/api/v1/households/${householdId}/members/${memberId}/plans/defer?plan_event_id=${encodeURIComponent(planEventId)}&delay_hours=${delayHours}`,
+      { method: 'POST' },
+      options,
+    )
+  }
+
+  skipCarePlan(
+    householdId: string,
+    memberId: string,
+    planEventId: string,
+    reason: string,
+    options?: RequestOptions,
+  ): Promise<HealthEvent> {
+    return this.request(
+      `/api/v1/households/${householdId}/members/${memberId}/plans/skip?plan_event_id=${encodeURIComponent(planEventId)}&reason=${encodeURIComponent(reason)}`,
+      { method: 'POST' },
       options,
     )
   }

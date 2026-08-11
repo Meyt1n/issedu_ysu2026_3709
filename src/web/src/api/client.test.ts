@@ -96,6 +96,40 @@ describe('ApiClient authorization contract', () => {
     ])
   })
 
+  it('routes the care-plan actions and rule run through the authorized API boundary', async () => {
+    const requests: Array<{ url: string; method: string | undefined; headers: Headers }> = []
+    const client = new ApiClient({
+      baseUrl: 'http://local.test',
+      fetcher: async (input, init) => {
+        requests.push({
+          url: String(input),
+          method: init?.method,
+          headers: new Headers(init?.headers),
+        })
+        return new Response(JSON.stringify([]), { status: 200 })
+      },
+    })
+    const options = {
+      actorId: 'caregiver',
+      accessPurpose: 'family-care',
+      idempotencyKey: 'e2e-plan-action-1',
+    }
+
+    await client.runMemberRules('household-1', 'member-1', options)
+    await client.confirmCarePlan('household-1', 'member-1', 'plan/1', options)
+    await client.deferCarePlan('household-1', 'member-1', 'plan/1', 6, options)
+    await client.skipCarePlan('household-1', 'member-1', 'plan/1', 'member declined', options)
+
+    expect(requests.map(request => request.url)).toEqual([
+      'http://local.test/api/v1/households/household-1/rules/run?member_id=member-1',
+      'http://local.test/api/v1/households/household-1/members/member-1/plans/confirm?plan_event_id=plan%2F1',
+      'http://local.test/api/v1/households/household-1/members/member-1/plans/defer?plan_event_id=plan%2F1&delay_hours=6',
+      'http://local.test/api/v1/households/household-1/members/member-1/plans/skip?plan_event_id=plan%2F1&reason=member%20declined',
+    ])
+    expect(requests.map(request => request.method)).toEqual(['POST', 'POST', 'POST', 'POST'])
+    expect(requests.every(request => request.headers.get('Idempotency-Key') === 'e2e-plan-action-1')).toBe(true)
+  })
+
   it('uses browser multipart boundaries for quality checks and uploads', async () => {
     const requests: RequestInit[] = []
     const fetcher: typeof fetch = async (_input, init) => {

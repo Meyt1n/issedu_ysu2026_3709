@@ -101,6 +101,11 @@ button:focus-visible { outline: 3px solid #68afbc; outline-offset: 2px; }
 .timeline-list { list-style: none; margin: 0; padding: 0; }
 .timeline-list li { border-top: 1px solid #dfe7e7; display: grid; gap: 3px; padding: 11px 0; }
 .timeline-list span { color: #587076; font-size: 12px; }
+.care-plan-form { display: grid; gap: 12px; }
+.care-plan-form label { color: #263f45; font-size: 13px; font-weight: 700; }
+.care-action-row { align-items: end; display: grid; gap: 10px; grid-template-columns: auto minmax(130px, 1fr) auto; }
+.care-action-row button { white-space: nowrap; }
+.action-success { border-left: 3px solid #218269; color: #155848; font-size: 13px; margin: 0; padding: 8px 10px; }
 
 .owner-layout { display: grid; gap: 20px; grid-template-columns: minmax(300px, 0.9fr) minmax(340px, 1.1fr); margin-top: 22px; }
 .panel { border: 1px solid #cbd7d7; background: #fff; padding: 22px; }
@@ -197,6 +202,8 @@ footer { color: #667b80; font-size: 12px; margin: 28px 0 0; text-align: center; 
   .dashboard-columns,
   .capture-layout,
   .quality-metrics { grid-template-columns: 1fr; }
+  .care-action-row { grid-template-columns: 1fr; }
+  .care-action-row button { width: 100%; }
   .grant-editor,
   .preview-panel { grid-column: auto; grid-row: auto; }
   .identity-bar button { width: 100%; }
