@@ -179,3 +179,15 @@ def test_repository_registry_passes() -> None:
 
     assert audit_registry(record) == []
     assert json.loads(json.dumps(copy.deepcopy(record))) == record
+
+
+def test_repository_registry_v1_3_passes() -> None:
+    registry_path = (
+        Path(__file__).parents[2]
+        / "docs"
+        / "model-registry"
+        / "HCT-203-yolo11n-experimental-v1.3.json"
+    )
+    record = load_registry(registry_path)
+
+    assert audit_registry(record) == []
