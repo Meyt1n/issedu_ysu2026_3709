@@ -19,9 +19,14 @@ import type {
   ProjectionCheckpoint,
   ProjectionReplayResult,
   RequestOptions,
+  RiskAlert,
   RiskDetailResponse,
   RiskListResponse,
   UpdateAuthorizationInput,
+  UploadedFile,
+  VisionQualityResponse,
+  CreateVisionTaskInput,
+  VisionTask,
 } from './types'
 
 export class ApiClientError extends Error {
@@ -83,7 +88,7 @@ export class ApiClient {
 
   constructor(options: ApiClientOptions = {}) {
     this.baseUrl = options.baseUrl ?? ''
-    this.fetcher = options.fetcher ?? fetch
+    this.fetcher = options.fetcher ?? globalThis.fetch.bind(globalThis)
   }
 
   private async request<T>(
@@ -93,7 +98,9 @@ export class ApiClient {
   ): Promise<T> {
     const headers = new Headers(init.headers)
     headers.set('Accept', 'application/json')
-    if (init.body !== undefined) headers.set('Content-Type', 'application/json')
+    if (init.body !== undefined && !(init.body instanceof FormData)) {
+      headers.set('Content-Type', 'application/json')
+    }
     if (options.actorId) headers.set('X-Actor-Id', options.actorId)
     if (options.accessPurpose) headers.set('X-Access-Purpose', options.accessPurpose)
     if (options.idempotencyKey) headers.set('Idempotency-Key', options.idempotencyKey)
@@ -137,6 +144,35 @@ export class ApiClient {
 
   getCapabilities(options?: RequestOptions): Promise<CapabilityResponse> {
     return this.request('/api/v1/meta/capabilities', undefined, options)
+  }
+
+  checkVisionQuality(file: File, options?: RequestOptions): Promise<VisionQualityResponse> {
+    const body = new FormData()
+    body.append('file', file)
+    body.append('media_type', 'image')
+    return this.request('/api/v1/vision-quality/check', { method: 'POST', body }, options)
+  }
+
+  uploadFile(file: File, options?: RequestOptions): Promise<UploadedFile> {
+    const body = new FormData()
+    body.append('file', file)
+    return this.request('/api/v1/files/upload', { method: 'POST', body }, options)
+  }
+
+  deleteUploadedFile(storageKey: string, options?: RequestOptions): Promise<{ deleted: boolean }> {
+    return this.request(
+      `/api/v1/files/${encodeURIComponent(storageKey)}`,
+      { method: 'DELETE' },
+      options,
+    )
+  }
+
+  createVisionTask(input: CreateVisionTaskInput, options?: RequestOptions): Promise<VisionTask> {
+    return this.request(
+      '/api/v1/vision-tasks',
+      { method: 'POST', body: JSON.stringify(input) },
+      options,
+    )
   }
 
   listHouseholds(options?: RequestOptions): Promise<Household[]> {
@@ -340,6 +376,59 @@ export class ApiClient {
         method: 'POST',
         body: JSON.stringify({ max_messages: 50, stale_after_seconds: 300 }),
       },
+      options,
+    )
+  }
+
+  runMemberRules(
+    householdId: string,
+    memberId: string,
+    options?: RequestOptions,
+  ): Promise<RiskAlert[]> {
+    return this.request(
+      `/api/v1/households/${householdId}/rules/run?member_id=${encodeURIComponent(memberId)}`,
+      { method: 'POST' },
+      options,
+    )
+  }
+
+  confirmCarePlan(
+    householdId: string,
+    memberId: string,
+    planEventId: string,
+    options?: RequestOptions,
+  ): Promise<HealthEvent> {
+    return this.request(
+      `/api/v1/households/${householdId}/members/${memberId}/plans/confirm?plan_event_id=${encodeURIComponent(planEventId)}`,
+      { method: 'POST' },
+      options,
+    )
+  }
+
+  deferCarePlan(
+    householdId: string,
+    memberId: string,
+    planEventId: string,
+    delayHours: number,
+    options?: RequestOptions,
+  ): Promise<HealthEvent> {
+    return this.request(
+      `/api/v1/households/${householdId}/members/${memberId}/plans/defer?plan_event_id=${encodeURIComponent(planEventId)}&delay_hours=${delayHours}`,
+      { method: 'POST' },
+      options,
+    )
+  }
+
+  skipCarePlan(
+    householdId: string,
+    memberId: string,
+    planEventId: string,
+    reason: string,
+    options?: RequestOptions,
+  ): Promise<HealthEvent> {
+    return this.request(
+      `/api/v1/households/${householdId}/members/${memberId}/plans/skip?plan_event_id=${encodeURIComponent(planEventId)}&reason=${encodeURIComponent(reason)}`,
+      { method: 'POST' },
       options,
     )
   }

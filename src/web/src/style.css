@@ -101,6 +101,11 @@ button:focus-visible { outline: 3px solid #68afbc; outline-offset: 2px; }
 .timeline-list { list-style: none; margin: 0; padding: 0; }
 .timeline-list li { border-top: 1px solid #dfe7e7; display: grid; gap: 3px; padding: 11px 0; }
 .timeline-list span { color: #587076; font-size: 12px; }
+.care-plan-form { display: grid; gap: 12px; }
+.care-plan-form label { color: #263f45; font-size: 13px; font-weight: 700; }
+.care-action-row { align-items: end; display: grid; gap: 10px; grid-template-columns: auto minmax(130px, 1fr) auto; }
+.care-action-row button { white-space: nowrap; }
+.action-success { border-left: 3px solid #218269; color: #155848; font-size: 13px; margin: 0; padding: 8px 10px; }
 
 .owner-layout { display: grid; gap: 20px; grid-template-columns: minmax(300px, 0.9fr) minmax(340px, 1.1fr); margin-top: 22px; }
 .panel { border: 1px solid #cbd7d7; background: #fff; padding: 22px; }
@@ -152,6 +157,35 @@ legend { color: #3d5960; font-size: 13px; font-weight: 800; padding: 0 4px; }
 .source-list span { color: #587076; font-size: 12px; }
 .member-list { display: grid; gap: 8px; }
 .member-list li { border-left: 3px solid #218269; padding: 7px 10px; }
+.vision-quality-panel { margin-top: 22px; }
+.quality-state { color: #587076; font-size: 11px; font-weight: 800; text-transform: uppercase; }
+.quality-state[data-state="retake"],
+.quality-state[data-state="error"] { color: #a43228; }
+.quality-state[data-state="passed"],
+.quality-state[data-state="queued"] { color: #155848; }
+.capture-layout { display: grid; gap: 20px; grid-template-columns: minmax(240px, 0.8fr) minmax(280px, 1.2fr); }
+.capture-preview { align-items: center; background: #edf3f1; border: 1px solid #cbd7d7; display: flex; justify-content: center; min-height: 220px; overflow: hidden; }
+.capture-preview img { display: block; max-height: 340px; max-width: 100%; object-fit: contain; }
+.capture-preview p { color: #587076; font-size: 13px; max-width: 220px; padding: 20px; text-align: center; }
+.capture-actions { align-content: start; display: grid; gap: 12px; }
+.file-picker { color: #263f45; font-size: 14px; font-weight: 700; }
+.file-picker input { background: #fff; }
+.local-file-note { color: #587076; font-size: 12px; margin: 0; overflow-wrap: anywhere; }
+.capture-buttons { display: flex; gap: 8px; }
+.quality-result { border-left: 4px solid #258692; display: grid; gap: 10px; margin-top: 18px; padding: 12px 14px; }
+.quality-result.retake { background: #fff8f4; border-left-color: #b24034; }
+.quality-result.passed,
+.quality-result.queued { background: #f1f8f4; border-left-color: #218269; }
+.quality-result strong,
+.quality-result span { display: block; }
+.quality-result p,
+.quality-result ul { color: #526a70; font-size: 13px; margin: 0; }
+.quality-result ul { padding-left: 20px; }
+.quality-metrics { display: grid; gap: 10px; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; }
+.quality-metrics div { border-top: 1px solid #cbd7d7; padding-top: 8px; }
+.quality-metrics dt { color: #587076; font-size: 11px; }
+.quality-metrics dd { color: #182b31; font-size: 15px; font-weight: 800; margin: 3px 0 0; }
+.quality-metrics dd[data-passed="false"] { color: #a43228; }
 footer { color: #667b80; font-size: 12px; margin: 28px 0 0; text-align: center; }
 
 @media (max-width: 800px) {
@@ -165,7 +199,11 @@ footer { color: #667b80; font-size: 12px; margin: 28px 0 0; text-align: center; 
   .dashboard-heading { align-items: stretch; display: grid; }
   .dashboard-member-select { width: 100%; }
   .overview-grid,
-  .dashboard-columns { grid-template-columns: 1fr; }
+  .dashboard-columns,
+  .capture-layout,
+  .quality-metrics { grid-template-columns: 1fr; }
+  .care-action-row { grid-template-columns: 1fr; }
+  .care-action-row button { width: 100%; }
   .grant-editor,
   .preview-panel { grid-column: auto; grid-row: auto; }
   .identity-bar button { width: 100%; }
@@ -174,4 +212,5 @@ footer { color: #667b80; font-size: 12px; margin: 28px 0 0; text-align: center; 
   .risk-source-count,
   .risk-card-toggle > span:last-child { grid-column: 2; }
   .row-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .capture-buttons { display: grid; }
 }

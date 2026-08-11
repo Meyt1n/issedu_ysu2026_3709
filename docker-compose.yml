@@ -34,7 +34,7 @@ services:
       ALLOW_DEV_ACTOR_HEADER: ${ALLOW_DEV_ACTOR_HEADER:-true}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
       DATABASE_URL: mysql+pymysql://${MYSQL_USER:-homecare}:${MYSQL_PASSWORD:-change-me}@db:3306/${MYSQL_DATABASE:-homecare}?charset=utf8mb4
-      PYTHONPATH: /app/src/api
+      PYTHONPATH: /app/src/api:/app/src
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://localhost:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-unavailable}
       OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-30}
@@ -60,7 +60,7 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-development}
       DATABASE_URL: mysql+pymysql://${MYSQL_USER:-homecare}:${MYSQL_PASSWORD:-change-me}@db:3306/${MYSQL_DATABASE:-homecare}?charset=utf8mb4
-      PYTHONPATH: /app/src/api
+      PYTHONPATH: /app/src/api:/app/src
       OUTBOX_POLL_SECONDS: ${OUTBOX_POLL_SECONDS:-2}
       OUTBOX_BATCH_SIZE: ${OUTBOX_BATCH_SIZE:-100}
       OUTBOX_STALE_SECONDS: ${OUTBOX_STALE_SECONDS:-300}

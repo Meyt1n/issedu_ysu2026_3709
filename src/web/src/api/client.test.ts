@@ -95,4 +95,88 @@ describe('ApiClient authorization contract', () => {
       'http://local.test/api/v1/households/household-1/members/member-1/timeline',
     ])
   })
+
+  it('routes the care-plan actions and rule run through the authorized API boundary', async () => {
+    const requests: Array<{ url: string; method: string | undefined; headers: Headers }> = []
+    const client = new ApiClient({
+      baseUrl: 'http://local.test',
+      fetcher: async (input, init) => {
+        requests.push({
+          url: String(input),
+          method: init?.method,
+          headers: new Headers(init?.headers),
+        })
+        return new Response(JSON.stringify([]), { status: 200 })
+      },
+    })
+    const options = {
+      actorId: 'caregiver',
+      accessPurpose: 'family-care',
+      idempotencyKey: 'e2e-plan-action-1',
+    }
+
+    await client.runMemberRules('household-1', 'member-1', options)
+    await client.confirmCarePlan('household-1', 'member-1', 'plan/1', options)
+    await client.deferCarePlan('household-1', 'member-1', 'plan/1', 6, options)
+    await client.skipCarePlan('household-1', 'member-1', 'plan/1', 'member declined', options)
+
+    expect(requests.map(request => request.url)).toEqual([
+      'http://local.test/api/v1/households/household-1/rules/run?member_id=member-1',
+      'http://local.test/api/v1/households/household-1/members/member-1/plans/confirm?plan_event_id=plan%2F1',
+      'http://local.test/api/v1/households/household-1/members/member-1/plans/defer?plan_event_id=plan%2F1&delay_hours=6',
+      'http://local.test/api/v1/households/household-1/members/member-1/plans/skip?plan_event_id=plan%2F1&reason=member%20declined',
+    ])
+    expect(requests.map(request => request.method)).toEqual(['POST', 'POST', 'POST', 'POST'])
+    expect(requests.every(request => request.headers.get('Idempotency-Key') === 'e2e-plan-action-1')).toBe(true)
+  })
+
+  it('uses browser multipart boundaries for quality checks and uploads', async () => {
+    const requests: RequestInit[] = []
+    const fetcher: typeof fetch = async (_input, init) => {
+      requests.push(init ?? {})
+      const body = init?.body as FormData
+      const isQuality = body?.get('media_type') === 'image'
+      return new Response(JSON.stringify(isQuality
+        ? { decision: 'PASS', quality_receipt: 'receipt' }
+        : { storage_key: 'stored.png', hash: 'a'.repeat(64), hash_algo: 'sha256' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    const client = new ApiClient({ baseUrl: 'http://local.test', fetcher })
+    const file = new File(['image'], 'box.png', { type: 'image/png' })
+
+    await client.checkVisionQuality(file, { actorId: 'owner' })
+    await client.uploadFile(file, { actorId: 'owner' })
+
+    expect(requests).toHaveLength(2)
+    for (const request of requests) {
+      const headers = new Headers(request.headers)
+      expect(headers.has('Content-Type')).toBe(false)
+      expect(headers.get('X-Actor-Id')).toBe('owner')
+      expect(request.body).toBeInstanceOf(FormData)
+    }
+  })
+
+  it('creates and cleans up vision tasks through encoded local API paths', async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = []
+    const fetcher: typeof fetch = async (input, init) => {
+      requests.push({ url: String(input), init: init ?? {} })
+      return new Response(JSON.stringify({ deleted: true }), { status: 200 })
+    }
+    const client = new ApiClient({ baseUrl: 'http://local.test', fetcher })
+
+    await client.createVisionTask({
+      file_id: 'stored.png',
+      quality_receipt: 'signed-receipt',
+      idempotency_key: 'request-1',
+    }, { actorId: 'owner' })
+    await client.deleteUploadedFile('folder/name.png', { actorId: 'owner' })
+
+    expect(requests[0]?.url).toBe('http://local.test/api/v1/vision-tasks')
+    expect(requests[0]?.init.method).toBe('POST')
+    expect(new Headers(requests[0]?.init.headers).get('Content-Type')).toBe('application/json')
+    expect(requests[1]?.url).toBe('http://local.test/api/v1/files/folder%2Fname.png')
+    expect(requests[1]?.init.method).toBe('DELETE')
+  })
 })

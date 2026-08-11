@@ -319,6 +319,7 @@ class VisionTaskCreate(BaseModel):
     task_type: str = Field(default="ocr", min_length=1, max_length=40)
     idempotency_key: str | None = Field(default=None, max_length=128)
     model_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    quality_receipt: str | None = Field(default=None, min_length=32, max_length=2048)
 
 
 class VisionTaskRead(BaseModel):
@@ -344,6 +345,23 @@ class VisionTaskRead(BaseModel):
     finished_at: datetime | None = None
     created_by: str
     created_at: datetime
+
+
+class VisionQualityRead(BaseModel):
+    schema_version: str
+    config_version: str
+    media_type: Literal["image", "video"]
+    decision: Literal["PASS", "RETAKE"]
+    allow_downstream: bool
+    source: dict[str, Any]
+    metrics: dict[str, Any]
+    thresholds: dict[str, Any]
+    reasons: list[str]
+    retake_prompts: list[str]
+    correction: dict[str, Any] | None = None
+    frames: list[dict[str, Any]] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+    quality_receipt: str | None = None
 
 
 # ── HCT-401: Knowledge / RAG schemas ──────────────────────────────────
@@ -425,4 +443,3 @@ class AssistantResponse(BaseModel):
     escalate: bool = False
     degraded: bool = False
     degrade_reason: str | None = None
-
