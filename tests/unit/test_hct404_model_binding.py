@@ -9,8 +9,8 @@ from app.model_binding import (
     activate_binding,
     create_binding,
     list_bindings,
-    rollback_binding,
     resolve_active_model_version,
+    rollback_binding,
 )
 
 
