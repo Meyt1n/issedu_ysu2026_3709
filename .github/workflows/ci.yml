@@ -96,3 +96,6 @@ jobs:
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The action otherwise derives the base from the first PR commit.
+          # Explicitly use the GitHub event base SHA for merge-history-safe scans.
+          BASE_REF: ${{ github.event.pull_request.base.sha }}
