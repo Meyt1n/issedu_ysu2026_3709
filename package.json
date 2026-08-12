@@ -1,0 +1,23 @@
+{
+  "name": "homecare-twin-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev:web": "vite --config src/web/vite.config.ts",
+    "build:web": "vite build --config src/web/vite.config.ts",
+    "preview:web": "vite preview --config src/web/vite.config.ts",
+    "check:web": "tsc --noEmit --project src/web/tsconfig.json",
+    "test:web": "vitest run --config src/web/vitest.config.ts"
+  },
+  "dependencies": {
+    "vue": "3.5.13"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.30",
+    "@vitejs/plugin-vue": "5.2.1",
+    "typescript": "5.7.3",
+    "vite": "6.4.3",
+    "vitest": "^3.2.6"
+  }
+}
