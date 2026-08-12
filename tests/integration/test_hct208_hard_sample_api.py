@@ -5,12 +5,9 @@ Requires database (uses the test SQLite fixture from conftest).
 """
 
 import pytest
-from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.hard_sample import (
-    VALID_CATEGORIES,
-    _canonical_hash,
     create_correction_diff,
     create_export_manifest,
     create_hard_sample,
@@ -243,7 +240,7 @@ class TestHardSample:
         # Approve and grant consent
         update_hard_sample_status(db_session, sample, new_status="approved", actor_id="bob")
         db_session.commit()
-        consent = grant_training_consent(
+        grant_training_consent(
             db_session, hard_sample_id=sample.id, household_id=h.id,
             member_id=m.id, granted_by="alice",
         )

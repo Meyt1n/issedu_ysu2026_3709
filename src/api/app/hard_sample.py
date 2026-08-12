@@ -14,14 +14,16 @@ from typing import Any
 from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String, func, select
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
-from app.models import Base, HealthEvent, Household, Member, new_id
+from app.models import Base, HealthEvent, new_id
 
 logger = logging.getLogger(__name__)
 
 # ── Enums ────────────────────────────────────────────────────────────────
 
 HardSampleCategoryStr = str  # one of: hard_font, layout, condition, similar, foreign
-VALID_CATEGORIES = frozenset({"hard_font", "hard_layout", "hard_condition", "hard_similar", "hard_foreign"})
+VALID_CATEGORIES = frozenset({
+    "hard_font", "hard_layout", "hard_condition", "hard_similar", "hard_foreign",
+})
 
 
 # ── Models ───────────────────────────────────────────────────────────────
@@ -346,10 +348,14 @@ def delete_hard_sample(
     sample.deleted_at = now
 
     # Cascade: revoke active training consent
-    _revoke_active_consent_for_sample(session, sample.id, actor_id=actor_id, reason="sample_deleted")
+    _revoke_active_consent_for_sample(
+        session, sample.id, actor_id=actor_id, reason="sample_deleted",
+    )
 
     # Cascade: invalidate manifests referencing this sample
-    _invalidate_manifests_referencing_sample(session, sample.id, actor_id=actor_id, reason="sample_deleted")
+    _invalidate_manifests_referencing_sample(
+        session, sample.id, actor_id=actor_id, reason="sample_deleted",
+    )
 
     session.flush()
     logger.info("HARD_SAMPLE_DELETED sample=%s actor=%s", sample.id, actor_id)
@@ -413,7 +419,7 @@ def grant_training_consent(
 
     # Revoke existing active consent first
     _revoke_active_consent_for_sample(
-        session, hard_sample_id, actor_id=granted_by, reason="replaced_by_new_grant"
+        session, hard_sample_id, actor_id=granted_by, reason="replaced_by_new_grant",
     )
 
     consent = TrainingConsent(
@@ -427,7 +433,10 @@ def grant_training_consent(
     )
     session.add(consent)
     session.flush()
-    logger.info("TRAINING_CONSENT_GRANTED consent=%s sample=%s actor=%s", consent.id, hard_sample_id, granted_by)
+    logger.info(
+        "TRAINING_CONSENT_GRANTED consent=%s sample=%s actor=%s",
+        consent.id, hard_sample_id, granted_by,
+    )
     return consent
 
 
@@ -443,11 +452,13 @@ def revoke_training_consent(
     if consent is None:
         raise ValueError("NO_ACTIVE_CONSENT")
 
-    _revoke_active_consent_for_sample(session, hard_sample_id, actor_id=actor_id, reason=reason)
+    _revoke_active_consent_for_sample(
+        session, hard_sample_id, actor_id=actor_id, reason=reason,
+    )
 
     # Cascade: invalidate manifests referencing this sample
     _invalidate_manifests_referencing_sample(
-        session, hard_sample_id, actor_id=actor_id, reason="consent_revoked"
+        session, hard_sample_id, actor_id=actor_id, reason="consent_revoked",
     )
 
     return consent
