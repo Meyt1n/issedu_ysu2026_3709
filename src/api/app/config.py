@@ -17,9 +17,13 @@ class Settings(BaseSettings):
     outbox_batch_size: int = 100
     outbox_stale_seconds: int = 300
     file_root: str = "./data/files"
+    master_data_root: str = "./data/master-data"
+    master_data_approved_versions: str = ""
     max_upload_bytes: int = 10 * 1024 * 1024
     vision_model_version: str = "unavailable"
     ocr_version: str = "unavailable"
+    vision_adapter_signing_key: str = "dev-only-change-me"
+    vision_adapter_allowlist: str = "homecare-local-vision"
     vision_quality_config_version: str = "opencv-quality-demo-v1"
     vision_quality_min_width: int = 640
     vision_quality_min_height: int = 480
@@ -50,14 +54,22 @@ class Settings(BaseSettings):
     @property
     def upload_allowed_ext_set(self) -> set[str]:
         return {
-            ext.strip().lower()
-            for ext in self.upload_allowed_extensions.split(",")
-            if ext.strip()
+            ext.strip().lower() for ext in self.upload_allowed_extensions.split(",") if ext.strip()
         }
 
     @property
     def cors_origin_list(self) -> list[str]:
         return [item.strip() for item in self.cors_origins.split(",") if item.strip()]
+
+    @property
+    def master_data_approved_version_set(self) -> set[str]:
+        return {
+            item.strip() for item in self.master_data_approved_versions.split(",") if item.strip()
+        }
+
+    @property
+    def vision_adapter_allowlist_set(self) -> set[str]:
+        return {item.strip() for item in self.vision_adapter_allowlist.split(",") if item.strip()}
 
     def vision_quality_thresholds(self):
         from ai.vision.quality_gate import QualityThresholds

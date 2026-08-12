@@ -5,6 +5,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import NoReturn
 
+from ai.vision.evidence_pipeline import (
+    EvidencePipelineRequest,
+    EvidencePipelineResult,
+    process_evidence,
+    verify_adapter_receipt,
+)
+from ai.vision.master_data import load_master_data_snapshot
 from fastapi import (
     APIRouter,
     Depends,
@@ -1560,6 +1567,92 @@ def create_vision_task_endpoint(
     session.refresh(task)
     logger.info("VISION_TASK_ENQUEUED task=%s actor=%s", task.id, actor_id)
     return task
+
+
+@router.post(
+    "/vision-tasks/{task_id}/evidence",
+    response_model=EvidencePipelineResult,
+)
+def submit_vision_evidence_endpoint(
+    task_id: str,
+    payload: EvidencePipelineRequest,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> EvidencePipelineResult:
+    """Store OCR-first adapter evidence and produce a safe fusion input.
+
+    This endpoint accepts outputs from local OCR/barcode/YOLO adapters.  It
+    never confirms an identity or creates a health event; HCT-206 performs
+    candidate fusion and HCT-207 performs human confirmation.
+    """
+    task = get_vision_task(session, task_id)
+    if task is None or task.created_by != actor_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="VISION_TASK_NOT_FOUND")
+    if task.status in {
+        VisionTaskStatus.SUCCEEDED,
+        VisionTaskStatus.FAILED,
+        VisionTaskStatus.TIMEOUT,
+        VisionTaskStatus.CANCELLED,
+    }:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"VISION_TASK_ALREADY_{task.status.upper()}",
+        )
+
+    if payload.adapter_id not in settings.vision_adapter_allowlist_set:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="ADAPTER_NOT_ALLOWED",
+        )
+    if payload.adapter_receipt is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="ADAPTER_RECEIPT_REQUIRED",
+        )
+    if not verify_adapter_receipt(
+        task.id,
+        task.input_digest or "",
+        payload,
+        settings.vision_adapter_signing_key,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="ADAPTER_RECEIPT_INVALID",
+        )
+
+    if task.status == VisionTaskStatus.QUEUED:
+        transition_status(session, task, VisionTaskStatus.RUNNING)
+    master_data = load_master_data_snapshot(
+        payload.master_data_version,
+        root=Path(settings.master_data_root),
+        approved_versions=settings.master_data_approved_version_set,
+    )
+    result = process_evidence(
+        payload,
+        master_data=master_data,
+        source_sha256=task.input_digest,
+    )
+    updated = transition_status(
+        session,
+        task,
+        VisionTaskStatus.SUCCEEDED,
+        result=result.model_dump(mode="json"),
+        model_version=payload.vision_model_version,
+        preprocess_version=task.preprocess_version,
+        schema_version=result.schema_version,
+        code_version=payload.code_version,
+        data_version=payload.master_data_version,
+    )
+    session.commit()
+    session.refresh(updated)
+    logger.info(
+        "VISION_EVIDENCE_STORED task=%s actor=%s readiness=%s findings=%d",
+        task.id,
+        actor_id,
+        result.fusion_readiness,
+        len(result.findings),
+    )
+    return result
 
 
 @router.get("/vision-tasks/{task_id}", response_model=VisionTaskRead)
