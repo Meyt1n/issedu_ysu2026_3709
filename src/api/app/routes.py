@@ -5,6 +5,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import NoReturn
 
+from ai.vision.candidate_fusion import (
+    CandidateFusionResult,
+    FusionRequest,
+    fuse_evidence,
+)
 from ai.vision.evidence_pipeline import (
     EvidencePipelineRequest,
     EvidencePipelineResult,
@@ -1651,6 +1656,51 @@ def submit_vision_evidence_endpoint(
         actor_id,
         result.fusion_readiness,
         len(result.findings),
+    )
+    return result
+
+
+@router.post(
+    "/vision-tasks/{task_id}/fusion",
+    response_model=CandidateFusionResult,
+)
+def fuse_vision_task_endpoint(
+    task_id: str,
+    payload: FusionRequest,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> CandidateFusionResult:
+    """Rank existing local candidates without confirming or writing a fact.
+
+    Fusion is deliberately a separate, repeatable read of the stored
+    OCR-first evidence.  It may only consume a completed task result and an
+    approved local master-data snapshot; no health event is created here.
+    """
+    task = get_vision_task(session, task_id)
+    if task is None or task.created_by != actor_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="VISION_TASK_NOT_FOUND")
+    if task.status != VisionTaskStatus.SUCCEEDED or not task.result:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="VISION_EVIDENCE_REQUIRED")
+    try:
+        evidence = EvidencePipelineResult.model_validate(task.result)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="VISION_EVIDENCE_INVALID",
+        ) from exc
+    master_version = evidence.versions.get("master_data_version", "unavailable")
+    master_data = load_master_data_snapshot(
+        master_version,
+        root=Path(settings.master_data_root),
+        approved_versions=settings.master_data_approved_version_set,
+    )
+    result = fuse_evidence(evidence, master_data, thresholds=payload.thresholds())
+    logger.info(
+        "VISION_FUSION_EVALUATED task=%s actor=%s status=%s candidates=%d",
+        task.id,
+        actor_id,
+        result.status,
+        len(result.candidates),
     )
     return result
 

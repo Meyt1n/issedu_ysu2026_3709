@@ -255,3 +255,50 @@ def test_evidence_api_loads_requested_local_master_snapshot(client, tmp_path, mo
     ]
     assert body["versions"]["master_data_version"] == "demo-master-v1"
     assert "MASTER_DATA_UNAVAILABLE" not in {finding["code"] for finding in body["findings"]}
+
+
+def test_fusion_api_returns_versioned_safe_four_state_result(client, tmp_path, monkeypatch) -> None:
+    task_id, input_digest = _create_task(client, tmp_path, monkeypatch)
+    payload = _signed_payload(
+        task_id,
+        input_digest,
+        {
+            "ocr_tokens": [
+                {
+                    "id": "ocr-1",
+                    "raw_value": "Demo Medicine",
+                    "confidence": 0.9,
+                    "engine_version": "ocr-local-v1",
+                }
+            ],
+            "field_proposals": [
+                {
+                    "field_name": "drug_name",
+                    "raw_value": "Demo Medicine",
+                    "evidence_ids": ["ocr-1"],
+                    "confidence": 0.85,
+                    "parser_version": "rules-v1",
+                }
+            ],
+        },
+    )
+    evidence = client.post(
+        f"/api/v1/vision-tasks/{task_id}/evidence",
+        json=payload,
+        headers={"X-Actor-ID": "evidence-owner"},
+    )
+    assert evidence.status_code == 200
+
+    response = client.post(
+        f"/api/v1/vision-tasks/{task_id}/fusion",
+        json={},
+        headers={"X-Actor-ID": "evidence-owner"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["schema_version"] == "candidate-fusion-v1"
+    assert body["status"] in {"UNKNOWN", "REVIEW", "CONFLICT", "MATCHED"}
+    assert body["requires_human_confirmation"] is True
+    assert body["health_event_allowed"] is False
+    assert "fusion_rule_version" in body["versions"]
