@@ -569,3 +569,43 @@ class ExportManifestRead(BaseModel):
     invalidated_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+
+
+# ── HCT-404: Model version binding schemas ────────────────────────────
+
+
+class ModelVersionBindingCreate(BaseModel):
+    model_id: str = Field(min_length=1, max_length=128)
+    dataset_version: str = Field(min_length=1, max_length=128)
+    export_manifest_id: str | None = Field(default=None, max_length=36)
+    fixed_set_hash: str = Field(min_length=1, max_length=64)
+    safety_thresholds: dict[str, Any] = Field(default_factory=dict)
+    comparison_report_hash: str | None = Field(default=None, max_length=64)
+
+
+class ModelVersionBindingActivate(BaseModel):
+    approved_by: str = Field(min_length=1, max_length=120)
+
+
+class ModelVersionBindingRollback(BaseModel):
+    reason: str = Field(default="", max_length=240)
+
+
+class ModelVersionBindingRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    model_id: str
+    dataset_version: str
+    export_manifest_id: str | None
+    fixed_set_hash: str
+    release_status: str
+    safety_thresholds: dict[str, Any]
+    comparison_report_hash: str | None
+    approved_by: str | None
+    approved_at: datetime | None
+    revoked_by: str | None
+    revoked_at: datetime | None
+    created_by: str
+    created_at: datetime
+    updated_at: datetime

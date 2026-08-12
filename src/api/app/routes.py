@@ -109,6 +109,10 @@ from app.schemas import (
     MemberCreate,
     MemberRead,
     MemberStateRead,
+    ModelVersionBindingActivate,
+    ModelVersionBindingCreate,
+    ModelVersionBindingRead,
+    ModelVersionBindingRollback,
     OutboxDispatchRead,
     OutboxDispatchRequest,
     OutboxRead,
@@ -2511,3 +2515,162 @@ def invalidate_export_manifest_endpoint(
     session.commit()
     session.refresh(manifest)
     return ExportManifestRead.model_validate(manifest)
+
+
+# ── HCT-404: Model version binding, release and rollback ──────────────
+
+
+from app import model_binding as _mb  # noqa: E402
+
+
+def _mb_raise_val(err: str) -> NoReturn:
+    mapping: dict[str, int] = {
+        "BINDING_NOT_FOUND": 404,
+        "BINDING_NOT_ACTIVE": 409,
+        "BINDING_NOT_INACTIVE": 409,
+        "BINDING_ALREADY_ACTIVE": 409,
+        "BINDING_ALREADY_REVOKED": 409,
+        "NO_ACTIVE_BINDING": 404,
+        "COMPARISON_REPORT_REQUIRED": 422,
+    }
+    status_code_val = 422
+    for prefix, code in mapping.items():
+        if err.startswith(prefix):
+            status_code_val = code
+            break
+    raise HTTPException(status_code=status_code_val, detail=err)
+
+
+def _resolve_active_model_version(session: Session) -> str | None:
+    """Resolve active model version for vision task creation."""
+    try:
+        return _mb.resolve_active_model_version(session)
+    except Exception:
+        return None
+
+
+@router.post(
+    "/model-version-bindings",
+    response_model=ModelVersionBindingRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_model_binding_endpoint(
+    payload: ModelVersionBindingCreate,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> ModelVersionBindingRead:
+    try:
+        binding = _mb.create_binding(
+            session,
+            model_id=payload.model_id,
+            dataset_version=payload.dataset_version,
+            export_manifest_id=payload.export_manifest_id,
+            fixed_set_hash=payload.fixed_set_hash,
+            safety_thresholds=payload.safety_thresholds,
+            comparison_report_hash=payload.comparison_report_hash,
+            created_by=actor_id,
+        )
+    except ValueError as exc:
+        _mb_raise_val(str(exc))
+    session.commit()
+    session.refresh(binding)
+    return ModelVersionBindingRead.model_validate(binding)
+
+
+@router.get(
+    "/model-version-bindings",
+    response_model=list[ModelVersionBindingRead],
+)
+def list_model_bindings_endpoint(
+    model_id: str | None = None,
+    release_status: str | None = None,
+    session: Session = Depends(get_session),
+) -> list[ModelVersionBindingRead]:
+    bindings = _mb.list_bindings(session, model_id=model_id, release_status=release_status)
+    return [ModelVersionBindingRead.model_validate(b) for b in bindings]
+
+
+@router.get(
+    "/model-version-bindings/{binding_id}",
+    response_model=ModelVersionBindingRead,
+)
+def get_model_binding_endpoint(
+    binding_id: str,
+    session: Session = Depends(get_session),
+) -> ModelVersionBindingRead:
+    binding = _mb.get_binding(session, binding_id)
+    if binding is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="BINDING_NOT_FOUND")
+    return ModelVersionBindingRead.model_validate(binding)
+
+
+@router.post(
+    "/model-version-bindings/{binding_id}/activate",
+    response_model=ModelVersionBindingRead,
+)
+def activate_model_binding_endpoint(
+    binding_id: str,
+    payload: ModelVersionBindingActivate,
+    session: Session = Depends(get_session),
+) -> ModelVersionBindingRead:
+    binding = _mb.get_binding(session, binding_id)
+    if binding is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="BINDING_NOT_FOUND")
+    try:
+        _mb.activate_binding(session, binding, approved_by=payload.approved_by)
+    except ValueError as exc:
+        _mb_raise_val(str(exc))
+    session.commit()
+    session.refresh(binding)
+    return ModelVersionBindingRead.model_validate(binding)
+
+
+@router.post(
+    "/model-version-bindings/{binding_id}/rollback",
+    response_model=ModelVersionBindingRead,
+)
+def rollback_model_binding_endpoint(
+    binding_id: str,
+    payload: ModelVersionBindingRollback,
+    session: Session = Depends(get_session),
+) -> ModelVersionBindingRead:
+    binding = _mb.get_binding(session, binding_id)
+    if binding is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="BINDING_NOT_FOUND")
+    try:
+        _mb.rollback_binding(session, binding, actor_id="admin", reason=payload.reason)
+    except ValueError as exc:
+        _mb_raise_val(str(exc))
+    session.commit()
+    session.refresh(binding)
+    return ModelVersionBindingRead.model_validate(binding)
+
+
+@router.get("/model-version-bindings/{binding_id}/comparison", response_model=dict)
+def get_model_binding_comparison_endpoint(
+    binding_id: str,
+    session: Session = Depends(get_session),
+) -> dict:
+    binding = _mb.get_binding(session, binding_id)
+    if binding is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="BINDING_NOT_FOUND")
+    return {
+        "binding_id": binding.id,
+        "comparison_report_hash": binding.comparison_report_hash,
+        "model_id": binding.model_id,
+        "dataset_version": binding.dataset_version,
+        "fixed_set_hash": binding.fixed_set_hash,
+        "safety_thresholds": binding.safety_thresholds,
+    }
+
+
+@router.get("/meta/active-model-version", response_model=dict)
+def active_model_version_endpoint(
+    session: Session = Depends(get_session),
+) -> dict:
+    version = _resolve_active_model_version(session)
+    settings = get_settings()
+    return {
+        "active_model_version": version or settings.vision_model_version,
+        "source": "binding" if version else "config",
+    }
