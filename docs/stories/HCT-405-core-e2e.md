@@ -7,7 +7,7 @@
 - Reviewer: Project lead or an independently assigned reviewer (R3; the owner cannot self-review)
 - Risk: R3
 - Dependencies: HCT-207, HCT-307, HCT-308, and HCT-403 are closed. Vision, RAG/LLM, and V2 release paths remain release blockers until their actual APIs and evidence are available.
-- Allowed changes: `src/web/src/api/`, focused frontend tests, `tests/e2e/`, and this Story.
+- Allowed changes: `src/web/src/api/`, focused frontend tests, `tests/e2e/`, `tests/browser/`, `playwright.config.ts`, the root `package.json`/`package-lock.json` test tooling entries, and this Story.
 
 ## Value and Scope
 
@@ -35,8 +35,10 @@ It also adds frontend client methods for rule execution and plan confirmation, d
 | Revocation takes effect immediately | `test_hct405_core_flows.py` | Automated |
 | Export and deletion propagation | No released export/deletion API capability | Blocked |
 | Local egress restriction and weather field minimization | Existing HCT-004 safety tests; HCT-405 end-to-end runner pending | Pending integration |
-| No purchase, consultation, or advertising entry point | Existing HCT-004 redirect scan; browser evidence pending | Pending integration |
+| No purchase, consultation, or advertising entry point | Existing HCT-004 redirect scan; `tests/browser/hct405-visible-workflows.spec.ts` | Automated (synthetic browser boundary) |
 | V2 fixed-set comparison and rollback | No released V2 model capability | Blocked |
+
+The browser evidence added by this increment is `tests/browser/hct405-visible-workflows.spec.ts`. It covers an owner creating and revoking a synthetic caregiver grant, API-unavailable rendering without a household or health summary, and the local-only/no-promotion boundary. The tests use synthetic API responses only; they do not represent visual recognition, RAG, model release, deletion propagation, or deployment acceptance.
 
 ## Given / When / Then
 
@@ -49,6 +51,7 @@ It also adds frontend client methods for rule execution and plan confirmation, d
 ## Verification
 
 - `npm.cmd run test:web`
+- `npm.cmd run test:e2e:web` (uses Playwright Chromium; on this Windows host it uses the installed Edge executable)
 - `npm.cmd run check:web`
 - `uv run pytest tests/e2e/test_hct405_core_flows.py`
 - `uv run pytest`
@@ -57,7 +60,7 @@ It also adds frontend client methods for rule execution and plan confirmation, d
 
 ## Acceptance Remaining
 
-Final HCT-405 acceptance still requires the blocked and pending scenarios above, Playwright browser evidence for the visible workflows, JUnit/screenshots or videos where applicable, failure-injection evidence, and independent R3 review. Until then, this Story remains `In progress` and Issue #70 must not be closed.
+Final HCT-405 acceptance still requires the blocked and pending scenarios above, production-like API/browser evidence beyond synthetic responses, JUnit/screenshots or videos where applicable, failure-injection evidence, and independent R3 review. Until then, this Story remains `In progress` and Issue #70 must not be closed.
 
 ## Rollback
 
