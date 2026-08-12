@@ -280,7 +280,10 @@ def create_hard_sample(
     )
     session.add(sample)
     session.flush()
-    logger.info("HARD_SAMPLE_CREATED sample=%s category=%s actor=%s", sample.id, category, created_by)
+    logger.info(
+        "HARD_SAMPLE_CREATED sample=%s category=%s actor=%s",
+        sample.id, category, created_by,
+    )
     return sample
 
 
