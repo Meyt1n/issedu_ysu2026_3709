@@ -22,10 +22,12 @@ import type {
   RiskAlert,
   RiskDetailResponse,
   RiskListResponse,
+  EvidencePipelineResult,
   UpdateAuthorizationInput,
   UploadedFile,
   VisionQualityResponse,
   CreateVisionTaskInput,
+  SubmitVisionEvidenceInput,
   VisionTask,
 } from './types'
 
@@ -170,6 +172,18 @@ export class ApiClient {
   createVisionTask(input: CreateVisionTaskInput, options?: RequestOptions): Promise<VisionTask> {
     return this.request(
       '/api/v1/vision-tasks',
+      { method: 'POST', body: JSON.stringify(input) },
+      options,
+    )
+  }
+
+  submitVisionEvidence(
+    taskId: string,
+    input: SubmitVisionEvidenceInput,
+    options?: RequestOptions,
+  ): Promise<EvidencePipelineResult> {
+    return this.request(
+      `/api/v1/vision-tasks/${encodeURIComponent(taskId)}/evidence`,
       { method: 'POST', body: JSON.stringify(input) },
       options,
     )

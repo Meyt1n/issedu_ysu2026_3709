@@ -292,8 +292,142 @@ export interface VisionTask {
   status: string
   error_code: string | null
   error_message: string | null
+  result: EvidencePipelineResult | null
+  model_version: string | null
+  model_threshold: number | null
+  schema_version: string | null
+  code_version: string | null
+  data_version: string | null
   preprocess_version: string | null
   input_digest: string | null
   created_by: string
   created_at: string
+}
+
+export type EvidenceFieldName =
+  | 'drug_name'
+  | 'specification'
+  | 'manufacturer'
+  | 'batch_number'
+  | 'expiry_date'
+  | 'product_barcode'
+  | 'packaging_type'
+
+export interface EvidenceRegion {
+  x: number
+  y: number
+  width: number
+  height: number
+  coordinate_space: 'pixel' | 'normalized'
+}
+
+export interface OcrTokenInput {
+  id: string
+  channel?: 'ocr'
+  raw_value: string
+  region?: EvidenceRegion | null
+  confidence: number
+  engine_version: string
+  language?: string
+}
+
+export interface BarcodeCandidateInput {
+  id: string
+  channel?: 'barcode'
+  raw_value: string
+  region?: EvidenceRegion | null
+  confidence: number
+  format?: 'EAN-8' | 'EAN-13' | 'UPC-A' | 'ITF-14' | 'QR' | 'DATA_MATRIX' | 'UNKNOWN'
+  decoder_version: string
+  checksum_valid?: boolean | null
+  decode_valid?: boolean
+}
+
+export interface PackageRegionProposalInput {
+  id: string
+  channel?: 'yolo'
+  label: string
+  region: EvidenceRegion
+  confidence: number
+  model_version: string
+}
+
+export interface FieldProposalInput {
+  field_name: EvidenceFieldName
+  raw_value: string
+  evidence_ids: string[]
+  confidence: number
+  parser_version: string
+  source?: 'rule' | 'llm' | 'manual'
+}
+
+export interface SubmitVisionEvidenceInput {
+  ocr_tokens?: OcrTokenInput[]
+  barcodes?: BarcodeCandidateInput[]
+  package_regions?: PackageRegionProposalInput[]
+  field_proposals?: FieldProposalInput[]
+  vision_model_version?: string
+  ocr_engine_version?: string
+  barcode_decoder_version?: string
+  master_data_version?: string
+  code_version?: string
+  adapter_id: string
+  adapter_version: string
+  adapter_run_id: string
+  adapter_receipt: string
+}
+
+export interface NormalizedEvidence {
+  id: string
+  channel: 'ocr' | 'barcode' | 'yolo'
+  original_value: string
+  normalized_value: string
+  region: EvidenceRegion | null
+  confidence: number
+  producer_version: string
+}
+
+export interface BarcodeEvidenceResult {
+  evidence_id: string
+  original_value: string
+  normalized_value: string
+  format: string
+  validation_status: 'VALID' | 'INVALID_FORMAT' | 'INVALID_CHECKSUM'
+  checksum_valid: boolean | null
+  confidence: number
+  decoder_version: string
+}
+
+export interface FieldEvidence {
+  field_name: EvidenceFieldName
+  original_value: string
+  normalized_value: string
+  evidence_ids: string[]
+  confidence: number
+  parser_version: string
+  model_version: string
+  source: 'rule' | 'llm' | 'manual'
+  confirmation_status: 'UNCONFIRMED'
+}
+
+export interface EvidenceFinding {
+  code: string
+  severity: 'INFO' | 'REVIEW' | 'CONFLICT'
+  channel: 'ocr' | 'barcode' | 'yolo' | 'field' | 'master' | 'pipeline'
+  detail: string
+}
+
+export interface EvidencePipelineResult {
+  schema_version: string
+  source_sha256: string | null
+  source_digest_scope: 'uploaded_file_bytes'
+  evidence: NormalizedEvidence[]
+  barcodes: BarcodeEvidenceResult[]
+  fields: FieldEvidence[]
+  master_candidates: Array<{ record_id: string; reasons: Array<'BARCODE_EXACT' | 'NAME_EXACT'> }>
+  missing_fields: EvidenceFieldName[]
+  findings: EvidenceFinding[]
+  fusion_readiness: 'READY_FOR_FUSION' | 'REVIEW' | 'UNKNOWN' | 'CONFLICT'
+  requires_human_confirmation: true
+  versions: Record<string, string>
 }
