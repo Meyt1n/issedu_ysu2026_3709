@@ -1,0 +1,301 @@
+/* ImageGen 生成的组件级主题元素：每个页面使用同一套视觉语言，但保持不同语义。 */
+:root {
+  --generated-element-sprite: url('./assets/component-elements.png');
+}
+
+.event-feed,
+.feed-card,
+.medication-risk-card,
+.trend-panel,
+.security-panel,
+.scan-dropzone,
+.graph-surface,
+.member-hero-main,
+.assistant-banner,
+.big-screen-hero,
+.model-grid,
+.report-card,
+.abnormal-panel,
+.event-surface,
+.review-submit,
+.risk-hero-card,
+.strategy-card,
+.today-plan,
+.evidence-surface,
+.analysis-surface,
+.model-alert {
+  position: relative;
+}
+
+.event-feed::after,
+.feed-card::after,
+.medication-risk-card::before,
+.trend-panel::before,
+.security-panel::before,
+.scan-dropzone::before,
+.graph-surface::before,
+.member-hero-main::after,
+.assistant-banner::before,
+.big-screen-hero::after,
+.model-grid::after,
+.report-card::after,
+.abnormal-panel::before,
+.event-surface::before,
+.review-submit::before,
+.risk-hero-card::before,
+.strategy-card::after,
+.today-plan::before,
+.evidence-surface::before,
+.analysis-surface::before,
+.model-alert::after {
+  content: '';
+  position: absolute;
+  z-index: 0;
+  width: 104px;
+  height: 104px;
+  pointer-events: none;
+  background-image: var(--generated-element-sprite);
+  background-repeat: no-repeat;
+  background-size: 300% 200%;
+  opacity: .15;
+  filter: saturate(.86) drop-shadow(0 10px 16px rgba(67, 82, 139, .12));
+  transform: rotate(-4deg);
+  transition: opacity .4s ease, transform .5s cubic-bezier(.2,.8,.2,1);
+}
+
+.event-feed::after {
+  right: 0;
+  bottom: -3px;
+  background-position: 0 0;
+  animation: generated-element-float 8s ease-in-out infinite;
+}
+
+.event-feed:hover::after {
+  opacity: .25;
+  transform: translateY(-5px) rotate(-8deg) scale(1.04);
+}
+
+.feed-card::after {
+  right: 20px;
+  top: 14px;
+  width: 52px;
+  height: 52px;
+  opacity: .09;
+  transform: rotate(5deg);
+}
+
+.feed-card:nth-child(1)::after { background-position: 0 0; }
+.feed-card:nth-child(2)::after { background-position: 50% 0; }
+.feed-card:nth-child(3)::after { background-position: 100% 0; }
+.feed-card:hover::after { opacity: .2; transform: translateY(-2px) rotate(0deg) scale(1.08); }
+
+.medication-risk-card::before {
+  right: 22px;
+  top: 22px;
+  background-position: 100% 0;
+  opacity: .13;
+  animation: generated-element-float 7s ease-in-out -1.2s infinite;
+}
+
+.trend-panel::before {
+  right: 24px;
+  top: 24px;
+  width: 86px;
+  height: 86px;
+  background-position: 0 100%;
+  opacity: .13;
+  transform: rotate(5deg);
+}
+
+.security-panel::before {
+  right: 18px;
+  bottom: 14px;
+  background-position: 50% 100%;
+  opacity: .12;
+  animation: generated-element-float 9s ease-in-out -2.4s infinite;
+}
+
+.scan-dropzone::before {
+  right: 30px;
+  top: 24px;
+  width: 120px;
+  height: 120px;
+  background-position: 100% 100%;
+  opacity: .14;
+  transform: rotate(8deg);
+  animation: generated-element-float 7.5s ease-in-out -2s infinite;
+}
+
+.graph-surface::before {
+  right: 20px;
+  top: 16px;
+  width: 112px;
+  height: 112px;
+  background-position: 50% 0;
+  opacity: .1;
+  animation: generated-element-float 10s ease-in-out -1s infinite;
+}
+
+.member-hero-main::after {
+  right: 3%;
+  bottom: -24px;
+  width: 122px;
+  height: 122px;
+  background-position: 50% 0;
+  opacity: .075;
+  transform: rotate(-8deg);
+}
+
+.assistant-banner::before {
+  right: 30px;
+  bottom: -18px;
+  background-position: 0 0;
+  opacity: .12;
+  animation: generated-element-float 8.5s ease-in-out -3s infinite;
+}
+
+.big-screen-hero::after {
+  right: 7%;
+  top: 18px;
+  width: 112px;
+  height: 112px;
+  background-position: 50% 100%;
+  opacity: .1;
+  animation: generated-element-float 9s ease-in-out -2s infinite;
+}
+
+.model-grid::after {
+  right: 5%;
+  bottom: 10px;
+  width: 92px;
+  height: 92px;
+  background-position: 50% 100%;
+  opacity: .08;
+  transform: rotate(8deg);
+}
+
+.report-card::after {
+  right: 12px;
+  top: 48px;
+  width: 72px;
+  height: 72px;
+  background-position: 0 100%;
+  opacity: .08;
+  transform: rotate(5deg);
+}
+
+.report-card:nth-child(2)::after { background-position: 50% 100%; transform: rotate(-6deg); }
+.report-card:nth-child(3)::after { background-position: 100% 0; transform: rotate(7deg); }
+.report-card:hover::after { opacity: .18; transform: translateY(-3px) rotate(0deg) scale(1.08); }
+
+.abnormal-panel::before {
+  right: 20px;
+  top: 22px;
+  width: 96px;
+  height: 96px;
+  background-position: 100% 100%;
+  opacity: .1;
+  transform: rotate(-7deg);
+}
+
+.event-surface::before {
+  right: 24px;
+  top: 18px;
+  width: 78px;
+  height: 78px;
+  background-position: 100% 0;
+  opacity: .08;
+  transform: rotate(6deg);
+}
+
+.review-submit::before {
+  right: 23px;
+  top: 18px;
+  width: 82px;
+  height: 82px;
+  background-position: 0 100%;
+  opacity: .08;
+  transform: rotate(-6deg);
+}
+
+.risk-hero-card::before {
+  right: 94px;
+  top: 14px;
+  width: 70px;
+  height: 70px;
+  background-position: 100% 0;
+  opacity: .09;
+  transform: rotate(5deg);
+}
+
+.strategy-card::after {
+  right: 18px;
+  bottom: 8px;
+  width: 70px;
+  height: 70px;
+  background-position: 50% 100%;
+  opacity: .07;
+  transform: rotate(8deg);
+}
+
+.today-plan::before {
+  right: 16px;
+  top: 16px;
+  width: 76px;
+  height: 76px;
+  background-position: 0 0;
+  opacity: .07;
+  transform: rotate(-5deg);
+}
+
+.evidence-surface::before {
+  right: 17px;
+  top: 15px;
+  width: 72px;
+  height: 72px;
+  background-position: 0 100%;
+  opacity: .07;
+  transform: rotate(6deg);
+}
+
+.evidence-surface.evidence-network::before { background-position: 50% 0; }
+
+.analysis-surface::before {
+  right: 16px;
+  top: 18px;
+  width: 84px;
+  height: 84px;
+  background-position: 50% 100%;
+  opacity: .07;
+  transform: rotate(-7deg);
+}
+
+.model-alert::after {
+  right: 64px;
+  top: 1px;
+  width: 55px;
+  height: 55px;
+  background-position: 50% 100%;
+  opacity: .07;
+  transform: rotate(6deg);
+}
+
+@keyframes generated-element-float {
+  0%, 100% { translate: 0 0; }
+  50% { translate: 0 -7px; }
+}
+
+@media (max-width: 600px) {
+  .event-feed::after,
+  .graph-surface::before,
+  .big-screen-hero::after,
+  .model-grid::after { opacity: .07; transform: scale(.78); }
+
+  .medication-risk-card::before,
+  .scan-dropzone::before,
+  .report-card::after,
+  .event-surface::before,
+  .review-submit::before,
+  .evidence-surface::before,
+  .analysis-surface::before { right: 8px; opacity: .055; transform: scale(.78); }
+}
