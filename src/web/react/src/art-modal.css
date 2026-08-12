@@ -1,0 +1,61 @@
+@keyframes art-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes art-card-in {
+  from { opacity: 0; transform: translate3d(0, 20px, 0) scale(.94) rotate(-.7deg); }
+  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1) rotate(0); }
+}
+
+@keyframes art-orbit-drift {
+  0%, 100% { transform: rotate(-12deg) translate3d(0, 0, 0); }
+  50% { transform: rotate(9deg) translate3d(8px, -5px, 0); }
+}
+
+.art-modal-layer { position: fixed; inset: 0; z-index: 120; padding: 20px; display: grid; place-items: center; background: rgba(15, 23, 56, .24); backdrop-filter: blur(14px) saturate(1.05); -webkit-backdrop-filter: blur(14px) saturate(1.05); animation: art-backdrop-in .28s ease both; }
+.art-modal-card { position: relative; width: min(520px, 100%); max-height: min(720px, calc(100vh - 40px)); overflow: auto; padding: 31px; color: #182345; background: linear-gradient(145deg, rgba(255, 255, 255, .96), rgba(245, 247, 255, .91)); border: 1px solid rgba(255, 255, 255, .95); border-radius: 32px; box-shadow: 0 34px 80px rgba(25, 39, 92, .26), 0 7px 24px rgba(216, 151, 136, .12); outline: none; isolation: isolate; animation: art-card-in .46s cubic-bezier(.17, .8, .2, 1) both; }
+.art-modal-card.wide { width: min(700px, 100%); }
+.art-modal-card::before { content: ''; position: absolute; z-index: -1; top: -110px; right: -100px; width: 260px; height: 260px; background: radial-gradient(circle, rgba(164, 190, 255, .48), rgba(164, 190, 255, 0) 68%); filter: blur(4px); }
+.art-modal-card::after { content: ''; position: absolute; z-index: -1; bottom: -120px; left: -110px; width: 280px; height: 280px; background: radial-gradient(circle, rgba(255, 204, 190, .3), rgba(255, 204, 190, 0) 70%); }
+.art-modal-card.peach .art-modal-icon { color: #a55e57; background: linear-gradient(145deg, #ffe6df, #fff4ef); }
+.art-modal-card.lilac .art-modal-icon { color: #6958a8; background: linear-gradient(145deg, #eee8ff, #f8f4ff); }
+.art-modal-card.mint .art-modal-icon { color: #2c8574; background: linear-gradient(145deg, #def8ed, #f1fffa); }
+.art-modal-close { position: absolute; z-index: 2; top: 18px; right: 18px; width: 36px; height: 36px; display: grid; place-items: center; color: #77829b; background: rgba(255, 255, 255, .62); border: 1px solid rgba(216, 222, 239, .8); border-radius: 50%; transition: transform .2s ease, background-color .2s ease, color .2s ease; }
+.art-modal-close:hover { color: #1b2a55; background: white; transform: rotate(8deg) scale(1.06); }
+.art-modal-heading { position: relative; display: flex; align-items: flex-start; gap: 15px; padding-right: 34px; }
+.art-modal-icon { width: 50px; height: 50px; display: grid; place-items: center; flex: 0 0 50px; color: #4966bd; background: linear-gradient(145deg, #e5edff, #f2f0ff); border: 1px solid rgba(255, 255, 255, .85); border-radius: 17px; box-shadow: 0 9px 20px rgba(77, 103, 183, .13); }
+.art-modal-spark { width: 12px; height: 12px; display: block; background: currentColor; border-radius: 50%; box-shadow: 14px 0 0 -3px currentColor, 7px 12px 0 -4px currentColor; }
+.art-modal-eyebrow { margin: 1px 0 6px; color: #7b88a6; font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+.art-modal-heading h2 { margin: 0; color: #1b2a55; font: 700 24px/1.12 Manrope, sans-serif; letter-spacing: -.06em; }
+.art-modal-heading p:not(.art-modal-eyebrow) { max-width: 410px; margin: 8px 0 0; color: #78839b; font-size: 12px; line-height: 1.55; }
+.art-modal-content { position: relative; margin-top: 25px; }
+.art-modal-actions { position: relative; margin-top: 25px; display: flex; justify-content: flex-end; align-items: center; gap: 9px; }
+.art-modal-actions button, .art-modal-actions a { min-height: 40px; padding: 0 14px; display: inline-flex; justify-content: center; align-items: center; gap: 7px; border-radius: 12px; font-size: 12px; font-weight: 700; text-decoration: none; }
+.art-modal-primary { color: white; background: #334b9a; border: 1px solid #334b9a; box-shadow: 0 8px 18px rgba(51, 75, 154, .18); }
+.art-modal-primary:hover { background: #263b80; transform: translateY(-1px); }
+.art-modal-secondary { color: #63708a; background: rgba(255, 255, 255, .7); border: 1px solid #dbe1f0; }
+.art-modal-secondary:hover { color: #2d407e; border-color: #abbbe8; background: white; }
+.art-modal-note { padding: 13px 14px; display: flex; align-items: flex-start; gap: 9px; color: #63708a; background: rgba(237, 242, 255, .72); border: 1px solid rgba(195, 208, 247, .65); border-radius: 15px; font-size: 12px; line-height: 1.55; }
+.art-modal-note svg { margin-top: 1px; flex: 0 0 auto; color: #5270c1; }
+.art-modal-list { display: grid; gap: 9px; }
+.art-modal-list-row { padding: 12px 13px; display: flex; justify-content: space-between; align-items: center; gap: 12px; color: #344264; background: rgba(255, 255, 255, .62); border: 1px solid rgba(219, 225, 240, .78); border-radius: 14px; }
+.art-modal-list-row strong { font-size: 12px; }
+.art-modal-list-row small { display: block; margin-top: 3px; color: #8b95ab; font-size: 10px; }
+.art-modal-list-row > svg { color: #7d8bb0; }
+.privacy-modal-check { padding: 5px 8px; color: #2d8572; background: #e1f7ee; border-radius: 9px; font-size: 10px; font-weight: 800; white-space: nowrap; }
+.art-modal-orbit { position: absolute; z-index: -1; width: 140px; height: 52px; border: 1px solid rgba(146, 168, 232, .25); border-radius: 50%; pointer-events: none; }
+.art-modal-orbit.orbit-a { top: 70px; right: -32px; animation: art-orbit-drift 10s ease-in-out infinite; }
+.art-modal-orbit.orbit-b { bottom: 55px; left: -50px; transform: rotate(24deg); animation: art-orbit-drift 13s ease-in-out infinite reverse; }
+
+@media (max-width: 560px) {
+  .art-modal-layer { padding: 12px; align-items: end; }
+  .art-modal-card { max-height: calc(100vh - 24px); padding: 24px 20px 20px; border-radius: 27px 27px 22px 22px; }
+  .art-modal-heading h2 { font-size: 22px; }
+  .art-modal-actions { justify-content: stretch; }
+  .art-modal-actions button, .art-modal-actions a { flex: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .art-modal-layer, .art-modal-card, .art-modal-orbit { animation: none !important; }
+}
