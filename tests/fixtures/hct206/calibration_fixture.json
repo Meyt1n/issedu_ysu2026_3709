@@ -1,0 +1,133 @@
+{
+  "schema_version": "hct206-calibration-fixture-v1",
+  "fixture_id": "hct206-synthetic-technical-v1",
+  "approval": {
+    "status": "APPROVED_FOR_TECHNICAL_CALIBRATION",
+    "reviewer": "repository-maintainer",
+    "review_date": "2026-08-12",
+    "scope": "deterministic fusion-rule regression only"
+  },
+  "production_eligible": false,
+  "source": {
+    "type": "synthetic",
+    "license": "internal-teaching-fixture",
+    "consent_status": "NOT_APPLICABLE_SYNTHETIC",
+    "deidentified": true
+  },
+  "limitations": [
+    "This fixture contains no real medicine, patient, or image data.",
+    "It is approved only for deterministic fusion-rule calibration and regression.",
+    "Production accuracy and release remain blocked until HCT-201 supplies approved fixed validation, independent test, and unknown sets."
+  ],
+  "validation": [
+    {
+      "sample_id": "hct206-v-match-01",
+      "top_score": 0.94,
+      "score_margin": 0.25,
+      "expected_status": "MATCHED",
+      "predicted_candidate_id": "candidate-a",
+      "expected_candidate_id": "candidate-a"
+    },
+    {
+      "sample_id": "hct206-v-match-02",
+      "top_score": 0.87,
+      "score_margin": 0.18,
+      "expected_status": "MATCHED",
+      "predicted_candidate_id": "candidate-b",
+      "expected_candidate_id": "candidate-b"
+    },
+    {
+      "sample_id": "hct206-v-match-03",
+      "top_score": 0.83,
+      "score_margin": 0.14,
+      "expected_status": "MATCHED",
+      "predicted_candidate_id": "candidate-c",
+      "expected_candidate_id": "candidate-c"
+    },
+    {
+      "sample_id": "hct206-v-review-low-margin",
+      "top_score": 0.91,
+      "score_margin": 0.03,
+      "expected_status": "REVIEW",
+      "observed_review": true
+    },
+    {
+      "sample_id": "hct206-v-conflict",
+      "top_score": 0.96,
+      "score_margin": 0.30,
+      "expected_status": "CONFLICT",
+      "predicted_candidate_id": "candidate-a",
+      "expected_candidate_id": "candidate-b",
+      "observed_conflict": true
+    },
+    {
+      "sample_id": "hct206-v-unknown",
+      "top_score": 0.20,
+      "score_margin": 0.10,
+      "expected_status": "UNKNOWN",
+      "observed_unknown": true
+    },
+    {
+      "sample_id": "hct206-v-review-low-score",
+      "top_score": 0.58,
+      "score_margin": 0.05,
+      "expected_status": "REVIEW"
+    }
+  ],
+  "independent_test": [
+    {
+      "sample_id": "hct206-t-match-01",
+      "top_score": 0.90,
+      "score_margin": 0.22,
+      "expected_status": "MATCHED",
+      "predicted_candidate_id": "candidate-a",
+      "expected_candidate_id": "candidate-a"
+    },
+    {
+      "sample_id": "hct206-t-match-02",
+      "top_score": 0.85,
+      "score_margin": 0.16,
+      "expected_status": "MATCHED",
+      "predicted_candidate_id": "candidate-b",
+      "expected_candidate_id": "candidate-b"
+    },
+    {
+      "sample_id": "hct206-t-review",
+      "top_score": 0.78,
+      "score_margin": 0.02,
+      "expected_status": "REVIEW",
+      "observed_review": true
+    },
+    {
+      "sample_id": "hct206-t-conflict",
+      "top_score": 0.93,
+      "score_margin": 0.25,
+      "expected_status": "CONFLICT",
+      "observed_conflict": true
+    },
+    {
+      "sample_id": "hct206-t-unknown",
+      "top_score": 0.28,
+      "score_margin": 0.08,
+      "expected_status": "UNKNOWN",
+      "observed_unknown": true
+    },
+    {
+      "sample_id": "hct206-t-review-low-score",
+      "top_score": 0.57,
+      "score_margin": 0.04,
+      "expected_status": "REVIEW"
+    }
+  ],
+  "human_review": {
+    "review_status": "TECHNICAL_FIXTURE_REVIEWED",
+    "reviewer": "repository-maintainer",
+    "review_date": "2026-08-12",
+    "checks": [
+      "Every sample has an explicit expected four-state label.",
+      "Conflict and unknown flags are never eligible for MATCHED.",
+      "Validation and independent_test sample IDs are disjoint.",
+      "The fixture contains no production medicine or health data."
+    ]
+  }
+}
