@@ -19,7 +19,6 @@ import argparse
 import hashlib
 import json
 import sys
-import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -125,8 +124,10 @@ def _build_placeholder_report(
             "passes_safety_thresholds": False,
             "safety_threshold_checks": [
                 {"threshold": "min_map50 >= 0.90", "passed": False, "reason": "PLACEHOLDER"},
-                {"threshold": "min_map50_95 >= 0.85", "passed": False, "reason": "PLACEHOLDER"},
-                {"threshold": "max_hard_negative_fp == 0", "passed": False, "reason": "PLACEHOLDER"},
+                {"threshold": "min_map50_95 >= 0.85",
+                 "passed": False, "reason": "PLACEHOLDER"},
+                {"threshold": "max_hard_negative_fp == 0",
+                 "passed": False, "reason": "PLACEHOLDER"},
                 {"threshold": "comparison_report exists", "passed": True, "reason": ""},
             ],
             "recommendation": "BLOCKED_UNTIL_REAL_WEIGHTS_AVAILABLE",

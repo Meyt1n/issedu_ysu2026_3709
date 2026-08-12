@@ -1,10 +1,9 @@
 """Integration tests for HCT-404 model version binding API endpoints."""
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.model_binding import create_binding, get_active_binding, resolve_active_model_version
+from app.model_binding import create_binding
 
 
 class TestCreateBindingAPI:

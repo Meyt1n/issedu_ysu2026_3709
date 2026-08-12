@@ -8,7 +8,6 @@ from app.model_binding import (
     ModelVersionBinding,
     activate_binding,
     create_binding,
-    get_active_binding,
     list_bindings,
     rollback_binding,
     resolve_active_model_version,

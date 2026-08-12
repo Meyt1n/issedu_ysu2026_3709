@@ -8,7 +8,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String, func, select
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, String, func, select
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from app.models import Base, new_id
