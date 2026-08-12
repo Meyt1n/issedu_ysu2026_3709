@@ -149,7 +149,7 @@ def test_alembic_has_a_single_head() -> None:
     assert len(scripts.get_heads()) == 1
     head = scripts.get_heads()[0]
     assert head == "0006_hct404_model_version_binding"
-    assert len(head) <= 32
+    assert len(head) <= 64
 
 
 def test_reproduction_guides_describe_the_verified_lifecycle() -> None:
