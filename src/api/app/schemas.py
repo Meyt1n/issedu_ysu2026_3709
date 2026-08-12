@@ -443,3 +443,129 @@ class AssistantResponse(BaseModel):
     escalate: bool = False
     degraded: bool = False
     degrade_reason: str | None = None
+
+
+# ── HCT-208: Correction diff schemas ──────────────────────────────────
+
+
+class CorrectionDiffCreate(BaseModel):
+    source_event_id: str = Field(min_length=1, max_length=36)
+    member_id: str = Field(min_length=1, max_length=36)
+    field_path: str = Field(min_length=1, max_length=120)
+    before_value: Any | None = None
+    after_value: Any | None = None
+    reason: str = Field(min_length=1, max_length=240)
+    evidence: dict[str, Any] = Field(default_factory=dict)
+
+
+class CorrectionDiffRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    source_event_id: str
+    household_id: str
+    member_id: str
+    field_path: str
+    before_value: Any | None = None
+    after_value: Any | None = None
+    reason: str
+    evidence: dict[str, Any]
+    operator_actor_id: str
+    version: int
+    created_at: datetime
+
+
+# ── HCT-208: Hard sample schemas ──────────────────────────────────────
+
+
+class HardSampleCreate(BaseModel):
+    source_event_id: str = Field(min_length=1, max_length=36)
+    member_id: str = Field(min_length=1, max_length=36)
+    category: str = Field(min_length=1, max_length=20)
+    note: str = Field(default="", max_length=500)
+
+
+class HardSampleUpdate(BaseModel):
+    status: str = Field(min_length=1, max_length=20)
+    note: str | None = Field(default=None, max_length=500)
+
+
+class HardSampleRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    source_event_id: str
+    household_id: str
+    member_id: str
+    category: str
+    status: str
+    note: str | None = None
+    reviewed_by: str | None = None
+    reviewed_at: datetime | None = None
+    deleted_by: str | None = None
+    deleted_at: datetime | None = None
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+
+
+# ── HCT-208: Training consent schemas ─────────────────────────────────
+
+
+class TrainingConsentCreate(BaseModel):
+    scope: dict[str, Any] = Field(default_factory=dict)
+    license: str = Field(default="internal", max_length=60)
+
+
+class TrainingConsentRevoke(BaseModel):
+    reason: str = Field(default="", max_length=240)
+
+
+class TrainingConsentRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    hard_sample_id: str
+    household_id: str
+    member_id: str
+    granted_by: str
+    status: str
+    scope: dict[str, Any]
+    license: str
+    revoked_by: str | None = None
+    revoked_at: datetime | None = None
+    version: int
+    created_at: datetime
+
+
+# ── HCT-208: Export manifest schemas ──────────────────────────────────
+
+
+class ExportManifestCreate(BaseModel):
+    version: str = Field(min_length=1, max_length=40)
+    group_key: str = Field(min_length=1, max_length=120)
+    license: str = Field(min_length=1, max_length=60)
+    sample_ids: list[str] = Field(min_length=1)
+
+
+class ExportManifestInvalidate(BaseModel):
+    reason: str = Field(default="", max_length=240)
+
+
+class ExportManifestRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    version: str
+    group_key: str
+    license: str
+    sample_ids: list[str]
+    total_samples: int
+    event_ids: list[str]
+    content_hash: str
+    created_by: str
+    status: str
+    invalidated_by: str | None = None
+    invalidated_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
