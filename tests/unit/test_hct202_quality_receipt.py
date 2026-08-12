@@ -62,8 +62,9 @@ def test_receipt_expires_at_exact_boundary_and_tampering_is_rejected() -> None:
             now=110,
         )
     with pytest.raises(ValueError, match="QUALITY_RECEIPT_INVALID"):
+        tampered_receipt = receipt[:-1] + ("B" if receipt[-1] == "A" else "A")
         verify_quality_receipt(
-            receipt[:-1] + "A",
+            tampered_receipt,
             actor_id="owner-a",
             input_digest="a" * 64,
             config_version="quality-v1",
