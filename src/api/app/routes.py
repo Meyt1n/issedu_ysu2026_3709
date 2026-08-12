@@ -88,6 +88,14 @@ from app.schemas import (
     AuthorizationRevoke,
     AuthorizationUpdate,
     CapabilityResponse,
+    CorrectionDiffCreate,
+    CorrectionDiffRead,
+    ExportManifestCreate,
+    ExportManifestInvalidate,
+    ExportManifestRead,
+    HardSampleCreate,
+    HardSampleRead,
+    HardSampleUpdate,
     HealthEventCompensationCreate,
     HealthEventCreate,
     HealthEventRead,
@@ -114,6 +122,9 @@ from app.schemas import (
     RiskAlertRead,
     RiskDetailResponse,
     RiskListResponse,
+    TrainingConsentCreate,
+    TrainingConsentRead,
+    TrainingConsentRevoke,
     VisionQualityRead,
     VisionTaskCreate,
     VisionTaskRead,
@@ -2091,3 +2102,412 @@ def get_risk_detail(
         ),
         source_events=sources,
     )
+
+
+# ── HCT-208: Correction diff, hard sample, training consent & export ───
+
+
+from app import hard_sample as _hs  # noqa: E402
+
+
+def _hs_household(session: Session, household_id: str, actor_id: str) -> Household:
+    household = session.get(Household, household_id)
+    if household is None or household.created_by != actor_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RESOURCE_NOT_FOUND")
+    return household
+
+
+def _hs_raise_val(err: str) -> NoReturn:
+    mapping: dict[str, int] = {
+        "SOURCE_EVENT_NOT_FOUND": 404,
+        "SAMPLE_NOT_FOUND": 404,
+        "NO_ACTIVE_CONSENT": 404,
+        "SAMPLE_NOT_PENDING": 409,
+        "SAMPLE_NOT_APPROVED": 422,
+        "SAMPLE_DELETED": 422,
+        "SAMPLE_ALREADY_DELETED": 409,
+        "INVALID_STATUS_TRANSITION": 422,
+        "VERSION_ALREADY_EXISTS": 409,
+        "NO_SAMPLES_PROVIDED": 422,
+        "MANIFEST_NOT_ACTIVE": 409,
+        "INVALID_CATEGORY": 422,
+        "TRAINING_CONSENT_REQUIRED": 422,
+        "HARD_SAMPLE_NOT_FOUND": 404,
+        "TRAINING_CONSENT_GRANT_REQUIRED": 422,
+    }
+    status_code_val = 422
+    for prefix, code in mapping.items():
+        if err.startswith(prefix):
+            status_code_val = code
+            break
+    raise HTTPException(status_code=status_code_val, detail=err)
+
+
+# ── Correction Diffs ─────────────────────────────────────────────────
+
+
+@router.post(
+    "/households/{household_id}/correction-diffs",
+    response_model=CorrectionDiffRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_correction_diff_endpoint(
+    household_id: str,
+    payload: CorrectionDiffCreate,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> CorrectionDiffRead:
+    household = _hs_household(session, household_id, actor_id)
+    member = session.get(Member, payload.member_id)
+    if member is None or member.household_id != household_id:
+        _raise_resource_not_found()
+    try:
+        diff = _hs.create_correction_diff(
+            session,
+            household_id=household.id,
+            member_id=member.id,
+            source_event_id=payload.source_event_id,
+            field_path=payload.field_path,
+            before_value=payload.before_value,
+            after_value=payload.after_value,
+            reason=payload.reason,
+            evidence=payload.evidence,
+            operator_actor_id=actor_id,
+        )
+    except ValueError as exc:
+        _hs_raise_val(str(exc))
+    session.commit()
+    session.refresh(diff)
+    return CorrectionDiffRead.model_validate(diff)
+
+
+@router.get(
+    "/households/{household_id}/correction-diffs",
+    response_model=list[CorrectionDiffRead],
+)
+def list_correction_diffs_endpoint(
+    household_id: str,
+    member_id: str | None = None,
+    source_event_id: str | None = None,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> list[CorrectionDiffRead]:
+    _hs_household(session, household_id, actor_id)
+    diffs = _hs.list_correction_diffs(
+        session, household_id, member_id=member_id, source_event_id=source_event_id
+    )
+    return [CorrectionDiffRead.model_validate(d) for d in diffs]
+
+
+@router.get(
+    "/households/{household_id}/correction-diffs/{diff_id}",
+    response_model=CorrectionDiffRead,
+)
+def get_correction_diff_endpoint(
+    household_id: str,
+    diff_id: str,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> CorrectionDiffRead:
+    _hs_household(session, household_id, actor_id)
+    diff = _hs.get_correction_diff(session, diff_id)
+    if diff is None or diff.household_id != household_id:
+        _raise_resource_not_found()
+    return CorrectionDiffRead.model_validate(diff)
+
+
+# ── Hard Samples ──────────────────────────────────────────────────────
+
+
+@router.post(
+    "/households/{household_id}/hard-samples",
+    response_model=HardSampleRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_hard_sample_endpoint(
+    household_id: str,
+    payload: HardSampleCreate,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> HardSampleRead:
+    household = _hs_household(session, household_id, actor_id)
+    member = session.get(Member, payload.member_id)
+    if member is None or member.household_id != household_id:
+        _raise_resource_not_found()
+    try:
+        sample = _hs.create_hard_sample(
+            session,
+            household_id=household.id,
+            member_id=member.id,
+            source_event_id=payload.source_event_id,
+            category=payload.category,
+            note=payload.note,
+            created_by=actor_id,
+        )
+    except ValueError as exc:
+        _hs_raise_val(str(exc))
+    session.commit()
+    session.refresh(sample)
+    return HardSampleRead.model_validate(sample)
+
+
+@router.get(
+    "/households/{household_id}/hard-samples",
+    response_model=list[HardSampleRead],
+)
+def list_hard_samples_endpoint(
+    household_id: str,
+    status: str | None = None,
+    category: str | None = None,
+    member_id: str | None = None,
+    include_deleted: bool = False,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> list[HardSampleRead]:
+    _hs_household(session, household_id, actor_id)
+    samples = _hs.list_hard_samples(
+        session, household_id,
+        status=status, category=category, member_id=member_id,
+        include_deleted=include_deleted,
+    )
+    return [HardSampleRead.model_validate(s) for s in samples]
+
+
+@router.get(
+    "/households/{household_id}/hard-samples/{sample_id}",
+    response_model=HardSampleRead,
+)
+def get_hard_sample_endpoint(
+    household_id: str,
+    sample_id: str,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> HardSampleRead:
+    _hs_household(session, household_id, actor_id)
+    sample = _hs.get_hard_sample(session, sample_id)
+    if sample is None or sample.household_id != household_id:
+        _raise_resource_not_found()
+    return HardSampleRead.model_validate(sample)
+
+
+@router.patch(
+    "/households/{household_id}/hard-samples/{sample_id}",
+    response_model=HardSampleRead,
+)
+def update_hard_sample_endpoint(
+    household_id: str,
+    sample_id: str,
+    payload: HardSampleUpdate,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> HardSampleRead:
+    _hs_household(session, household_id, actor_id)
+    sample = _hs.get_hard_sample(session, sample_id)
+    if sample is None or sample.household_id != household_id:
+        _raise_resource_not_found()
+    try:
+        _hs.update_hard_sample_status(
+            session, sample,
+            new_status=payload.status,
+            actor_id=actor_id,
+            note=payload.note,
+        )
+    except ValueError as exc:
+        _hs_raise_val(str(exc))
+    session.commit()
+    session.refresh(sample)
+    return HardSampleRead.model_validate(sample)
+
+
+@router.delete("/households/{household_id}/hard-samples/{sample_id}")
+def delete_hard_sample_endpoint(
+    household_id: str,
+    sample_id: str,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> dict:
+    _hs_household(session, household_id, actor_id)
+    sample = _hs.get_hard_sample(session, sample_id)
+    if sample is None or sample.household_id != household_id:
+        _raise_resource_not_found()
+    try:
+        _hs.delete_hard_sample(session, sample, actor_id=actor_id)
+    except ValueError as exc:
+        _hs_raise_val(str(exc))
+    session.commit()
+    return {"status": "deleted", "sample_id": sample_id}
+
+
+# ── Training Consent ──────────────────────────────────────────────────
+
+
+@router.post(
+    "/households/{household_id}/hard-samples/{sample_id}/training-consent",
+    response_model=TrainingConsentRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def grant_training_consent_endpoint(
+    household_id: str,
+    sample_id: str,
+    payload: TrainingConsentCreate,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> TrainingConsentRead:
+    _hs_household(session, household_id, actor_id)
+    sample = _hs.get_hard_sample(session, sample_id)
+    if sample is None or sample.household_id != household_id:
+        _raise_resource_not_found()
+    try:
+        consent = _hs.grant_training_consent(
+            session,
+            hard_sample_id=sample_id,
+            household_id=household_id,
+            member_id=sample.member_id,
+            granted_by=actor_id,
+            scope=payload.scope,
+            license=payload.license,
+        )
+    except ValueError as exc:
+        _hs_raise_val(str(exc))
+    session.commit()
+    session.refresh(consent)
+    return TrainingConsentRead.model_validate(consent)
+
+
+@router.get(
+    "/households/{household_id}/hard-samples/{sample_id}/training-consent",
+    response_model=TrainingConsentRead | None,
+)
+def get_training_consent_endpoint(
+    household_id: str,
+    sample_id: str,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> TrainingConsentRead | None:
+    _hs_household(session, household_id, actor_id)
+    sample = _hs.get_hard_sample(session, sample_id)
+    if sample is None or sample.household_id != household_id:
+        _raise_resource_not_found()
+    consent = _hs.get_training_consent(session, sample_id)
+    if consent is None:
+        return None
+    return TrainingConsentRead.model_validate(consent)
+
+
+@router.post(
+    "/households/{household_id}/hard-samples/{sample_id}/training-consent/revoke",
+    response_model=TrainingConsentRead,
+)
+def revoke_training_consent_endpoint(
+    household_id: str,
+    sample_id: str,
+    payload: TrainingConsentRevoke,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> TrainingConsentRead:
+    _hs_household(session, household_id, actor_id)
+    sample = _hs.get_hard_sample(session, sample_id)
+    if sample is None or sample.household_id != household_id:
+        _raise_resource_not_found()
+    try:
+        consent = _hs.revoke_training_consent(
+            session, sample_id, actor_id=actor_id, reason=payload.reason
+        )
+    except ValueError as exc:
+        _hs_raise_val(str(exc))
+    session.commit()
+    session.refresh(consent)
+    return TrainingConsentRead.model_validate(consent)
+
+
+# ── Export Manifests ──────────────────────────────────────────────────
+
+
+@router.post(
+    "/households/{household_id}/export-manifests",
+    response_model=ExportManifestRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_export_manifest_endpoint(
+    household_id: str,
+    payload: ExportManifestCreate,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> ExportManifestRead:
+    _hs_household(session, household_id, actor_id)
+    try:
+        manifest = _hs.create_export_manifest(
+            session,
+            household_id=household_id,
+            version=payload.version,
+            group_key=payload.group_key,
+            license=payload.license,
+            sample_ids=payload.sample_ids,
+            created_by=actor_id,
+        )
+    except ValueError as exc:
+        _hs_raise_val(str(exc))
+    session.commit()
+    session.refresh(manifest)
+    return ExportManifestRead.model_validate(manifest)
+
+
+@router.get(
+    "/households/{household_id}/export-manifests",
+    response_model=list[ExportManifestRead],
+)
+def list_export_manifests_endpoint(
+    household_id: str,
+    status: str | None = None,
+    group_key: str | None = None,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> list[ExportManifestRead]:
+    _hs_household(session, household_id, actor_id)
+    manifests = _hs.list_export_manifests(
+        session, household_id, status=status, group_key=group_key
+    )
+    return [ExportManifestRead.model_validate(m) for m in manifests]
+
+
+@router.get(
+    "/households/{household_id}/export-manifests/{manifest_id}",
+    response_model=ExportManifestRead,
+)
+def get_export_manifest_endpoint(
+    household_id: str,
+    manifest_id: str,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> ExportManifestRead:
+    _hs_household(session, household_id, actor_id)
+    manifest = _hs.get_export_manifest(session, manifest_id)
+    if manifest is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MANIFEST_NOT_FOUND")
+    return ExportManifestRead.model_validate(manifest)
+
+
+@router.post(
+    "/households/{household_id}/export-manifests/{manifest_id}/invalidate",
+    response_model=ExportManifestRead,
+)
+def invalidate_export_manifest_endpoint(
+    household_id: str,
+    manifest_id: str,
+    payload: ExportManifestInvalidate,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> ExportManifestRead:
+    _hs_household(session, household_id, actor_id)
+    manifest = _hs.get_export_manifest(session, manifest_id)
+    if manifest is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MANIFEST_NOT_FOUND")
+    try:
+        _hs.invalidate_export_manifest(
+            session, manifest, actor_id=actor_id, reason=payload.reason
+        )
+    except ValueError as exc:
+        _hs_raise_val(str(exc))
+    session.commit()
+    session.refresh(manifest)
+    return ExportManifestRead.model_validate(manifest)

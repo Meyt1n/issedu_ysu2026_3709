@@ -50,6 +50,7 @@ paths = [
     "tests/unit/test_hct403_tool_call.py",
     "tests/safety/test_hct406_red_team.py",
     "tests/integration/test_hct301_projection.py",
+    "tests/integration/test_hct208_hard_sample_api.py",
     "tests/e2e/test_hct405_core_flows.py",
     "src/api/app/rules.py",
     "docs/threat-model/",
