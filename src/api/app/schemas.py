@@ -628,3 +628,18 @@ class ModelVersionBindingRead(BaseModel):
     created_by: str
     created_at: datetime
     updated_at: datetime
+
+
+class ErasureTaskRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    household_id: str
+    member_id: str | None
+    requested_by: str
+    requested_at: datetime
+    completed_at: datetime | None
+    status: str
+    layers: dict[str, Any]
+    scope: dict[str, Any]
+    error_layers: list[str]

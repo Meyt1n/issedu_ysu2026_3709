@@ -100,6 +100,7 @@ jobs:
           tests/e2e/test_hct405_failure_degradation.py
           tests/e2e/test_hct405_scenario_manifest.py
           tests/e2e/test_hct405_vision_review_release.py
+          tests/e2e/test_hct405_deletion_propagation.py
           --junitxml=artifacts/hct405-api-junit.xml
 
       - name: Upload HCT-405 API evidence

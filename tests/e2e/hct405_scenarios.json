@@ -144,21 +144,22 @@
     },
     {
       "id": "HCT405-09",
-      "title": "知识和训练出口删除传播",
+      "title": "家庭删除传播到主库、文件、索引、缓存和备份跳过",
       "status": "automated_with_limitations",
-      "preconditions": ["私有知识文档", "已批准困难样本、有效训练同意和活动导出清单"],
-      "roles": ["owner", "unauthorized-actor"],
-      "steps": ["验证他人不能删除私有文档", "owner 删除文档", "删除已导出的困难样本"],
-      "expected_states": ["知识 chunk 被删除且文档不可检索", "训练同意被撤销", "导出清单被标记 invalidated"],
-      "permission_boundary": "只有资源所属家庭 owner 或文档创建者可删除。",
-      "audit_evidence": ["deleted_by/deleted_at、consent revoke、manifest invalidation 和内容哈希"],
-      "cleanup": "测试主动删除资源，fixture 最终重置数据库。",
-      "coverage_tags": ["deletion-propagation", "consent-revocation", "export-invalidation"],
+      "preconditions": ["合成家庭与成员", "已确认事件", "家庭范围知识文档", "困难样本", "视觉任务关联文件和缓存"],
+      "roles": ["owner", "caregiver", "unauthorized-actor"],
+      "steps": ["验证他人不能删除家庭", "owner 删除家庭", "查询清理任务各层状态", "确认其他家庭不受影响"],
+      "expected_states": ["家庭和成员对业务不可见", "文件与缓存已删除", "知识 chunk 已删除", "困难样本已失效", "备份 skip 标记已写入且无正文", "健康事件物理行保留但 API 隐藏"],
+      "permission_boundary": "只有家庭 owner 可发起删除；照护者和其他身份统一返回资源不存在。",
+      "audit_evidence": ["erasure_task 各层状态", "脱敏 scope/skip 标记", "deleted_at 墓碑", "AccessAudit ERASURE"],
+      "cleanup": "测试主动删除资源，fixture 最终重置数据库和临时文件根。",
+      "coverage_tags": ["deletion-propagation", "consent-revocation", "export-invalidation", "backup-skip"],
       "automated_tests": [
         "tests/e2e/test_hct405_failure_degradation.py::test_knowledge_scope_and_deletion_propagate_through_api",
-        "tests/e2e/test_hct405_vision_review_release.py::test_hard_sample_deletion_revokes_consent_and_invalidates_export"
+        "tests/e2e/test_hct405_vision_review_release.py::test_hard_sample_deletion_revokes_consent_and_invalidates_export",
+        "tests/e2e/test_hct405_deletion_propagation.py::test_household_erasure_propagates_to_files_index_cache_and_backup_skip"
       ],
-      "limitations": ["完整家庭数据、对象存储和备份擦除由后续删除 Story 验收。"]
+      "limitations": ["不改写已离线的生产灾备副本；仅对本地可控备份写入 skip 标记。"]
     },
     {
       "id": "HCT405-10",

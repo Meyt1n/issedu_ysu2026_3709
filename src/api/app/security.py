@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models import AccessAudit, CareAuthorization, Household
+from app.models import AccessAudit, CareAuthorization, Household, Member
 
 PURPOSE_CODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
 
@@ -32,9 +32,17 @@ def get_access_purpose(
     return purpose if PURPOSE_CODE.fullmatch(purpose) else None
 
 
-def require_household_owner(session: Session, household_id: str, actor_id: str) -> Household:
+def require_household_owner(
+    session: Session,
+    household_id: str,
+    actor_id: str,
+    *,
+    allow_deleted: bool = False,
+) -> Household:
     household = session.get(Household, household_id)
     if household is None or household.created_by != actor_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RESOURCE_NOT_FOUND")
+    if household.deleted_at is not None and not allow_deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RESOURCE_NOT_FOUND")
     return household
 
@@ -84,6 +92,11 @@ def has_authorized_action(
 ) -> bool:
     # P0 管理边界：家庭 owner 是家庭管理员，可访问本家庭的成员目录和健康事实；
     # 非 owner 照护者必须同时满足成员、字段、动作和有效期授权。子女身份本身不等于 owner。
+    if household.deleted_at is not None:
+        return False
+    member = session.get(Member, member_id)
+    if member is None or member.household_id != household.id or member.deleted_at is not None:
+        return False
     if household.created_by == actor_id:
         return True
 

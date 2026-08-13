@@ -11,7 +11,7 @@ from sqlalchemy import create_engine, inspect, text
 from app.config import get_settings
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CURRENT_HEAD = "0010_hct405_review_wiring"
+CURRENT_HEAD = "0011_hct405_erasure"
 RESTORED_TABLES = {
     "projection_checkpoint",
     "review_task",
@@ -27,6 +27,7 @@ CURRENT_BRANCH_TABLES = {
     "training_consent",
     "export_manifest",
     "model_version_binding",
+    "erasure_task",
 }
 
 
