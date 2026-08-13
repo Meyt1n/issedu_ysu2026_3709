@@ -89,6 +89,16 @@ def quad_to_region(points: Any) -> EvidenceRegion | None:
     return EvidenceRegion(x=x, y=y, width=width, height=height, coordinate_space="pixel")
 
 
+def worker_python() -> str:
+    """Interpreter for engine worker subprocesses.
+
+    Defaults to the current interpreter; ``HCT_VISION_WORKER_PYTHON`` lets a
+    host process (e.g. the API env without paddle/torch) point workers at the
+    adapter environment that has the heavy runtimes installed.
+    """
+    return os.environ.get("HCT_VISION_WORKER_PYTHON") or sys.executable
+
+
 def _read_image_bgr(image_path: str | Path) -> Any | None:
     """Read an image as a BGR ndarray; safe for non-ASCII Windows paths.
 
@@ -156,6 +166,10 @@ class LocalPaddleOCR:
     def available(self) -> bool:
         if self.run_batch_fn is not None:
             return True
+        # a configured worker interpreter carries its own paddle install,
+        # so the host process does not need the package importable
+        if os.environ.get("HCT_VISION_WORKER_PYTHON"):
+            return True
         return importlib.util.find_spec("paddleocr") is not None
 
     @property
@@ -166,7 +180,7 @@ class LocalPaddleOCR:
             try:
                 release = importlib.metadata.version("paddleocr")
             except importlib.metadata.PackageNotFoundError:
-                release = "unknown"
+                release = "worker-env"
             self._version = f"paddleocr-{release}-ppocrv4-{self.lang}"
         return self._version
 
@@ -178,7 +192,7 @@ class LocalPaddleOCR:
             {"image_path": image_path, "lang": self.lang, "crops": crop_rects}
         )
         completed = subprocess.run(  # noqa: S603 (fixed worker script, no shell)
-            [sys.executable, "-X", "utf8", str(worker)],
+            [worker_python(), "-X", "utf8", str(worker)],
             input=request,
             capture_output=True,
             text=True,

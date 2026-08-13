@@ -37,7 +37,6 @@ import logging
 import os
 import re
 import subprocess
-import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -156,9 +155,11 @@ class YoloBoxAssist:
     def _detect(self, request: dict) -> dict:
         if self.run_detect_fn is not None:
             return self.run_detect_fn(request)
+        from ai.vision.local_ocr import worker_python
+
         worker = Path(__file__).with_name("_yolo_worker.py")
         completed = subprocess.run(  # noqa: S603 (fixed worker script, no shell)
-            [sys.executable, "-X", "utf8", str(worker)],
+            [worker_python(), "-X", "utf8", str(worker)],
             input=json.dumps(request),
             capture_output=True,
             text=True,
