@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   Activity,
   AlertTriangle,
@@ -170,10 +170,172 @@ export function BigScreenPage() {
   </div></PageFrame>
 }
 
+const modelLabRecords = [
+  {
+    id: 'hct-yolo11n-box-assist-experimental-v1.3',
+    status: 'EXPERIMENTAL_UNRELEASED',
+    registeredAt: '2026-08-11 22:04',
+    code: ['未登记', 'original_code_commit=null'],
+    data: ['HCT-201-dataset-v1.2-annotation-reviewed-candidate', 'a0ffc701…e52d312'],
+    model: ['YOLO11n · 50 epoch · seed 42', 'fcda34dd…7a35f92'],
+    prompt: ['不适用', '仅包装区域建议'],
+    knowledge: ['不适用', '不读取家庭知识'],
+    rules: ['发布门禁', '家庭运行禁止加载'],
+    metric: 'P=0.9864 · R=1.0000 · mAP50-95=0.9284 · CPU P95=137.319ms',
+    limitation: '候选 test 147 张；不是获批固定集。2/2 困难负样本在阈值 ≤0.75 时误检。',
+  },
+  {
+    id: 'hct-yolo11n-box-assist-experimental-v1.2',
+    status: 'EXPERIMENTAL_UNRELEASED',
+    registeredAt: '2026-08-11 00:00',
+    code: ['未登记', 'original_code_commit=null'],
+    data: ['HCT-201-dataset-v1.2-annotation-reviewed-candidate', 'a0ffc701…e52d312'],
+    model: ['YOLO11n · 50 epoch · seed 42', 'cedb5b52…5a7d1b'],
+    prompt: ['不适用', '仅包装区域建议'],
+    knowledge: ['不适用', '不读取家庭知识'],
+    rules: ['发布门禁', '家庭运行禁止加载'],
+    metric: 'P=0.9864 · R=1.0000 · mAP50-95=0.9273 · CPU P95=111.592ms',
+    limitation: '候选 test 147 张；不是获批固定集。2/2 困难负样本在阈值 0.25 时误检。',
+  },
+]
+
+const rollbackInitialState = {
+  status: 'IDLE',
+  requestId: '',
+  target: 'vision_model_version=unavailable',
+  message: '尚未执行教学回滚演练；家庭运行时事实仍为 unavailable。',
+  audit: [],
+}
+
+function readRollbackDemoState() {
+  try {
+    return JSON.parse(window.localStorage.getItem('hct407-rollback-demo-v1')) || rollbackInitialState
+  } catch {
+    return rollbackInitialState
+  }
+}
+
+function ArtifactCell({ value }) {
+  return <span className="artifact-cell"><strong>{value[0]}</strong><small>{value[1]}</small></span>
+}
+
+function ModelLabState({ mode, onReset }) {
+  const states = {
+    empty: [Database, '暂无已登记实验', '当前筛选没有登记记录；不会加载真实家庭数据或模型权重。'],
+    error: [CircleAlert, '登记校验失败', '无法校验模型卡和登记哈希。页面保持只读，家庭运行时继续使用 unavailable。'],
+    offline: [Cloud, '离线只读', '显示本地登记摘要；发布和回滚演练入口已停用，禁止云端回退。'],
+    unauthorized: [LockKeyhole, '无模型管理员权限', '非管理员不能查看指标详情、样本摘要或执行回滚演练。'],
+  }
+  const [Icon, title, detail] = states[mode]
+  return <section className="core-surface lab-state-panel"><Icon size={30} /><h2>{title}</h2><p>{detail}</p><button className="core-outline-button" onClick={onReset}>恢复正常演示</button></section>
+}
+
 export function ModelLabPage() {
-  const [rollback, setRollback] = useState(false)
+  const [view, setView] = useState('registry')
+  const [pageState, setPageState] = useState(() => navigator.onLine ? 'normal' : 'offline')
+  const [rollbackState, setRollbackState] = useState(readRollbackDemoState)
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [permissionConfirmed, setPermissionConfirmed] = useState(false)
+  const [confirmText, setConfirmText] = useState('')
+
+  useEffect(() => {
+    try { window.localStorage.setItem('hct407-rollback-demo-v1', JSON.stringify(rollbackState)) } catch { /* 受限浏览器仅保留当前会话 */ }
+  }, [rollbackState])
+
+  useEffect(() => {
+    const online = () => setPageState('normal')
+    const offline = () => setPageState('offline')
+    window.addEventListener('online', online)
+    window.addEventListener('offline', offline)
+    return () => {
+      window.removeEventListener('online', online)
+      window.removeEventListener('offline', offline)
+    }
+  }, [])
+
+  const openRollbackDemo = () => {
+    setPermissionConfirmed(false)
+    setConfirmText('')
+    setConfirmOpen(true)
+  }
+
+  const executeRollbackDemo = () => {
+    if (!permissionConfirmed || confirmText !== 'ROLLBACK') return
+    const requestId = 'DEMO-RB-vision-unavailable'
+    if (rollbackState.requestId === requestId) {
+      setRollbackState(current => ({ ...current, message: '检测到相同请求 ID，重复演练已幂等忽略，未追加第二条审计。' }))
+    } else {
+      setRollbackState({
+        status: 'DEMO_COMPLETED',
+        requestId,
+        target: 'vision_model_version=unavailable',
+        message: '教学演练已完成并在浏览器本地恢复；未调用后端、未切换真实运行时。',
+        audit: [{ id: 'DEMO-AUD-001', actor: 'synthetic-release-admin', action: '回滚演练', result: 'DEMO_ONLY' }],
+      })
+    }
+    setConfirmOpen(false)
+  }
+
   return <PageFrame title="模型实验室"><div className="core-page model-page">
-    <PageIntro eyebrow="P0 · 管理员 / 研发专用" title="模型实验室" description="只展示数据集、模型、阈值和评估指标，不混入真实家庭健康正文，也不会因为研发权限自动扩大成员数据权限。" actions={<><StatusBadge tone="navy"><LockKeyhole size={13} /> 管理员模式</StatusBadge><button className="core-outline-button"><Database size={16} /> 导出审计摘要</button></>} />
-    <div className="model-alert"><ServerCog size={20} /><div><strong>发布门禁：当前候选仍为 EXPERIMENTAL_UNRELEASED</strong><p>固定集评估完成前不可发布到家庭版；外部网络回退已关闭。</p></div><StatusBadge tone="warn">待评估</StatusBadge></div><div className="model-metrics"><MetricTile icon={Gauge} label="OCR 字段准确率" value="92.4%" detail="固定集 V1 · n=147" tone="blue" /><MetricTile icon={ScanSearch} label="包装定位召回" value="88.1%" detail="YOLO 辅助 · 未发布" tone="lilac" /><MetricTile icon={Zap} label="CPU P95 延迟" value="1.8s" detail="基础档 · 8 核" tone="peach" /><MetricTile icon={ShieldCheck} label="安全回归" value="48 / 48" detail="最近一次全通过" tone="navy" /></div><div className="model-grid"><section className="core-surface"><SectionTitle icon={Layers3} title="版本与部署" detail="每个版本可回滚" /><div className="version-row current"><div><span className="version-pill">CURRENT</span><strong>ocr-rag-v0.4</strong><small>2026-08-10 · hash 9a7c…12f</small></div><StatusBadge tone="good">本地运行</StatusBadge></div><div className="version-row"><div><span className="version-pill gray">CANDIDATE</span><strong>vision-fusion-v1.2</strong><small>2026-08-11 · hash 41cd…a88</small></div><button className="core-ghost-button" onClick={() => setRollback(true)}><RotateCcw size={15} /> {rollback ? '已记录回滚请求' : '回滚到此版本'}</button></div><div className="version-row"><div><span className="version-pill gray">ARCHIVED</span><strong>ocr-rag-v0.3</strong><small>仅保留审计和对比用途</small></div><span className="version-muted">不可部署</span></div></section><section className="core-surface"><SectionTitle icon={GitCompareArrows} title="V1 / V2 对比" detail="只显示脱敏评估指标" /><div className="compare-bars"><div><span>字段准确率</span><b><i style={{ width: '76%' }} /><em>V1 88%</em></b><b><i className="lilac" style={{ width: '84%' }} /><em>V2 92%</em></b></div><div><span>拒识正确率</span><b><i style={{ width: '68%' }} /><em>V1 81%</em></b><b><i className="lilac" style={{ width: '78%' }} /><em>V2 89%</em></b></div><div><span>失败样本复现</span><b><i style={{ width: '57%' }} /><em>V1 62%</em></b><b><i className="lilac" style={{ width: '73%' }} /><em>V2 79%</em></b></div></div></section></div><section className="core-surface failure-samples"><SectionTitle icon={FileSearch} title="失败样本与门禁" detail="不展示原图和健康正文，只保留脱敏类型" action={<button className="core-outline-button"><SlidersHorizontal size={15} /> 筛选</button>} /><div className="failure-table"><div className="failure-row head"><span>样本 ID</span><span>失败类型</span><span>当前状态</span><span>操作</span></div><div className="failure-row"><span>DS-0142</span><span><Tags size={14} /> 规格冲突</span><StatusBadge tone="warn">待复核</StatusBadge><a href="#复核中心">查看复核</a></div><div className="failure-row"><span>DS-0288</span><span><UploadCloud size={14} /> 低质量输入</span><StatusBadge tone="muted">已拒识</StatusBadge><a href="#视觉扫描中心">查看规则</a></div><div className="failure-row"><span>DS-0319</span><span><Workflow size={14} /> 关系投影缺失</span><StatusBadge tone="high">阻塞</StatusBadge><a href="#家庭健康图谱">查看投影</a></div></div></section>
+    <PageIntro eyebrow="P0 · 管理员 / 研发教学演示" title="模型实验室" description="只展示仓库中的实验登记、模型卡指标和合成状态。页面不接真实 API、不加载权重，也不能执行真实发布或回滚。" actions={<StatusBadge tone="navy"><LockKeyhole size={13} /> SYNTHETIC DEMO</StatusBadge>} />
+
+    <div className="model-lab-tabs" role="tablist" aria-label="模型实验室视图">
+      {[['registry', '版本登记'], ['metrics', '版本指标'], ['rollback', '回滚状态']].map(([key, label]) => <button role="tab" aria-selected={view === key} className={view === key ? 'active' : ''} key={key} onClick={() => setView(key)}>{label}</button>)}
+      <label>状态演练<select aria-label="状态演练" value={pageState} onChange={event => setPageState(event.target.value)}><option value="normal">正常</option><option value="empty">空状态</option><option value="error">错误</option><option value="offline">离线</option><option value="unauthorized">未授权</option></select></label>
+    </div>
+
+    {pageState !== 'normal' ? <ModelLabState mode={pageState} onReset={() => setPageState('normal')} /> : <>
+      <div className="model-alert"><ServerCog size={20} /><div><strong>家庭运行门禁：当前没有 APPROVED 模型</strong><p>两个登记均为 EXPERIMENTAL_UNRELEASED；家庭运行时保持 vision_model_version=unavailable。</p></div><StatusBadge tone="warn">发布阻塞</StatusBadge></div>
+
+      {view === 'registry' && <>
+        <div className="model-status-legend" aria-label="发布状态说明">
+          <span><i className="experimental" /><b>实验</b> 当前 2</span><span><i className="candidate" /><b>候选</b> 当前 0</span><span><i className="approved" /><b>已批准</b> 当前 0</span><span><i className="rolled-back" /><b>已回滚</b> 当前 0</span>
+        </div>
+        <div className="model-metrics"><MetricTile icon={Layers3} label="实验登记" value="02" detail="均禁止家庭加载" /><MetricTile icon={ShieldCheck} label="已批准" value="00" detail="运行时 unavailable" tone="navy" /><MetricTile icon={Database} label="真实家庭样本" value="0" detail="页面绝不加载" tone="lilac" /><MetricTile icon={Cloud} label="云端回退" value="关闭" detail="本地默认不出网" tone="peach" /></div>
+        <section className="core-surface model-registry"><SectionTitle icon={Layers3} title="组合版本登记" detail="事实源：HCT-203 模型卡与机器可读登记；缺失项明确显示“未登记/不适用”" />
+          <div className="registry-scroll"><div className="registry-table">
+            <div className="registry-row head"><span>模型 / 状态</span><span>代码</span><span>数据</span><span>模型</span><span>提示词</span><span>知识</span><span>规则</span></div>
+            {modelLabRecords.map(record => <article className="registry-row" key={record.id}>
+              <div><StatusBadge tone="warn">实验</StatusBadge><strong>{record.id}</strong><small>CONTROLLED_TRAINING_MACHINE<br />{record.registeredAt}</small></div>
+              <ArtifactCell value={record.code} /><ArtifactCell value={record.data} /><ArtifactCell value={record.model} /><ArtifactCell value={record.prompt} /><ArtifactCell value={record.knowledge} /><ArtifactCell value={record.rules} />
+              <footer><span><b>指标：</b>{record.metric}</span><span><b>限制：</b>{record.limitation}</span><button disabled><LockKeyhole size={14} /> 未批准，禁止调用</button></footer>
+            </article>)}
+          </div></div>
+        </section>
+      </>}
+
+      {view === 'metrics' && <>
+        <section className="benchmark-banner"><GitCompareArrows size={20} /><div><strong>同一候选 test 输入集 · 不是获批固定集</strong><p>147 张、145 个真值实例 · 输入 SHA-256 eeca28b6…2eae · confidence 0.25。指标只能描述实验。</p></div><StatusBadge tone="warn">不可发布</StatusBadge></section>
+        <div className="model-metrics"><MetricTile icon={Gauge} label="v1.3 mAP50-95" value="0.9284" detail="v1.2 为 0.9273" /><MetricTile icon={ScanSearch} label="v1.3 Recall" value="1.0000" detail="候选 test 结果" tone="lilac" /><MetricTile icon={Zap} label="v1.3 CPU P95" value="137.319ms" detail="仅 YOLO 组件" tone="peach" /><MetricTile icon={ShieldAlert} label="困难负样本误检" value="2 / 2" detail="阈值 ≤ 0.75" tone="navy" /></div>
+        <div className="model-metric-layout">
+          <section className="core-surface metric-comparison"><SectionTitle icon={GitCompareArrows} title="同口径 V1.2 / V1.3" detail="不只展示最好分数；延迟退化和误检同时保留" /><div className="metric-table"><div className="metric-row head"><span>指标</span><span>V1.2</span><span>V1.3</span><span>说明</span></div>{[
+            ['Precision', '0.9864', '0.9864', '候选 test'],
+            ['Recall', '1.0000', '1.0000', '候选 test'],
+            ['mAP@0.5:0.95', '0.9273', '0.9284', '+0.0011'],
+            ['CPU P95', '111.592ms', '137.319ms', '变慢 25.727ms'],
+            ['困难负样本', '2/2 误检', '2/2 误检', '阻塞发布'],
+          ].map((row, index) => <div className={`metric-row ${index >= 3 ? 'failed' : ''}`} key={row[0]}>{row.map(value => <span key={value}>{value}</span>)}</div>)}</div></section>
+          <section className="core-surface failure-categories"><SectionTitle icon={ShieldAlert} title="失败类别与安全边界" detail="不展示原图或健康正文" /><div className="failure-category"><span>非纸盒泡罩包装误检</span><b className="danger">1</b><small>v1.3 置信度 0.8585</small></div><div className="failure-category"><span>非纸盒输液袋误检</span><b className="danger">1</b><small>v1.3 置信度 0.8461</small></div><div className="failure-category"><span>原始训练代码未跟踪</span><b>1</b><small>PARTIAL_UNTRACKED_ORIGINAL_CODE</small></div><div className="failure-category"><span>获批 fixed / unknown 集</span><b>0</b><small>发布阻断</small></div></section>
+        </div>
+      </>}
+
+      {view === 'rollback' && <div className="rollback-layout">
+        <div className="core-stack">
+          <section className="core-surface rollback-runtime"><SectionTitle icon={ServerCog} title="家庭运行时事实" detail="来自 HCT-203 v1.3 登记" /><div className="runtime-version"><StatusBadge tone="muted">UNAVAILABLE</StatusBadge><div><strong>vision_model_version=unavailable</strong><small>没有 APPROVED 模型，家庭端不得加载实验权重</small></div></div><div className="runtime-guard"><LockKeyhole size={18} /><div><strong>实验与生产隔离</strong><p>本页只有前端演练状态；真实权限、幂等、审计和原子切换必须由后端权威状态机提供。</p></div></div></section>
+          <section className="core-surface rollback-targets"><SectionTitle icon={RotateCcw} title="回滚教学演练" detail="不调用 API，不修改模型、规则或医疗事实" /><div className="rollback-target"><div><strong>目标：vision_model_version=unavailable</strong><small>稳定请求 ID · 二次确认 · 浏览器本地恢复</small></div><button className="core-outline-button" onClick={openRollbackDemo}><RotateCcw size={14} /> 开始演练</button></div></section>
+        </div>
+        <aside className="core-stack">
+          <section className="core-surface rollback-state"><SectionTitle icon={Workflow} title="演练状态机" detail={`请求 ${rollbackState.requestId || '—'}`} /><div className="rollback-steps"><span className={rollbackState.status === 'DEMO_COMPLETED' ? 'done' : ''}><Check size={13} /> 权限声明</span><span className={rollbackState.status === 'DEMO_COMPLETED' ? 'done' : ''}><Check size={13} /> 二次确认</span><span className={rollbackState.status === 'DEMO_COMPLETED' ? 'done' : ''}><Check size={13} /> 幂等处理</span><span className={rollbackState.status === 'DEMO_COMPLETED' ? 'done' : ''}><Check size={13} /> 本地恢复</span></div><p className="rollback-message">{rollbackState.message}</p><small>该状态仅用于 Playwright 验收，不能作为真实生产审计证据。</small></section>
+          <section className="core-surface audit-panel"><SectionTitle icon={FileCheck2} title="演练审计" detail="刷新页面后从 localStorage 恢复" />{rollbackState.audit.length ? rollbackState.audit.map(item => <article key={item.id}><div><strong>{item.action}</strong><small>{item.actor}</small></div><StatusBadge tone="muted">{item.result}</StatusBadge><p>{item.id} · {rollbackState.target}</p></article>) : <p className="version-muted">暂无演练记录</p>}</section>
+        </aside>
+      </div>}
+    </>}
+
+    {confirmOpen && <div className="rollback-dialog-backdrop" role="presentation"><section className="rollback-dialog" role="dialog" aria-modal="true" aria-labelledby="rollback-title">
+      <div className="rollback-dialog-icon"><ShieldAlert size={24} /></div><h2 id="rollback-title">二次确认回滚演练</h2><p>目标为 <b>vision_model_version=unavailable</b>。本操作仅写入浏览器本地演练状态，不会调用后端或改变家庭运行时。</p>
+      <label className="rollback-permission"><input type="checkbox" checked={permissionConfirmed} onChange={event => setPermissionConfirmed(event.target.checked)} />我确认这是合成教学演练，并声明具备 RELEASE_ROLLBACK 演示权限</label>
+      <label className="rollback-confirm-input"><span>输入 ROLLBACK 完成二次确认</span><input value={confirmText} onChange={event => setConfirmText(event.target.value)} placeholder="ROLLBACK" autoComplete="off" /></label>
+      <div className="rollback-dialog-actions"><button className="core-ghost-button" onClick={() => setConfirmOpen(false)}>取消</button><button className="core-primary-button" disabled={!permissionConfirmed || confirmText !== 'ROLLBACK'} onClick={executeRollbackDemo}><RotateCcw size={15} /> 执行幂等演练</button></div>
+    </section></div>}
   </div></PageFrame>
 }
