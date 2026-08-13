@@ -75,7 +75,11 @@ jobs:
 
       - name: Test HCT-405 migration on MySQL 8.4
         env:
-          HCT405_MYSQL_TEST_URL: mysql+pymysql://homecare:test-password@127.0.0.1:3306/homecare_test?charset=utf8mb4
+          HCT405_MYSQL_HOST: 127.0.0.1
+          HCT405_MYSQL_PORT: "3306"
+          HCT405_MYSQL_DATABASE: homecare_test
+          HCT405_MYSQL_USER: homecare
+          HCT405_MYSQL_PASSWORD: test-password
         run: >-
           uv run pytest
           tests/integration/test_hct405_review_migration.py::test_review_wiring_upgrade_and_downgrade_on_mysql

@@ -16,6 +16,11 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    empty_json_default = (
+        sa.text("(JSON_OBJECT())")
+        if op.get_bind().dialect.name == "mysql"
+        else sa.text("'{}'")
+    )
     op.create_table(
         "model_version_binding",
         sa.Column("id", sa.String(36), primary_key=True),
@@ -34,7 +39,12 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("'inactive'"),
         ),
-        sa.Column("safety_thresholds", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
+        sa.Column(
+            "safety_thresholds",
+            sa.JSON(),
+            nullable=False,
+            server_default=empty_json_default,
+        ),
         sa.Column("comparison_report_hash", sa.String(64), nullable=True),
         sa.Column("approved_by", sa.String(120), nullable=True),
         sa.Column("approved_at", sa.DateTime(timezone=True), nullable=True),

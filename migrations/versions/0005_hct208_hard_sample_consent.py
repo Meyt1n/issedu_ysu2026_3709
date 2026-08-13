@@ -17,6 +17,11 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    empty_json_default = (
+        sa.text("(JSON_OBJECT())")
+        if op.get_bind().dialect.name == "mysql"
+        else sa.text("'{}'")
+    )
     # ── 1. correction_diff ────────────────────────────────────────────
     op.create_table(
         "correction_diff",
@@ -43,7 +48,12 @@ def upgrade() -> None:
         sa.Column("before_value", sa.JSON(), nullable=True),
         sa.Column("after_value", sa.JSON(), nullable=True),
         sa.Column("reason", sa.String(240), nullable=False),
-        sa.Column("evidence", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
+        sa.Column(
+            "evidence",
+            sa.JSON(),
+            nullable=False,
+            server_default=empty_json_default,
+        ),
         sa.Column("operator_actor_id", sa.String(120), nullable=False),
         sa.Column("version", sa.Integer(), nullable=False, server_default=sa.text("1")),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
@@ -115,7 +125,12 @@ def upgrade() -> None:
         ),
         sa.Column("granted_by", sa.String(120), nullable=False),
         sa.Column("status", sa.String(20), nullable=False, server_default=sa.text("'active'")),
-        sa.Column("scope", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
+        sa.Column(
+            "scope",
+            sa.JSON(),
+            nullable=False,
+            server_default=empty_json_default,
+        ),
         sa.Column("license", sa.String(60), nullable=False, server_default=sa.text("'internal'")),
         sa.Column("revoked_by", sa.String(120), nullable=True),
         sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),

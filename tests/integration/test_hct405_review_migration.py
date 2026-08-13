@@ -9,6 +9,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, event, inspect, text
+from sqlalchemy.engine import URL
 from sqlalchemy.orm import sessionmaker
 
 from app.config import get_settings
@@ -23,6 +24,30 @@ from app.vision_tasks import create_vision_task
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PREVIOUS_REVISION = "0009_merge_backend_heads"
+
+
+def _mysql_test_url() -> str | None:
+    explicit_url = os.getenv("HCT405_MYSQL_TEST_URL")
+    if explicit_url:
+        return explicit_url
+    host = os.getenv("HCT405_MYSQL_HOST")
+    database = os.getenv("HCT405_MYSQL_DATABASE")
+    username = os.getenv("HCT405_MYSQL_USER")
+    password = os.getenv("HCT405_MYSQL_PASSWORD")
+    if not all((host, database, username, password)):
+        return None
+    return URL.create(
+        "mysql+pymysql",
+        username=username,
+        password=password,
+        host=host,
+        port=int(os.getenv("HCT405_MYSQL_PORT", "3306")),
+        database=database,
+        query={"charset": "utf8mb4"},
+    ).render_as_string(hide_password=False)
+
+
+MYSQL_TEST_URL = _mysql_test_url()
 
 
 def _config(database_url: str) -> Config:
@@ -284,13 +309,14 @@ def test_review_wiring_can_downgrade_when_no_review_status_rows_exist(
 
 
 @pytest.mark.skipif(
-    not os.getenv("HCT405_MYSQL_TEST_URL"),
-    reason="HCT405_MYSQL_TEST_URL is required for MySQL migration coverage",
+    MYSQL_TEST_URL is None,
+    reason="HCT405 MySQL connection settings are required",
 )
 def test_review_wiring_upgrade_and_downgrade_on_mysql(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    database_url = os.environ["HCT405_MYSQL_TEST_URL"]
+    assert MYSQL_TEST_URL is not None
+    database_url = MYSQL_TEST_URL
     monkeypatch.setenv("DATABASE_URL", database_url)
     get_settings.cache_clear()
     config = _config(database_url)
