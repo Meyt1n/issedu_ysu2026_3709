@@ -36,6 +36,21 @@ export function canCreateVisionTask(result: VisionQualityResponse | null): boole
   )
 }
 
+export const qualityStateLabels: Record<QualityFlowState, string> = {
+  idle: '待选择图片',
+  ready: '待检查',
+  checking: '检查中',
+  retake: '需重拍',
+  passed: '质量通过',
+  queueing: '创建任务中',
+  queued: '任务已创建',
+  error: '出现错误',
+}
+
+export function qualityStateLabel(state: QualityFlowState): string {
+  return qualityStateLabels[state] ?? state
+}
+
 export const metricLabels: Record<string, string> = {
   blur_variance: '清晰度',
   mean_luminance: '平均亮度',

@@ -7,6 +7,7 @@ import {
   canCreateVisionTask,
   formatMetricValue,
   metricLabels,
+  qualityStateLabel,
   queuePassedVisionFile,
   type QualityFlowState,
   validateVisionImage,
@@ -151,13 +152,14 @@ watch(() => props.actorId, () => {
 </script>
 
 <template>
-  <section class="panel vision-quality-panel" aria-labelledby="vision-quality-title">
+  <!-- This panel is authored in Chinese inside an English-labelled page (WCAG 3.1.2). -->
+  <section class="panel vision-quality-panel" aria-labelledby="vision-quality-title" lang="zh-CN">
     <div class="panel-heading">
       <div>
         <p class="section-label">本地药盒采集</p>
         <h2 id="vision-quality-title">先检查图片，再进入识别</h2>
       </div>
-      <span class="quality-state" :data-state="state">{{ state }}</span>
+      <span class="quality-state" :data-state="state" role="status" aria-live="polite">{{ qualityStateLabel(state) }}</span>
     </div>
 
     <p class="preview-note">图片只发送到本机 API。质量通过不代表药品识别或用药结论，后续结果仍需人工确认。</p>

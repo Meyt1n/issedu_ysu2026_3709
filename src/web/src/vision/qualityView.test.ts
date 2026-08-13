@@ -4,6 +4,8 @@ import type { VisionQualityResponse } from '../api/types'
 import {
   canCreateVisionTask,
   formatMetricValue,
+  qualityStateLabel,
+  qualityStateLabels,
   queuePassedVisionFile,
   validateVisionImage,
 } from './qualityView'
@@ -46,6 +48,16 @@ describe('vision quality view rules', () => {
   it('formats proxy ratios as percentages without changing evidence', () => {
     expect(formatMetricValue('glare_ratio', 0.125)).toBe('12.5%')
     expect(formatMetricValue('blur_variance', 123.456)).toBe('123.5')
+  })
+
+  it('maps every flow state to a human-readable status label', () => {
+    const states = ['idle', 'ready', 'checking', 'retake', 'passed', 'queueing', 'queued', 'error'] as const
+    for (const state of states) {
+      const label = qualityStateLabel(state)
+      expect(label).toBe(qualityStateLabels[state])
+      expect(label).not.toBe(state)
+      expect(label.length).toBeGreaterThan(0)
+    }
   })
 
   it('does not upload or queue a RETAKE result', async () => {
