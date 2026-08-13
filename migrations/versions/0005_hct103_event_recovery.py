@@ -266,7 +266,6 @@ def downgrade() -> None:
         )
 
     _drop_immutability_triggers()
-    op.drop_index("uq_checkpoint_member_sequence", table_name="projection_checkpoint")
     op.drop_table("projection_checkpoint")
     with op.batch_alter_table("member_state_projection") as batch_op:
         batch_op.drop_column("state_hash")
