@@ -72,6 +72,37 @@ def test_yolo_missing_weights_path_is_unavailable(tmp_path) -> None:
     assert yolo.propose_regions(tmp_path / "img.jpg") == []
 
 
+def test_yolo_worker_boxes_become_proposals(tmp_path) -> None:
+    weights = tmp_path / "best.pt"
+    weights.write_bytes(b"fake-weights")
+    yolo = YoloBoxAssist(
+        weights_path=str(weights),
+        run_detect_fn=lambda request: {
+            "boxes": [
+                {"x": 12.0, "y": 8.0, "width": 300.0, "height": 200.0, "confidence": 0.91},
+                {"x": "broken"},  # malformed entries are skipped, not fatal
+            ]
+        },
+    )
+    proposals = yolo.propose_regions(tmp_path / "img.jpg")
+    assert len(proposals) == 1
+    assert proposals[0].id == "yolo-1"
+    assert proposals[0].label == "medicine_box"
+    assert proposals[0].region.width == 300.0
+    assert proposals[0].model_version.endswith("-UNREGISTERED")
+
+
+def test_yolo_worker_crash_degrades_to_empty(tmp_path) -> None:
+    weights = tmp_path / "best.pt"
+    weights.write_bytes(b"fake-weights")
+
+    def boom(request: dict) -> dict:
+        raise RuntimeError("yolo worker exited 3221225477")
+
+    yolo = YoloBoxAssist(weights_path=str(weights), run_detect_fn=boom)
+    assert yolo.propose_regions(tmp_path / "img.jpg") == []
+
+
 def test_llm_unavailable_without_paths(monkeypatch) -> None:
     for name in ("HCT_LLM_BASE_MODEL", "HCT_LLM_ADAPTER"):
         monkeypatch.delenv(name, raising=False)

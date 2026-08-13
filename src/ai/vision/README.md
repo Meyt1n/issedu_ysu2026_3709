@@ -32,9 +32,12 @@ uv run python scripts/hct202_quality_demo.py --iterations 50
 
 | 引擎 | 角色 | 依赖（可选） | 不可用时 |
 |---|---|---|---|
-| `LocalPaddleOCR` | 文字主来源：全图 OCR 优先，YOLO 裁剪只补充非重复 token | `paddleocr`（PP-OCRv4 本地缓存，CPU） | 返回空列表，适配器记录降级 |
-| `YoloBoxAssist` | 包装/裁剪辅助定位，不承担药品身份 | `ultralytics` + 仓库外权重 | 返回空列表 |
+| `LocalPaddleOCR` | 文字主来源：全图 OCR 优先，YOLO 裁剪只补充非重复 token（隔离子进程 `_paddle_worker`） | `paddleocr`（PP-OCRv4 本地缓存，CPU） | 返回空列表，适配器记录降级 |
+| `YoloBoxAssist` | 包装/裁剪辅助定位，不承担药品身份（隔离子进程 `_yolo_worker`） | `ultralytics` + 仓库外权重 | 返回空列表 |
 | `LocalBarcodeDecoder` | 条码/二维码独立通道，GTIN 校验位规则判定 | `opencv-contrib` | 返回空列表 |
+| `rule_fields.propose_fields` | 契约规定的规则/词典字段候选层：日期/批号/规格/厂家模式 + 逐字子 token 拆分 | 无（纯规则） | 不适用（确定性） |
 | `QwenLoraFieldExtractor` | 已有候选的槽位归类，反幻觉过滤 | `transformers`/`peft`/`bitsandbytes` + 仓库外权重 | 返回空列表 |
 
-约束：裁剪 OCR 的 token 只能新增证据、不得替换或过滤全图 OCR 结果；条码置信度由「解码成功 + 校验位」确定性规则给出，不采信模型自报；LLM 产出的字段值必须逐字存在于输入证据且引用已知证据 ID，否则本地即丢弃。全链路 CLI 见 `scripts/run_local_adapter.py`（`--ocr-json`/`--barcode-json` 可用外部引擎覆盖内建引擎，`--no-local-ocr`/`--no-local-barcode` 显式关闭）。所有结果必须经服务端融合与人工确认后才能写入健康事实。
+进程隔离：paddle 与 torch 的原生 DLL 在同一 Windows 进程内两种加载顺序都会冲突，故 OCR 与 YOLO 均以短生命周期子进程运行、一次调用返回 JSON；子进程崩溃只降级为空证据，不影响主链路。
+
+约束：裁剪 OCR 的 token 只能新增证据、不得替换或过滤全图 OCR 结果；规则候选只做逐字引用（子 token 必须是 OCR 原行的字面子串，继承原区域与置信度），生产日期不会被当作有效期；条码置信度由「解码成功 + 校验位」确定性规则给出，不采信模型自报；LLM 产出的字段值必须逐字存在于输入证据且引用已知证据 ID，否则本地即丢弃。全链路 CLI 见 `scripts/run_local_adapter.py`（`--ocr-json`/`--barcode-json` 可用外部引擎覆盖内建引擎，`--no-local-ocr`/`--no-local-barcode` 显式关闭）。所有结果必须经服务端融合与人工确认后才能写入健康事实。

@@ -56,6 +56,7 @@ from ai.vision.local_ocr import (  # noqa: E402
     LocalBarcodeDecoder,
     LocalPaddleOCR,
 )
+from ai.vision.rule_fields import propose_fields  # noqa: E402
 
 ADAPTER_ID = "homecare-local-vision"
 ADAPTER_VERSION = "local-adapter-v1"
@@ -117,11 +118,20 @@ def build_request(
     else:
         barcodes = []
 
-    proposals = extractor.extract_fields(
+    # contract order: deterministic rules/dictionary produce candidates first
+    # (with verbatim sub-tokens); the LLM then only classifies existing ones
+    rule_subtokens, rule_proposals = propose_fields(
+        ocr_tokens, barcodes, package_regions
+    )
+    if rule_subtokens:
+        ocr_tokens = (ocr_tokens + rule_subtokens)[:512]
+
+    llm_proposals = extractor.extract_fields(
         ocr_tokens,
         barcodes,
         [proposal.label for proposal in package_regions],
     )
+    proposals = (rule_proposals + llm_proposals)[:64]
 
     return EvidencePipelineRequest(
         ocr_tokens=ocr_tokens,

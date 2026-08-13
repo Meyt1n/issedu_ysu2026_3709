@@ -36,6 +36,8 @@ import json
 import logging
 import os
 import re
+import subprocess
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -117,7 +119,14 @@ def extract_json_object(text: str) -> dict[str, Any] | None:
 
 @dataclass
 class YoloBoxAssist:
-    """Lazy wrapper around the experimental YOLO11n box-assist weights."""
+    """Isolated-process wrapper around the experimental YOLO11n weights.
+
+    Detection runs in the ``_yolo_worker`` subprocess: torch cannot share a
+    Windows process with PaddlePaddle, and keeping the heavy runtime out of
+    the adapter process means a native inference crash degrades to "no
+    proposals" instead of killing the whole chain.  ``run_detect_fn`` may be
+    injected for tests.
+    """
 
     weights_path: str | None = field(
         default_factory=lambda: os.environ.get("HCT_VISION_WEIGHTS") or None
@@ -126,7 +135,8 @@ class YoloBoxAssist:
     confidence: float = field(
         default_factory=lambda: float(os.environ.get("HCT_VISION_CONF", "0.25"))
     )
-    _model: Any = field(default=None, repr=False)
+    timeout_seconds: int = 300
+    run_detect_fn: Callable[[dict], dict] | None = None
     _version: str | None = field(default=None, repr=False)
 
     @property
@@ -143,49 +153,62 @@ class YoloBoxAssist:
             self._version = f"{YOLO_REGISTRY_MODEL_ID}+{digest[:8]}{suffix}"
         return self._version
 
-    def _load(self) -> Any:
-        if self._model is None:
-            from ultralytics import YOLO  # heavy import stays lazy
-
-            self._model = YOLO(str(self.weights_path))
-        return self._model
+    def _detect(self, request: dict) -> dict:
+        if self.run_detect_fn is not None:
+            return self.run_detect_fn(request)
+        worker = Path(__file__).with_name("_yolo_worker.py")
+        completed = subprocess.run(  # noqa: S603 (fixed worker script, no shell)
+            [sys.executable, "-X", "utf8", str(worker)],
+            input=json.dumps(request),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=self.timeout_seconds,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError(
+                f"yolo worker exited {completed.returncode}: "
+                f"{(completed.stderr or '')[-500:]}"
+            )
+        return json.loads(completed.stdout)
 
     def propose_regions(self, image_path: str | Path) -> list[PackageRegionProposal]:
         """Return medicine-box crop proposals; empty when unavailable or failed."""
         if not self.available:
             logger.info("YOLO_BOX_ASSIST_UNAVAILABLE weights not configured")
             return []
+        request = {
+            "image_path": str(image_path),
+            "weights": str(self.weights_path),
+            "device": self.device,
+            "conf": self.confidence,
+        }
         try:
-            result = self._load().predict(
-                source=str(image_path),
-                conf=self.confidence,
-                device=self.device,
-                verbose=False,
-            )[0]
+            response = self._detect(request)
         except Exception:  # inference failure must not block the OCR-first chain
             logger.exception("YOLO_BOX_ASSIST_INFERENCE_FAILED")
             return []
         proposals: list[PackageRegionProposal] = []
-        boxes = getattr(result, "boxes", None)
-        if boxes is None:
-            return proposals
-        for index in range(len(boxes)):
-            x1, y1, x2, y2 = (float(v) for v in boxes.xyxy[index].tolist())
-            proposals.append(
-                PackageRegionProposal(
-                    id=f"yolo-{index + 1}",
-                    label="medicine_box",
-                    region=EvidenceRegion(
-                        x=max(x1, 0.0),
-                        y=max(y1, 0.0),
-                        width=max(x2 - x1, 1e-3),
-                        height=max(y2 - y1, 1e-3),
-                        coordinate_space="pixel",
-                    ),
-                    confidence=min(max(float(boxes.conf[index]), 0.0), 1.0),
-                    model_version=self.model_version,
+        for index, box in enumerate(response.get("boxes") or []):
+            try:
+                proposals.append(
+                    PackageRegionProposal(
+                        id=f"yolo-{index + 1}",
+                        label="medicine_box",
+                        region=EvidenceRegion(
+                            x=max(float(box["x"]), 0.0),
+                            y=max(float(box["y"]), 0.0),
+                            width=max(float(box["width"]), 1e-3),
+                            height=max(float(box["height"]), 1e-3),
+                            coordinate_space="pixel",
+                        ),
+                        confidence=min(max(float(box["confidence"]), 0.0), 1.0),
+                        model_version=self.model_version,
+                    )
                 )
-            )
+            except (KeyError, TypeError, ValueError):
+                logger.warning("YOLO_BOX_ASSIST_BAD_BOX index=%d", index)
         return proposals
 
 
