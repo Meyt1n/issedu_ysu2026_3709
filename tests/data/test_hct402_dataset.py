@@ -90,6 +90,7 @@ def test_prepare_separates_training_and_blind_targets(tmp_path: Path) -> None:
     assert all(len(item["messages"]) == 2 for item in blind_inputs)
     assert all(item["messages"][-1]["role"] != "assistant" for item in blind_inputs)
     assert len(blind_labels) == len(blind_inputs) == 4
+    assert all("task_category" in item and "scenario_group" in item for item in blind_labels)
 
 
 def test_prepared_manifest_has_no_local_paths_or_model_claims(tmp_path: Path) -> None:
