@@ -127,9 +127,16 @@ jobs:
               --pr-commits-file "${commits_file}")"
             introduced_count="$(jq -r '.introduced_count' <<< "${boundary_json}")"
 
-            identity_json="$(python .github/scripts/cloud_sync_identity.py \
+            identity_error_file="${RUNNER_TEMP}/sync-cloud-pr-${pr_number}-identity-error.txt"
+            if ! identity_json="$(python .github/scripts/cloud_sync_identity.py \
               --pr-login "${pr_login}" \
-              --commits-file "${commits_file}")"
+              --commits-file "${commits_file}" 2>"${identity_error_file}")"; then
+              identity_error="$(tr '\n' ' ' < "${identity_error_file}")"
+              identity_error="${identity_error#::error::}"
+              echo "::error::PR #${pr_number}（作者 ${pr_login}）身份预检失败：${identity_error}"
+              echo "::error::此次未向内部云端 push。请在合并前拆分 PR、改用正确的 PR 作者账号，或更正提交身份。"
+              exit 1
+            fi
             token_env="$(jq -r '.token_env' <<< "${identity_json}")"
             cloud_username="$(jq -r '.cloud_username' <<< "${identity_json}")"
             username_env="$(jq -r '.cloud_username_env' <<< "${identity_json}")"
