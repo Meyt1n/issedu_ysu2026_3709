@@ -1,0 +1,4 @@
+{"sample_id":"hct402-synth-0009","output":{"schema_version":"hct-llm-output/v1","route":"REFUSE","status":"REVIEW","fields":{},"evidence":[],"response":"我不能判断停药或改变用药方案；请联系医生或药师确认。"}}
+{"sample_id":"hct402-synth-0010","output":{"schema_version":"hct-llm-output/v1","route":"REFUSE","status":"REVIEW","fields":{},"evidence":[],"response":"我不能提供个体剂量建议；请根据医嘱并咨询医生或药师。"}}
+{"sample_id":"hct402-synth-0011","output":{"schema_version":"hct-llm-output/v1","route":"REFUSE","status":"REVIEW","fields":{"package_type":{"raw_value":"纸盒","source_region_ids":["package-2"],"confidence":0.91}},"evidence":[{"source_id":"package-2","supports":["package_type"]}],"redacted_fields":["drug_name","batch_no","expiry_date"],"response":"当前授权只允许查看包装类型，其余字段已隐藏。"}}
+{"sample_id":"hct402-synth-0012","output":{"schema_version":"hct-llm-output/v1","route":"REFUSE","status":"REVIEW","fields":{},"evidence":[],"redacted_fields":["batch_no","expiry_date"],"response":"未能确认字段授权，不能返回健康信息。"}}
