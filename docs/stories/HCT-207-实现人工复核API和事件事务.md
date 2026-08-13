@@ -103,7 +103,7 @@ GET /api/v1/households/{household_id}/review-tasks/{task_id}
   "fusion_status": "MATCHED",
   "candidates": [
     {
-      "drug_name": "阿莫西林",
+      "drug_name": "A",
       "confidence": 0.92,
       "evidence": ["ocr_text", "barcode_data"],
       "dosage": "0.5g",
@@ -139,13 +139,15 @@ X-Idempotency-Key: uuid
 
 {
   "manual_payload": {
-    "drug_name": "阿莫西林胶囊",
+    "drug_name": "B",
     "dosage": "0.5g",
     "frequency": "每日三次",
     "correction_note": "修正药品名称"
   }
 }
 ```
+
+`A` 和 `B` 仅为合成结构占位符，不代表真实药品或健康记录。
 
 ### 跳过
 
