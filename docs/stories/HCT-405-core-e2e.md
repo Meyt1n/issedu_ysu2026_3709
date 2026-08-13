@@ -7,20 +7,20 @@
 - Reviewer: Meyt1n or another independently assigned reviewer (R3; owners cannot self-review)
 - Risk: R3
 - Dependencies: HCT-207, HCT-307, HCT-308, HCT-401, HCT-403, and HCT-404; the backend files and migrations accidentally removed by PR #128 must first be restored by #132/PR #133.
-- Allowed changes: focused knowledge/assistant API fixes; vision/review routing, schemas, application helpers and migration; focused unit/contract/integration tests; `tests/e2e/`; `tests/browser/`; `playwright.config.ts`; `.github/workflows/ci.yml`; the existing frontend API/test files; this Story; the API specification; and the requirement traceability matrix.
+- Allowed changes: focused knowledge/assistant API fixes; vision/review routing, schemas, application helpers and migration; household/member erasure helpers, tombstone columns, cleanup-task API and migration; `scripts/backup.ps1` skip-marker copy; focused unit/contract/integration tests; `tests/e2e/`; `tests/browser/`; `playwright.config.ts`; `.github/workflows/ci.yml`; the existing frontend API/test files; this Story; the API specification; and the requirement traceability matrix.
 
 ## Value and Scope
 
 This increment creates a repeatable, synthetic-data E2E regression baseline for the backend APIs. It exercises the owner and caregiver authorization boundary through event projection, risk evidence, plan actions, revocation, cross-household denial, local knowledge retrieval, vision four-state safety, manual correction, deletion propagation, and model-binding rollback.
 
-It also verifies structured Ollama outage and unsafe-output degradation at the HTTP boundary. The assistant executes whitelisted read-only tools against the caller's authorized knowledge scope and only returns citations that match retrieved `document_id`/`version`/`chunk_id` tuples. The backend wiring increment binds every accepted vision task to a real household member, creates one pending `ReviewTask` after fusion, fingerprints the complete fusion and transition inputs, and uses a versioned conditional database update so concurrent confirm/correct requests cannot create duplicate health events or outbox rows. CI runs the migration against SQLite and MySQL 8.4, records focused API JUnit evidence, and retains Playwright JUnit/failure artifacts. The client keeps authorization, purpose, version, and idempotency metadata at the API boundary; it does not call databases, rules, models, or Ollama directly.
+It also verifies structured Ollama outage and unsafe-output degradation at the HTTP boundary. The assistant executes whitelisted read-only tools against the caller's authorized knowledge scope and only returns citations that match retrieved `document_id`/`version`/`chunk_id` tuples. Owner household erasure returns a cleanup task covering database tombstones, files, household-scoped vectors, cache, hard samples, and backup skip markers; confirmed health events remain physically immutable and are only hidden. The backend wiring increment binds every accepted vision task to a real household member, creates one pending `ReviewTask` after fusion, fingerprints the complete fusion and transition inputs, and uses a versioned conditional database update so concurrent confirm/correct requests cannot create duplicate health events or outbox rows. CI runs the migration against SQLite and MySQL 8.4, records focused API JUnit evidence, and retains Playwright JUnit/failure artifacts. The client keeps authorization, purpose, version, and idempotency metadata at the API boundary; it does not call databases, rules, models, or Ollama directly.
 
 ## Explicitly Out of Scope
 
 - Synthetic signed adapter output verifies the API contract only; it is not presented as real OCR/barcode/model accuracy.
 - Injected Ollama responses verify outage and safety behavior only; they are not presented as a released LLM or medical-answer quality evidence.
 - A synthetic V1/V2 binding drill verifies comparison and rollback state transitions only; it is not a released model evaluation.
-- Knowledge and consent/export deletion propagation do not represent full household, object-store, backup, or disaster-recovery erasure.
+- Knowledge, hard-sample, household, object-store, cache, vector, and backup-skip deletion are automated for the local controlled stores. Rewriting or destroying already-shipped production disaster-recovery backups is out of scope.
 - No real household data, images, weights, secrets, logs, or networked health content is used.
 
 ## Scenario Coverage
@@ -36,7 +36,7 @@ It also verifies structured Ollama outage and unsafe-output degradation at the H
 | Plan confirmation, deferral, skip, and authorized care actions | `test_hct405_core_flows.py`; `client.test.ts` | Automated |
 | Knowledge evidence, no-authorized-evidence degradation, unsafe-output refusal, and Ollama outage | `test_hct405_failure_degradation.py` | Automated at API boundary, including live tool-call citation checks against retrieved chunks |
 | Revocation takes effect immediately | `test_hct405_core_flows.py` | Automated |
-| Knowledge deletion and hard-sample consent/export invalidation | Both new HCT-405 E2E files | Automated for available stores; full household erasure remains pending |
+| Knowledge, hard-sample, household, object-store, cache, vector, and backup-skip deletion | `test_hct405_failure_degradation.py`; `test_hct405_vision_review_release.py`; `test_hct405_deletion_propagation.py` | Automated for local stores; production backup rewrite remains out of scope |
 | Local egress restriction, network outage, and weather field minimization | HCT-004 safety tests; assistant outage E2E | Automated by focused safety/API tests; deployment drill remains pending |
 | No purchase, consultation, or advertising entry point | Existing HCT-004 redirect scan; `tests/browser/hct405-visible-workflows.spec.ts` | Automated (synthetic browser boundary) |
 | V2 fixed-set comparison and rollback | `test_hct405_vision_review_release.py` | Automated state-transition drill; released-model evaluation remains blocked |
@@ -62,6 +62,7 @@ The browser evidence is `tests/browser/hct405-visible-workflows.spec.ts`. It cov
 - Given Ollama is unreachable or returns prohibited medical/external-link output, when the assistant endpoint is called, then it returns a structured low-confidence degradation without unsafe text or untrusted sources.
 - Given the local assistant issues a whitelisted `retrieve_knowledge` tool call, when the backend executes it in the caller's authorized scope, then the final answer may only cite `document_id`/`version`/`chunk_id` tuples returned by that tool; fabricated sources degrade with `CITATION_NOT_FOUND`, and unauthorized actors receive `NO_AUTHORISED_DOCUMENTS`.
 - Given an approved hard sample is exported with consent, when the sample is deleted, then active consent is revoked and the export manifest is invalidated.
+- Given an owner requests household erasure, when the cleanup task completes, then the household, members, files, household-scoped knowledge chunks, cache entries, and hard samples are hidden or removed, a backup skip marker is recorded without payload or display names, confirmed health-event rows remain physically immutable, and other households are unchanged.
 - Given synthetic V2 is activated after V1, when V2 is rolled back, then V2 is revoked and V1 becomes active again.
 
 ## Verification
@@ -69,8 +70,8 @@ The browser evidence is `tests/browser/hct405-visible-workflows.spec.ts`. It cov
 - `npm.cmd run test:web`
 - `npm.cmd run test:e2e:web` (uses Playwright Chromium; on this Windows host it uses the installed Edge executable)
 - `npm.cmd run check:web`
-- `uv run pytest tests/e2e/test_hct405_core_flows.py tests/e2e/test_hct405_failure_degradation.py tests/e2e/test_hct405_scenario_manifest.py tests/e2e/test_hct405_vision_review_release.py`
-- `uv run pytest tests/integration/test_hct405_review_migration.py tests/unit/test_hct207_review.py tests/contract/test_hct202_quality_api.py tests/contract/test_hct205_evidence_api.py`
+- `uv run pytest tests/e2e/test_hct405_core_flows.py tests/e2e/test_hct405_failure_degradation.py tests/e2e/test_hct405_scenario_manifest.py tests/e2e/test_hct405_vision_review_release.py tests/e2e/test_hct405_deletion_propagation.py`
+- `uv run pytest tests/integration/test_hct405_review_migration.py tests/integration/test_hct405_erasure_migration.py tests/unit/test_hct207_review.py tests/unit/test_hct405_erasure.py tests/contract/test_hct202_quality_api.py tests/contract/test_hct205_evidence_api.py`
 - `HCT405_MYSQL_TEST_URL=<disposable-mysql-8.4-url> uv run pytest tests/integration/test_hct405_review_migration.py::test_review_wiring_upgrade_and_downgrade_on_mysql` (automated in CI)
 - `uv run pytest`
 - `npm.cmd run build:web`
@@ -94,8 +95,8 @@ CI uploads `hct405-api-evidence` and `hct405-browser-evidence` for 14 days. The 
 
 Browser coverage against a real local API is now automated by `tests/browser/hct405-real-api.spec.ts` (local run; CI does not start the backend for browser jobs, so the spec is env-gated and skipped there).
 
-Final HCT-405 acceptance still requires full household/object/backup deletion evidence, a deployment restart/offline drill, released-model fixed-set evidence, and project-lead/two-group-lead R3 review. Live assistant tool-call citation validation is now automated at the API boundary with injected Ollama responses. Until the remaining facts exist, this Story remains `In progress` and Issue #70 must not be closed.
+Final HCT-405 acceptance still requires a deployment restart/offline drill, released-model fixed-set evidence, and project-lead/two-group-lead R3 review. Household erasure now returns a cleanup task covering database tombstones, files, vectors, cache, hard samples, and backup skip markers; confirmed events remain physically immutable and are only hidden. Until the remaining facts exist, this Story remains `In progress` and Issue #70 must not be closed.
 
 ## Rollback
 
-Revert the focused API/application/test changes, then downgrade `0010_hct405_review_wiring` only when no new review audit context/fingerprints/version transitions and no `REVIEW` rows exist. On upgrade, the migration repairs historical vision-task household IDs from their assigned members and cancels active legacy tasks with no valid member scope; these safety corrections are intentionally not reversed. The migration refuses duplicate historical review tasks and refuses any downgrade that would discard new audit evidence or status values; reconcile such rows and use a reviewed forward fix instead. All test inputs are generated in temporary stores, with no external health-data dependency.
+Revert the focused API/application/test changes, then downgrade `0011_hct405_erasure` only when no `erasure_task` rows exist; the migration refuses to discard erasure audit. Downgrade `0010_hct405_review_wiring` only when no new review audit context/fingerprints/version transitions and no `REVIEW` rows exist. On upgrade, the review-wiring migration repairs historical vision-task household IDs from their assigned members and cancels active legacy tasks with no valid member scope; these safety corrections are intentionally not reversed. The erasure migration adds nullable `deleted_at` tombstones and the cleanup-task table. All test inputs are generated in temporary stores, with no external health-data dependency.

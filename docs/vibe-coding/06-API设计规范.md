@@ -147,7 +147,9 @@ MATCHED/CONFLICT/UNKNOWN/REVIEW -> CONFIRMED | CORRECTED | REJECTED
 
 ## 5. 并发、审计与删除
 
-成员状态、计划和授权更新使用版本号/ETag 防止覆盖；P0 授权 API 使用请求体 `expected_version` 实现 compare-and-swap。所有敏感写操作记录操作者、目标、目的、前后版本和结果。删除接口返回清理任务 ID，支持查询主库、文件、向量索引、缓存和备份处置状态。
+成员状态、计划和授权更新使用版本号/ETag 防止覆盖；P0 授权 API 使用请求体 `expected_version` 实现 compare-and-swap。所有敏感写操作记录操作者、目标、目的、前后版本和结果。
+
+家庭 Owner 可调用 `DELETE /households/{household_id}` 触发完整删除传播，可选 `member_id` 仅擦除一名成员。接口同步执行本地传播链并返回清理任务：`id`、`status`、各层 `layers`（`database` / `files` / `vectors` / `cache` / `hard_samples` / `backups` / `audit`）和脱敏 `scope`。`GET /erasure-tasks/{task_id}` 供同一请求者查询处置状态。主库对家庭/成员写入 `deleted_at` 软删除，业务读取返回 `RESOURCE_NOT_FOUND`；`health_event` 保持物理不可变，仅对已擦除范围隐藏。对象文件、家庭范围知识块、缓存目录和困难样本按层清理；`FILE_ROOT/backup-skip/{task_id}.json` 标记恢复时跳过，备份脚本复制该目录。审计与 skip 标记只保留 `deletion_id`、操作者、范围 ID 和计数，禁止 `payload` / `evidence` / `state` / `display_name`。这不表示改写已离线的生产灾备副本。
 
 ## 6. 契约管理
 

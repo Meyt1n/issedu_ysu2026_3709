@@ -80,6 +80,16 @@ if (-not $SkipFiles) {
     }
 }
 
+# --- Deletion skip markers (HCT-405 / NFR-02) ---
+$fileRoot = if ($env:FILE_ROOT) { $env:FILE_ROOT } else { "./data/files" }
+$skipRoot = Join-Path $fileRoot "backup-skip"
+if (Test-Path $skipRoot) {
+    Copy-Item -Path $skipRoot -Destination (Join-Path $backupPath "backup-skip") -Recurse -Force
+    Write-Host "[HCT-408 backup] copied deletion skip markers from $skipRoot"
+} else {
+    Write-Host "[HCT-408 backup] no deletion skip markers present"
+}
+
 # --- Version manifest ---
 if (-not $SkipVersion) {
     Write-Host "[HCT-408 backup] collecting version manifest ..."
