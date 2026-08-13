@@ -2,19 +2,24 @@
 
 This adapter executes inside the family trusted domain. It performs the
 quality gate, uploads the image, creates a vision task, runs the local
-experimental models (YOLO box-assist and the LLM field extractor), and
-submits signed OCR-first evidence. It never confirms a medicine identity;
-fusion and human confirmation stay on the server.
+engines (PaddleOCR full-image OCR as the primary text channel, YOLO
+box-assist for crop hints, OpenCV barcode/QR decoding, and the LLM field
+extractor over the collected candidates), and submits signed OCR-first
+evidence. It never confirms a medicine identity; fusion and human
+confirmation stay on the server.
 
-The project has no integrated OCR engine yet, so OCR tokens can be supplied
-from an external engine via ``--ocr-json`` (list of objects with ``id``,
-``raw_value``, ``confidence``, ``engine_version``). Without OCR tokens the
-adapter still submits YOLO region proposals as a documented degraded mode.
+OCR-first order: the full image is always OCRed first; YOLO proposals only
+trigger an additional OCR pass on crops whose non-duplicate tokens are added
+as extra evidence. External engines can override the built-in ones via
+``--ocr-json`` / ``--barcode-json`` (lists of objects with ``id``,
+``raw_value``, ``confidence`` …). When no OCR source is available the adapter
+still submits YOLO region proposals as a documented degraded mode.
 
-Requirements: run inside an environment that has ``ultralytics`` (YOLO),
-``transformers``/``peft``/``bitsandbytes`` (LLM, optional) and ``requests``.
-Model weights stay outside Git and are configured through environment
-variables (see ``src/ai/vision/local_models.py``).
+Requirements: run inside an environment that has ``paddleocr`` (OCR,
+optional), ``ultralytics`` (YOLO, optional), ``opencv-contrib`` (barcode,
+optional), ``transformers``/``peft``/``bitsandbytes`` (LLM, optional) and
+``requests``. Model weights stay outside Git and are configured through
+environment variables (see ``src/ai/vision/local_models.py``).
 
 Example (dry run, no API calls):
     python scripts/run_local_adapter.py --image path\\to\\box.jpg --dry-run
@@ -47,6 +52,10 @@ from ai.vision.local_models import (  # noqa: E402
     QwenLoraFieldExtractor,
     YoloBoxAssist,
 )
+from ai.vision.local_ocr import (  # noqa: E402
+    LocalBarcodeDecoder,
+    LocalPaddleOCR,
+)
 
 ADAPTER_ID = "homecare-local-vision"
 ADAPTER_VERSION = "local-adapter-v1"
@@ -69,30 +78,45 @@ def build_request(
     ocr_rows: list[dict],
     barcode_rows: list[dict],
     run_id: str,
+    local_ocr: LocalPaddleOCR | None = None,
+    local_barcode: LocalBarcodeDecoder | None = None,
 ) -> EvidencePipelineRequest:
-    ocr_tokens = [
-        OCRToken(
-            id=row.get("id") or f"ocr-{index + 1}",
-            raw_value=row["raw_value"],
-            confidence=float(row.get("confidence", 0.5)),
-            engine_version=row.get("engine_version", "external-ocr"),
-        )
-        for index, row in enumerate(ocr_rows)
-    ]
-    barcodes = [
-        BarcodeCandidate(
-            id=row.get("id") or f"code-{index + 1}",
-            raw_value=row["raw_value"],
-            confidence=float(row.get("confidence", 0.9)),
-            format=row.get("format", "UNKNOWN"),
-            decoder_version=row.get("decoder_version", "external-decoder"),
-            decode_valid=bool(row.get("decode_valid", False)),
-            checksum_valid=row.get("checksum_valid"),
-        )
-        for index, row in enumerate(barcode_rows)
-    ]
-
+    # YOLO first so its crops can assist (never replace) the full-image OCR.
     package_regions = yolo.propose_regions(image)
+
+    if ocr_rows:  # explicit external engine wins
+        ocr_tokens = [
+            OCRToken(
+                id=row.get("id") or f"ocr-{index + 1}",
+                raw_value=row["raw_value"],
+                confidence=float(row.get("confidence", 0.5)),
+                engine_version=row.get("engine_version", "external-ocr"),
+            )
+            for index, row in enumerate(ocr_rows)
+        ]
+    elif local_ocr is not None and local_ocr.available:
+        ocr_tokens = local_ocr.recognize(image, package_regions)
+    else:
+        ocr_tokens = []
+
+    if barcode_rows:
+        barcodes = [
+            BarcodeCandidate(
+                id=row.get("id") or f"code-{index + 1}",
+                raw_value=row["raw_value"],
+                confidence=float(row.get("confidence", 0.9)),
+                format=row.get("format", "UNKNOWN"),
+                decoder_version=row.get("decoder_version", "external-decoder"),
+                decode_valid=bool(row.get("decode_valid", False)),
+                checksum_valid=row.get("checksum_valid"),
+            )
+            for index, row in enumerate(barcode_rows)
+        ]
+    elif local_barcode is not None and local_barcode.available:
+        barcodes = local_barcode.decode(image)
+    else:
+        barcodes = []
+
     proposals = extractor.extract_fields(
         ocr_tokens,
         barcodes,
@@ -126,6 +150,16 @@ def main() -> int:
     parser.add_argument("--actor", default=os.environ.get("HCT_ACTOR_ID", "local-adapter-demo"))
     parser.add_argument("--ocr-json", type=Path, help="external OCR tokens (JSON list)")
     parser.add_argument("--barcode-json", type=Path, help="external barcode decodes (JSON list)")
+    parser.add_argument(
+        "--no-local-ocr",
+        action="store_true",
+        help="disable the built-in PaddleOCR engine (degraded mode without --ocr-json)",
+    )
+    parser.add_argument(
+        "--no-local-barcode",
+        action="store_true",
+        help="disable the built-in OpenCV barcode/QR decoder",
+    )
     parser.add_argument("--member-id", default=None)
     parser.add_argument("--fuse", action="store_true", help="run candidate fusion after evidence")
     parser.add_argument(
@@ -140,12 +174,21 @@ def main() -> int:
 
     yolo = YoloBoxAssist()
     extractor = QwenLoraFieldExtractor()
+    local_ocr = None if args.no_local_ocr else LocalPaddleOCR()
+    local_barcode = None if args.no_local_barcode else LocalBarcodeDecoder()
     print(
         json.dumps(
             {
                 "adapter": ADAPTER_ID,
                 "yolo_available": yolo.available,
                 "yolo_version": yolo.model_version,
+                "ocr_available": bool(local_ocr and local_ocr.available),
+                "ocr_version": (
+                    local_ocr.engine_version
+                    if local_ocr and local_ocr.available
+                    else "unavailable"
+                ),
+                "barcode_available": bool(local_barcode and local_barcode.available),
                 "llm_available": extractor.available,
                 "llm_version": extractor.extractor_version,
                 "note": "EXPERIMENTAL_UNRELEASED; results always require human confirmation",
@@ -162,6 +205,8 @@ def main() -> int:
         ocr_rows=load_json_list(args.ocr_json),
         barcode_rows=load_json_list(args.barcode_json),
         run_id=run_id,
+        local_ocr=local_ocr,
+        local_barcode=local_barcode,
     )
 
     if args.dry_run:
