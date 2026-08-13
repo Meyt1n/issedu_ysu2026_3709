@@ -89,8 +89,6 @@ def downgrade() -> None:
     if audit_count:
         raise RuntimeError("Cannot downgrade while authorization audit records must be retained.")
 
-    op.drop_index("ix_audit_authorization", table_name="access_audit")
-    op.drop_index("ix_audit_household_time", table_name="access_audit")
     op.drop_table("access_audit")
     with op.batch_alter_table("care_authorization") as batch_op:
         batch_op.drop_index("ix_auth_grantor_actor_id")

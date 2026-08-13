@@ -65,6 +65,4 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_model_binding_release_status", table_name="model_version_binding")
-    op.drop_index("ix_model_binding_model_id", table_name="model_version_binding")
     op.drop_table("model_version_binding")

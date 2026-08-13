@@ -166,20 +166,10 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     # Reverse dependency order: export_manifest → training_consent → hard_sample → correction_diff
-    op.drop_index("ix_export_manifest_status", table_name="export_manifest")
-    op.drop_index("ix_export_manifest_group_key", table_name="export_manifest")
     op.drop_table("export_manifest")
 
-    op.drop_index("ix_training_consent_status", table_name="training_consent")
-    op.drop_index("ix_training_consent_sample", table_name="training_consent")
     op.drop_table("training_consent")
 
-    op.drop_index("ix_hard_sample_category", table_name="hard_sample")
-    op.drop_index("ix_hard_sample_household_status", table_name="hard_sample")
-    op.drop_index("ix_hard_sample_source", table_name="hard_sample")
     op.drop_table("hard_sample")
 
-    op.drop_index("ix_correction_diff_operator", table_name="correction_diff")
-    op.drop_index("ix_correction_diff_household_member", table_name="correction_diff")
-    op.drop_index("ix_correction_diff_source_event", table_name="correction_diff")
     op.drop_table("correction_diff")
