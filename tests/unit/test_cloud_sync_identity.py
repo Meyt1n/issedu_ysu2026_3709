@@ -152,7 +152,7 @@ def test_rejects_mixed_pr_commit_accounts() -> None:
         ),
     ]
 
-    with pytest.raises(IDENTITY.IdentityError, match="提交账号不一致"):
+    with pytest.raises(IDENTITY.IdentityError, match="拆分 PR.*更正提交身份"):
         IDENTITY.resolve_identity("Shen-huang-123", commits)
 
 
