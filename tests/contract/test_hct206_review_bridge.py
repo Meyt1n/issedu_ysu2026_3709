@@ -181,7 +181,11 @@ def test_evidence_submission_bridges_into_review_center(
 
     confirm = client.post(
         f"/api/v1/households/{household_id}/review-tasks/{review['id']}/confirm",
-        json={"selected_index": 0, "confirmation_note": "与实物核对一致"},
+        json={
+            "expected_version": review["version"],
+            "selected_index": 0,
+            "confirmation_note": "与实物核对一致",
+        },
         headers={"X-Actor-ID": ACTOR, "Idempotency-Key": "bridge-confirm-1"},
     )
     assert confirm.status_code == 200, confirm.text

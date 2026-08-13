@@ -1580,7 +1580,7 @@ def assistant_chat(
     if context:
         messages = [{"role": "system", "content": context}, *messages]
     result = run_assistant(
-        None,  # db_session is injected inside run_assistant when tools are called
+        session,
         messages=messages,
         actor_id=actor_id,
         household_id=household_id,
@@ -1705,19 +1705,22 @@ def _require_vision_task_access(
     access_purpose: str | None,
 ) -> VisionTask:
     task = get_vision_task(session, task_id)
-    member = (
-        session.get(Member, task.member_id)
-        if task is not None and task.member_id is not None
-        else None
-    )
-    household = (
-        session.get(Household, task.household_id)
-        if task is not None
-        else None
-    )
+    if task is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="VISION_TASK_NOT_FOUND",
+        )
+    if not task.member_id:
+        if task.created_by != actor_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="VISION_TASK_NOT_FOUND",
+            )
+        return task
+    member = session.get(Member, task.member_id)
+    household = session.get(Household, task.household_id)
     if (
-        task is None
-        or member is None
+        member is None
         or household is None
         or _is_erased(household, member)
         or not has_authorized_action(
@@ -1754,26 +1757,30 @@ def create_vision_task_endpoint(
     /files/upload).  The task is queued asynchronously and a worker picks it
     up later.  Use the idempotency key to avoid duplicate tasks on retry.
     """
-    member = session.get(Member, payload.member_id)
-    household = (
-        session.get(Household, member.household_id)
-        if member is not None
-        else None
-    )
-    if (
-        member is None
-        or household is None
-        or not has_authorized_action(
-            session,
-            household,
-            member.id,
-            actor_id,
-            "WRITE_EVENTS",
-            "health_events",
-            access_purpose,
+    household_id = "system"
+    if payload.member_id:
+        member = session.get(Member, payload.member_id)
+        household = (
+            session.get(Household, member.household_id)
+            if member is not None
+            else None
         )
-    ):
-        _raise_resource_not_found()
+        if (
+            member is None
+            or household is None
+            or _is_erased(household, member)
+            or not has_authorized_action(
+                session,
+                household,
+                member.id,
+                actor_id,
+                "WRITE_EVENTS",
+                "health_events",
+                access_purpose,
+            )
+        ):
+            _raise_resource_not_found()
+        household_id = household.id
 
     file_root = Path(settings.file_root).resolve()
     target = (file_root / payload.file_id).resolve()
@@ -1813,7 +1820,7 @@ def create_vision_task_endpoint(
 
     task = create_vision_task(
         session,
-        household_id=household.id,
+        household_id=household_id,
         created_by=actor_id,
         file_id=payload.file_id,
         member_id=payload.member_id,

@@ -321,7 +321,7 @@ class ReviewTaskRead(BaseModel):
 
 class VisionTaskCreate(BaseModel):
     file_id: str = Field(min_length=1, description="Reference to an uploaded file")
-    member_id: str = Field(min_length=1)
+    member_id: str | None = Field(default=None)
     task_type: str = Field(default="ocr", min_length=1, max_length=40)
     idempotency_key: str | None = Field(default=None, max_length=128)
     model_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -462,6 +462,7 @@ class AssistantResponse(BaseModel):
     degraded: bool = False
     degrade_reason: str | None = None
     model: str | None = None
+    route: str | None = None
 
 
 # ── HCT-208: Correction diff schemas ──────────────────────────────────

@@ -16,6 +16,7 @@ Design
 
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -330,17 +331,11 @@ class DegradedResponse:
     escalate: bool = False
 
 
-def degrade_result(degrade: DegradedResponse, model: str | None) -> dict[str, Any]:
+def degrade_result(degrade: DegradedResponse, model: str | None = None) -> dict[str, Any]:
     """Map a DegradedResponse onto the assistant response contract."""
-    return {
-        "answer": degrade.answer,
-        "sources": degrade.sources,
-        "confidence": "low",
-        "escalate": degrade.escalate,
-        "degraded": True,
-        "degrade_reason": degrade.reason,
-        "model": model,
-    }
+    payload = _degrade_payload(degrade)
+    payload["model"] = model
+    return payload
 
 
 def build_degrade_response(
@@ -497,6 +492,35 @@ def filter_claimed_citations(
     return matched
 
 
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+_KNOWLEDGE_TOKEN_RE = re.compile(r"(chunk|document|doc[-_]|kb[-_])", re.IGNORECASE)
+
+
+def _looks_like_knowledge_citation(token: str) -> bool:
+    """True when a source token claims a knowledge chunk/document id."""
+    text = token.strip()
+    if not text:
+        return False
+    return bool(_UUID_RE.match(text) or _KNOWLEDGE_TOKEN_RE.search(text))
+
+
+def _unmatched_source_tokens(
+    claimed: list[str],
+    matched: list[dict[str, str]],
+) -> list[str]:
+    indexed = _index_allowed_citations(matched)
+    unmatched: list[str] = []
+    for token in claimed:
+        key = str(token).strip()
+        if not key or key in indexed:
+            continue
+        unmatched.append(key)
+    return unmatched
+
+
 def _execute_retrieve_knowledge(
     session: Session,
     *,
@@ -636,12 +660,12 @@ def _parse_assistant_output(raw_content: str) -> HealthAssistantOutput | None:
     if not raw_content or not str(raw_content).strip():
         return None
     try:
-        return HealthAssistantOutput.model_validate_json(raw_content)
-    except (ValidationError, json.JSONDecodeError):
-        try:
-            return _parse_loose_output(raw_content)
-        except Exception:
-            return None
+        parsed = parse_model_output(raw_content)
+    except (ValidationError, json.JSONDecodeError, ValueError):
+        return None
+    if not parsed.answer.strip():
+        return None
+    return parsed
 
 
 def run_assistant(
@@ -658,7 +682,8 @@ def run_assistant(
     """Run the health assistant with tool calling and citation checks.
 
     Returns a dict with:
-        answer, sources, confidence, escalate, degraded, degrade_reason, model
+        answer, sources, citations, confidence, escalate, degraded,
+        degrade_reason, model, route
     """
     from app.config import get_settings
 
@@ -675,15 +700,12 @@ def run_assistant(
         for message in messages
         if message.get("role") == "system" and message.get("content")
     ]
-    messages = [
+    conversation = [
         {"role": "system", "content": "\n\n".join(system_parts)},
         *[message for message in messages if message.get("role") != "system"],
     ]
 
-    # ── Phase 1: Build approved tool list ───────────────────────────
-    approved_tools = [t.model_dump() for t in get_approved_tools()]
-
-    # ── Phase 2: Build structured request ───────────────────────────
+    approved_tools = [tool.model_dump() for tool in get_approved_tools()]
     request = HealthAssistantRequest(
         messages=conversation,
         tools=approved_tools,
@@ -693,27 +715,19 @@ def run_assistant(
     allowed_citations: list[dict[str, str]] = []
     tool_errors: list[str] = []
 
-    # ── Phase 3: Call the local model server ───────────────────────
-    try:
-        raw = client.chat(
-            model=model,
-            messages=request.messages,
-            tools=request.tools if request.tools else None,
-            temperature=request.temperature,
-            max_tokens=request.max_tokens,
-            timeout=timeout,
-        )
-    except RuntimeError:
-        degrade = build_degrade_response("MODEL_UNAVAILABLE")
-        return degrade_result(degrade, model)
-
-    # ── Phase 4: Parse & validate structured output ────────────────
-    raw_content = raw.get("message", {}).get("content", "")
-    try:
-        parsed = parse_model_output(raw_content)
-    except (ValidationError, json.JSONDecodeError, ValueError):
-        degrade = build_degrade_response("SCHEMA_VALIDATION_FAILED")
-        return degrade_result(degrade, model)
+    parsed: HealthAssistantOutput | None = None
+    for _round in range(MAX_TOOL_ROUNDS + 1):
+        try:
+            raw = client.chat(
+                model=model,
+                messages=conversation,
+                tools=request.tools if request.tools else None,
+                temperature=request.temperature,
+                max_tokens=request.max_tokens,
+                timeout=timeout,
+            )
+        except RuntimeError:
+            return degrade_result(build_degrade_response("MODEL_UNAVAILABLE"), model)
 
         tool_calls = extract_tool_calls(raw)
         raw_content = (raw.get("message") or {}).get("content") or ""
@@ -749,33 +763,47 @@ def run_assistant(
 
         parsed = _parse_assistant_output(raw_content)
         if parsed is None:
-            return _degrade_payload(build_degrade_response("SCHEMA_VALIDATION_FAILED"))
+            return degrade_result(
+                build_degrade_response("SCHEMA_VALIDATION_FAILED"), model
+            )
         break
     else:
-        return _degrade_payload(build_degrade_response("SCHEMA_VALIDATION_FAILED"))
+        return degrade_result(build_degrade_response("SCHEMA_VALIDATION_FAILED"), model)
 
     assert parsed is not None
     violations = _check_medical_boundary(parsed.answer)
     if violations:
         logger.warning("Medical boundary violation: %s", violations)
-        degrade = build_degrade_response("MEDICAL_BOUNDARY_VIOLATION")
-        return degrade_result(degrade, model)
-
-    # ── Phase 6: Check for external links ──────────────────────────
+        return degrade_result(build_degrade_response("MEDICAL_BOUNDARY_VIOLATION"), model)
     if _contains_external_links(parsed.answer):
         logger.warning("External link detected in assistant output")
-        degrade = build_degrade_response("EXTERNAL_LINK_DETECTED")
-        return degrade_result(degrade, model)
+        return degrade_result(build_degrade_response("EXTERNAL_LINK_DETECTED"), model)
 
+    if "TOOL_SCOPE_DENIED" in tool_errors:
+        return degrade_result(build_degrade_response("TOOL_SCOPE_DENIED"), model)
+    if "NO_AUTHORISED_DOCUMENTS" in tool_errors and not allowed_citations:
+        return degrade_result(build_degrade_response("NO_AUTHORISED_DOCUMENTS"), model)
+
+    matched_citations = filter_claimed_citations(parsed.sources, allowed_citations)
+    unmatched = _unmatched_source_tokens(parsed.sources, matched_citations)
+    if any(_looks_like_knowledge_citation(token) for token in unmatched):
+        return degrade_result(build_degrade_response("CITATION_NOT_FOUND"), model)
+    if allowed_citations and not matched_citations:
+        return degrade_result(build_degrade_response("EVIDENCE_REQUIRED"), model)
+
+    fact_sources = [
+        token for token in unmatched if not _looks_like_knowledge_citation(token)
+    ]
     return {
         "answer": parsed.answer,
-        "sources": [item["chunk_id"] for item in matched_citations],
+        "sources": [item["chunk_id"] for item in matched_citations] + fact_sources,
         "citations": matched_citations,
         "confidence": parsed.confidence,
         "escalate": parsed.escalate,
         "degraded": False,
         "degrade_reason": None,
         "model": model,
+        "route": "EVIDENCE_REQUIRED" if matched_citations else None,
     }
 
 

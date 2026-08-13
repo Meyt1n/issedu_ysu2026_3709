@@ -455,6 +455,7 @@ export interface ReviewTask {
   manual_payload: Record<string, unknown> | null
   model_version: string | null
   rule_version: string | null
+  version: number
   confirmed_by: string | null
   confirmed_at: string | null
   created_at: string
@@ -462,13 +463,20 @@ export interface ReviewTask {
 }
 
 export interface ConfirmReviewInput {
+  expected_version: number
   selected_index?: number | null
   confirmation_note?: string | null
 }
 
 export interface CorrectReviewInput {
+  expected_version: number
   manual_payload: Record<string, unknown>
   correction_note?: string | null
+}
+
+export interface SkipReviewInput {
+  expected_version: number
+  reason: string
 }
 
 export interface WeatherActionCard {
@@ -494,14 +502,22 @@ export interface AssistantChatInput {
   max_tokens?: number
 }
 
+export interface AssistantCitation {
+  document_id: string
+  version: string
+  chunk_id: string
+}
+
 export interface AssistantResponse {
   answer: string
   sources: string[]
+  citations?: AssistantCitation[]
   confidence: string
   escalate: boolean
   degraded: boolean
   degrade_reason: string | null
   model?: string | null
+  route?: string | null
 }
 
 export interface AssistantTool {

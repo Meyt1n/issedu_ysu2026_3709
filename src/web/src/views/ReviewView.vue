@@ -150,7 +150,11 @@ async function submitPanel(task: ReviewTask): Promise<void> {
       await apiClient.confirmReviewTask(
         householdId,
         task.id,
-        { selected_index: panel.selectedIndex, confirmation_note: panel.note.trim() || null },
+        {
+          expected_version: task.version,
+          selected_index: panel.selectedIndex,
+          confirmation_note: panel.note.trim() || null,
+        },
         options,
       )
       pushToast('success', '候选已确认，健康事件已入档。')
@@ -163,6 +167,7 @@ async function submitPanel(task: ReviewTask): Promise<void> {
         householdId,
         task.id,
         {
+          expected_version: task.version,
           manual_payload: {
             drug_name: panel.correctDrug.trim(),
             dosage: panel.correctDosage.trim() || null,
@@ -174,7 +179,12 @@ async function submitPanel(task: ReviewTask): Promise<void> {
       )
       pushToast('success', '人工修正已入档，before/after 已留痕。')
     } else {
-      await apiClient.skipReviewTask(householdId, task.id, panel.skipReason.trim(), options)
+      await apiClient.skipReviewTask(
+        householdId,
+        task.id,
+        { expected_version: task.version, reason: panel.skipReason.trim() },
+        options,
+      )
       pushToast('info', '该任务已跳过，不会写入健康记录。')
     }
     panel.taskId = ''

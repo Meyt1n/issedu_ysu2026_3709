@@ -1695,6 +1695,65 @@ button:focus-visible, a:focus-visible {
   --sage-ink: #43705c;
 }
 
+/* ---------- 青黛映蓝：吸收自团队 React 版前端的冷调蓝紫风 ----------
+   来源 src/web/react：Manrope 负字距标题、#00041F 深墨、#626fb1 长春花蓝、
+   白玻璃大圆角卡片、极浅冷阴影 rgba(70,88,128,.06)。 */
+
+:root[data-theme="indigo"] {
+  --paper: #fbfcff;
+  --paper-deep: #f4f5f9;
+  --card: #ffffff;
+  --card-soft: #f7f8fc;
+  --ink: #00041f;
+  --ink-soft: #4c4f63;
+  --ink-faint: #9695a0;
+  --pine: #626fb1;
+  --pine-deep: #4d5896;
+  --pine-night: #26336e;
+  --pine-tint: #e9edf9;
+  --clay: #1f2350;
+  --clay-deep: #00041f;
+  --clay-tint: #e4e7f4;
+  --gold: #9a7d2e;
+  --gold-tint: #f0ead2;
+  --rose: #e35b58;
+  --rose-tint: #f9e1df;
+  --sky: #53639e;
+  --sky-tint: #e2e6f6;
+  --sage: #1e7468;
+  --sage-tint: #d5f3ed;
+  --line: #e3e2e7;
+  --line-soft: #ededf1;
+  --shadow-soft: 0 1px 2px rgba(70, 88, 128, 0.04), 0 8px 22px -10px rgba(70, 88, 128, 0.12);
+  --shadow-lift: 0 2px 4px rgba(38, 51, 110, 0.06), 0 20px 42px -14px rgba(38, 51, 110, 0.18);
+  --app-bg:
+    radial-gradient(1100px 500px at 85% -10%, rgba(130, 141, 204, 0.12), transparent 60%),
+    radial-gradient(900px 600px at -10% 30%, rgba(166, 234, 221, 0.12), transparent 55%),
+    radial-gradient(700px 500px at 70% 105%, rgba(248, 211, 219, 0.12), transparent 60%),
+    var(--paper);
+  --topbar-bg: rgba(255, 255, 255, 0.86);
+  --glass-bg: rgba(255, 255, 255, 0.94);
+  --scroll-thumb: #c6c9da;
+  --sidebar-from: #1c2352;
+  --sidebar-to: #0a0f33;
+  --aurora-1: rgba(130, 141, 204, 0.3);
+  --aurora-2: rgba(166, 234, 221, 0.24);
+  --aurora-3: rgba(248, 211, 219, 0.24);
+  --sky-ink: #39447d;
+  --gold-ink: #6f5a1c;
+  --rose-ink: #a33c39;
+  --sage-ink: #175d54;
+  /* React 版用 Manrope/DM Sans 无衬线：标题不再用衬线宋体 */
+  --font-display: "Segoe UI", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  --font-hand: var(--font-display);
+}
+
+:root[data-theme="indigo"] .bg-wash { opacity: 0.22; }
+
+:root[data-theme="indigo"] .hero-greeting,
+:root[data-theme="indigo"] .card-title,
+:root[data-theme="indigo"] .sec-title { letter-spacing: -0.03em; }
+
 /* ============================================================
    开放式版式 · 摆脱"满屏卡片"的杂志式结构
    ============================================================ */

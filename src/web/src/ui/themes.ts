@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 
-export type ThemeId = 'warm' | 'classic' | 'dusk' | 'sakura' | 'ocean'
+export type ThemeId = 'warm' | 'classic' | 'dusk' | 'sakura' | 'ocean' | 'indigo'
 
 export interface ThemeOption {
   id: ThemeId
@@ -16,6 +16,7 @@ export const THEMES: ThemeOption[] = [
   { id: 'dusk', name: '青珀夜航', tagline: '夜间守护 · 深色', swatches: ['#1a231f', '#4fa98a', '#e0916a'] },
   { id: 'sakura', name: '樱语粉黛', tagline: '柔软粉调', swatches: ['#faf3f1', '#a8506c', '#d98a5f'] },
   { id: 'ocean', name: '海盐晨风', tagline: '清爽蓝绿', swatches: ['#edf3f4', '#1f6579', '#dd6f52'] },
+  { id: 'indigo', name: '青黛映蓝', tagline: '致敬 React 版 · 冷静蓝紫', swatches: ['#fbfcff', '#626fb1', '#00041f'] },
 ]
 
 const STORAGE_KEY = 'hct-theme'

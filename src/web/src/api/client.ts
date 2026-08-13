@@ -36,6 +36,7 @@ import type {
   ProjectionReplayResult,
   RequestOptions,
   ReviewTask,
+  SkipReviewInput,
   RiskAlert,
   RiskDetailResponse,
   RiskListResponse,
@@ -591,12 +592,12 @@ export class ApiClient {
   skipReviewTask(
     householdId: string,
     taskId: string,
-    reason: string,
+    input: SkipReviewInput,
     options?: RequestOptions,
   ): Promise<ReviewTask> {
     return this.request(
       `/api/v1/households/${householdId}/review-tasks/${encodeURIComponent(taskId)}/skip`,
-      { method: 'POST', body: JSON.stringify({ reason }) },
+      { method: 'POST', body: JSON.stringify(input) },
       options,
     )
   }
