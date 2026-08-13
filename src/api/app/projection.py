@@ -62,7 +62,16 @@ def build_relationship_graph(
         payload = event.payload or {}
 
         if etype == "medication_added":
-            drugs.append({"name": payload.get("drug"), "added_by": event.id})
+            # 保留规则引擎（app/rules.py）依赖的风险字段：
+            # expiry_check 读 expiry_date，low_stock 读 stock，
+            # duplicate_ingredient / allergy_conflict 读 ingredient。
+            drugs.append({
+                "name": payload.get("drug"),
+                "expiry_date": payload.get("expiry_date"),
+                "stock": payload.get("stock"),
+                "ingredient": payload.get("ingredient"),
+                "added_by": event.id,
+            })
         elif etype == "allergy_added":
             allergies.append({"name": payload.get("allergy"), "added_by": event.id})
         elif etype == "allergy_removed":
