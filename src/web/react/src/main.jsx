@@ -8,6 +8,7 @@ import './motion-theme.css'
 import './art-modal.css'
 import './page-art.css'
 import './component-elements.css'
+import './auth-page.css'
 import App from './App'
 
 createRoot(document.getElementById('root')).render(
@@ -15,3 +16,4 @@ createRoot(document.getElementById('root')).render(
     <App />
   </StrictMode>,
 )
+
