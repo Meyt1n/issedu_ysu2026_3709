@@ -109,17 +109,20 @@
       "preconditions": ["私有合成知识文档", "可注入断连或危险返回的本地 Ollama 边界"],
       "roles": ["owner", "unauthorized-actor", "local-assistant"],
       "steps": ["按权限检索知识", "以无权限身份检索", "模拟 Ollama 连接拒绝", "模拟医疗指令和外链输出"],
-      "expected_states": ["无权限时 NO_AUTHORISED_DOCUMENTS", "断连时 MODEL_UNAVAILABLE", "危险内容被替换且 sources 为空"],
-      "permission_boundary": "检索先按 actor/household/member 过滤，未授权文档不参与评分。",
-      "audit_evidence": ["retrieval query ID、知识版本、degrade_reason 和低置信度"],
+      "expected_states": ["无权限时 NO_AUTHORISED_DOCUMENTS", "断连时 MODEL_UNAVAILABLE", "危险内容被替换且 sources 为空", "真实工具调用后只返回本次检索到的 document_id/version/chunk_id", "伪造引用返回 CITATION_NOT_FOUND"],
+      "permission_boundary": "检索先按 actor/household/member 过滤，未授权文档不参与评分。助手工具不得改写请求中的家庭/成员范围。",
+      "audit_evidence": ["retrieval query ID、知识版本、degrade_reason 和低置信度", "assistant citations 绑定本次 tool 结果"],
       "cleanup": "知识文档和 chunk 在测试内删除，数据库由 fixture 重置。",
       "coverage_tags": ["no-evidence-refusal", "model-unavailable", "network-disconnect", "medical-refusal", "no-external-link"],
       "automated_tests": [
         "tests/e2e/test_hct405_failure_degradation.py::test_knowledge_scope_and_deletion_propagate_through_api",
         "tests/e2e/test_hct405_failure_degradation.py::test_assistant_returns_structured_degrade_when_local_network_is_down",
-        "tests/e2e/test_hct405_failure_degradation.py::test_assistant_refuses_unsafe_model_output_at_api_boundary"
+        "tests/e2e/test_hct405_failure_degradation.py::test_assistant_refuses_unsafe_model_output_at_api_boundary",
+        "tests/e2e/test_hct405_failure_degradation.py::test_assistant_live_tool_call_returns_only_retrieved_citations",
+        "tests/e2e/test_hct405_failure_degradation.py::test_assistant_rejects_fabricated_citation_without_tool_evidence",
+        "tests/e2e/test_hct405_failure_degradation.py::test_unauthorized_actor_cannot_cite_private_knowledge_via_tools"
       ],
-      "limitations": ["真实 Ollama 工具调用和引用存在性校验仍待集成。"]
+      "limitations": ["注入的 Ollama 响应只验证工具执行、引用存在性和安全降级，不代表已发布 LLM 质量。"]
     },
     {
       "id": "HCT405-08",

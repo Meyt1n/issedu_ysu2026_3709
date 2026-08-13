@@ -13,7 +13,7 @@
 
 This increment creates a repeatable, synthetic-data E2E regression baseline for the backend APIs. It exercises the owner and caregiver authorization boundary through event projection, risk evidence, plan actions, revocation, cross-household denial, local knowledge retrieval, vision four-state safety, manual correction, deletion propagation, and model-binding rollback.
 
-It also verifies structured Ollama outage and unsafe-output degradation at the HTTP boundary. The backend wiring increment binds every accepted vision task to a real household member, creates one pending `ReviewTask` after fusion, fingerprints the complete fusion and transition inputs, and uses a versioned conditional database update so concurrent confirm/correct requests cannot create duplicate health events or outbox rows. CI runs the migration against SQLite and MySQL 8.4, records focused API JUnit evidence, and retains Playwright JUnit/failure artifacts. The client keeps authorization, purpose, version, and idempotency metadata at the API boundary; it does not call databases, rules, models, or Ollama directly.
+It also verifies structured Ollama outage and unsafe-output degradation at the HTTP boundary. The assistant executes whitelisted read-only tools against the caller's authorized knowledge scope and only returns citations that match retrieved `document_id`/`version`/`chunk_id` tuples. The backend wiring increment binds every accepted vision task to a real household member, creates one pending `ReviewTask` after fusion, fingerprints the complete fusion and transition inputs, and uses a versioned conditional database update so concurrent confirm/correct requests cannot create duplicate health events or outbox rows. CI runs the migration against SQLite and MySQL 8.4, records focused API JUnit evidence, and retains Playwright JUnit/failure artifacts. The client keeps authorization, purpose, version, and idempotency metadata at the API boundary; it does not call databases, rules, models, or Ollama directly.
 
 ## Explicitly Out of Scope
 
@@ -34,7 +34,7 @@ It also verifies structured Ollama outage and unsafe-output degradation at the H
 | Confirmed event updates timeline and projection | `test_hct405_core_flows.py` | Automated |
 | Rule result returns desensitized risk evidence | `test_hct405_core_flows.py` | Automated |
 | Plan confirmation, deferral, skip, and authorized care actions | `test_hct405_core_flows.py`; `client.test.ts` | Automated |
-| Knowledge evidence, no-authorized-evidence degradation, unsafe-output refusal, and Ollama outage | `test_hct405_failure_degradation.py` | Automated at API boundary; live tool-call citation remains pending |
+| Knowledge evidence, no-authorized-evidence degradation, unsafe-output refusal, and Ollama outage | `test_hct405_failure_degradation.py` | Automated at API boundary, including live tool-call citation checks against retrieved chunks |
 | Revocation takes effect immediately | `test_hct405_core_flows.py` | Automated |
 | Knowledge deletion and hard-sample consent/export invalidation | Both new HCT-405 E2E files | Automated for available stores; full household erasure remains pending |
 | Local egress restriction, network outage, and weather field minimization | HCT-004 safety tests; assistant outage E2E | Automated by focused safety/API tests; deployment drill remains pending |
@@ -60,6 +60,7 @@ The browser evidence is `tests/browser/hct405-visible-workflows.spec.ts`. It cov
 - Given a pending review task, when an owner or caregiver with current read/write authorization submits a manual correction with its expected version, then exactly one confirmed append-only event records the review evidence and the explainable fusion context.
 - Given a private knowledge document, when another actor retrieves or deletes it, then no resource or chunk is disclosed; when the owner deletes it, retrieval and chunks are removed.
 - Given Ollama is unreachable or returns prohibited medical/external-link output, when the assistant endpoint is called, then it returns a structured low-confidence degradation without unsafe text or untrusted sources.
+- Given the local assistant issues a whitelisted `retrieve_knowledge` tool call, when the backend executes it in the caller's authorized scope, then the final answer may only cite `document_id`/`version`/`chunk_id` tuples returned by that tool; fabricated sources degrade with `CITATION_NOT_FOUND`, and unauthorized actors receive `NO_AUTHORISED_DOCUMENTS`.
 - Given an approved hard sample is exported with consent, when the sample is deleted, then active consent is revoked and the export manifest is invalidated.
 - Given synthetic V2 is activated after V1, when V2 is rolled back, then V2 is revoked and V1 becomes active again.
 
@@ -93,7 +94,7 @@ CI uploads `hct405-api-evidence` and `hct405-browser-evidence` for 14 days. The 
 
 Browser coverage against a real local API is now automated by `tests/browser/hct405-real-api.spec.ts` (local run; CI does not start the backend for browser jobs, so the spec is env-gated and skipped there).
 
-Final HCT-405 acceptance still requires live assistant tool-call citation validation, full household/object/backup deletion evidence, a deployment restart/offline drill, released-model fixed-set evidence, and project-lead/two-group-lead R3 review. Until those facts exist, this Story remains `In progress` and Issue #70 must not be closed.
+Final HCT-405 acceptance still requires full household/object/backup deletion evidence, a deployment restart/offline drill, released-model fixed-set evidence, and project-lead/two-group-lead R3 review. Live assistant tool-call citation validation is now automated at the API boundary with injected Ollama responses. Until the remaining facts exist, this Story remains `In progress` and Issue #70 must not be closed.
 
 ## Rollback
 
