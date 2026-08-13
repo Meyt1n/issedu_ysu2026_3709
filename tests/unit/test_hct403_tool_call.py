@@ -213,5 +213,5 @@ class TestRunAssistant:
             actor_id="test-user",
         )
         assert result["degraded"] is True
-        assert result["reason"] == "MODEL_UNAVAILABLE"
+        assert result["degrade_reason"] == "MODEL_UNAVAILABLE"
         assert result["answer"]  # non-empty degrade message

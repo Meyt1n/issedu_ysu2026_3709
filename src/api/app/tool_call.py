@@ -48,6 +48,21 @@ _DEGRADE_TEMPLATE = """当前助手服务暂时不可用。您可以：
 
 如有紧急情况请及时联系医务人员。"""
 
+# Output-contract system prompt pinned in front of every conversation.
+# The fine-tuned v5 model answers evidence-first; this fixes the JSON shape
+# the parser below expects regardless of caller-provided system context.
+ASSISTANT_SYSTEM_PROMPT = (
+    "你是「家健镜」家庭健康助手，运行在家庭本地设备上，服务于家庭照护的教学演示。"
+    "回答要求：\n"
+    "1. 只依据对话中提供的本地事实、规则结果与文档片段回答；资料不足时明确说「无法判断」。\n"
+    "2. 绝不做诊断、开处方、决定用药剂量或建议停药换药；不提供购买链接或外部网址。\n"
+    "3. 用温和、口语化的简体中文，先给依据再给解释，回答控制在 150 字以内。\n"
+    "4. 输出必须是一个 JSON 对象，且只有 JSON，格式："
+    '{"answer": "回答正文", "sources": ["引用的依据标识"], '
+    '"confidence": "high|medium|low", "escalate": false}。'
+    "紧急情况（如疑似中毒、呼吸困难）时 escalate 设为 true 并提醒联系医务人员。"
+)
+
 
 # ── Tool Schema ────────────────────────────────────────────────────────
 
@@ -213,7 +228,9 @@ class OllamaClient:
 
     def health_check(self) -> bool:
         try:
-            with httpx.Client(timeout=REQUEST_TIMEOUT) as client:
+            # trust_env=False: local model calls must never go through a
+            # system proxy (a misconfigured proxy turns localhost into 502).
+            with httpx.Client(timeout=REQUEST_TIMEOUT, trust_env=False) as client:
                 resp = client.get(f"{self.base_url}/api/tags")
                 self._available = resp.status_code == 200
                 return self._available
@@ -241,6 +258,9 @@ class OllamaClient:
             "model": model,
             "messages": messages,
             "stream": False,
+            # Qwen3 thinking is disabled in the fine-tune; ask servers that
+            # understand the flag to skip it too (others ignore the field).
+            "think": False,
             "options": {
                 "temperature": temperature,
                 "num_predict": max_tokens,
@@ -252,7 +272,7 @@ class OllamaClient:
         last_error: str | None = None
         for attempt in range(MAX_RETRIES + 1):
             try:
-                with httpx.Client(timeout=timeout or REQUEST_TIMEOUT) as client:
+                with httpx.Client(timeout=timeout or REQUEST_TIMEOUT, trust_env=False) as client:
                     resp = client.post(f"{self.base_url}/api/chat", json=payload)
                     resp.raise_for_status()
                     data = resp.json()
@@ -308,6 +328,19 @@ class DegradedResponse:
     escalate: bool = False
 
 
+def degrade_result(degrade: DegradedResponse, model: str | None) -> dict[str, Any]:
+    """Map a DegradedResponse onto the assistant response contract."""
+    return {
+        "answer": degrade.answer,
+        "sources": degrade.sources,
+        "confidence": "low",
+        "escalate": degrade.escalate,
+        "degraded": True,
+        "degrade_reason": degrade.reason,
+        "model": model,
+    }
+
+
 def build_degrade_response(
     reason: str = "MODEL_UNAVAILABLE",
     *,
@@ -344,16 +377,34 @@ def run_assistant(
     actor_id: str,
     household_id: str | None = None,
     member_id: str | None = None,
-    model: str = "llama3.2:3b",
+    model: str | None = None,
     max_tokens: int = 512,
     temperature: float = 0.3,
 ) -> dict[str, Any]:
     """Run the health assistant with tool calling and safety checks.
 
     Returns a dict with:
-        answer, sources, confidence, escalate, degraded, degrade_reason
+        answer, sources, confidence, escalate, degraded, degrade_reason, model
     """
-    client = OllamaClient()
+    from app.config import get_settings
+
+    settings = get_settings()
+    model = model or settings.ollama_model
+    timeout = settings.ollama_timeout_seconds
+    client = OllamaClient(settings.ollama_base_url)
+
+    # Pin the output contract as the leading system message; caller-provided
+    # system context (e.g. injected member facts) is merged after it so
+    # grounding never displaces the JSON contract or the medical boundary.
+    system_parts = [ASSISTANT_SYSTEM_PROMPT] + [
+        str(message.get("content", ""))
+        for message in messages
+        if message.get("role") == "system" and message.get("content")
+    ]
+    messages = [
+        {"role": "system", "content": "\n\n".join(system_parts)},
+        *[message for message in messages if message.get("role") != "system"],
+    ]
 
     # ── Phase 1: Build approved tool list ───────────────────────────
     approved_tools = [t.model_dump() for t in get_approved_tools()]
@@ -366,7 +417,7 @@ def run_assistant(
         max_tokens=max_tokens,
     )
 
-    # ── Phase 3: Call Ollama ───────────────────────────────────────
+    # ── Phase 3: Call the local model server ───────────────────────
     try:
         raw = client.chat(
             model=model,
@@ -374,35 +425,32 @@ def run_assistant(
             tools=request.tools if request.tools else None,
             temperature=request.temperature,
             max_tokens=request.max_tokens,
+            timeout=timeout,
         )
     except RuntimeError:
         degrade = build_degrade_response("MODEL_UNAVAILABLE")
-        return degrade.__dict__
+        return degrade_result(degrade, model)
 
     # ── Phase 4: Parse & validate structured output ────────────────
     raw_content = raw.get("message", {}).get("content", "")
     try:
-        parsed = HealthAssistantOutput.model_validate_json(raw_content)
-    except (ValidationError, json.JSONDecodeError):
-        # Try to extract from plain text — validate against schema
-        try:
-            parsed = _parse_loose_output(raw_content)
-        except Exception:
-            degrade = build_degrade_response("SCHEMA_VALIDATION_FAILED")
-            return degrade.__dict__
+        parsed = parse_model_output(raw_content)
+    except (ValidationError, json.JSONDecodeError, ValueError):
+        degrade = build_degrade_response("SCHEMA_VALIDATION_FAILED")
+        return degrade_result(degrade, model)
 
     # ── Phase 5: Medical boundary check ────────────────────────────
     violations = _check_medical_boundary(parsed.answer)
     if violations:
         logger.warning("Medical boundary violation: %s", violations)
         degrade = build_degrade_response("MEDICAL_BOUNDARY_VIOLATION")
-        return degrade.__dict__
+        return degrade_result(degrade, model)
 
     # ── Phase 6: Check for external links ──────────────────────────
     if _contains_external_links(parsed.answer):
         logger.warning("External link detected in assistant output")
         degrade = build_degrade_response("EXTERNAL_LINK_DETECTED")
-        return degrade.__dict__
+        return degrade_result(degrade, model)
 
     # ── Phase 7: Return validated output ───────────────────────────
     return {
@@ -412,29 +460,108 @@ def run_assistant(
         "escalate": parsed.escalate,
         "degraded": False,
         "degrade_reason": None,
+        "model": model,
     }
+
+
+def strip_thinking(text: str) -> str:
+    """Remove Qwen3 <think>...</think> blocks (and stray closers) from output."""
+    import re
+
+    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.S)
+    cleaned = re.sub(r"^\s*</think>\s*", "", cleaned)
+    return cleaned.strip()
+
+
+def _extract_json_object(text: str) -> dict[str, Any] | None:
+    """Parse the first JSON object out of generated text (fences tolerated)."""
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        import re
+
+        cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.I | re.S).strip()
+    try:
+        value = json.loads(cleaned)
+        if isinstance(value, dict):
+            return value
+    except json.JSONDecodeError:
+        pass
+    decoder = json.JSONDecoder()
+    for start, character in enumerate(cleaned):
+        if character != "{":
+            continue
+        try:
+            value, _ = decoder.raw_decode(cleaned[start:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            return value
+    return None
+
+
+def _normalize_sources(raw_sources: Any) -> list[str]:
+    """Accept both plain strings and the v5 {source_id, evidence} objects."""
+    if not isinstance(raw_sources, list):
+        return []
+    normalized: list[str] = []
+    for item in raw_sources:
+        if isinstance(item, str) and item.strip():
+            normalized.append(item.strip())
+        elif isinstance(item, dict):
+            label = item.get("source_id") or item.get("id") or item.get("evidence")
+            if isinstance(label, str) and label.strip():
+                normalized.append(label.strip())
+    return normalized[:8]
+
+
+def parse_model_output(raw_text: str) -> HealthAssistantOutput:
+    """Normalize model output onto the assistant schema.
+
+    Handles the fine-tuned v5 contract drift: ``response`` instead of
+    ``answer``, source objects instead of strings, thinking-block leakage
+    and malformed JSON (regex fallback).
+    """
+    text = strip_thinking(raw_text)
+    parsed = _extract_json_object(text)
+    if parsed is not None:
+        answer = parsed.get("answer") or parsed.get("response") or parsed.get("content")
+        if isinstance(answer, str) and answer.strip():
+            confidence = parsed.get("confidence")
+            return HealthAssistantOutput(
+                answer=answer.strip(),
+                sources=_normalize_sources(parsed.get("sources")),
+                confidence=confidence if confidence in ("high", "medium", "low") else "low",
+                escalate=bool(parsed.get("escalate", False)),
+            )
+    return _parse_loose_output(text)
 
 
 def _parse_loose_output(text: str) -> HealthAssistantOutput:
     """Best-effort parse of non-JSON model output."""
-    # Try to extract answer field
+    # Try to extract answer field (escaped quotes tolerated)
     import re
-    answer_match = re.search(r'"answer"\s*:\s*"([^"]*)"', text)
+    answer_match = re.search(r'"(?:answer|response)"\s*:\s*"((?:[^"\\]|\\.)*)"', text)
     confidence_match = re.search(r'"confidence"\s*:\s*"(\w+)"', text)
     sources_match = re.search(r'"sources"\s*:\s*\[([^\]]*)\]', text)
     escalate_match = re.search(r'"escalate"\s*:\s*(true|false)', text)
 
-    answer = answer_match.group(1) if answer_match else text[:500]
+    if answer_match:
+        try:
+            answer = json.loads(f'"{answer_match.group(1)}"')
+        except json.JSONDecodeError:
+            answer = answer_match.group(1)
+    else:
+        answer = text[:500]
     confidence = confidence_match.group(1) if confidence_match else "low"
     sources = []
     if sources_match:
         raw_srcs = sources_match.group(1)
-        sources = [s.strip().strip('"') for s in raw_srcs.split(",") if s.strip()]
+        sources = [s.strip().strip('"') for s in raw_srcs.split(",") if s.strip().strip('"')]
     escalate = bool(escalate_match and escalate_match.group(1).lower() == "true")
 
     return HealthAssistantOutput(
         answer=answer,
         sources=sources,
-        confidence=confidence,
+        confidence=confidence if confidence in ("high", "medium", "low") else "low",
         escalate=escalate,
     )

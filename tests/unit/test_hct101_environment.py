@@ -148,7 +148,7 @@ def test_alembic_has_a_single_head() -> None:
 
     assert len(scripts.get_heads()) == 1
     head = scripts.get_heads()[0]
-    assert head == "0006_hct404_model_version_binding"
+    assert head == "0007_sync_schema_with_models"
     assert len(head) <= 64
 
 

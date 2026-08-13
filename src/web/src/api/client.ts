@@ -1,34 +1,53 @@
 import type {
   AccessAudit,
+  ActiveModelVersion,
   ApiErrorCode,
   ApiErrorEnvelope,
+  AssistantChatInput,
+  AssistantResponse,
+  AssistantTool,
   Authorization,
   CompensateHealthEventInput,
+  ConfirmReviewInput,
+  CorrectionDiff,
+  CorrectReviewInput,
   CreateAuthorizationInput,
+  CreateHardSampleInput,
   CreateHealthEventInput,
   CreateHouseholdInput,
+  CreateKnowledgeDocumentInput,
   CreateMemberInput,
+  CreateModelVersionBindingInput,
+  HardSample,
   HealthEvent,
   HealthResponse,
   CapabilityResponse,
   Household,
+  KnowledgeDocument,
+  KnowledgeIndexSnapshot,
+  KnowledgeRetrieveResponse,
   Member,
   MemberState,
+  ModelBindingComparison,
+  ModelVersionBinding,
   OutboxDispatchResult,
   OutboxMessage,
   ProjectionCheckpoint,
   ProjectionReplayResult,
   RequestOptions,
+  ReviewTask,
   RiskAlert,
   RiskDetailResponse,
   RiskListResponse,
   EvidencePipelineResult,
+  TrainingConsent,
   UpdateAuthorizationInput,
   UploadedFile,
   VisionQualityResponse,
   CreateVisionTaskInput,
   SubmitVisionEvidenceInput,
   VisionTask,
+  WeatherResponse,
 } from './types'
 
 export class ApiClientError extends Error {
@@ -84,6 +103,9 @@ function parseErrorBody(body: unknown, status: number, requestId: string | null)
   )
 }
 
+/** 默认请求超时：覆盖本地推理接口的最慢路径，同时保证挂起请求可在可感知时间内恢复。 */
+const DEFAULT_REQUEST_TIMEOUT_MS = 15_000
+
 export class ApiClient {
   private readonly baseUrl: string
   private readonly fetcher: typeof fetch
@@ -107,18 +129,32 @@ export class ApiClient {
     if (options.accessPurpose) headers.set('X-Access-Purpose', options.accessPurpose)
     if (options.idempotencyKey) headers.set('Idempotency-Key', options.idempotencyKey)
 
+    // 默认超时兜底：本地 API 或 dev 代理偶发丢失响应时，请求不能永远挂起，
+    // 否则界面会停在"正在保存"且用户无法恢复。写请求携带幂等键，超时后重试安全。
+    const timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    const timeoutSignal = AbortSignal.timeout(timeoutMs)
+    const signal = options.signal
+      ? AbortSignal.any([options.signal, timeoutSignal])
+      : timeoutSignal
+
     let response: Response
     try {
       response = await this.fetcher(`${this.baseUrl}${path}`, {
         ...init,
         headers,
-        signal: options.signal,
+        signal,
       })
-    } catch {
-      throw new ApiClientError('API service is unavailable', {
-        status: 0,
-        code: 'DEPENDENCY_UNAVAILABLE',
-      })
+    } catch (cause) {
+      if (options.signal?.aborted) throw cause
+      throw new ApiClientError(
+        timeoutSignal.aborted
+          ? `API request timed out after ${timeoutMs}ms`
+          : 'API service is unavailable',
+        {
+          status: 0,
+          code: 'DEPENDENCY_UNAVAILABLE',
+        },
+      )
     }
     const requestId = response.headers.get('x-request-id')
     const text = await response.text()
@@ -467,6 +503,338 @@ export class ApiClient {
   ): Promise<RiskDetailResponse> {
     return this.request(
       `/api/v1/households/${householdId}/members/${memberId}/risks/${encodeURIComponent(ruleId)}`,
+      undefined,
+      options,
+    )
+  }
+
+  getVisionTask(taskId: string, options?: RequestOptions): Promise<VisionTask> {
+    return this.request(
+      `/api/v1/vision-tasks/${encodeURIComponent(taskId)}`,
+      undefined,
+      options,
+    )
+  }
+
+  /** 携带开发身份头下载文件字节（<img> 无法带请求头，需转 blob URL）。 */
+  async fetchFileBlob(storageKey: string, options: RequestOptions = {}): Promise<Blob> {
+    const headers = new Headers()
+    if (options.actorId) headers.set('X-Actor-Id', options.actorId)
+    if (options.accessPurpose) headers.set('X-Access-Purpose', options.accessPurpose)
+    let response: Response
+    try {
+      response = await this.fetcher(
+        `${this.baseUrl}/api/v1/files/${encodeURIComponent(storageKey)}`,
+        { headers, signal: options.signal },
+      )
+    } catch {
+      throw new ApiClientError('API service is unavailable', {
+        status: 0,
+        code: 'DEPENDENCY_UNAVAILABLE',
+      })
+    }
+    if (!response.ok) {
+      throw new ApiClientError(`file download failed with status ${response.status}`, {
+        status: response.status,
+        code: fallbackErrorCode(response.status),
+      })
+    }
+    return response.blob()
+  }
+
+  cancelVisionTask(taskId: string, options?: RequestOptions): Promise<VisionTask> {
+    return this.request(
+      `/api/v1/vision-tasks/${encodeURIComponent(taskId)}/cancel`,
+      { method: 'POST' },
+      options,
+    )
+  }
+
+  listReviewTasks(
+    householdId: string,
+    memberId: string,
+    options?: RequestOptions,
+  ): Promise<ReviewTask[]> {
+    return this.request(
+      `/api/v1/households/${householdId}/members/${memberId}/review-tasks`,
+      undefined,
+      options,
+    )
+  }
+
+  confirmReviewTask(
+    householdId: string,
+    taskId: string,
+    input: ConfirmReviewInput,
+    options?: RequestOptions,
+  ): Promise<ReviewTask> {
+    return this.request(
+      `/api/v1/households/${householdId}/review-tasks/${encodeURIComponent(taskId)}/confirm`,
+      { method: 'POST', body: JSON.stringify(input) },
+      options,
+    )
+  }
+
+  correctReviewTask(
+    householdId: string,
+    taskId: string,
+    input: CorrectReviewInput,
+    options?: RequestOptions,
+  ): Promise<ReviewTask> {
+    return this.request(
+      `/api/v1/households/${householdId}/review-tasks/${encodeURIComponent(taskId)}/correct`,
+      { method: 'POST', body: JSON.stringify(input) },
+      options,
+    )
+  }
+
+  skipReviewTask(
+    householdId: string,
+    taskId: string,
+    reason: string,
+    options?: RequestOptions,
+  ): Promise<ReviewTask> {
+    return this.request(
+      `/api/v1/households/${householdId}/review-tasks/${encodeURIComponent(taskId)}/skip`,
+      { method: 'POST', body: JSON.stringify({ reason }) },
+      options,
+    )
+  }
+
+  getWeatherActionCards(
+    cityCode?: string,
+    districtCode?: string,
+    options?: RequestOptions,
+  ): Promise<WeatherResponse> {
+    const params = new URLSearchParams()
+    if (cityCode) params.set('city_code', cityCode)
+    if (districtCode) params.set('district_code', districtCode)
+    const query = params.toString()
+    return this.request(
+      `/api/v1/weather/action-cards${query ? `?${query}` : ''}`,
+      undefined,
+      options,
+    )
+  }
+
+  assistantChat(
+    input: AssistantChatInput,
+    householdId?: string,
+    memberId?: string,
+    options?: RequestOptions,
+  ): Promise<AssistantResponse> {
+    const params = new URLSearchParams()
+    if (householdId) params.set('household_id', householdId)
+    if (memberId) params.set('member_id', memberId)
+    const query = params.toString()
+    // 本地 4bit 大模型单次生成约 25~90 秒，远超默认 15 秒超时。
+    return this.request(
+      `/api/v1/assistant/chat${query ? `?${query}` : ''}`,
+      { method: 'POST', body: JSON.stringify(input) },
+      { timeoutMs: 240_000, ...options },
+    )
+  }
+
+  listAssistantTools(options?: RequestOptions): Promise<{ tools: AssistantTool[]; count: number }> {
+    return this.request('/api/v1/assistant/tools', undefined, options)
+  }
+
+  listKnowledgeDocuments(options?: RequestOptions): Promise<KnowledgeDocument[]> {
+    return this.request('/api/v1/knowledge/documents', undefined, options)
+  }
+
+  createKnowledgeDocument(
+    input: CreateKnowledgeDocumentInput,
+    options?: RequestOptions,
+  ): Promise<KnowledgeDocument> {
+    return this.request(
+      '/api/v1/knowledge/documents',
+      { method: 'POST', body: JSON.stringify(input) },
+      options,
+    )
+  }
+
+  deleteKnowledgeDocument(
+    docId: string,
+    options?: RequestOptions,
+  ): Promise<{ status: string; document_id: string }> {
+    return this.request(
+      `/api/v1/knowledge/documents/${encodeURIComponent(docId)}`,
+      { method: 'DELETE' },
+      options,
+    )
+  }
+
+  retrieveKnowledge(
+    query: string,
+    topK: number,
+    householdId?: string,
+    memberId?: string,
+    options?: RequestOptions,
+  ): Promise<KnowledgeRetrieveResponse> {
+    return this.request(
+      '/api/v1/knowledge/retrieve',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          query,
+          top_k: topK,
+          household_id: householdId,
+          member_id: memberId,
+        }),
+      },
+      options,
+    )
+  }
+
+  createKnowledgeSnapshot(
+    version: string,
+    options?: RequestOptions,
+  ): Promise<KnowledgeIndexSnapshot> {
+    return this.request(
+      `/api/v1/knowledge/index/snapshot?version=${encodeURIComponent(version)}`,
+      { method: 'POST' },
+      options,
+    )
+  }
+
+  listModelBindings(options?: RequestOptions): Promise<ModelVersionBinding[]> {
+    return this.request('/api/v1/model-version-bindings', undefined, options)
+  }
+
+  createModelBinding(
+    input: CreateModelVersionBindingInput,
+    options?: RequestOptions,
+  ): Promise<ModelVersionBinding> {
+    return this.request(
+      '/api/v1/model-version-bindings',
+      { method: 'POST', body: JSON.stringify(input) },
+      options,
+    )
+  }
+
+  activateModelBinding(
+    bindingId: string,
+    approvedBy: string,
+    options?: RequestOptions,
+  ): Promise<ModelVersionBinding> {
+    return this.request(
+      `/api/v1/model-version-bindings/${encodeURIComponent(bindingId)}/activate`,
+      { method: 'POST', body: JSON.stringify({ approved_by: approvedBy }) },
+      options,
+    )
+  }
+
+  rollbackModelBinding(
+    bindingId: string,
+    reason: string,
+    options?: RequestOptions,
+  ): Promise<ModelVersionBinding> {
+    return this.request(
+      `/api/v1/model-version-bindings/${encodeURIComponent(bindingId)}/rollback`,
+      { method: 'POST', body: JSON.stringify({ reason }) },
+      options,
+    )
+  }
+
+  getModelBindingComparison(
+    bindingId: string,
+    options?: RequestOptions,
+  ): Promise<ModelBindingComparison> {
+    return this.request(
+      `/api/v1/model-version-bindings/${encodeURIComponent(bindingId)}/comparison`,
+      undefined,
+      options,
+    )
+  }
+
+  getActiveModelVersion(options?: RequestOptions): Promise<ActiveModelVersion> {
+    return this.request('/api/v1/meta/active-model-version', undefined, options)
+  }
+
+  listHardSamples(
+    householdId: string,
+    options?: RequestOptions,
+  ): Promise<HardSample[]> {
+    return this.request(
+      `/api/v1/households/${householdId}/hard-samples`,
+      undefined,
+      options,
+    )
+  }
+
+  createHardSample(
+    householdId: string,
+    input: CreateHardSampleInput,
+    options?: RequestOptions,
+  ): Promise<HardSample> {
+    return this.request(
+      `/api/v1/households/${householdId}/hard-samples`,
+      { method: 'POST', body: JSON.stringify(input) },
+      options,
+    )
+  }
+
+  updateHardSample(
+    householdId: string,
+    sampleId: string,
+    status: string,
+    note?: string,
+    options?: RequestOptions,
+  ): Promise<HardSample> {
+    return this.request(
+      `/api/v1/households/${householdId}/hard-samples/${encodeURIComponent(sampleId)}`,
+      { method: 'PATCH', body: JSON.stringify({ status, note }) },
+      options,
+    )
+  }
+
+  getTrainingConsent(
+    householdId: string,
+    sampleId: string,
+    options?: RequestOptions,
+  ): Promise<TrainingConsent | null> {
+    return this.request(
+      `/api/v1/households/${householdId}/hard-samples/${encodeURIComponent(sampleId)}/training-consent`,
+      undefined,
+      options,
+    )
+  }
+
+  grantTrainingConsent(
+    householdId: string,
+    sampleId: string,
+    license: string,
+    options?: RequestOptions,
+  ): Promise<TrainingConsent> {
+    return this.request(
+      `/api/v1/households/${householdId}/hard-samples/${encodeURIComponent(sampleId)}/training-consent`,
+      { method: 'POST', body: JSON.stringify({ scope: {}, license }) },
+      options,
+    )
+  }
+
+  revokeTrainingConsent(
+    householdId: string,
+    sampleId: string,
+    reason: string,
+    options?: RequestOptions,
+  ): Promise<TrainingConsent> {
+    return this.request(
+      `/api/v1/households/${householdId}/hard-samples/${encodeURIComponent(sampleId)}/training-consent/revoke`,
+      { method: 'POST', body: JSON.stringify({ reason }) },
+      options,
+    )
+  }
+
+  listCorrectionDiffs(
+    householdId: string,
+    memberId?: string,
+    options?: RequestOptions,
+  ): Promise<CorrectionDiff[]> {
+    const query = memberId ? `?member_id=${encodeURIComponent(memberId)}` : ''
+    return this.request(
+      `/api/v1/households/${householdId}/correction-diffs${query}`,
       undefined,
       options,
     )

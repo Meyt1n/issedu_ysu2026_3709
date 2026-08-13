@@ -50,6 +50,7 @@ async function installSyntheticApi(page: Page): Promise<void> {
     if (request.method() === 'GET' && path.endsWith('/authorizations')) {
       return respond(hasAuthorization && !authorization.revoked_at ? [authorization] : [])
     }
+    if (request.method() === 'GET' && path.endsWith('/audits')) return respond([])
     if (request.method() === 'GET' && path.endsWith('/timeline')) return respond([])
     if (request.method() === 'GET' && path.endsWith('/state')) {
       return respond({
@@ -69,6 +70,12 @@ async function installSyntheticApi(page: Page): Promise<void> {
     if (request.method() === 'GET' && path.endsWith('/risks')) {
       return respond({ member_id: member.id, alerts: [], total: 0, severe_count: 0, warning_count: 0 })
     }
+    if (request.method() === 'GET' && (path.endsWith('/plans') || path.endsWith('/tasks') || path.endsWith('/review-tasks'))) {
+      return respond([])
+    }
+    if (request.method() === 'GET' && path.startsWith('/api/v1/weather/')) {
+      return respond({ status: 'unavailable', action_cards: [], reason: 'synthetic' })
+    }
     if (request.method() === 'POST' && path.endsWith('/authorizations')) {
       hasAuthorization = true
       return respond(authorization, 201)
@@ -82,42 +89,91 @@ async function installSyntheticApi(page: Page): Promise<void> {
   })
 }
 
-test('owner creates a grant and revocation removes its visible caregiver scope', async ({ page }) => {
-  await installSyntheticApi(page)
+function navItem(page: Page, label: string) {
+  return page.locator('aside.sidebar button.nav-item', { hasText: label })
+}
+
+function viewHeading(page: Page) {
+  return page.locator('.view-stage h2.hero-greeting')
+}
+
+async function enterFamilySpace(page: Page): Promise<void> {
   await page.goto('/')
+  await expect(page.getByRole('button', { name: '进入家庭空间' })).toBeVisible({ timeout: 20_000 })
+  await page.getByLabel('开发身份标识').fill('owner-1')
+  await page.getByRole('button', { name: '进入家庭空间' }).click()
+  await expect(page.locator('.app-frame')).toBeVisible({ timeout: 20_000 })
+  await expect(navItem(page, '授权管理')).toBeVisible()
+}
 
-  await page.getByLabel('Development identity').fill('owner-1')
-  await page.getByRole('button', { name: 'Load households' }).click()
-  await expect(page.getByRole('heading', { name: 'Create grant' })).toBeVisible()
+test('管理员创建授权后撤回，照护者可见范围立即清空', async ({ page }) => {
+  await installSyntheticApi(page)
+  await enterFamilySpace(page)
 
-  await page.getByLabel('Caregiver identity', { exact: true }).fill('caregiver-1')
-  await page.getByRole('button', { name: 'Create grant' }).click()
-  await expect(page.getByText('Authorization created. The preview now reflects the new active scope.')).toBeVisible()
+  // 进入家庭空间后，侧栏必须保持本地数据承诺
+  await expect(page.getByText('家庭健康数据默认不出网，全部保存在本地可信域。')).toBeVisible()
 
-  await page.getByLabel('Preview caregiver identity').fill('caregiver-1')
-  const previewPanel = page.locator('.preview-panel')
-  await expect(previewPanel).toContainText('health_events')
+  await navItem(page, '授权管理').click()
+  await expect(viewHeading(page)).toHaveText('授权管理')
+  await expect(page.getByRole('heading', { name: '新建授权' })).toBeVisible()
 
-  await page.getByRole('button', { name: 'Revoke' }).click()
-  await expect(page.getByText('Authorization revoked. It is removed from the caregiver preview immediately.')).toBeVisible()
-  await expect(page.getByText('No active fields are granted to this caregiver.')).toBeVisible()
+  await page.getByLabel('照护者身份标识').fill('caregiver-1')
+  await page.getByRole('button', { name: '创建授权' }).click()
+  await expect(page.getByText('授权已创建，默认遵循最小权限原则。')).toBeVisible()
+
+  // 照护者预览：授权元数据可见（不加载健康事件内容）
+  await page.getByLabel('输入照护者身份查看其可见范围').fill('caregiver-1')
+  await expect(page.getByText(/可见字段：health_events/)).toBeVisible()
+
+  // 撤回需要经过确认弹窗，防止误触
+  await page.getByRole('button', { name: '撤回授权' }).first().click()
+  const dialog = page.getByRole('alertdialog')
+  await expect(dialog).toBeVisible()
+  await dialog.getByRole('button', { name: '撤回授权' }).click()
+
+  await expect(page.getByText('授权已撤回，对应照护者立即失去访问权限。')).toBeVisible()
+  await expect(page.getByText('该照护者当前没有任何有效授权字段。')).toBeVisible()
 })
 
-test('unavailable local API does not render a household or health summary', async ({ page }) => {
+test('命令面板 Ctrl+K 可以在十二个视图之间快速跳转', async ({ page }) => {
+  await installSyntheticApi(page)
+  await enterFamilySpace(page)
+
+  await page.keyboard.press('Control+k')
+  const palette = page.getByRole('dialog', { name: '命令面板' })
+  await expect(palette).toBeVisible()
+
+  await palette.getByLabel('搜索命令').fill('授权')
+  await page.keyboard.press('Enter')
+  await expect(palette).toHaveCount(0)
+  await expect(viewHeading(page)).toHaveText('授权管理')
+
+  // 顶栏按钮同样可以打开；无匹配时给出无导流的空态提示
+  await page.getByRole('button', { name: /快速跳转/ }).click()
+  await palette.getByLabel('搜索命令').fill('购药')
+  await expect(palette.getByText(/没有匹配「购药」的命令/)).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(palette).toHaveCount(0)
+})
+
+test('本地 API 不可用时不进入家庭空间，也不渲染任何健康摘要', async ({ page }) => {
   await page.route('**/api/v1/households', route => route.abort('failed'))
   await page.goto('/')
 
-  await page.getByLabel('Development identity').fill('owner-1')
-  await page.getByRole('button', { name: 'Load households' }).click()
+  await page.getByLabel('开发身份标识').fill('owner-1')
+  await page.getByRole('button', { name: '进入家庭空间' }).click()
 
-  await expect(page.getByRole('alert')).toContainText('The local API is unavailable. No data was changed.')
-  await expect(page.getByRole('heading', { name: 'Synthetic member' })).toHaveCount(0)
-  await expect(page.getByText(/confirmed events/)).toHaveCount(0)
+  await expect(page.getByRole('alert')).toContainText('本地 API 服务不可用，本次没有改变任何数据。')
+  await expect(page.locator('.app-frame')).toHaveCount(0)
+  await expect(page.getByText('Synthetic member')).toHaveCount(0)
 })
 
-test('visible UI keeps the local-only and no-promotion safety boundary', async ({ page }) => {
+test('可见界面始终保持本地优先与无导流安全边界', async ({ page }) => {
   await page.goto('/')
 
-  await expect(page.getByText('Local-only health data')).toBeVisible()
-  await expect(page.locator('body')).not.toContainText(/buy medicine|purchase|online consultation|advertisement|commission/i)
+  await expect(page.getByText('健康数据默认保存在本地家庭可信域')).toBeVisible()
+  await expect(page.getByText('不提供诊断、处方或用药决策；不提供购药、问诊或广告导流。')).toBeVisible()
+  await expect(page.locator('body')).not.toContainText(
+    /购药入口|立即购买|去问诊|在线咨询|广告推荐|buy medicine|purchase|online consultation|advertisement|commission/i,
+  )
 })

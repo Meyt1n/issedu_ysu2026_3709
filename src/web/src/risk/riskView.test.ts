@@ -23,7 +23,7 @@ describe('risk card view model', () => {
   })
 
   it('labels known and unknown levels without inventing severity', () => {
-    expect(riskLevelLabel('SEVERE')).toBe('Severe')
-    expect(riskLevelLabel('future-level')).toBe('Unclassified')
+    expect(riskLevelLabel('SEVERE')).toBe('严重')
+    expect(riskLevelLabel('future-level')).toBe('未分级')
   })
 })

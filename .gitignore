@@ -41,3 +41,8 @@ backups/
 *.swp
 .DS_Store
 Thumbs.db
+
+# Local scratch and infra-access scripts (server addresses / accounts)
+tmp/
+*.tmp
+server_scripts/

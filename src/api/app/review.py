@@ -124,6 +124,16 @@ def get_review_task(session: Session, task_id: str) -> ReviewTask | None:
     return session.get(ReviewTask, task_id)
 
 
+def get_review_task_by_vision_task(
+    session: Session,
+    vision_task_id: str,
+) -> ReviewTask | None:
+    """Return the review task bound to a vision task (one per vision task)."""
+    return session.scalars(
+        select(ReviewTask).where(ReviewTask.vision_task_id == vision_task_id)
+    ).first()
+
+
 def list_pending_reviews(
     session: Session,
     household_id: str,
@@ -135,6 +145,22 @@ def list_pending_reviews(
             ReviewTask.household_id == household_id,
             ReviewTask.status == ReviewStatus.PENDING_REVIEW,
         )
+        .order_by(ReviewTask.created_at.desc())
+    )
+    if member_id is not None:
+        stmt = stmt.where(ReviewTask.member_id == member_id)
+    return list(session.scalars(stmt).all())
+
+
+def list_review_tasks(
+    session: Session,
+    household_id: str,
+    member_id: str | None = None,
+) -> list[ReviewTask]:
+    """All review tasks (pending and settled) so the UI can show处理记录."""
+    stmt = (
+        select(ReviewTask)
+        .where(ReviewTask.household_id == household_id)
         .order_by(ReviewTask.created_at.desc())
     )
     if member_id is not None:

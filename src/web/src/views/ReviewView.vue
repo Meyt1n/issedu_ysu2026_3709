@@ -1,0 +1,427 @@
+<script setup lang="ts">
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+
+import { apiClient } from '../api/client'
+import type { ReviewTask, VisionTask } from '../api/types'
+import AppIcon from '../components/AppIcon.vue'
+import VisionResultViewer from '../components/VisionResultViewer.vue'
+import {
+  createIdempotencyKey,
+  formatError,
+  pushToast,
+  requestOptions,
+  selectMember,
+  session,
+} from '../store'
+import {
+  formatDateTime,
+  fusionStatusLabel,
+  reviewStatusLabel,
+} from '../ui/labels'
+import { vReveal } from '../ui/motion'
+
+const tasks = ref<ReviewTask[]>([])
+const loading = ref(false)
+const loadError = ref('')
+const busyTaskId = ref<string | null>(null)
+
+const panel = reactive({
+  taskId: '',
+  mode: 'confirm' as 'confirm' | 'correct' | 'skip',
+  selectedIndex: 0,
+  note: '',
+  correctDrug: '',
+  correctDosage: '',
+  correctFrequency: '',
+  skipReason: '',
+})
+
+const pendingTasks = computed(() => tasks.value.filter(task => task.status === 'PENDING_REVIEW'))
+const settledTasks = computed(() => tasks.value.filter(task => task.status !== 'PENDING_REVIEW'))
+
+const SETTLED_PREVIEW = 4
+const showAllSettled = ref(false)
+const visibleSettled = computed(() =>
+  showAllSettled.value ? settledTasks.value : settledTasks.value.slice(0, SETTLED_PREVIEW),
+)
+
+function fusionTone(status: string | null): string {
+  if (status === 'MATCHED' || status === 'READY_FOR_FUSION') return 'pine'
+  if (status === 'CONFLICT') return 'rose'
+  if (status === 'UNKNOWN') return 'plain'
+  return 'gold'
+}
+
+function statusTone(status: string): string {
+  if (status === 'CONFIRMED') return 'pine'
+  if (status === 'CORRECTED') return 'gold'
+  if (status === 'SKIPPED') return 'plain'
+  return 'clay'
+}
+
+// 原始证据（原图 + 定位框）缓存，键为 vision_task_id
+const evidenceOpenId = ref<string | null>(null)
+const visionTasks = ref<Record<string, VisionTask>>({})
+const imageUrls = ref<Record<string, string>>({})
+const evidenceLoadingId = ref<string | null>(null)
+
+async function loadEvidence(visionTaskId: string): Promise<void> {
+  if (!visionTasks.value[visionTaskId]) {
+    const vision = await apiClient.getVisionTask(visionTaskId, requestOptions.value)
+    visionTasks.value = { ...visionTasks.value, [visionTaskId]: vision }
+  }
+  if (!imageUrls.value[visionTaskId]) {
+    const fileId = visionTasks.value[visionTaskId]?.file_id
+    if (fileId) {
+      const blob = await apiClient.fetchFileBlob(fileId, requestOptions.value)
+      imageUrls.value = { ...imageUrls.value, [visionTaskId]: URL.createObjectURL(blob) }
+    }
+  }
+}
+
+async function preloadEvidence(): Promise<void> {
+  const targets = pendingTasks.value.slice(0, 8)
+  await Promise.allSettled(targets.map(task => loadEvidence(task.vision_task_id)))
+}
+
+async function toggleEvidence(task: ReviewTask): Promise<void> {
+  if (evidenceOpenId.value === task.id) {
+    evidenceOpenId.value = null
+    return
+  }
+  evidenceOpenId.value = task.id
+  evidenceLoadingId.value = task.id
+  try {
+    await loadEvidence(task.vision_task_id)
+  } catch {
+    // 原图或识别详情不可用时保持候选列表可操作
+  } finally {
+    evidenceLoadingId.value = null
+  }
+}
+
+onBeforeUnmount(() => {
+  for (const url of Object.values(imageUrls.value)) URL.revokeObjectURL(url)
+})
+
+async function loadTasks(): Promise<void> {
+  const householdId = session.selectedHouseholdId
+  const memberId = session.selectedMemberId
+  if (!householdId || !memberId) return
+
+  loading.value = true
+  loadError.value = ''
+  panel.taskId = ''
+  try {
+    tasks.value = await apiClient.listReviewTasks(householdId, memberId, requestOptions.value)
+    void preloadEvidence()
+  } catch (cause) {
+    tasks.value = []
+    loadError.value = formatError(cause)
+  } finally {
+    loading.value = false
+  }
+}
+
+function openPanel(task: ReviewTask, mode: 'confirm' | 'correct' | 'skip'): void {
+  if (panel.taskId === task.id && panel.mode === mode) {
+    panel.taskId = ''
+    return
+  }
+  panel.taskId = task.id
+  panel.mode = mode
+  panel.selectedIndex = 0
+  panel.note = ''
+  const first = task.candidates[0] ?? {}
+  panel.correctDrug = String(first.drug_name ?? '')
+  panel.correctDosage = String(first.dosage ?? '')
+  panel.correctFrequency = String(first.frequency ?? '')
+  panel.skipReason = ''
+}
+
+async function submitPanel(task: ReviewTask): Promise<void> {
+  const householdId = session.selectedHouseholdId
+  if (!householdId || busyTaskId.value) return
+
+  busyTaskId.value = task.id
+  const options = { ...requestOptions.value, idempotencyKey: createIdempotencyKey() }
+  try {
+    if (panel.mode === 'confirm') {
+      await apiClient.confirmReviewTask(
+        householdId,
+        task.id,
+        { selected_index: panel.selectedIndex, confirmation_note: panel.note.trim() || null },
+        options,
+      )
+      pushToast('success', '候选已确认，健康事件已入档。')
+    } else if (panel.mode === 'correct') {
+      if (!panel.correctDrug.trim()) {
+        pushToast('error', '请填写修正后的药品名称。')
+        return
+      }
+      await apiClient.correctReviewTask(
+        householdId,
+        task.id,
+        {
+          manual_payload: {
+            drug_name: panel.correctDrug.trim(),
+            dosage: panel.correctDosage.trim() || null,
+            frequency: panel.correctFrequency.trim() || null,
+          },
+          correction_note: panel.note.trim() || null,
+        },
+        options,
+      )
+      pushToast('success', '人工修正已入档，before/after 已留痕。')
+    } else {
+      await apiClient.skipReviewTask(householdId, task.id, panel.skipReason.trim(), options)
+      pushToast('info', '该任务已跳过，不会写入健康记录。')
+    }
+    panel.taskId = ''
+    await loadTasks()
+  } catch (cause) {
+    pushToast('error', formatError(cause))
+  } finally {
+    busyTaskId.value = null
+  }
+}
+
+function onMemberChange(event: Event): void {
+  selectMember((event.target as HTMLSelectElement).value)
+}
+
+watch(
+  () => [session.selectedHouseholdId, session.selectedMemberId],
+  () => void loadTasks(),
+)
+
+onMounted(() => void loadTasks())
+</script>
+
+<template>
+  <section class="page-hero">
+    <div class="card-heading" style="margin-bottom: 0">
+      <div>
+        <h2 class="hero-greeting">人工复核中心</h2>
+        <p class="hero-sub">
+          识别结果仅为候选。只有经过人工确认或修正，事实才会进入健康记录；冲突与未知不能绕过复核。
+        </p>
+      </div>
+      <label class="context-select">
+        成员
+        <select :value="session.selectedMemberId" :disabled="loading" @change="onMemberChange">
+          <option v-for="member in session.members" :key="member.id" :value="member.id">
+            {{ member.display_name }}
+          </option>
+        </select>
+      </label>
+    </div>
+  </section>
+
+  <p v-if="loadError" class="notice error" role="alert">
+    <AppIcon name="alert" :size="16" />
+    {{ loadError }}
+  </p>
+
+  <section class="card">
+    <div class="card-heading">
+      <div>
+        <p class="eyebrow">待处理</p>
+        <h3 class="card-title">待复核任务</h3>
+      </div>
+      <div class="heading-actions">
+        <span class="pill clay">{{ pendingTasks.length }} 个待复核</span>
+        <button type="button" class="btn btn-ghost btn-small" :disabled="loading" @click="loadTasks">
+          <AppIcon name="refresh" :size="15" />
+          刷新
+        </button>
+      </div>
+    </div>
+
+    <div v-if="loading" class="inline-loading">
+      <span class="loading-dots"><span /><span /><span /></span>
+      正在读取复核任务
+    </div>
+    <div v-else-if="pendingTasks.length === 0" class="empty-state">
+      <AppIcon class="empty-art" name="review" :size="40" />
+      <strong>当前没有待复核任务</strong>
+      <p>视觉识别产生候选后，需要人工确认的任务会出现在这里。</p>
+    </div>
+    <ul v-else v-reveal class="list-plain">
+      <li v-for="task in pendingTasks" :key="task.id" class="row-card">
+        <div class="row-top">
+          <span class="row-title">
+            识别任务 {{ task.vision_task_id.slice(0, 8) }}…
+            <span class="pill" :class="fusionTone(task.fusion_status)">{{ fusionStatusLabel(task.fusion_status) }}</span>
+          </span>
+          <span class="text-faint" style="font-size: 12.5px">{{ formatDateTime(task.created_at) }}</span>
+        </div>
+        <p class="row-meta" style="margin: 0">
+          模型 {{ task.model_version ?? '未登记' }} · 规则 {{ task.rule_version ?? '未登记' }} · 高置信度也必须人工确认。
+        </p>
+
+        <button
+          v-if="imageUrls[task.vision_task_id] && evidenceOpenId !== task.id"
+          type="button"
+          class="review-thumb"
+          title="查看原图与识别定位"
+          @click="toggleEvidence(task)"
+        >
+          <img :src="imageUrls[task.vision_task_id]" alt="识别原图缩略" />
+          <span class="review-thumb-hint">
+            <AppIcon name="eye" :size="12" />
+            查看定位
+          </span>
+        </button>
+
+        <VisionResultViewer
+          v-if="evidenceOpenId === task.id && visionTasks[task.vision_task_id]"
+          :task="visionTasks[task.vision_task_id]"
+          :image-url="imageUrls[task.vision_task_id] ?? null"
+          :image-loading="evidenceLoadingId === task.id"
+        />
+
+        <div v-if="task.candidates.length > 0" class="section-stack" style="gap: 8px">
+          <label
+            v-for="(candidate, index) in task.candidates"
+            :key="index"
+            class="check-row"
+            style="align-items: flex-start; background: var(--glass-card-strong); border: 1.5px solid var(--glass-border); border-radius: 9px; margin: 0; padding: 10px 12px"
+          >
+            <input
+              type="radio"
+              :name="'candidate-' + task.id"
+              :checked="panel.taskId === task.id && panel.selectedIndex === index"
+              style="margin-top: 3px"
+              @change="panel.taskId = task.id; panel.mode = 'confirm'; panel.selectedIndex = index"
+            />
+            <span style="display: grid; gap: 2px">
+              <strong>{{ candidate.drug_name ?? '未命名候选' }}</strong>
+              <span class="text-soft" style="font-size: 12.5px">
+                {{ candidate.dosage ? `剂量 ${candidate.dosage}` : '' }}
+                {{ candidate.frequency ? ` · 频次 ${candidate.frequency}` : '' }}
+                {{ candidate.confidence != null ? ` · 证据置信度 ${(candidate.confidence * 100).toFixed(0)}%（仍需人工确认）` : '' }}
+              </span>
+              <span v-if="candidate.evidence?.length" class="text-faint" style="font-size: 12px">
+                证据来源：{{ candidate.evidence.join('、') }}
+              </span>
+            </span>
+          </label>
+        </div>
+        <p v-else class="notice warn" style="margin: 0">
+          <AppIcon name="info" :size="15" />
+          没有可用候选，请选择「修正」手工填写，或跳过并补拍。
+        </p>
+
+        <div class="row-actions">
+          <button
+            v-if="task.candidates.length > 0"
+            type="button"
+            class="btn btn-primary btn-small"
+            @click="openPanel(task, 'confirm')"
+          >
+            确认候选
+          </button>
+          <button type="button" class="btn btn-ghost btn-small" @click="openPanel(task, 'correct')">
+            人工修正
+          </button>
+          <button type="button" class="btn btn-ghost btn-small" @click="toggleEvidence(task)">
+            <AppIcon name="eye" :size="14" />
+            {{ evidenceOpenId === task.id ? '收起原图' : '原图与定位' }}
+          </button>
+          <button type="button" class="btn btn-danger btn-small" @click="openPanel(task, 'skip')">
+            跳过
+          </button>
+        </div>
+
+        <form
+          v-if="panel.taskId === task.id"
+          class="section-stack"
+          style="border-top: 1px dashed var(--line); padding-top: 12px"
+          @submit.prevent="submitPanel(task)"
+        >
+          <template v-if="panel.mode === 'confirm'">
+            <p class="card-note" style="margin: 0">
+              确认后将以「已确认」状态写入健康事件，确认人与时间会记录在案。
+            </p>
+            <label class="field">
+              确认备注（可选）
+              <input v-model="panel.note" autocomplete="off" placeholder="例如 与药盒实物核对一致" />
+            </label>
+          </template>
+          <template v-else-if="panel.mode === 'correct'">
+            <p class="card-note" style="margin: 0">
+              本次修正会进入健康事件，before / after 与原因将留痕，可用于后续困难样本改进。
+            </p>
+            <label class="field">
+              修正后药品名称（必填）
+              <input v-model="panel.correctDrug" autocomplete="off" required />
+            </label>
+            <div class="grid-two" style="gap: 12px">
+              <label class="field">
+                剂量（可选）
+                <input v-model="panel.correctDosage" autocomplete="off" placeholder="例如 0.25g" />
+              </label>
+              <label class="field">
+                频次（可选）
+                <input v-model="panel.correctFrequency" autocomplete="off" placeholder="例如 每日三次" />
+              </label>
+            </div>
+            <label class="field">
+              修正原因
+              <input v-model="panel.note" autocomplete="off" placeholder="例如 OCR 将 0.25g 误读为 0.75g" />
+            </label>
+          </template>
+          <template v-else>
+            <label class="field">
+              跳过原因
+              <input v-model="panel.skipReason" autocomplete="off" placeholder="例如 图片对应的药品已停用" />
+              <small>跳过不会写入健康记录，原始证据仍会保留。</small>
+            </label>
+          </template>
+          <div class="row-actions">
+            <button type="submit" class="btn btn-clay btn-small" :disabled="busyTaskId === task.id">
+              {{ busyTaskId === task.id ? '正在提交' : '提交' }}
+            </button>
+          </div>
+        </form>
+      </li>
+    </ul>
+  </section>
+
+  <section v-if="settledTasks.length > 0" class="card">
+    <div class="card-heading">
+      <div>
+        <p class="eyebrow">处理记录</p>
+        <h3 class="card-title">已处理的复核任务</h3>
+      </div>
+    </div>
+    <ul class="list-plain">
+      <li v-for="task in visibleSettled" :key="task.id" class="row-card">
+        <div class="row-top">
+          <span class="row-title">
+            识别任务 {{ task.vision_task_id.slice(0, 8) }}…
+            <span class="pill" :class="statusTone(task.status)">{{ reviewStatusLabel(task.status) }}</span>
+          </span>
+          <span class="text-faint" style="font-size: 12.5px">
+            {{ task.confirmed_at ? formatDateTime(task.confirmed_at) : formatDateTime(task.updated_at) }}
+          </span>
+        </div>
+        <p class="row-meta" style="margin: 0">
+          {{ task.status === 'CORRECTED'
+            ? `人工修正为「${task.manual_payload?.drug_name ?? '未记录'}」`
+            : task.status === 'CONFIRMED'
+              ? `确认候选「${task.selected_candidate?.drug_name ?? '未记录'}」`
+              : '已跳过，未写入健康记录' }}
+          {{ task.confirmed_by ? ` · 操作人 ${task.confirmed_by}` : '' }}
+        </p>
+      </li>
+    </ul>
+    <div v-if="settledTasks.length > SETTLED_PREVIEW" class="more-wrap">
+      <button type="button" class="more-btn" :class="{ open: showAllSettled }" @click="showAllSettled = !showAllSettled">
+        <AppIcon name="arrow-right" :size="13" />
+        {{ showAllSettled ? '收起记录' : `展开更早的 ${settledTasks.length - SETTLED_PREVIEW} 条记录` }}
+      </button>
+    </div>
+  </section>
+</template>

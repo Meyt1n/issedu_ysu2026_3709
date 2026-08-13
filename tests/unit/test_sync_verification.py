@@ -22,6 +22,9 @@ _IN_CI = (
 # ── 本测试提交的预期身份 ──────────────────────────────────
 EXPECTED_AUTHOR = "zhang"
 EXPECTED_EMAIL = "z85963541@qq.com"
+# 同一成员在不同时期使用过的 git user.name（身份以邮箱为准，显示名允许变化，
+# 否则任何合法的后续整理提交都会让"最近一次提交作者"断言失效）
+EXPECTED_AUTHOR_ALIASES = {"zhang", "Wind"}
 # 合并后 GitHub master 上本提交的 SHA（由合并时确定，人工填入）
 EXPECTED_SHA = os.environ.get("SYNC_VERIFY_EXPECTED_SHA", "")
 
@@ -221,7 +224,11 @@ def test_cloud_remote_configured() -> None:
 
 
 def test_verification_record_committed_by_correct_author() -> None:
-    """自检：PR #32 的同步验证记录由预期成员提交。"""
+    """自检：同步验证记录由预期成员维护。
+
+    身份锚点是提交邮箱；git user.name 允许在该成员的已知别名内变化
+    （历史上同一成员先后使用过 zhang / Wind 两个显示名）。
+    """
     if _IN_CI:
         pytest.skip("CI 环境跳过本地 git log 自检")
     result = subprocess.run(
@@ -238,9 +245,10 @@ def test_verification_record_committed_by_correct_author() -> None:
     if "|" not in output:
         pytest.skip("git log 输出格式异常")
     author_name, author_email = output.split("|", 1)
-    assert author_name == EXPECTED_AUTHOR, (
-        f"本文件提交作者与预期不符：expected={EXPECTED_AUTHOR} actual={author_name}"
-    )
     assert author_email == EXPECTED_EMAIL, (
         f"本文件提交邮箱与预期不符：expected={EXPECTED_EMAIL} actual={author_email}"
+    )
+    assert author_name in EXPECTED_AUTHOR_ALIASES, (
+        f"本文件提交作者不在预期成员别名内："
+        f"expected_any={sorted(EXPECTED_AUTHOR_ALIASES)} actual={author_name}"
     )

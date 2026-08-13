@@ -236,6 +236,8 @@ export interface RequestOptions {
   accessPurpose?: string
   idempotencyKey?: string
   signal?: AbortSignal
+  /** 单次请求超时（毫秒）。超时视为本地 API 不可用，写请求可凭幂等键安全重试。 */
+  timeoutMs?: number
 }
 
 export interface VisionQualityMetric {
@@ -430,4 +432,229 @@ export interface EvidencePipelineResult {
   fusion_readiness: 'READY_FOR_FUSION' | 'REVIEW' | 'UNKNOWN' | 'CONFLICT'
   requires_human_confirmation: true
   versions: Record<string, string>
+}
+
+export interface ReviewCandidate {
+  drug_name?: string
+  confidence?: number | null
+  evidence?: string[]
+  dosage?: string | null
+  frequency?: string | null
+  [key: string]: unknown
+}
+
+export interface ReviewTask {
+  id: string
+  vision_task_id: string
+  household_id: string
+  member_id: string
+  status: string
+  fusion_status: string | null
+  candidates: ReviewCandidate[]
+  selected_candidate: Record<string, unknown> | null
+  manual_payload: Record<string, unknown> | null
+  model_version: string | null
+  rule_version: string | null
+  confirmed_by: string | null
+  confirmed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ConfirmReviewInput {
+  selected_index?: number | null
+  confirmation_note?: string | null
+}
+
+export interface CorrectReviewInput {
+  manual_payload: Record<string, unknown>
+  correction_note?: string | null
+}
+
+export interface WeatherActionCard {
+  level: string
+  message: string
+}
+
+export interface WeatherResponse {
+  status: string
+  temperature?: number | null
+  humidity?: number | null
+  condition?: string | null
+  wind?: string | null
+  aqi?: number | null
+  action_cards: WeatherActionCard[]
+  reason?: string
+}
+
+export interface AssistantChatInput {
+  messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>
+  model?: string
+  temperature?: number
+  max_tokens?: number
+}
+
+export interface AssistantResponse {
+  answer: string
+  sources: string[]
+  confidence: string
+  escalate: boolean
+  degraded: boolean
+  degrade_reason: string | null
+  model?: string | null
+}
+
+export interface AssistantTool {
+  name: string
+  description?: string
+  parameters?: Record<string, unknown>
+  [key: string]: unknown
+}
+
+export interface KnowledgeDocument {
+  id: string
+  title: string
+  source: string
+  license: string
+  version: string
+  content_hash: string
+  permission_scope: Record<string, unknown>
+  status: string
+  effective_from: string | null
+  effective_until: string | null
+  created_by: string
+  created_at: string
+}
+
+export interface CreateKnowledgeDocumentInput {
+  title: string
+  content: string
+  source: string
+  license?: string
+  version?: string
+  permission_scope?: Record<string, unknown>
+  effective_from?: string
+  effective_until?: string
+}
+
+export interface KnowledgeRetrieveResult {
+  chunk_id?: string
+  document_id?: string
+  document_title?: string
+  text?: string
+  score?: number
+  locator?: string | null
+  [key: string]: unknown
+}
+
+export interface KnowledgeRetrieveResponse {
+  query: string
+  results: KnowledgeRetrieveResult[]
+  total: number
+  query_id: string | null
+  degraded: boolean
+  degrade_reason: string | null
+}
+
+export interface KnowledgeIndexSnapshot {
+  index_id: string
+  version: string
+  document_count: number
+  chunk_count: number
+  checksum: string
+}
+
+export interface ModelVersionBinding {
+  id: string
+  model_id: string
+  dataset_version: string
+  export_manifest_id: string | null
+  fixed_set_hash: string
+  release_status: string
+  safety_thresholds: Record<string, unknown>
+  comparison_report_hash: string | null
+  approved_by: string | null
+  approved_at: string | null
+  revoked_by: string | null
+  revoked_at: string | null
+  created_by: string
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateModelVersionBindingInput {
+  model_id: string
+  dataset_version: string
+  export_manifest_id?: string
+  fixed_set_hash: string
+  safety_thresholds?: Record<string, unknown>
+  comparison_report_hash?: string
+}
+
+export interface ModelBindingComparison {
+  binding_id: string
+  comparison_report_hash: string | null
+  model_id: string
+  dataset_version: string
+  fixed_set_hash: string
+  safety_thresholds: Record<string, unknown>
+}
+
+export interface ActiveModelVersion {
+  active_model_version: string
+  source: 'binding' | 'config'
+}
+
+export interface HardSample {
+  id: string
+  source_event_id: string
+  household_id: string
+  member_id: string
+  category: string
+  status: string
+  note: string | null
+  reviewed_by: string | null
+  reviewed_at: string | null
+  deleted_by: string | null
+  deleted_at: string | null
+  created_by: string
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateHardSampleInput {
+  source_event_id: string
+  member_id: string
+  category: string
+  note?: string
+}
+
+export interface TrainingConsent {
+  id: string
+  hard_sample_id: string
+  household_id: string
+  member_id: string
+  granted_by: string
+  status: string
+  scope: Record<string, unknown>
+  license: string
+  revoked_by: string | null
+  revoked_at: string | null
+  version: number
+  created_at: string
+}
+
+export interface CorrectionDiff {
+  id: string
+  source_event_id: string
+  household_id: string
+  member_id: string
+  field_path: string
+  before_value: unknown
+  after_value: unknown
+  reason: string
+  evidence: Record<string, unknown>
+  operator_actor_id: string
+  version: number
+  created_at: string
 }

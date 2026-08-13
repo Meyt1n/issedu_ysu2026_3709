@@ -25,10 +25,10 @@ export function toRiskCardModel(alert: RiskAlert): RiskCardModel {
 
 export function riskLevelLabel(level: RiskLevel): string {
   switch (level) {
-    case 'SEVERE': return 'Severe'
-    case 'WARNING': return 'Warning'
-    case 'INFO': return 'Info'
-    case 'TIP': return 'Tip'
-    default: return 'Unclassified'
+    case 'SEVERE': return '严重'
+    case 'WARNING': return '警告'
+    case 'INFO': return '提示'
+    case 'TIP': return '建议'
+    default: return '未分级'
   }
 }

@@ -52,13 +52,14 @@ from ai.vision.evidence_pipeline import (
 
 logger = logging.getLogger(__name__)
 
-YOLO_REGISTRY_MODEL_ID = "hct-yolo11n-box-assist-experimental-v1.2"
-LLM_REGISTRY_MODEL_ID = "hct402-demo-lora-v4"
+YOLO_REGISTRY_MODEL_ID = "hct-yolo11n-box-assist-experimental-v1.2-opt-a"
+LLM_REGISTRY_MODEL_ID = "hct402-opt-qlora-v5"
 UNAVAILABLE = "unavailable"
 
 # Registry hash of the approved-for-experiment weights; a mismatch is recorded
 # in the reported version string so an unexpected artifact is visible.
-YOLO_REGISTRY_WEIGHTS_SHA256 = "cedb5b52c1c2a71538c7f31bacc2d46aed0db2b0b7aec09eceb0d3525f5a7d1b"
+# Current registration: hct201_v1.2_opt_a_augplus_20260813/weights/best.pt
+YOLO_REGISTRY_WEIGHTS_SHA256 = "b3611241787360ab517ff4169af974cd49ae46d63ccb3b3387481db1e07a8ecf"
 
 # v4/v5 output-contract field names -> evidence-pipeline field names
 FIELD_NAME_MAP = {

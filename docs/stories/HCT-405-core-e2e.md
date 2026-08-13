@@ -38,7 +38,7 @@ It also adds frontend client methods for rule execution and plan confirmation, d
 | No purchase, consultation, or advertising entry point | Existing HCT-004 redirect scan; `tests/browser/hct405-visible-workflows.spec.ts` | Automated (synthetic browser boundary) |
 | V2 fixed-set comparison and rollback | No released V2 model capability | Blocked |
 
-The browser evidence added by this increment is `tests/browser/hct405-visible-workflows.spec.ts`. It covers an owner creating and revoking a synthetic caregiver grant, API-unavailable rendering without a household or health summary, and the local-only/no-promotion boundary. The tests use synthetic API responses only; they do not represent visual recognition, RAG, model release, deletion propagation, or deployment acceptance.
+The browser evidence added by this increment is `tests/browser/hct405-visible-workflows.spec.ts`. It covers an owner creating and revoking a synthetic caregiver grant, API-unavailable rendering without a household or health summary, and the local-only/no-promotion boundary. Visible-workflow assertions target `.view-stage h2.hero-greeting` and `aside.sidebar button.nav-item` so they stay unique after the topbar title and lazy-loaded views share the same page names. The tests use synthetic API responses only; they do not represent visual recognition, RAG, model release, deletion propagation, or deployment acceptance.
 
 ## Given / When / Then
 

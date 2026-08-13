@@ -63,6 +63,14 @@ def build_relationship_graph(
 
         if etype == "medication_added":
             drugs.append({"name": payload.get("drug"), "added_by": event.id})
+        elif etype == "medication_confirmed":
+            # Vision review confirmations archive with drug_name (HCT-207).
+            name = payload.get("drug_name") or payload.get("drug")
+            if name:
+                drugs.append({"name": name, "added_by": event.id})
+        elif etype == "medication_stopped":
+            stopped = payload.get("drug_name") or payload.get("drug")
+            drugs = [d for d in drugs if d.get("name") != stopped]
         elif etype == "allergy_added":
             allergies.append({"name": payload.get("allergy"), "added_by": event.id})
         elif etype == "allergy_removed":

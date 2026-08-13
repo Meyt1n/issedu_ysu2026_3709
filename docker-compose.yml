@@ -56,6 +56,7 @@ services:
       context: .
       dockerfile: docker/api.Dockerfile
     restart: unless-stopped
+    profiles: ["basic", "enhanced", "dev"]
     command: ["uv", "run", "--no-sync", "python", "-m", "app.outbox_worker", "--loop"]
     environment:
       APP_ENV: ${APP_ENV:-development}
