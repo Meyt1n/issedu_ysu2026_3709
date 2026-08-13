@@ -1,38 +1,129 @@
 # 家健镜 HomeCare Twin
 
-> 基于多模态视觉、家庭健康事件孪生与本地微调大模型的主动照护系统
+本地优先的家庭居家照护教学系统：把药品、过敏、指标和计划的变化写成不可覆盖的健康事件，用多证据视觉录入、确定性规则和受约束本地大模型，帮助家庭看清「发生了什么、依据是什么、下一步谁确认」。
 
-面向 8 周软件工程实训的本地优先家庭居家照护项目。家健镜不替家庭成员看病，也不把“聊天机器人”或“定时闹钟”包装成创新；它持续记录家庭健康事实的变化，以多证据视觉录入为入口，通过确定性规则发现冲突、遗漏和风险，再用本地 RAG 与受约束大模型给出带证据的通俗解释和待确认任务。
+> **产品硬承诺：** 健康数据默认不出网；药盒识别必须多渠道核对且支持人工修正；子女只能看到被精细授权的信息；提醒按等级和预算控制；AI 只能基于完整证据解释，不做诊断、处方或自主用药判断；不提供买药、问诊和广告导流。
 
-> **产品硬承诺：** 健康数据默认不出网；药盒识别必须多渠道核对且支持人工修正；子女只能看到被精细授权的健康信息；提醒按等级和预算控制，不用低价值消息打扰家庭；AI 只能基于完整证据解释，不做诊断、处方或自主用药判断；产品只做居家照护，不提供买药、问诊和广告导流。蚂蚁阿福属于云端通用健康工具，家健镜不复制其服务生态。
+> **使用边界：教学演示，不用于诊断或治疗。** 紧急情况请联系医务人员或当地急救服务。
 
-> **当前状态：一期工程骨架已建立，完整 P0 业务仍在实现中。**
->
-> 仓库当前包含 Vue/FastAPI/MySQL/Alembic 基础工程、家庭/成员/授权、不可变事件、兼容幂等与补偿、可恢复 outbox worker、状态重放、规则/风险/计划基础能力、测试和 CI。视觉主链、RAG、完整 Ollama 助手与完整部署验收仍未交付；实际状态以[需求追踪矩阵](docs/vibe-coding/12-需求追踪矩阵.md)及可复现证据为准。
+## 当前状态
 
-> **使用边界：教学演示，不用于诊断或治疗。**
->
-> 系统不得诊断疾病、开具处方、决定停药或改变剂量。风险卡只提示“发现已知资料，需要进一步确认”。紧急情况应联系医生或当地急救服务。
+一期工程骨架、家庭/成员/授权、不可变事件、状态投影、规则与风险、视觉质量门控、OCR-first 证据、人工复核、本地知识检索和受约束助手接口已经进入本仓库，并有自动测试。
+
+**完整 P0 业务仍未关闭：** 正式药品固定集、模型发布、三档部署演练和 R3 验收尚未完成。进度以[需求追踪矩阵](docs/vibe-coding/12-需求追踪矩阵.md)及可复现证据为准，不以 README、截图或本地实验冒充已交付。
+
+产品界面是 `src/web` 的 Vue 应用（多套可切换主题，含「青黛映蓝」）。`src/web/react` 是风格与教学页面来源，不是第二套运行时。
+
+## 快速开始：如何部署
+
+需要 [Git](https://git-scm.com/)、[uv](https://docs.astral.sh/uv/)（Python 3.11）、[Node.js 22+](https://nodejs.org/) 和 [Docker Desktop](https://www.docker.com/products/docker-desktop/)（Compose 路径）。Windows 用 PowerShell，Linux/macOS 把 `scripts/start.ps1` 换成 `scripts/start.sh`。
+
+更细的端口、探针、质量 Demo 和故障说明见[本地部署与 Demo 操作指南](docs/本地部署与Demo操作指南.md)。干净环境复现证据见 [HCT-101 记录](docs/reviews/HCT-101-工程骨架干净环境复现记录.md)。
+
+### 路径 A：Docker Compose 基础档（推荐干净机器）
+
+基础档启动 MySQL、FastAPI、outbox worker 和 Nginx 托管的 Vue 前端。Ollama 默认不启动，助手接口返回结构化降级，档案/事件/规则仍可用。
+
+```powershell
+git clone https://github.com/Meyt1n/issedu_ysu2026_3709.git
+cd issedu_ysu2026_3709
+# 视觉/助手闭环尚未合入 master 时，请用功能分支才能对齐当前演示代码
+git switch feature/hct-local-model-adapter
+Copy-Item .env.example .env
+# 把 .env 里的 change-me 密码换成自己的本地口令，不要提交该文件
+
+scripts/start.ps1 setup
+scripts/start.ps1 up
+scripts/start.ps1 health
+```
+
+| 入口 | 地址 |
+|---|---|
+| 网页 | http://localhost:8080 |
+| API 健康检查 | http://localhost:8000/health |
+| OpenAPI | http://localhost:8000/docs |
+
+开发身份：页面填写 Actor ID，或请求头 `X-Actor-ID`（仅 `ALLOW_DEV_ACTOR_HEADER=true` 时可用）。生产前必须换成真实认证。
+
+端口冲突时改 `.env` 的 `API_PORT`、`WEB_PORT`、`MYSQL_PORT` 后重新 `up`。
+
+```powershell
+scripts/start.ps1 down          # 停服务，默认保留 mysql_data 卷
+```
+
+清空教学库必须由负责人显式执行 `docker compose --profile basic down --volumes` 并记录影响；标准 `down` 不会删卷。
+
+增强档（额外启动本机 Ollama 容器）在启动前设置：
+
+```powershell
+$env:COMPOSE_PROFILE = "enhanced"
+scripts/start.ps1 up
+```
+
+容器内的 Ollama 仍需自行 `ollama pull` / `ollama create` 模型；未配置 `OLLAMA_MODEL` 时助手保持降级。HCT-408 三档备份恢复仍在进行中，不能把增强档当成已验收交付。
+
+### 路径 B：本地进程（调试 Vue / FastAPI）
+
+适合改代码。不自动启动 outbox worker。默认 API 配置是 SQLite `./homecare-dev.sqlite3`；一旦存在 `.env`（`setup`/`up` 会从示例复制），`DATABASE_URL` 会指向 Compose 的 MySQL——没有 MySQL 时请改成 SQLite，或先只起数据库。
+
+```powershell
+scripts/start.ps1 setup
+$env:DATABASE_URL = "sqlite+pysqlite:///./homecare-dev.sqlite3"
+scripts/start.ps1 migrate
+
+# 终端 1
+scripts/start.ps1 api
+
+# 终端 2
+scripts/start.ps1 web
+```
+
+| 入口 | 地址 |
+|---|---|
+| Vite 开发页 | http://127.0.0.1:5173 |
+| API | http://127.0.0.1:8000 |
+
+本机代理固定走 `127.0.0.1`，避免 `localhost` 解析到 IPv6。多人联调可设 `HCT_API_PROXY`（后端）和 `HCT_WEB_PORT`（前端端口）。
+
+### 可选：复刻本机视觉与助手闭环
+
+权重、PaddleOCR 环境和微调 GGUF **不进 Git**，别人必须在自己机器上准备，不要拷贝他人盘符或 SQLite。没有它们时，质量门控、建任务、人工复核和助手降级仍然可用。
+
+要接近「扫合成药盒 → 复核入档 → 助手按事实回答」：
+
+1. 用上面的路径 B 或 Compose 起 API/Web（默认端口 **8000 / 5173 或 8080**）。
+2. 按 [视觉演示说明](docs/demo/vision-samples/README.md) 自备 PaddleOCR 环境、生成 `demo-cn-en-v1`、启动 `scripts/vision_worker.py`，上传本目录合成药盒。
+3. 按 [本地大模型闭环](docs/demo/local-llm-v5.md) 在仓库外准备 Ollama 模型，设置 `OLLAMA_MODEL` 后重启 API；先在自己建的成员上确认一条用药再提问。
+
+`VISION_ADAPTER_SIGNING_KEY` 必须与 worker 的 `HCT_ADAPTER_SIGNING_KEY` 相同（示例均为 `dev-only-change-me`）。v5 尚未完成正式评估，输出只用于教学演示。
+
+### 提交前检查
+
+```powershell
+scripts/start.ps1 check
+```
+
+等价于 Ruff、pytest、前端类型检查/构建和 Compose 配置校验。无法运行的检查要在 PR 里如实说明。
 
 ## 核心价值
 
-家庭中的药品、检查报告、过敏史、指标、计划和照护关系经常分散且不断变化。HomeCare Twin 将每次变化保存为不可覆盖的 `health_event`，再重建当前状态、重算规则并生成照护任务，因此能回答：
+家庭中的药品、检查报告、过敏史、指标、计划和照护关系经常分散且不断变化。家健镜将每次变化保存为不可覆盖的 `health_event`，再重建当前状态、重算规则并生成照护任务，因此能回答：
 
 - 最近发生了什么变化；
 - 哪些事实、规则和文档导致新风险；
 - 当前结果是否经过本人或照护者确认；
 - 下一步需要谁处理、何时升级。
 
-这里的“孪生”是家庭健康运营型数字孪生，不模拟人体生理，也不宣称预测疾病。
+这里的「孪生」是家庭健康运营型数字孪生，不模拟人体生理，也不宣称预测疾病。
 
 ## 六个 P0 功能域
 
 | 功能域 | P0 交付 | 明确边界 |
 |---|---|---|
 | 家庭健康事件中心 | 成员、疾病、过敏、指标、药物、文档、授权与事件时间线 | 不接医院 HIS 和全量可穿戴设备 |
-| 多证据视觉录入 | 图片/短视频质量检查、YOLO、OCR、条码、包装特征、本地主数据和人工复核/修正 | 不承诺识别任意药品，不做持续家庭监控；未知/冲突不得自动入库 |
+| 多证据视觉录入 | 图片/短视频质量检查、YOLO 辅助定位、OCR、条码、包装特征、本地主数据和人工复核/修正 | 不承诺识别任意药品；未知/冲突不得自动入库 |
 | 家庭健康关系图谱 | 成员—疾病—过敏—药品—成分—计划—照护者关系投影 | P0 不引入大规模医学本体或自动医学推理 |
-| 风险与环境规则 | 过期、临期、低库存、重复成分、过敏、有限相互作用、天气行动卡和四级提醒 | 不提供完整临床决策支持；普通告警有预算，严重告警不被压制 |
+| 风险与环境规则 | 过期、临期、低库存、重复成分、过敏、有限相互作用、天气行动卡和四级提醒 | 不是临床决策支持；普通告警有预算，严重告警不被压制 |
 | 受约束计划优化 | 服药确认、延期、跳过、照护升级及安全时间窗内提醒建议 | AI 不得新增、停用、替换药物或改变剂量 |
 | 本地证据助手与大屏 | SQL/图谱/RAG 工具调用、风险解释、事件摘要、业务与模型指标、字段级可见范围 | 无证据不作肯定性医学回答；无购药/问诊/广告入口 |
 
@@ -56,79 +147,59 @@ flowchart TD
     N --> O["审核、追加训练、固定集评测、发布或回滚 V2"]
 ```
 
-视觉系统允许拒识。只有 `MATCHED` 且人工确认的药品可参与风险计算；LLM 不计算风险等级，只解释规则结果。
+视觉系统允许拒识。只有人工确认的药品可参与风险计算；LLM 不计算风险等级，只解释规则结果。
 
 ## 计划架构
 
 ```mermaid
 flowchart TB
-    UI["Vue 3 + TypeScript + Element Plus + ECharts"] --> GW["Nginx / HTTPS"]
+    UI["Vue 3 + TypeScript + Vite"] --> GW["Nginx / HTTPS"]
     GW --> API["FastAPI 统一业务 API"]
     API --> AUTH["身份、成员级授权与审计"]
     API --> EVENT["事件、状态、计划与任务服务"]
     API --> ORCH["AI 编排与输出校验"]
-    AUTH --> DB[("MySQL 事实主库")]
+    AUTH --> DB[("MySQL 事实主库 / 本地 SQLite")]
     EVENT --> DB
     ORCH --> CV["OpenCV / OCR / YOLO 辅助 / 条码"]
     ORCH --> RULE["关系投影与版本化规则"]
-    ORCH --> RAG["FAISS 或 Qdrant + 版本化文档"]
+    ORCH --> RAG["本地知识检索 + 版本化文档"]
     ORCH --> LLM["Ollama 本地量化模型"]
     DB --> FILES["加密本地文件与模型存储"]
 ```
 
-前端和管理员端不得直连数据库、向量库或 Ollama。MySQL 是唯一业务事实源；图谱是可重建投影；规则给出确定结论；LLM 负责工具选择、引用和语言解释。家庭版网络出口默认拒绝，天气只可发送城市/区县代码，健康数据、报告、图片、视频、向量和对话不得自动上传。
+前端不得直连数据库、向量库或 Ollama。MySQL（Compose）或 SQLite（本地进程）是业务事实源；图谱是可重建投影；规则给出确定结论；LLM 负责工具选择、引用和语言解释。家庭版网络出口默认拒绝；天气只可发送城市/区县代码。
 
 ## 技术基线
 
-- Web：Vue 3、TypeScript、Vite、Element Plus、ECharts；
-- API：Python 3.11、FastAPI、Pydantic、SQLAlchemy 2、Alembic；
-- 数据：MySQL 8；向量检索在 P0 从 FAISS 起步，确需服务化时评审 Qdrant；
-- 视觉：OpenCV 质量门控、PaddleOCR/本地 OCR、条码解析，YOLO11n 仅作包装/条码区域辅助；YOLO26n 仅作对照实验，是否采用由固定评估集决定；
-- 大模型：LLaMA Factory 进行 4-bit QLoRA，Ollama 本地部署；模型学习工具调用、引用、解释和拒答，不学习并替代医学事实库；
-- 测试：pytest、httpx、Playwright、固定视觉/LLM/安全评估集；
-- 部署：Docker Compose，提供基础档、增强档和研发档。
+- Web：Vue 3、TypeScript、Vite；页面主题在应用内切换，不依赖 Element Plus
+- API：Python 3.11、FastAPI、Pydantic、SQLAlchemy 2、Alembic
+- 数据：Compose 用 MySQL 8.4；本地进程默认可 SQLite
+- 视觉：OpenCV 质量门控；PaddleOCR / 条码 / YOLO 辅助定位由本机 worker 按需加载
+- 大模型：Ollama 本地推理；微调与评测在研发机进行，权重不入库
+- 测试：pytest、httpx、Playwright、Vitest
+- 部署：Docker Compose profile `basic` / `enhanced` / `dev`
 
-以上是方案基线，具体依赖版本须由首个可运行工程增量锁定并更新文档。
-
-## 8 周 P0 路线
-
-| 周次 | 重点 | 可验收证据 |
-|---|---|---|
-| 1 | 范围、医疗边界、数据字典、标注规范、环境 | 评审记录、ADR、数据卡草案 |
-| 2 | Vue/FastAPI/MySQL 骨架，成员、授权、事件模型 | 迁移、OpenAPI、权限测试 |
-| 3 | 自采授权数据、图片/视频预处理、YOLO 辅助定位基线 | 数据集 V1、辅助模型 V1、评测报告 |
-| 4 | OCR 主链路、条码解码、字段抽取、候选融合与人工复核 | 从拍照到确认的纵向闭环 |
-| 5 | 时间线、关系投影、风险规则与告警预算 | 规则测试、风险证据链 |
-| 6 | 计划确认、照护升级、天气行动卡、大屏 | 任务闭环与指标页面 |
-| 7 | RAG、QLoRA 对照、Ollama 工具调用和安全回归 | 带引用回答、微调对照、安全报告 |
-| 8 | 困难样本 V2、集成、部署演练、录屏与答辩 | V1/V2 对比、测试报告、交付包 |
-
-若时间或算力不足，优先缩小药品 SKU、规则和页面范围，不删除授权、人工确认、拒识、证据和安全门禁。
-
-## 当前仓库结构
+## 仓库结构
 
 ```text
 docs/vibe-coding/   需求、架构、数据、AI、测试、计划和交付基线
 docs/stories/       当前可执行 Story、验收条件和复核要求
 docs/decisions/     架构决策记录
-docs/demo/          受控演示知识与场景
-src/                Web、API、AI 模块和一期工程骨架
-tests/              单元/集成起步测试，后续扩展 E2E、模型和安全测试
-migrations/         MySQL/SQLite 兼容的 Alembic 版本化迁移
-scripts/            Windows/Linux 启动、迁移和检查脚本
+docs/demo/          受控演示知识、视觉样例与本地模型接线
+src/web/            产品 Vue 前端
+src/web/react/      React 风格来源 / 教学页，不作为默认运行时
+src/api/            FastAPI 业务 API
+src/ai/             视觉与本地模型适配器
+tests/              单元、契约、集成、E2E 与安全测试
+migrations/         MySQL/SQLite 兼容的 Alembic 迁移
+scripts/            启动、迁移、worker、检查脚本
 docker/             API/Web 镜像和 Nginx 配置
-doc/                 历史会议记录、课程参考和 Office 模板
-sync-test/           双仓库协作验证记录
 ```
 
-## 开始工作
+## 开始协作
 
-0. 任何成员、Vibe Coding 或 agent 必须先阅读[开发前必读与 Vibe Coding 工作流](docs/vibe-coding/开发前必读与Vibe%20Coding工作流.md)；agent 还必须遵守根目录的 [`AGENTS.md`](AGENTS.md)。
-1. 再阅读[综合研究与实施报告](docs/家健镜%20HomeCare%20Twin%20综合研究与实施报告.md)、[文档导航](docs/vibe-coding/00-文档导航.md)和[需求规格](docs/vibe-coding/01-需求规格说明书.md)。
-2. 按[产品信息架构与页面设计](docs/vibe-coding/18-产品信息架构与页面设计.md)冻结页面、状态和文案。
-3. 从[需求追踪矩阵](docs/vibe-coding/12-需求追踪矩阵.md)领取尚未完成的需求。
-4. 按[任务拆分与交付清单](docs/vibe-coding/15-任务拆分与交付清单.md)建立 Story，并遵守[贡献指南](CONTRIBUTING.md)。
-5. 按[项目全生命周期开发流程](docs/vibe-coding/19-项目全生命周期开发流程.md)领取阶段 Issue、执行 Vibe Coding、PR、周验收和双仓库同步。
-6. 只有在代码、测试和复现证据合并后，才把状态从“未开始/进行中”改为“已验证”。
-
-本地基础启动命令已建立，完整 Demo 仍未完成。以[本地部署与 Demo 操作指南](docs/本地部署与Demo操作指南.md)为唯一入口；首次开发依次执行 `scripts/start.ps1 setup`、`scripts/start.ps1 up`、`scripts/start.ps1 health` 和 `scripts/start.ps1 down`，提交前执行 `scripts/start.ps1 check`。Linux/macOS 使用同名 `scripts/start.sh` 命令。
+0. 先阅读[开发前必读与 Vibe Coding 工作流](docs/vibe-coding/开发前必读与Vibe%20Coding工作流.md)；agent 还必须遵守 [`AGENTS.md`](AGENTS.md)。
+1. 再阅读[文档导航](docs/vibe-coding/00-文档导航.md)和[需求规格](docs/vibe-coding/01-需求规格说明书.md)。
+2. 从[需求追踪矩阵](docs/vibe-coding/12-需求追踪矩阵.md)领取尚未完成的需求。
+3. 按[贡献指南](CONTRIBUTING.md)从 GitHub `master` 拉任务分支，用 PR 合并。
+4. 只有在代码、测试和复现证据合并后，才把状态改为「已验证」。

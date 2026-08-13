@@ -4,11 +4,15 @@
 
 ## 1. 当前可执行状态
 
-一期工程骨架已经可以运行健康检查、数据库迁移、家庭/成员/授权、不可变事件、兼容幂等与补偿、可恢复 outbox worker 和投影重放。HCT-003 已增加 MySQL、OpenCV 质量探针和 Ollama 结构化资源探针；HCT-202 正在实现合成样例驱动的本地质量门控。视觉 OCR/YOLO 主链、RAG、完整 Ollama 业务助手和完整部署验收仍未实现，不能把资源探针当作完整产品，也不能把质量门控当作完整识别能力。
+一期工程骨架可以运行健康检查、数据库迁移、家庭/成员/授权、不可变事件、兼容幂等与补偿、可恢复 outbox worker 和投影重放。仓库内还有视觉质量门控、OCR-first 证据、人工复核、本地知识检索和受约束助手接口；**权重、PaddleOCR 环境和微调模型不进 Git**，未配置时助手与识别应降级而不是假装完成。
+
+正式药品固定集、模型发布、三档备份恢复演练和 R3 验收仍未关闭。不能把资源探针、质量门控或本机实验模型当成完整产品。总入口见根目录 [README](../README.md)。
 
 ### 1.1 干净环境标准复现路径
 
-以下路径是 HCT-101 的唯一基础档复现入口。`up` 使用 Docker Compose 构建 API/Web/outbox worker，等待 MySQL、API、worker 和 Web 的健康检查，并在 API 容器启动时执行 Alembic 迁移；`down` 默认不删除 `mysql_data` 卷。
+以下路径是 HCT-101 的基础档复现入口（工程骨架）。要复刻视觉识别与本地助手闭环，请改用功能分支 `feature/hct-local-model-adapter`，并阅读根目录 README 的「复刻本机视觉与助手闭环」。
+
+`up` 默认使用 Compose profile `basic`，构建 API/Web/outbox worker，等待 MySQL、API、worker 和 Web 的健康检查，并在 API 容器启动时执行 Alembic 迁移；`down` 默认不删除 `mysql_data` 卷。所有业务服务都声明了 profile，**不指定 `basic`/`enhanced`/`dev` 时 Compose 不会启动任何容器**；启动脚本已默认补上 `--profile basic`。
 
 Windows PowerShell：
 
@@ -39,9 +43,11 @@ chmod +x scripts/start.sh
 
 `health` 会同时检查 Compose 中 API、outbox worker、Web、MySQL 的容器健康状态，并访问 API 与 Web 的 `/health`。默认浏览器入口为 `http://localhost:8080`，API 健康检查为 `http://localhost:8000/health`，OpenAPI 为 `http://localhost:8000/docs`。端口被占用时，在 `.env` 中修改 `API_PORT`、`WEB_PORT` 或 `MYSQL_PORT`，再重新执行 `up`。
 
+增强档（额外启动 Ollama 容器）在启动前设置 `$env:COMPOSE_PROFILE='enhanced'`（Bash：`export COMPOSE_PROFILE=enhanced`）。容器内仍需自行拉取或创建模型；未配置 `OLLAMA_MODEL` 时助手保持结构化降级。
+
 ### 1.2 本地进程开发路径
 
-需要调试 Vue/FastAPI 时可以不启动 Compose 的 API/Web，但仍必须先安装依赖并执行迁移：
+需要调试 Vue/FastAPI 时可以不启动 Compose 的 API/Web，但仍必须先安装依赖并执行迁移。若 `.env` 里的 `DATABASE_URL` 指向 MySQL 而本机没有库，请改成 SQLite，例如 `$env:DATABASE_URL='sqlite+pysqlite:///./homecare-dev.sqlite3'`。
 
 ```powershell
 scripts/start.ps1 setup
@@ -58,7 +64,7 @@ scripts/start.ps1 api
 | 档位 | 服务 | 适用环境 |
 |---|---|---|
 | 基础档 | Vue、FastAPI、outbox worker、MySQL、规则、轻量 OCR | 低配置电脑；断网仍可管理档案、任务和历史证据；网络出口默认拒绝 |
-| 增强档 | 基础档 + FAISS/Qdrant + Ollama 量化模型 | 建议 16 GB 以上内存；资源探针已验证，本地证据助手仍待实现 |
+| 增强档 | 基础档 + FAISS/Qdrant + Ollama 量化模型 | 建议 16 GB 以上内存；Compose profile `enhanced` 会多起 Ollama 容器，业务助手仍取决于本机是否已登记模型 |
 | 研发档 | 增强档 + 数据标注、训练、评测和模型登记 | GPU 工作站或短时云 GPU；不得在家庭端自动训练 |
 
 MySQL、Ollama、向量检索和文件服务默认仅监听本机/容器网络，不暴露公网。

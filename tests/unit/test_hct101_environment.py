@@ -45,10 +45,12 @@ def test_cross_platform_start_scripts_expose_lifecycle_commands() -> None:
         assert command in shell
     assert "uv sync --frozen" in powershell
     assert "uv sync --frozen" in shell
-    assert "docker compose up -d --build --wait" in powershell
-    assert "docker compose up -d --build --wait" in shell
-    assert "docker compose down" in powershell
-    assert "docker compose down" in shell
+    assert "up -d --build --wait" in powershell
+    assert "up -d --build --wait" in shell
+    assert "--profile" in powershell
+    assert "--profile" in shell
+    assert "--profile $profile down" in powershell
+    assert "compose --profile \"$compose_profile\" down" in shell
     assert "/api/v1/health/db" in powershell
     assert "/api/v1/health/db" in shell
     assert "check_http_health.py" in powershell
@@ -158,5 +160,8 @@ def test_reproduction_guides_describe_the_verified_lifecycle() -> None:
 
     for command in ("setup", "up", "health", "down"):
         assert f"start.ps1 {command}" in guide or f"start.sh {command}" in guide
+        assert f"start.ps1 {command}" in readme
     assert "干净环境复现记录" in guide
     assert "完整 P0 业务" in readme
+    assert "如何部署" in readme
+    assert "localhost:8080" in readme

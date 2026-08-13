@@ -12,11 +12,12 @@ sources / confidence / escalate), so when the caller does not provide its
 own system prompt we inject one that pins the output contract and the
 medical boundary ("no diagnosis / prescription / dosage decisions").
 
-Run inside the GPU inference environment (Anaconda ``xa_code``):
+Run inside a GPU inference environment you maintain locally
+(do not hard-code another developer's disk path):
 
-    C:\\Users\\32140\\anaconda\\envs\\xa_code\\python.exe scripts/llm_sidecar.py \
-        --base "...\\local-models\\hct402-demo-lora-v4\\base-model" \
-        --adapter "...\\local-models\\hct402-opt-v5-20260813\\run-qlora-v5\\adapter" \
+    <your-gpu-python> scripts/llm_sidecar.py \
+        --base "<repo-external>/base-model" \
+        --adapter "<repo-external>/adapter" \
         --port 11435
 
 Results are teaching-demo output and never a medical decision.

@@ -8,8 +8,8 @@ LLM stays untouched (results here are recognition evidence, not facts).
 
 Run (repo root; workers need the adapter env that has paddle/torch):
 
-    $env:HCT_VISION_WEIGHTS = "<path to best.pt>"
-    $env:HCT_VISION_WORKER_PYTHON = "<xa_code python.exe>"
+    $env:HCT_VISION_WEIGHTS = "<仓库外的 YOLO 权重>\best.pt"
+    $env:HCT_VISION_WORKER_PYTHON = "<你的 PaddleOCR 环境>\python.exe"
     uv run python scripts/vision_debug_app.py --port 18901
 """
 # ruff: noqa: E501  (embedded HTML/CSS/JS page)

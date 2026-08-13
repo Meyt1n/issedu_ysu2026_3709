@@ -10,8 +10,8 @@ and bridges the result into a human review task — the worker never
 confirms anything by itself.
 
 Example:
-    python scripts/vision_worker.py --actors parent-1,demo-parent \
-        --api http://127.0.0.1:8001/api/v1 --interval 5
+    python scripts/vision_worker.py --actors <your-actor-id> \
+        --api http://127.0.0.1:8000/api/v1 --interval 5
 
 Environment: same as scripts/run_local_adapter.py (HCT_VISION_WORKER_PYTHON,
 HCT_MASTER_DATA_VERSION, HCT_OCR_LANG, HCT_ADAPTER_SIGNING_KEY ...).

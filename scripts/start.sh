@@ -10,6 +10,10 @@ if [[ ! -f .env ]]; then
   echo "已从 .env.example 创建 .env；请在真实环境中替换开发密码。"
 fi
 
+compose_profile="${COMPOSE_PROFILE:-${COMPOSE_PROFILES:-basic}}"
+compose_profile="${compose_profile%%,*}"
+compose_profile="${compose_profile// /}"
+
 case "$target" in
   setup)
     uv sync --frozen
@@ -31,26 +35,27 @@ case "$target" in
     uv run pytest
     npm run check:web
     npm run build:web
-    docker compose config --quiet
+    docker compose --profile "$compose_profile" config --quiet
     ;;
   up)
-    docker compose up -d --build --wait --wait-timeout 60
+    docker compose --profile "$compose_profile" up -d --build --wait --wait-timeout 60
+    echo "Compose profile=${compose_profile} 已启动。"
     "$0" health
     ;;
   health)
-    docker compose ps --all
+    docker compose --profile "$compose_profile" ps --all
     while read -r service state health; do
       if [[ "$state" != "running" || "$health" != "healthy" ]]; then
         echo "Compose 服务 $service 未健康：state=$state, health=$health" >&2
         exit 1
       fi
-    done < <(docker compose ps --all --format '{{.Service}} {{.State}} {{.Health}}')
-    if [[ -z "$(docker compose ps --all --format '{{.Service}}')" ]]; then
-      echo "没有找到 Compose 服务，请先执行 ./scripts/start.sh up。" >&2
+    done < <(docker compose --profile "$compose_profile" ps --all --format '{{.Service}} {{.State}} {{.Health}}')
+    if [[ -z "$(docker compose --profile "$compose_profile" ps --all --format '{{.Service}}')" ]]; then
+      echo "没有找到 Compose 服务，请先执行 ./scripts/start.sh up（默认 profile=basic）。" >&2
       exit 1
     fi
-    api_url="$(docker compose port api 8000)"
-    web_url="$(docker compose port web 80)"
+    api_url="$(docker compose --profile "$compose_profile" port api 8000)"
+    web_url="$(docker compose --profile "$compose_profile" port web 80)"
     [[ -n "$api_url" && -n "$web_url" ]] || { echo "无法定位 API/Web 宿主端口。" >&2; exit 1; }
     api_port="${api_url##*:}"
     web_port="${web_url##*:}"
@@ -61,8 +66,8 @@ case "$target" in
     echo "API、Web、MySQL Compose 健康检查通过。"
     ;;
   down)
-    docker compose down
-    echo "Compose 服务已停止；默认保留 mysql_data 卷。"
+    docker compose --profile "$compose_profile" down
+    echo "Compose 服务已停止（profile=${compose_profile}）；默认保留 mysql_data 卷。"
     ;;
   *)
     echo "用法: ./scripts/start.sh [setup|api|web|migrate|check|up|health|down]" >&2
