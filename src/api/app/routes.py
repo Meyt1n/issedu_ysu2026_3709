@@ -175,7 +175,9 @@ def _raise_resource_not_found() -> NoReturn:
 def _is_erased(household: Household | None, member: Member | None = None) -> bool:
     if household is None or household.deleted_at is not None:
         return True
-    if member is not None and (member.deleted_at is not None or member.household_id != household.id):
+    if member is not None and (
+        member.deleted_at is not None or member.household_id != household.id
+    ):
         return True
     return False
 

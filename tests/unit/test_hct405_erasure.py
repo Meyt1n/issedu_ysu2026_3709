@@ -131,11 +131,15 @@ def test_household_erasure_hides_rows_and_writes_skip_marker(
     assert not cache_file.exists()
     assert scoped.status == "deleted"
     assert db_session.scalar(
-        select(func.count()).select_from(KnowledgeChunk).where(KnowledgeChunk.document_id == scoped.id)
+        select(func.count())
+        .select_from(KnowledgeChunk)
+        .where(KnowledgeChunk.document_id == scoped.id)
     ) == 0
     assert kept.status == "active"
     assert db_session.scalar(
-        select(func.count()).select_from(KnowledgeChunk).where(KnowledgeChunk.document_id == kept.id)
+        select(func.count())
+        .select_from(KnowledgeChunk)
+        .where(KnowledgeChunk.document_id == kept.id)
     ) >= 1
 
     marker_path = tmp_path / "backup-skip" / f"{task.id}.json"

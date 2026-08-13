@@ -165,7 +165,11 @@ def test_household_erasure_propagates_to_files_index_cache_and_backup_skip(
     assert caregiver_list.status_code == 200
     assert caregiver_list.json() == []
 
-    assert client.get(f"/api/v1/households/{household_id}/members", headers=OWNER).status_code == 404
+    members_hidden = client.get(
+        f"/api/v1/households/{household_id}/members",
+        headers=OWNER,
+    )
+    assert members_hidden.status_code == 404
     assert client.get(
         f"/api/v1/households/{household_id}/events",
         headers=OWNER,

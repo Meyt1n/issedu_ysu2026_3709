@@ -33,7 +33,12 @@ def upgrade() -> None:
         sa.Column("household_id", sa.String(length=36), nullable=False),
         sa.Column("member_id", sa.String(length=36), nullable=True),
         sa.Column("requested_by", sa.String(length=120), nullable=False),
-        sa.Column("requested_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "requested_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.func.now(),
+        ),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("status", sa.String(length=32), nullable=False, server_default="pending"),
         sa.Column("layers", sa.JSON(), nullable=False),

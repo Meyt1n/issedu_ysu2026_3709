@@ -59,7 +59,9 @@ def test_erasure_upgrade_adds_tombstones_and_task_table(
             "error_layers",
         } <= task_columns
         with engine.connect() as connection:
-            revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            revision = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
         assert revision == CURRENT_REVISION
     finally:
         engine.dispose()
