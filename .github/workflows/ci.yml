@@ -33,6 +33,21 @@ jobs:
   backend:
     name: Backend lint, migration and tests
     runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb
+        env:
+          MYSQL_DATABASE: homecare_test
+          MYSQL_USER: homecare
+          MYSQL_PASSWORD: test-password
+          MYSQL_ROOT_PASSWORD: test-root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -uroot -ptest-root"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -57,6 +72,14 @@ jobs:
         env:
           DATABASE_URL: sqlite+pysqlite:///./ci.sqlite3
         run: uv run alembic upgrade head
+
+      - name: Test HCT-405 migration on MySQL 8.4
+        env:
+          HCT405_MYSQL_TEST_URL: mysql+pymysql://homecare:test-password@127.0.0.1:3306/homecare_test?charset=utf8mb4
+        run: >-
+          uv run pytest
+          tests/integration/test_hct405_review_migration.py::test_review_wiring_upgrade_and_downgrade_on_mysql
+          -q
 
       - name: Record HCT-405 evidence environment
         run: uv run python scripts/hct405_evidence_metadata.py

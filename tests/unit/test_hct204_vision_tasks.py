@@ -144,15 +144,66 @@ class TestStateMachine:
 
 
 class TestIdempotency:
-    def test_same_key_returns_existing_queued_task(self, session):
+    def test_same_key_and_same_request_returns_existing_queued_task(self, session):
         key = f"idem-{uuid.uuid4().hex[:16]}"
-        t1 = _make_task(session, idempotency_key=key)
+        household_id = str(uuid.uuid4())
+        t1 = _make_task(
+            session,
+            idempotency_key=key,
+            household_id=household_id,
+            created_by="actor",
+            file_id="same-file",
+        )
         session.commit()
 
-        t2 = create_vision_task(session, idempotency_key=key, household_id=str(uuid.uuid4()),
-                                created_by="actor", file_id="f2")
+        t2 = create_vision_task(
+            session,
+            idempotency_key=key,
+            household_id=household_id,
+            created_by="actor",
+            file_id="same-file",
+        )
         session.commit()
         assert t1.id == t2.id
+
+    def test_same_key_with_different_request_is_conflict(self, session):
+        key = f"idem-{uuid.uuid4().hex[:16]}"
+        _make_task(session, idempotency_key=key)
+        session.commit()
+
+        with pytest.raises(HTTPException) as exc_info:
+            create_vision_task(
+                session,
+                idempotency_key=key,
+                household_id=str(uuid.uuid4()),
+                created_by="actor",
+                file_id="different-file",
+            )
+        assert exc_info.value.detail == "IDEMPOTENCY_KEY_CONFLICT"
+
+    def test_same_key_returns_matching_terminal_task(self, session):
+        key = f"idem-{uuid.uuid4().hex[:16]}"
+        household_id = str(uuid.uuid4())
+        task = _make_task(
+            session,
+            idempotency_key=key,
+            household_id=household_id,
+            created_by="actor",
+            file_id="terminal-file",
+        )
+        transition_status(session, task, VisionTaskStatus.RUNNING)
+        transition_status(session, task, VisionTaskStatus.SUCCEEDED, result={"ok": True})
+        session.commit()
+
+        retried = create_vision_task(
+            session,
+            idempotency_key=key,
+            household_id=household_id,
+            created_by="actor",
+            file_id="terminal-file",
+        )
+        assert retried.id == task.id
+        assert retried.status == VisionTaskStatus.SUCCEEDED
 
     def test_different_key_creates_new_task(self, session):
         t1 = _make_task(session, idempotency_key="key-a")

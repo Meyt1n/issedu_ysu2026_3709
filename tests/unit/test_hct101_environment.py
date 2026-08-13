@@ -148,7 +148,7 @@ def test_alembic_has_a_single_head() -> None:
 
     assert len(scripts.get_heads()) == 1
     head = scripts.get_heads()[0]
-    assert head == "0009_merge_backend_heads"
+    assert head == "0010_hct405_review_wiring"
     assert len(head) <= 64
 
 

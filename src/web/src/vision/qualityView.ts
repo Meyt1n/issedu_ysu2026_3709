@@ -74,6 +74,7 @@ interface QueueVisionFileInput {
   result: VisionQualityResponse
   actorId: string
   memberId?: string
+  accessPurpose?: string
   idempotencyKey: string
   isCurrent: () => boolean
 }
@@ -85,8 +86,12 @@ export async function queuePassedVisionFile(
   if (!canCreateVisionTask(input.result) || !input.result.quality_receipt) {
     throw new Error('QUALITY_GATE_REQUIRED')
   }
+  if (!input.memberId) {
+    throw new Error('MEMBER_REQUIRED')
+  }
 
-  const requestOptions = { actorId: input.actorId }
+  const requestOptions: RequestOptions = { actorId: input.actorId }
+  if (input.accessPurpose) requestOptions.accessPurpose = input.accessPurpose
   const uploaded = await api.uploadFile(input.file, requestOptions)
   const cleanup = () => api
     .deleteUploadedFile(uploaded.storage_key, requestOptions)

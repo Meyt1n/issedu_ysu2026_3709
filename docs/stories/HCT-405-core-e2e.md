@@ -7,13 +7,13 @@
 - Reviewer: Meyt1n or another independently assigned reviewer (R3; owners cannot self-review)
 - Risk: R3
 - Dependencies: HCT-207, HCT-307, HCT-308, HCT-401, HCT-403, and HCT-404; the backend files and migrations accidentally removed by PR #128 must first be restored by #132/PR #133.
-- Allowed changes: focused knowledge/assistant API fixes, focused unit tests, `tests/e2e/`, `tests/browser/`, `playwright.config.ts`, `.github/workflows/ci.yml`, the existing frontend API/test files, this Story, and the requirement traceability matrix.
+- Allowed changes: focused knowledge/assistant API fixes; vision/review routing, schemas, application helpers and migration; focused unit/contract/integration tests; `tests/e2e/`; `tests/browser/`; `playwright.config.ts`; `.github/workflows/ci.yml`; the existing frontend API/test files; this Story; the API specification; and the requirement traceability matrix.
 
 ## Value and Scope
 
 This increment creates a repeatable, synthetic-data E2E regression baseline for the backend APIs. It exercises the owner and caregiver authorization boundary through event projection, risk evidence, plan actions, revocation, cross-household denial, local knowledge retrieval, vision four-state safety, manual correction, deletion propagation, and model-binding rollback.
 
-It also verifies structured Ollama outage and unsafe-output degradation at the HTTP boundary. CI records focused API JUnit evidence and Playwright JUnit/failure artifacts. The client keeps authorization, purpose, and idempotency metadata at the API boundary; it does not call databases, rules, models, or Ollama directly.
+It also verifies structured Ollama outage and unsafe-output degradation at the HTTP boundary. The backend wiring increment binds every accepted vision task to a real household member, creates one pending `ReviewTask` after fusion, fingerprints the complete fusion and transition inputs, and uses a versioned conditional database update so concurrent confirm/correct requests cannot create duplicate health events or outbox rows. CI runs the migration against SQLite and MySQL 8.4, records focused API JUnit evidence, and retains Playwright JUnit/failure artifacts. The client keeps authorization, purpose, version, and idempotency metadata at the API boundary; it does not call databases, rules, models, or Ollama directly.
 
 ## Explicitly Out of Scope
 
@@ -28,8 +28,9 @@ It also verifies structured Ollama outage and unsafe-output degradation at the H
 | Scenario | Evidence in this increment | Status |
 | --- | --- | --- |
 | Registration, household, member, and caregiver authorization | `test_hct405_core_flows.py` | Automated |
-| Image quality, multi-evidence fusion, and manual correction | `test_hct405_failure_degradation.py`; `test_hct405_vision_review_release.py` | Automated with synthetic bytes/adapter evidence |
+| Image quality, multi-evidence fusion, automatic unique review creation, and manual correction | `test_hct405_failure_degradation.py`; `test_hct405_vision_review_release.py` | Automated with synthetic bytes/adapter evidence |
 | MATCHED still requires confirmation; UNKNOWN and CONFLICT do not create facts | `test_hct405_vision_review_release.py` | Automated |
+| Member-scoped vision/review authorization and concurrent confirmation/correction | `test_hct202_quality_api.py`; `test_hct405_vision_review_release.py` | Automated with cross-household denial and two-thread/two-session event/outbox assertions |
 | Confirmed event updates timeline and projection | `test_hct405_core_flows.py` | Automated |
 | Rule result returns desensitized risk evidence | `test_hct405_core_flows.py` | Automated |
 | Plan confirmation, deferral, skip, and authorized care actions | `test_hct405_core_flows.py`; `client.test.ts` | Automated |
@@ -42,17 +43,21 @@ It also verifies structured Ollama outage and unsafe-output degradation at the H
 
 `tests/e2e/hct405_scenarios.json` is the machine-readable source for all twelve scenarios. Each entry records preconditions, roles, steps, expected states, permission boundary, audit evidence, cleanup, coverage tags, automated tests, and explicit limitations. `test_hct405_scenario_manifest.py` prevents missing fields, missing evidence files, or accidental loss of the required failure/four-state cases.
 
-The browser evidence is `tests/browser/hct405-visible-workflows.spec.ts`. It covers an owner creating and revoking a synthetic caregiver grant, API-unavailable rendering without a household or health summary, and the local-only/no-promotion boundary. CI now runs it and retains JUnit plus screenshots, traces, and video on failure. The browser tests still use synthetic API responses and do not represent live visual recognition, RAG, model release, deletion propagation, or deployment acceptance.
+The browser evidence is `tests/browser/hct405-visible-workflows.spec.ts`. It covers an owner creating and revoking a synthetic caregiver grant, API-unavailable rendering without a household or health summary, and the local-only/no-promotion boundary. CI now runs it and retains JUnit plus screenshots, traces, and video on failure. These three tests still use synthetic API responses.
+
+`tests/browser/hct405-real-api.spec.ts` adds real-API browser coverage: it drives the Vue frontend through the Vite proxy against a locally running FastAPI backend with no route mocks. It verifies (1) an owner grant create/revoke round trip whose state survives a full page reload and is locatable in the `authorization-audits` API trail, (2) a caregiver seeing only the granted member scope and losing household visibility after revocation, (3) a confirmed manual event reaching the dashboard projection, timeline, and a real rules-engine evaluation, and (4) an unknown identity receiving no household or health data. The file is gated by `REAL_API_E2E=1` and skips otherwise, so the default suite stays runnable without a backend; all identifiers are synthetic and namespaced per run. It does not represent live visual recognition, RAG, model release, deletion propagation, or deployment acceptance.
 
 ## Given / When / Then
 
 - Given a caregiver has a valid read/write grant, when confirmed synthetic allergy and medication events are appended, then the caregiver can read the authorized timeline and desensitized risk evidence only.
 - Given an event is unconfirmed, when the timeline and member state are requested, then it does not appear as a confirmed fact or update the projection.
 - Given a caregiver has the required write grant, when the caregiver confirms, defers, or skips a plan, then the API records a confirmed append-only plan event.
-- Given a grant is revoked or belongs to another household, when the caregiver requests events or a timeline, then the API returns no resource.
+- Given a grant is revoked or belongs to another household, when the caregiver requests events, a timeline, or vision task read/fusion/cancel operations, then the API returns no resource.
 - Given a synthetic image fails the local quality gate, when a task is attempted, then no vision task or health fact is created.
-- Given signed synthetic evidence produces MATCHED, CONFLICT, or UNKNOWN, when fusion is requested, then the result records versions and still forbids automatic health-event creation.
-- Given a pending review task, when the owner submits a manual correction, then exactly one confirmed append-only event records the review evidence.
+- Given signed synthetic evidence produces MATCHED, CONFLICT, UNKNOWN, or REVIEW, when fusion is repeated with the same thresholds, weights, and versions, then it returns the same unique pending review task and still forbids automatic health-event creation; changed fusion configuration returns a conflict.
+- Given a vision task references a member outside the actor's authorized scope, when task creation is requested, then the API hides the resource and creates no task.
+- Given two sessions concurrently submit confirm/correct transitions for version 1, when the database conditionally changes the pending review, then only one request succeeds and exactly one confirmed event plus one outbox row exists; reusing its idempotency key with a changed payload is rejected.
+- Given a pending review task, when an owner or caregiver with current read/write authorization submits a manual correction with its expected version, then exactly one confirmed append-only event records the review evidence and the explainable fusion context.
 - Given a private knowledge document, when another actor retrieves or deletes it, then no resource or chunk is disclosed; when the owner deletes it, retrieval and chunks are removed.
 - Given Ollama is unreachable or returns prohibited medical/external-link output, when the assistant endpoint is called, then it returns a structured low-confidence degradation without unsafe text or untrusted sources.
 - Given an approved hard sample is exported with consent, when the sample is deleted, then active consent is revoked and the export manifest is invalidated.
@@ -64,16 +69,32 @@ The browser evidence is `tests/browser/hct405-visible-workflows.spec.ts`. It cov
 - `npm.cmd run test:e2e:web` (uses Playwright Chromium; on this Windows host it uses the installed Edge executable)
 - `npm.cmd run check:web`
 - `uv run pytest tests/e2e/test_hct405_core_flows.py tests/e2e/test_hct405_failure_degradation.py tests/e2e/test_hct405_scenario_manifest.py tests/e2e/test_hct405_vision_review_release.py`
+- `uv run pytest tests/integration/test_hct405_review_migration.py tests/unit/test_hct207_review.py tests/contract/test_hct202_quality_api.py tests/contract/test_hct205_evidence_api.py`
+- `HCT405_MYSQL_TEST_URL=<disposable-mysql-8.4-url> uv run pytest tests/integration/test_hct405_review_migration.py::test_review_wiring_upgrade_and_downgrade_on_mysql` (automated in CI)
 - `uv run pytest`
 - `npm.cmd run build:web`
 - `git diff --check`
+
+Real-API browser coverage (Windows, Python 3.11 venv with the `pyproject.toml` runtime dependencies plus `httpx`):
+
+```powershell
+$env:DATABASE_URL = "sqlite+pysqlite:///./homecare-e2e.sqlite3"
+.\.venv\Scripts\alembic.exe upgrade head
+$env:PYTHONPATH = "src/api;src;scripts"
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000   # keep running
+$env:REAL_API_E2E = "1"; npx playwright test tests/browser/hct405-real-api.spec.ts --config playwright.config.ts
+```
+
+The sqlite file and `.venv` are gitignored; the run is disposable and contains only synthetic identifiers.
 
 CI uploads `hct405-api-evidence` and `hct405-browser-evidence` for 14 days. The API artifact contains focused JUnit plus `hct405-environment.json` with the commit SHA, environment, synthetic-data policy, reproduction commands, and artifact paths; the browser artifact contains JUnit and retained failure screenshots, traces, and video without real health data.
 
 ## Acceptance Remaining
 
-Final HCT-405 acceptance still requires live assistant tool-call citation validation, automatic vision-to-review task wiring, true concurrent event/review writes, full household/object/backup deletion evidence, a deployment restart/offline drill, browser coverage against a real local API, released-model fixed-set evidence, and project-lead/two-group-lead R3 review. Until those facts exist, this Story remains `In progress` and Issue #70 must not be closed.
+Browser coverage against a real local API is now automated by `tests/browser/hct405-real-api.spec.ts` (local run; CI does not start the backend for browser jobs, so the spec is env-gated and skipped there).
+
+Final HCT-405 acceptance still requires live assistant tool-call citation validation, full household/object/backup deletion evidence, a deployment restart/offline drill, released-model fixed-set evidence, and project-lead/two-group-lead R3 review. Until those facts exist, this Story remains `In progress` and Issue #70 must not be closed.
 
 ## Rollback
 
-Revert the focused knowledge/assistant fixes, CI evidence steps, and E2E files. All test inputs are generated in temporary stores; the increment has no migration, persistent fixture, external health-data dependency, or production health-data effect.
+Revert the focused API/application/test changes, then downgrade `0010_hct405_review_wiring` only when no new review audit context/fingerprints/version transitions and no `REVIEW` rows exist. On upgrade, the migration repairs historical vision-task household IDs from their assigned members and cancels active legacy tasks with no valid member scope; these safety corrections are intentionally not reversed. The migration refuses duplicate historical review tasks and refuses any downgrade that would discard new audit evidence or status values; reconcile such rows and use a reviewed forward fix instead. All test inputs are generated in temporary stores, with no external health-data dependency.

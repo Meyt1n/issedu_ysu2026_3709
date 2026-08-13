@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -179,11 +180,25 @@ def test_assistant_refuses_unsafe_model_output_at_api_boundary(
 def test_low_quality_image_stops_before_downstream_vision_task(
     client: TestClient,
     db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    household = client.post(
+        "/api/v1/households",
+        headers=OWNER_HEADERS,
+        json={"name": "Low-quality household"},
+    )
+    member = client.post(
+        f"/api/v1/households/{household.json()['id']}/members",
+        headers=OWNER_HEADERS,
+        json={"display_name": "Low-quality member"},
+    )
+    assert member.status_code == 201
+    content = _dark_synthetic_image()
     quality = client.post(
         "/api/v1/vision-quality/check",
         headers=OWNER_HEADERS,
-        files={"file": ("synthetic-dark.png", _dark_synthetic_image(), "image/png")},
+        files={"file": ("synthetic-dark.png", content, "image/png")},
         data={"media_type": "image"},
     )
 
@@ -192,11 +207,17 @@ def test_low_quality_image_stops_before_downstream_vision_task(
     assert quality.json()["allow_downstream"] is False
     assert quality.json()["quality_receipt"] is None
 
+    (tmp_path / "synthetic-dark.png").write_bytes(content)
+    monkeypatch.setattr("app.routes.settings.file_root", str(tmp_path))
     task = client.post(
         "/api/v1/vision-tasks",
         headers=OWNER_HEADERS,
-        json={"file_id": "synthetic-dark.png", "quality_receipt": None},
+        json={
+            "file_id": "synthetic-dark.png",
+            "member_id": member.json()["id"],
+            "quality_receipt": None,
+        },
     )
-    assert task.status_code in {404, 409}
-    assert task.json()["detail"] in {"FILE_NOT_FOUND", "QUALITY_GATE_REQUIRED"}
+    assert task.status_code == 409
+    assert task.json()["detail"] == "QUALITY_GATE_REQUIRED"
     assert db_session.scalar(select(func.count()).select_from(VisionTask)) == 0

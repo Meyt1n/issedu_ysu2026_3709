@@ -75,6 +75,21 @@ describe('vision quality view rules', () => {
     expect(api.createVisionTask).not.toHaveBeenCalled()
   })
 
+  it('does not upload a passed result without a selected member', async () => {
+    const api = queueApi()
+
+    await expect(queuePassedVisionFile({
+      file: new File(['image'], 'box.png', { type: 'image/png' }),
+      result: qualityResult(),
+      actorId: 'owner-a',
+      idempotencyKey: 'request-without-member',
+      isCurrent: () => true,
+    }, api)).rejects.toThrow('MEMBER_REQUIRED')
+
+    expect(api.uploadFile).not.toHaveBeenCalled()
+    expect(api.createVisionTask).not.toHaveBeenCalled()
+  })
+
   it('uses the immutable actor to clean an upload after identity changes', async () => {
     let current = true
     const api = queueApi()
@@ -88,6 +103,7 @@ describe('vision quality view rules', () => {
       result: qualityResult(),
       actorId: 'owner-before-switch',
       memberId: 'member-before-switch',
+      accessPurpose: 'family-care',
       idempotencyKey: 'request-2',
       isCurrent: () => current,
     }, api)
@@ -96,7 +112,7 @@ describe('vision quality view rules', () => {
     expect(api.createVisionTask).not.toHaveBeenCalled()
     expect(api.deleteUploadedFile).toHaveBeenCalledWith(
       'stored.png',
-      { actorId: 'owner-before-switch' },
+      { actorId: 'owner-before-switch', accessPurpose: 'family-care' },
     )
   })
 
@@ -106,6 +122,7 @@ describe('vision quality view rules', () => {
       file: new File(['image'], 'box.png', { type: 'image/png' }),
       result: qualityResult(),
       actorId: 'owner-a',
+      memberId: 'member-a',
       idempotencyKey: 'request-3',
       isCurrent: () => true,
     }

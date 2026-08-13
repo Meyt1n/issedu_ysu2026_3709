@@ -18,7 +18,8 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException
+from fastapi import status as http_status
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
@@ -109,7 +110,7 @@ def transition_status(
     current = task.status
     if not _can_transition(current, next_status):
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
+            status_code=http_status.HTTP_409_CONFLICT,
             detail=f"INVALID_TRANSITION {current} → {next_status}",
         )
 
@@ -198,16 +199,26 @@ def create_vision_task(
     code_version: str | None = None,
     data_version: str | None = None,
 ) -> VisionTask:  # noqa: F821
-    """Create a new vision task.  Idempotent — returns existing task if the
-    idempotency key matches a queued or running task."""
+    """Create a vision task, or return the matching task for an idempotent retry."""
     if idempotency_key is not None:
         existing = session.scalars(
-            select(VisionTask).where(
-                VisionTask.idempotency_key == idempotency_key,
-                VisionTask.status.in_([VisionTaskStatus.QUEUED, VisionTaskStatus.RUNNING]),
-            )
+            select(VisionTask).where(VisionTask.idempotency_key == idempotency_key)
         ).first()
         if existing is not None:
+            if (
+                existing.household_id != household_id
+                or existing.member_id != member_id
+                or existing.created_by != created_by
+                or existing.file_id != file_id
+                or existing.task_type != task_type
+                or existing.input_digest != input_digest
+                or existing.model_threshold != model_threshold
+                or existing.preprocess_version != preprocess_version
+            ):
+                raise HTTPException(
+                    status_code=http_status.HTTP_409_CONFLICT,
+                    detail="IDEMPOTENCY_KEY_CONFLICT",
+                )
             logger.info("VISION_TASK_DEDUP key=%s existing=%s", idempotency_key, existing.id)
             return existing
 

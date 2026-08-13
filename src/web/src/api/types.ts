@@ -277,7 +277,7 @@ export interface UploadedFile {
 
 export interface CreateVisionTaskInput {
   file_id: string
-  member_id?: string
+  member_id: string
   task_type?: string
   idempotency_key?: string
   quality_receipt: string

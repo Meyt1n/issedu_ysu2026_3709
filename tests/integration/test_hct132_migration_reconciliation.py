@@ -11,7 +11,7 @@ from sqlalchemy import create_engine, inspect, text
 from app.config import get_settings
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-MERGE_REVISION = "0009_merge_backend_heads"
+CURRENT_HEAD = "0010_hct405_review_wiring"
 RESTORED_TABLES = {
     "projection_checkpoint",
     "review_task",
@@ -39,7 +39,7 @@ def _alembic_config(database_url: str) -> Config:
 def test_migration_graph_has_one_merged_head() -> None:
     script = ScriptDirectory.from_config(Config(str(REPO_ROOT / "alembic.ini")))
 
-    assert script.get_heads() == [MERGE_REVISION]
+    assert script.get_heads() == [CURRENT_HEAD]
 
 
 @pytest.mark.parametrize(
@@ -86,12 +86,22 @@ def test_existing_schema_branch_can_upgrade_to_merged_head(
             "last_error",
             "updated_at",
         } <= {column["name"] for column in schema.get_columns("outbox_message")}
+        assert {
+            "version",
+            "fusion_context",
+            "fusion_fingerprint",
+            "transition_fingerprint",
+        } <= {column["name"] for column in schema.get_columns("review_task")}
+        assert any(
+            index["name"] == "uq_review_vision_task" and index["unique"]
+            for index in schema.get_indexes("review_task")
+        )
 
         with engine.connect() as connection:
             current_revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-        assert current_revision == MERGE_REVISION
+        assert current_revision == CURRENT_HEAD
     finally:
         engine.dispose()
         get_settings.cache_clear()

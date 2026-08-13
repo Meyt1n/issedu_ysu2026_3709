@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Generator
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Barrier
 from typing import Any
 
 import cv2
@@ -12,10 +16,15 @@ import numpy as np
 import pytest
 from ai.vision.evidence_pipeline import EvidencePipelineRequest, issue_adapter_receipt
 from fastapi.testclient import TestClient
-from sqlalchemy.orm import Session
+from sqlalchemy import create_engine, func, select
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import NullPool
 
 from app.config import get_settings
-from app.review import FusionStatus, create_review_task
+from app.db import get_session
+from app.main import app
+from app.models import Base, HealthEvent, Household, Member, OutboxMessage, VisionTask
+from app.review import FusionStatus, ReviewStatus, ReviewTask, create_review_task
 
 OWNER_HEADERS = {"X-Actor-Id": "e2e-owner"}
 MASTER_VERSION = "hct405-master-v1"
@@ -193,7 +202,7 @@ def _run_vision_flow(
     *,
     payload: dict[str, Any],
     with_master: bool,
-) -> tuple[dict[str, Any], str, str]:
+) -> tuple[dict[str, Any], str, str, str]:
     household_id, member_id = _create_household_and_member(client)
     content = _encode_demo_image()
     quality = client.post(
@@ -256,7 +265,7 @@ def _run_vision_flow(
     )
     assert timeline.status_code == 200, timeline.text
     assert timeline.json() == []
-    return fusion.json(), household_id, member_id
+    return fusion.json(), household_id, member_id, task_body["id"]
 
 
 def test_matched_vision_result_still_requires_manual_confirmation(
@@ -264,7 +273,7 @@ def test_matched_vision_result_still_requires_manual_confirmation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fusion, _, _ = _run_vision_flow(
+    fusion, household_id, member_id, vision_task_id = _run_vision_flow(
         client,
         tmp_path,
         monkeypatch,
@@ -277,6 +286,30 @@ def test_matched_vision_result_still_requires_manual_confirmation(
     assert fusion["requires_human_confirmation"] is True
     assert fusion["health_event_allowed"] is False
     assert fusion["versions"]["master_data_version"] == MASTER_VERSION
+    assert fusion["review_task_version"] == 1
+
+    repeated = client.post(
+        f"/api/v1/vision-tasks/{vision_task_id}/fusion",
+        headers=OWNER_HEADERS,
+        json={},
+    )
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json()["review_task_id"] == fusion["review_task_id"]
+
+    changed_thresholds = client.post(
+        f"/api/v1/vision-tasks/{vision_task_id}/fusion",
+        headers=OWNER_HEADERS,
+        json={"matched_score": 0.81},
+    )
+    assert changed_thresholds.status_code == 409
+    assert changed_thresholds.json()["detail"] == "REVIEW_TASK_FUSION_CONFLICT"
+
+    pending = client.get(
+        f"/api/v1/households/{household_id}/members/{member_id}/review-tasks",
+        headers=OWNER_HEADERS,
+    )
+    assert pending.status_code == 200, pending.text
+    assert [task["id"] for task in pending.json()] == [fusion["review_task_id"]]
 
 
 def test_conflicting_vision_result_does_not_create_health_fact(
@@ -284,7 +317,7 @@ def test_conflicting_vision_result_does_not_create_health_fact(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fusion, _, _ = _run_vision_flow(
+    fusion, _, _, _ = _run_vision_flow(
         client,
         tmp_path,
         monkeypatch,
@@ -302,7 +335,7 @@ def test_unknown_vision_result_does_not_create_health_fact(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fusion, _, _ = _run_vision_flow(
+    fusion, _, _, _ = _run_vision_flow(
         client,
         tmp_path,
         monkeypatch,
@@ -320,27 +353,166 @@ def test_unknown_vision_result_does_not_create_health_fact(
     assert fusion["health_event_allowed"] is False
 
 
-def test_manual_review_correction_creates_one_confirmed_event(
+def test_write_only_caregiver_cannot_read_fusion_result(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, household_id, member_id, vision_task_id = _run_vision_flow(
+        client,
+        tmp_path,
+        monkeypatch,
+        payload=_matched_payload(),
+        with_master=True,
+    )
+    authorization = client.post(
+        f"/api/v1/households/{household_id}/authorizations",
+        headers=OWNER_HEADERS,
+        json={
+            "member_id": member_id,
+            "grantee_actor_id": "write-only-caregiver",
+            "data_fields": ["health_events"],
+            "actions": ["WRITE_EVENTS"],
+            "purpose": "vision-entry",
+            "valid_until": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+        },
+    )
+    assert authorization.status_code == 201, authorization.text
+
+    denied = client.post(
+        f"/api/v1/vision-tasks/{vision_task_id}/fusion",
+        headers={
+            "X-Actor-ID": "write-only-caregiver",
+            "X-Access-Purpose": "vision-entry",
+        },
+        json={},
+    )
+    assert denied.status_code == 404
+    assert denied.json()["detail"] == "VISION_TASK_NOT_FOUND"
+
+
+def test_revoked_caregiver_cannot_access_or_mutate_vision_task(
     client: TestClient,
     db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     household_id, member_id = _create_household_and_member(client)
-    review = create_review_task(
-        db_session,
-        vision_task_id="synthetic-vision-task",
-        household_id=household_id,
-        member_id=member_id,
-        candidates=[{"drug_name": "Incorrect synthetic candidate"}],
-        fusion_status=FusionStatus.CONFLICT,
-        model_version="synthetic-vision-v1",
-        rule_version="fusion-rules-v1",
+    authorization = client.post(
+        f"/api/v1/households/{household_id}/authorizations",
+        headers=OWNER_HEADERS,
+        json={
+            "member_id": member_id,
+            "grantee_actor_id": "vision-caregiver",
+            "data_fields": ["health_events"],
+            "actions": ["READ_EVENTS", "WRITE_EVENTS"],
+            "purpose": "vision-entry",
+            "valid_until": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+        },
     )
-    db_session.commit()
+    assert authorization.status_code == 201, authorization.text
+    caregiver_headers = {
+        "X-Actor-ID": "vision-caregiver",
+        "X-Access-Purpose": "vision-entry",
+    }
+    content = _encode_demo_image()
+    quality = client.post(
+        "/api/v1/vision-quality/check",
+        headers={"X-Actor-ID": "vision-caregiver"},
+        files={"file": ("caregiver.png", content, "image/png")},
+        data={"media_type": "image"},
+    )
+    assert quality.status_code == 200, quality.text
+    file_id = "caregiver-vision.png"
+    (tmp_path / file_id).write_bytes(content)
+    monkeypatch.setattr("app.routes.settings.file_root", str(tmp_path))
+    created = client.post(
+        "/api/v1/vision-tasks",
+        headers=caregiver_headers,
+        json={
+            "file_id": file_id,
+            "member_id": member_id,
+            "quality_receipt": quality.json()["quality_receipt"],
+        },
+    )
+    assert created.status_code == 201, created.text
+    task_id = created.json()["id"]
+    assert (
+        client.get(
+            f"/api/v1/vision-tasks/{task_id}",
+            headers=caregiver_headers,
+        ).status_code
+        == 200
+    )
+    listed = client.get(
+        f"/api/v1/households/{household_id}/vision-tasks",
+        headers=caregiver_headers,
+        params={"member_id": member_id},
+    )
+    assert listed.status_code == 200, listed.text
+    assert [task["id"] for task in listed.json()] == [task_id]
+
+    revoked = client.post(
+        (
+            f"/api/v1/households/{household_id}/authorizations/"
+            f"{authorization.json()['id']}/revoke"
+        ),
+        headers=OWNER_HEADERS,
+        json={"expected_version": authorization.json()["version"]},
+    )
+    assert revoked.status_code == 200, revoked.text
+
+    denied_responses = [
+        client.get(
+            f"/api/v1/vision-tasks/{task_id}",
+            headers=caregiver_headers,
+        ),
+        client.post(
+            f"/api/v1/vision-tasks/{task_id}/fusion",
+            headers=caregiver_headers,
+            json={},
+        ),
+        client.post(
+            f"/api/v1/vision-tasks/{task_id}/cancel",
+            headers=caregiver_headers,
+        ),
+        client.get(
+            f"/api/v1/households/{household_id}/vision-tasks",
+            headers=caregiver_headers,
+            params={"member_id": member_id},
+        ),
+    ]
+    assert all(response.status_code == 404 for response in denied_responses)
+    assert all(
+        response.json()["detail"] in {"VISION_TASK_NOT_FOUND", "HOUSEHOLD_NOT_FOUND"}
+        for response in denied_responses
+    )
+    stored = db_session.get(VisionTask, task_id)
+    assert stored is not None
+    assert stored.status == "queued"
+
+
+def test_manual_review_correction_creates_one_confirmed_event(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fusion, household_id, member_id, vision_task_id = _run_vision_flow(
+        client,
+        tmp_path,
+        monkeypatch,
+        payload=_conflict_payload(),
+        with_master=True,
+    )
 
     corrected = client.post(
-        f"/api/v1/households/{household_id}/review-tasks/{review.id}/correct",
+        (
+            f"/api/v1/households/{household_id}/review-tasks/"
+            f"{fusion['review_task_id']}/correct"
+        ),
         headers={**OWNER_HEADERS, "Idempotency-Key": "hct405-correction-1"},
         json={
+            "expected_version": fusion["review_task_version"],
             "manual_payload": {"drug_name": "Corrected synthetic medication"},
             "correction_note": "Synthetic OCR correction",
         },
@@ -361,7 +533,224 @@ def test_manual_review_correction_creates_one_confirmed_event(
     assert event["event_type"] == "medication_corrected"
     assert event["confirmation_status"] == "CONFIRMED"
     assert event["payload"]["drug_name"] == "Corrected synthetic medication"
-    assert event["evidence"]["review_task_id"] == review.id
+    assert event["evidence"]["review_task_id"] == fusion["review_task_id"]
+    assert event["evidence"]["fusion_context"]["thresholds"]["matched_score"] == 0.8
+
+    repeated_fusion = client.post(
+        f"/api/v1/vision-tasks/{vision_task_id}/fusion",
+        headers=OWNER_HEADERS,
+        json={},
+    )
+    assert repeated_fusion.status_code == 200, repeated_fusion.text
+    assert repeated_fusion.json()["review_task_id"] == fusion["review_task_id"]
+    assert repeated_fusion.json()["review_task_version"] == 2
+
+
+def test_review_confirmation_enforces_member_read_write_authorization(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    household_id, member_id = _create_household_and_member(client)
+    review = create_review_task(
+        db_session,
+        vision_task_id="authorized-vision-task",
+        household_id=household_id,
+        member_id=member_id,
+        candidates=[{"drug_name": "Synthetic candidate"}],
+        fusion_status=FusionStatus.MATCHED,
+    )
+    db_session.commit()
+
+    missing_version = client.post(
+        f"/api/v1/households/{household_id}/review-tasks/{review.id}/confirm",
+        headers={**OWNER_HEADERS, "Idempotency-Key": "missing-version"},
+        json={"selected_index": 0},
+    )
+    assert missing_version.status_code == 422
+
+    denied = client.post(
+        f"/api/v1/households/{household_id}/review-tasks/{review.id}/confirm",
+        headers={
+            "X-Actor-ID": "unauthorized-caregiver",
+            "X-Access-Purpose": "family-care",
+            "Idempotency-Key": "denied-confirm",
+        },
+        json={"expected_version": 1, "selected_index": 0},
+    )
+    assert denied.status_code == 404
+
+    write_only_authorization = client.post(
+        f"/api/v1/households/{household_id}/authorizations",
+        headers=OWNER_HEADERS,
+        json={
+            "member_id": member_id,
+            "grantee_actor_id": "write-only-reviewer",
+            "data_fields": ["health_events"],
+            "actions": ["WRITE_EVENTS"],
+            "purpose": "family-care",
+            "valid_until": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+        },
+    )
+    assert write_only_authorization.status_code == 201, write_only_authorization.text
+    denied_write_only = client.post(
+        f"/api/v1/households/{household_id}/review-tasks/{review.id}/confirm",
+        headers={
+            "X-Actor-ID": "write-only-reviewer",
+            "X-Access-Purpose": "family-care",
+            "Idempotency-Key": "write-only-confirm",
+        },
+        json={"expected_version": 1, "selected_index": 0},
+    )
+    assert denied_write_only.status_code == 404
+
+    authorization = client.post(
+        f"/api/v1/households/{household_id}/authorizations",
+        headers=OWNER_HEADERS,
+        json={
+            "member_id": member_id,
+            "grantee_actor_id": "authorized-caregiver",
+            "data_fields": ["health_events"],
+            "actions": ["READ_EVENTS", "WRITE_EVENTS"],
+            "purpose": "family-care",
+            "valid_until": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+        },
+    )
+    assert authorization.status_code == 201, authorization.text
+
+    confirmed = client.post(
+        f"/api/v1/households/{household_id}/review-tasks/{review.id}/confirm",
+        headers={
+            "X-Actor-ID": "authorized-caregiver",
+            "X-Access-Purpose": "family-care",
+            "Idempotency-Key": "authorized-confirm",
+        },
+        json={"expected_version": 1, "selected_index": 0},
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["status"] == "CONFIRMED"
+    assert confirmed.json()["confirmed_by"] == "authorized-caregiver"
+
+
+def test_concurrent_review_confirm_and_correct_create_one_event_and_outbox(
+    tmp_path: Path,
+) -> None:
+    database_url = f"sqlite+pysqlite:///{(tmp_path / 'review-race.db').as_posix()}"
+    engine = create_engine(
+        database_url,
+        connect_args={"check_same_thread": False, "timeout": 10},
+        poolclass=NullPool,
+    )
+    with engine.begin() as connection:
+        connection.exec_driver_sql("PRAGMA journal_mode=WAL")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(
+        bind=engine,
+        autoflush=False,
+        expire_on_commit=False,
+    )
+    with session_factory() as setup_session:
+        household = Household(name="Concurrent household", created_by="concurrent-owner")
+        setup_session.add(household)
+        setup_session.flush()
+        member = Member(
+            household_id=household.id,
+            display_name="Concurrent member",
+            role="SELF",
+        )
+        setup_session.add(member)
+        setup_session.flush()
+        review = create_review_task(
+            setup_session,
+            vision_task_id="concurrent-vision-task",
+            household_id=household.id,
+            member_id=member.id,
+            candidates=[{"drug_name": "Synthetic candidate"}],
+            fusion_status=FusionStatus.MATCHED,
+        )
+        setup_session.commit()
+        household_id = household.id
+        review_id = review.id
+
+    def override_get_session() -> Generator[Session, None, None]:
+        request_session = session_factory()
+        try:
+            yield request_session
+        finally:
+            request_session.close()
+
+    start = Barrier(2)
+
+    def transition(
+        operation: str,
+        idempotency_key: str,
+        concurrent_client: TestClient,
+    ) -> tuple[int, dict]:
+        start.wait(timeout=5)
+        response = concurrent_client.post(
+            (
+                f"/api/v1/households/{household_id}/review-tasks/"
+                f"{review_id}/{operation}"
+            ),
+            headers={
+                "X-Actor-ID": "concurrent-owner",
+                "Idempotency-Key": idempotency_key,
+            },
+            json=(
+                {"expected_version": 1, "selected_index": 0}
+                if operation == "confirm"
+                else {
+                    "expected_version": 1,
+                    "manual_payload": {"drug_name": "Concurrent correction"},
+                }
+            ),
+        )
+        return response.status_code, response.json()
+
+    app.dependency_overrides[get_session] = override_get_session
+    try:
+        with TestClient(app) as concurrent_client:
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                results = list(
+                    executor.map(
+                        lambda request: transition(*request, concurrent_client),
+                        [
+                            ("confirm", "concurrent-confirm"),
+                            ("correct", "concurrent-correct"),
+                        ],
+                    )
+                )
+        assert sorted(status_code for status_code, _ in results) == [200, 409]
+        conflict = next(body for status_code, body in results if status_code == 409)
+        assert conflict["detail"] in {
+            "REVIEW_ALREADY_CONFIRMED",
+            "REVIEW_ALREADY_CORRECTED",
+            "REVIEW_VERSION_CONFLICT",
+        }
+
+        with session_factory() as verification_session:
+            stored_review = verification_session.get(ReviewTask, review_id)
+            assert stored_review is not None
+            assert stored_review.status in {
+                ReviewStatus.CONFIRMED,
+                ReviewStatus.CORRECTED,
+            }
+            assert stored_review.version == 2
+            assert (
+                verification_session.scalar(
+                    select(func.count()).select_from(HealthEvent)
+                )
+                == 1
+            )
+            assert (
+                verification_session.scalar(
+                    select(func.count()).select_from(OutboxMessage)
+                )
+                == 1
+            )
+    finally:
+        app.dependency_overrides.clear()
+        Base.metadata.drop_all(engine)
+        engine.dispose()
 
 
 def test_hard_sample_deletion_revokes_consent_and_invalidates_export(
