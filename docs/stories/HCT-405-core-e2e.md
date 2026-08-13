@@ -42,7 +42,9 @@ It also verifies structured Ollama outage and unsafe-output degradation at the H
 
 `tests/e2e/hct405_scenarios.json` is the machine-readable source for all twelve scenarios. Each entry records preconditions, roles, steps, expected states, permission boundary, audit evidence, cleanup, coverage tags, automated tests, and explicit limitations. `test_hct405_scenario_manifest.py` prevents missing fields, missing evidence files, or accidental loss of the required failure/four-state cases.
 
-The browser evidence is `tests/browser/hct405-visible-workflows.spec.ts`. It covers an owner creating and revoking a synthetic caregiver grant, API-unavailable rendering without a household or health summary, and the local-only/no-promotion boundary. CI now runs it and retains JUnit plus screenshots, traces, and video on failure. The browser tests still use synthetic API responses and do not represent live visual recognition, RAG, model release, deletion propagation, or deployment acceptance.
+The browser evidence is `tests/browser/hct405-visible-workflows.spec.ts`. It covers an owner creating and revoking a synthetic caregiver grant, API-unavailable rendering without a household or health summary, and the local-only/no-promotion boundary. CI now runs it and retains JUnit plus screenshots, traces, and video on failure. These three tests still use synthetic API responses.
+
+`tests/browser/hct405-real-api.spec.ts` adds real-API browser coverage: it drives the Vue frontend through the Vite proxy against a locally running FastAPI backend with no route mocks. It verifies (1) an owner grant create/revoke round trip whose state survives a full page reload and is locatable in the `authorization-audits` API trail, (2) a caregiver seeing only the granted member scope and losing household visibility after revocation, (3) a confirmed manual event reaching the dashboard projection, timeline, and a real rules-engine evaluation, and (4) an unknown identity receiving no household or health data. The file is gated by `REAL_API_E2E=1` and skips otherwise, so the default suite stays runnable without a backend; all identifiers are synthetic and namespaced per run. It does not represent live visual recognition, RAG, model release, deletion propagation, or deployment acceptance.
 
 ## Given / When / Then
 
@@ -68,11 +70,25 @@ The browser evidence is `tests/browser/hct405-visible-workflows.spec.ts`. It cov
 - `npm.cmd run build:web`
 - `git diff --check`
 
+Real-API browser coverage (Windows, Python 3.11 venv with the `pyproject.toml` runtime dependencies plus `httpx`):
+
+```powershell
+$env:DATABASE_URL = "sqlite+pysqlite:///./homecare-e2e.sqlite3"
+.\.venv\Scripts\alembic.exe upgrade head
+$env:PYTHONPATH = "src/api;src;scripts"
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000   # keep running
+$env:REAL_API_E2E = "1"; npx playwright test tests/browser/hct405-real-api.spec.ts --config playwright.config.ts
+```
+
+The sqlite file and `.venv` are gitignored; the run is disposable and contains only synthetic identifiers.
+
 CI uploads `hct405-api-evidence` and `hct405-browser-evidence` for 14 days. The API artifact contains focused JUnit plus `hct405-environment.json` with the commit SHA, environment, synthetic-data policy, reproduction commands, and artifact paths; the browser artifact contains JUnit and retained failure screenshots, traces, and video without real health data.
 
 ## Acceptance Remaining
 
-Final HCT-405 acceptance still requires live assistant tool-call citation validation, automatic vision-to-review task wiring, true concurrent event/review writes, full household/object/backup deletion evidence, a deployment restart/offline drill, browser coverage against a real local API, released-model fixed-set evidence, and project-lead/two-group-lead R3 review. Until those facts exist, this Story remains `In progress` and Issue #70 must not be closed.
+Browser coverage against a real local API is now automated by `tests/browser/hct405-real-api.spec.ts` (local run; CI does not start the backend for browser jobs, so the spec is env-gated and skipped there).
+
+Final HCT-405 acceptance still requires live assistant tool-call citation validation, automatic vision-to-review task wiring, true concurrent event/review writes, full household/object/backup deletion evidence, a deployment restart/offline drill, released-model fixed-set evidence, and project-lead/two-group-lead R3 review. Until those facts exist, this Story remains `In progress` and Issue #70 must not be closed.
 
 ## Rollback
 
