@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -131,6 +133,48 @@ def resolve_identity(pr_login: str, commits: list[dict[str, Any]]) -> dict[str, 
     }
 
 
+def filter_already_present_commits(
+    commits: list[dict[str, Any]],
+    is_already_present: Callable[[str], bool],
+) -> tuple[list[dict[str, Any]], int]:
+    """Exclude commits that the internal master already contains."""
+
+    filtered: list[dict[str, Any]] = []
+    excluded_count = 0
+    for commit in commits:
+        commit_sha = _text(commit.get("sha")) if isinstance(commit, dict) else ""
+        if commit_sha and is_already_present(commit_sha):
+            excluded_count += 1
+        else:
+            filtered.append(commit)
+    return filtered, excluded_count
+
+
+def _git_commit_is_ancestor(repo: Path, commit_sha: str, descendant_sha: str) -> bool:
+    process = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "merge-base",
+            "--is-ancestor",
+            commit_sha,
+            descendant_sha,
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if process.returncode == 0:
+        return True
+    if process.returncode == 1:
+        return False
+    detail = process.stderr.strip() or process.stdout.strip() or "unknown git error"
+    raise IdentityError(f"无法检查提交 {commit_sha[:12]} 是否已在内部 master：{detail}")
+
+
 def load_commits(path: Path) -> list[dict[str, Any]]:
     """Load one compact GitHub commit JSON object per line."""
 
@@ -152,10 +196,24 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--pr-login", required=True)
     parser.add_argument("--commits-file", type=Path, required=True)
+    parser.add_argument("--repo", type=Path, default=Path.cwd())
+    parser.add_argument("--exclude-ancestor")
     args = parser.parse_args()
 
     try:
-        result = resolve_identity(args.pr_login, load_commits(args.commits_file))
+        commits = load_commits(args.commits_file)
+        excluded_count = 0
+        if args.exclude_ancestor:
+            commits, excluded_count = filter_already_present_commits(
+                commits,
+                lambda commit_sha: _git_commit_is_ancestor(
+                    args.repo,
+                    commit_sha,
+                    args.exclude_ancestor,
+                ),
+            )
+        result = resolve_identity(args.pr_login, commits)
+        result["excluded_commit_count"] = excluded_count
     except (IdentityError, OSError) as error:
         print(f"::error::{error}", file=sys.stderr)
         return 1
