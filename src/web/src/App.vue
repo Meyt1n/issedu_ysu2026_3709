@@ -509,7 +509,8 @@ async function revokeAuthorization(authorization: Authorization): Promise<void> 
 </script>
 
 <template>
-  <main class="workspace">
+  <!-- The document lang is zh-CN; this view is authored in English (WCAG 3.1.2). -->
+  <main class="workspace" lang="en">
     <header class="topbar">
       <div>
         <p class="eyebrow">HomeCare Twin</p>
@@ -694,11 +695,21 @@ async function revokeAuthorization(authorization: Authorization): Promise<void> 
               {{ action.label }}
             </label>
           </fieldset>
-          <label>
-            Purpose code
-            <input v-model="draft.purpose" pattern="[A-Za-z0-9._:-]{1,64}" required placeholder="family-care" />
-            <small>ASCII code, 1-64 characters: letters, digits, period, underscore, colon, or hyphen.</small>
-          </label>
+          <!-- The hint stays outside the label so it is a description, not part of the accessible name. -->
+          <div>
+            <label>
+              Purpose code
+              <input
+                v-model="draft.purpose"
+                pattern="[A-Za-z0-9._:-]{1,64}"
+                required
+                placeholder="family-care"
+                aria-describedby="purpose-format-hint"
+                :aria-invalid="!purposePattern.test(draft.purpose)"
+              />
+            </label>
+            <small id="purpose-format-hint">ASCII code, 1-64 characters: letters, digits, period, underscore, colon, or hyphen.</small>
+          </div>
           <label>
             Expiry
             <input v-model="draft.validUntil" type="datetime-local" required />

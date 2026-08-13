@@ -40,9 +40,10 @@ select {
   padding: 8px 10px;
 }
 
+/* WCAG 1.4.11: focus ring needs at least 3:1 against adjacent background. */
 input:focus,
 select:focus,
-button:focus-visible { outline: 3px solid #68afbc; outline-offset: 2px; }
+button:focus-visible { outline: 3px solid #0c5265; outline-offset: 2px; }
 
 .workspace {
   width: min(1180px, calc(100% - 40px));
@@ -186,7 +187,7 @@ legend { color: #3d5960; font-size: 13px; font-weight: 800; padding: 0 4px; }
 .quality-metrics dt { color: #587076; font-size: 11px; }
 .quality-metrics dd { color: #182b31; font-size: 15px; font-weight: 800; margin: 3px 0 0; }
 .quality-metrics dd[data-passed="false"] { color: #a43228; }
-footer { color: #667b80; font-size: 12px; margin: 28px 0 0; text-align: center; }
+footer { color: #587076; font-size: 12px; margin: 28px 0 0; text-align: center; }
 
 @media (max-width: 800px) {
   .workspace { width: min(100% - 28px, 620px); padding-top: 24px; }
@@ -207,7 +208,9 @@ footer { color: #667b80; font-size: 12px; margin: 28px 0 0; text-align: center; 
   .grant-editor,
   .preview-panel { grid-column: auto; grid-row: auto; }
   .identity-bar button { width: 100%; }
-  .risk-member-select { width: 100%; }
+  .panel-heading { flex-wrap: wrap; }
+  /* flex-basis 220px would win over width and overflow narrow viewports */
+  .risk-member-select { flex: 1 1 100%; width: 100%; }
   .risk-card-toggle { align-items: start; grid-template-columns: auto minmax(0, 1fr); }
   .risk-source-count,
   .risk-card-toggle > span:last-child { grid-column: 2; }
