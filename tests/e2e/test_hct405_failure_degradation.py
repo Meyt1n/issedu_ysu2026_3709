@@ -127,6 +127,7 @@ def test_assistant_returns_structured_degrade_when_local_network_is_down(
     assert response.json()["degrade_reason"] == "MODEL_UNAVAILABLE"
     assert response.json()["confidence"] == "low"
     assert response.json()["sources"] == []
+    assert response.json()["citations"] == []
     assert response.json()["answer"]
 
 
@@ -174,7 +175,156 @@ def test_assistant_refuses_unsafe_model_output_at_api_boundary(
     assert body["escalate"] is expected_escalate
     assert body["confidence"] == "low"
     assert body["sources"] == []
+    assert body["citations"] == []
     assert unsafe_answer not in body["answer"]
+
+
+def _scripted_knowledge_tool_chat(unsafe_source: str | None = None):
+    def scripted(_client: OllamaClient, **kwargs: object) -> dict:
+        messages = kwargs["messages"]  # type: ignore[index]
+        has_tool_result = any(
+            isinstance(message, dict) and message.get("role") == "tool"
+            for message in messages
+        )
+        if not has_tool_result:
+            return {
+                "message": {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "retrieve_knowledge",
+                                "arguments": {"query": "合成照护证据"},
+                            }
+                        }
+                    ],
+                }
+            }
+        payload = json.loads(messages[-1]["content"])
+        results = payload.get("results") or []
+        cited = unsafe_source
+        if cited is None and results:
+            cited = results[0]["chunk_id"]
+        return {
+            "message": {
+                "content": json.dumps(
+                    {
+                        "answer": "合成照护证据要求先核对已确认事件。",
+                        "sources": [cited] if cited else [],
+                        "confidence": "medium",
+                        "escalate": False,
+                    },
+                    ensure_ascii=False,
+                )
+            }
+        }
+
+    return scripted
+
+
+def test_assistant_live_tool_call_returns_only_retrieved_citations(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created = client.post(
+        "/api/v1/knowledge/documents",
+        headers=OWNER_HEADERS,
+        json={
+            "title": "Synthetic care evidence",
+            "content": "合成照护证据要求先核对已确认事件，并联系有资质的医务人员。",
+            "source": "hct405-synthetic",
+            "version": "e2e-v1",
+            "permission_scope": {"created_by": "e2e-owner"},
+        },
+    )
+    assert created.status_code == 201, created.text
+    document_id = created.json()["id"]
+    monkeypatch.setattr(OllamaClient, "chat", _scripted_knowledge_tool_chat())
+
+    response = client.post(
+        "/api/v1/assistant/chat",
+        headers=OWNER_HEADERS,
+        json={"messages": [{"role": "user", "content": "总结合成照护证据"}]},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["degraded"] is False
+    assert body["degrade_reason"] is None
+    assert body["route"] == "EVIDENCE_REQUIRED"
+    assert len(body["citations"]) == 1
+    assert body["citations"][0]["document_id"] == document_id
+    assert body["citations"][0]["version"] == "e2e-v1"
+    assert body["sources"] == [body["citations"][0]["chunk_id"]]
+    assert "合成照护证据" in body["answer"]
+
+
+def test_assistant_rejects_fabricated_citation_without_tool_evidence(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fabricated(_client: OllamaClient, **_kwargs: object) -> dict:
+        return {
+            "message": {
+                "content": json.dumps(
+                    {
+                        "answer": "合成照护证据已经核对完成。",
+                        "sources": ["forged-chunk"],
+                        "confidence": "high",
+                        "escalate": False,
+                    },
+                    ensure_ascii=False,
+                )
+            }
+        }
+
+    monkeypatch.setattr(OllamaClient, "chat", fabricated)
+    response = client.post(
+        "/api/v1/assistant/chat",
+        headers=OWNER_HEADERS,
+        json={"messages": [{"role": "user", "content": "总结合成照护证据"}]},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["degraded"] is True
+    assert body["degrade_reason"] == "CITATION_NOT_FOUND"
+    assert body["citations"] == []
+    assert body["sources"] == []
+    assert body["route"] == "EVIDENCE_REQUIRED"
+
+
+def test_unauthorized_actor_cannot_cite_private_knowledge_via_tools(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created = client.post(
+        "/api/v1/knowledge/documents",
+        headers=OWNER_HEADERS,
+        json={
+            "title": "Synthetic care evidence",
+            "content": "合成照护证据要求先核对已确认事件，并联系有资质的医务人员。",
+            "source": "hct405-synthetic",
+            "version": "e2e-v1",
+            "permission_scope": {"created_by": "e2e-owner"},
+        },
+    )
+    assert created.status_code == 201, created.text
+    monkeypatch.setattr(
+        OllamaClient,
+        "chat",
+        _scripted_knowledge_tool_chat(unsafe_source="forged-chunk"),
+    )
+
+    response = client.post(
+        "/api/v1/assistant/chat",
+        headers=OTHER_HEADERS,
+        json={"messages": [{"role": "user", "content": "总结合成照护证据"}]},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["degraded"] is True
+    assert body["degrade_reason"] == "NO_AUTHORISED_DOCUMENTS"
+    assert body["citations"] == []
+    assert body["sources"] == []
 
 
 def test_low_quality_image_stops_before_downstream_vision_task(

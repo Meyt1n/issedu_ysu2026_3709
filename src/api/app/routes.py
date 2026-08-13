@@ -1394,16 +1394,18 @@ def list_assistant_tools(
 def assistant_chat(
     payload: AssistantRequest,
     actor_id: str = Depends(get_actor_id),
-    household_id: str | None = None,
-    member_id: str | None = None,
+    session: Session = Depends(get_session),
+    household_id: str | None = Query(default=None),
+    member_id: str | None = Query(default=None),
 ) -> AssistantResponse:
     """Run the local health assistant with Ollama tool calling.
 
-    Falls back to a structured degrade response if the model is unavailable,
-    output fails schema validation, or medical boundary checks are triggered.
+    Tool calls execute against the caller's authorized knowledge scope.
+    Final answers must cite chunks returned by those tools; fabricated
+    sources are dropped and the response degrades.
     """
     result = run_assistant(
-        None,  # db_session is injected inside run_assistant when tools are called
+        session,
         messages=payload.messages,
         actor_id=actor_id,
         household_id=household_id,
@@ -1412,6 +1414,7 @@ def assistant_chat(
         max_tokens=payload.max_tokens,
         temperature=payload.temperature,
     )
+    session.commit()
     return AssistantResponse(**result)
 
 

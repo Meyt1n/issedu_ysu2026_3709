@@ -141,6 +141,8 @@ MATCHED/CONFLICT/UNKNOWN/REVIEW -> CONFIRMED | CORRECTED | REJECTED
 
 `EVIDENCE_REQUIRED` 没有引用时不得返回肯定性回答。客户端不得只展示 `answer` 而隐藏规则和确认状态。
 
+`POST /assistant/chat` 只执行白名单只读工具。`retrieve_knowledge` 必须使用请求中的 `household_id`/`member_id`，模型不得改写范围。最终 `citations` 只能引用本次工具返回的 `document_id`/`version`/`chunk_id`；伪造来源返回 `CITATION_NOT_FOUND`，无授权文档返回 `NO_AUTHORISED_DOCUMENTS`。降级响应的 `sources` 和 `citations` 必须为空。
+
 回答接口必须明确返回 `route`、证据完整性和降级状态。模型不可用时只能返回结构化事实/规则结果或 `MODEL_UNAVAILABLE`，不得把云端服务当作家庭版默认回退。
 
 ## 5. 并发、审计与删除

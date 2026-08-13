@@ -440,6 +440,12 @@ class AssistantMessage(BaseModel):
     content: str | None = None
 
 
+class AssistantCitation(BaseModel):
+    document_id: str
+    version: str
+    chunk_id: str
+
+
 class AssistantRequest(BaseModel):
     messages: list[dict[str, Any]] = Field(min_length=1)
     model: str = Field(default="llama3.2:3b", max_length=64)
@@ -450,10 +456,12 @@ class AssistantRequest(BaseModel):
 class AssistantResponse(BaseModel):
     answer: str
     sources: list[str] = Field(default_factory=list)
+    citations: list[AssistantCitation] = Field(default_factory=list)
     confidence: str = "low"
     escalate: bool = False
     degraded: bool = False
     degrade_reason: str | None = None
+    route: str | None = None
 
 
 # ── HCT-208: Correction diff schemas ──────────────────────────────────

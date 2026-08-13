@@ -6,7 +6,9 @@ import json
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy.orm import Session
 
+from app.knowledge import KnowledgeChunk, add_document
 from app.tool_call import (
     HealthAssistantOutput,
     OllamaClient,
@@ -15,6 +17,9 @@ from app.tool_call import (
     _contains_external_links,
     _parse_loose_output,
     build_degrade_response,
+    execute_whitelisted_tool,
+    extract_tool_calls,
+    filter_claimed_citations,
     get_approved_tools,
     get_tool,
     is_tool_allowed,
@@ -215,4 +220,192 @@ class TestRunAssistant:
         assert result["degraded"] is True
         assert result["degrade_reason"] == "MODEL_UNAVAILABLE"
         assert result["confidence"] == "low"
+        assert result["citations"] == []
+        assert result["route"] == "REFUSE"
         assert result["answer"]  # non-empty degrade message
+
+
+def test_extract_tool_calls_normalizes_openai_and_ollama_shapes() -> None:
+    calls = extract_tool_calls(
+        {
+            "message": {
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "retrieve_knowledge",
+                            "arguments": json.dumps({"query": "合成照护证据"}),
+                        }
+                    },
+                    {"name": "get_document_metadata", "arguments": {"document_id": "doc-1"}},
+                ]
+            }
+        }
+    )
+    assert calls == [
+        {"name": "retrieve_knowledge", "arguments": {"query": "合成照护证据"}},
+        {"name": "get_document_metadata", "arguments": {"document_id": "doc-1"}},
+    ]
+
+
+def test_filter_claimed_citations_keeps_only_retrieved_chunks() -> None:
+    allowed = [
+        {
+            "document_id": "doc-a",
+            "version": "e2e-v1",
+            "chunk_id": "chunk-a",
+        }
+    ]
+    matched = filter_claimed_citations(["chunk-a", "forged-source"], allowed)
+    assert matched == allowed
+    assert filter_claimed_citations(["forged-source"], allowed) == []
+
+
+def test_retrieve_knowledge_tool_binds_request_scope_and_rejects_override(
+    db_session: Session,
+) -> None:
+    document = add_document(
+        db_session,
+        title="Synthetic care evidence",
+        content="合成照护证据要求先核对已确认事件，并联系有资质的医务人员。",
+        source="hct405-synthetic",
+        created_by="owner-a",
+        version="e2e-v1",
+        permission_scope={"created_by": "owner-a", "household_ids": ["house-a"]},
+    )
+    db_session.commit()
+
+    denied = execute_whitelisted_tool(
+        db_session,
+        name="retrieve_knowledge",
+        arguments={"query": "合成照护证据", "household_id": "house-b"},
+        actor_id="owner-a",
+        household_id="house-a",
+        member_id=None,
+    )
+    assert denied["error"] == "TOOL_SCOPE_DENIED"
+    assert denied["results"] == []
+
+    retrieved = execute_whitelisted_tool(
+        db_session,
+        name="retrieve_knowledge",
+        arguments={"query": "合成照护证据"},
+        actor_id="owner-a",
+        household_id="house-a",
+        member_id=None,
+    )
+    assert retrieved["total"] == 1
+    assert retrieved["results"][0]["document_id"] == document.id
+    chunk = db_session.query(KnowledgeChunk).filter_by(document_id=document.id).one()
+    assert retrieved["results"][0]["chunk_id"] == chunk.id
+
+
+def test_unknown_tool_is_not_executed(db_session: Session) -> None:
+    result = execute_whitelisted_tool(
+        db_session,
+        name="drop_table",
+        arguments={},
+        actor_id="owner-a",
+        household_id=None,
+        member_id=None,
+    )
+    assert result == {"error": "TOOL_NOT_ALLOWED"}
+
+
+def test_run_assistant_requires_live_tool_citations(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = add_document(
+        db_session,
+        title="Synthetic care evidence",
+        content="合成照护证据要求先核对已确认事件，并联系有资质的医务人员。",
+        source="hct405-synthetic",
+        created_by="owner-a",
+        version="e2e-v1",
+        permission_scope={"created_by": "owner-a"},
+    )
+    db_session.commit()
+    chunk = db_session.query(KnowledgeChunk).filter_by(document_id=document.id).one()
+
+    def scripted_chat(_self: OllamaClient, **kwargs: object) -> dict:
+        messages = kwargs["messages"]  # type: ignore[index]
+        has_tool_result = any(
+            isinstance(message, dict) and message.get("role") == "tool"
+            for message in messages
+        )
+        if not has_tool_result:
+            return {
+                "message": {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "retrieve_knowledge",
+                                "arguments": {"query": "合成照护证据"},
+                            }
+                        }
+                    ],
+                }
+            }
+        payload = json.loads(messages[-1]["content"])
+        cited = payload["results"][0]["chunk_id"]
+        return {
+            "message": {
+                "content": json.dumps(
+                    {
+                        "answer": "合成照护证据要求先核对已确认事件。",
+                        "sources": [cited],
+                        "confidence": "medium",
+                        "escalate": False,
+                    },
+                    ensure_ascii=False,
+                )
+            }
+        }
+
+    monkeypatch.setattr(OllamaClient, "chat", scripted_chat)
+    result = run_assistant(
+        db_session,
+        messages=[{"role": "user", "content": "总结合成照护证据"}],
+        actor_id="owner-a",
+    )
+    assert result["degraded"] is False
+    assert result["sources"] == [chunk.id]
+    assert result["citations"] == [
+        {
+            "document_id": document.id,
+            "version": "e2e-v1",
+            "chunk_id": chunk.id,
+        }
+    ]
+    assert result["route"] == "EVIDENCE_REQUIRED"
+
+
+def test_run_assistant_rejects_fabricated_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fabricated(_self: OllamaClient, **_kwargs: object) -> dict:
+        return {
+            "message": {
+                "content": json.dumps(
+                    {
+                        "answer": "合成照护证据已经核对完成。",
+                        "sources": ["forged-chunk"],
+                        "confidence": "high",
+                        "escalate": False,
+                    },
+                    ensure_ascii=False,
+                )
+            }
+        }
+
+    monkeypatch.setattr(OllamaClient, "chat", fabricated)
+    result = run_assistant(
+        None,
+        messages=[{"role": "user", "content": "总结合成照护证据"}],
+        actor_id="owner-a",
+    )
+    assert result["degraded"] is True
+    assert result["degrade_reason"] == "CITATION_NOT_FOUND"
+    assert result["citations"] == []
+    assert result["route"] == "EVIDENCE_REQUIRED"
