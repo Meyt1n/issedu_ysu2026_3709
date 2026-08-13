@@ -1,0 +1,18 @@
+{
+  "schema_version": "hct409-pip-audit-allowlist-v1",
+  "package": "starlette",
+  "pinned_by": "fastapi>=0.115,<0.116",
+  "decision": "accepted",
+  "owner": "backend lead",
+  "impact": "Runtime FastAPI pin keeps starlette 0.46.2 until a dedicated dependency upgrade Story.",
+  "rollback": "Do not widen fastapi bounds in this increment; keep local-only deployment and reject malformed Host/path at the reverse proxy.",
+  "items": [
+    {"id": "PYSEC-2026-161"},
+    {"id": "PYSEC-2026-248"},
+    {"id": "PYSEC-2026-249"},
+    {"id": "PYSEC-2026-1941"},
+    {"id": "PYSEC-2026-1942"},
+    {"id": "PYSEC-2026-2280"},
+    {"id": "PYSEC-2026-2281"}
+  ]
+}

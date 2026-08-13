@@ -87,6 +87,12 @@ jobs:
           tests/integration/test_hct405_review_migration.py::test_review_wiring_upgrade_and_downgrade_on_mysql
           -q
 
+      - name: Record HCT-409 API performance
+        run: uv run python scripts/hct409_api_perf.py --output artifacts/hct409-api-perf.json
+
+      - name: Audit Python runtime dependencies
+        run: uv run python scripts/hct409_dependency_audit.py
+
       - name: Record HCT-405 evidence environment
         run: uv run python scripts/hct405_evidence_metadata.py
 
@@ -111,6 +117,7 @@ jobs:
           path: |
             artifacts/hct405-environment.json
             artifacts/hct405-api-junit.xml
+            artifacts/hct409-api-perf.json
           if-no-files-found: warn
           retention-days: 14
 
@@ -129,6 +136,9 @@ jobs:
 
       - name: Install locked dependencies
         run: npm ci
+
+      - name: Audit production npm dependencies
+        run: npm audit --registry=https://registry.npmjs.org --omit=dev --audit-level=high
 
       - name: Typecheck frontend
         run: npm run check:web
