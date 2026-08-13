@@ -194,6 +194,19 @@ class TestRetrieval:
         results = retrieve(db_session, query="口服 服用方法", actor_id="u1", top_k=10)
         scores = [r["score"] for r in results]
         assert scores == sorted(scores, reverse=True)
+
+    def test_unsegmented_chinese_query_matches_longer_sentence(self, db_session):
+        _make_doc(
+            db_session,
+            content="合成照护证据要求先核对已确认事件并联系医务人员。",
+        )
+        db_session.commit()
+
+        results = retrieve(db_session, query="合成照护证据", actor_id="u1")
+
+        assert len(results) == 1
+        assert results[0]["score"] > 0
+
 # ── Index snapshot ─────────────────────────────────────────────────────
 class TestIndexSnapshot:
     def test_create_snapshot(self, db_session):

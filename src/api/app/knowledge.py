@@ -86,11 +86,30 @@ _CHINESE_STOPWORDS = frozenset({
     "而", "及", "或", "但", "等", "如", "把", "被", "从", "向", "以", "要",
     "之", "去", "出", "会", "可", "着", "过", "来", "说", "给", "很", "还",
 })
+_TOKEN_PATTERN = re.compile(r"[a-z0-9_]+|[\u3400-\u9fff]+", re.IGNORECASE)
 
 
 def _tokenize(text: str) -> list[str]:
-    words = re.findall(r"[\w一-鿿]+", text.lower())
-    return [w for w in words if w not in _CHINESE_STOPWORDS and len(w) > 1]
+    """Tokenize Latin words and unsegmented Chinese text for local retrieval.
+
+    Chinese source documents rarely contain spaces between words.  Keeping a
+    segment plus overlapping bigrams lets a short query match a longer
+    sentence without requiring an external segmenter.
+    """
+    tokens: list[str] = []
+    for raw_token in _TOKEN_PATTERN.findall(text.casefold()):
+        if re.fullmatch(r"[\u3400-\u9fff]+", raw_token):
+            if raw_token in _CHINESE_STOPWORDS or len(raw_token) <= 1:
+                continue
+            tokens.append(raw_token)
+            if len(raw_token) > 2:
+                tokens.extend(
+                    raw_token[index : index + 2]
+                    for index in range(len(raw_token) - 1)
+                )
+        elif len(raw_token) > 1:
+            tokens.append(raw_token)
+    return tokens
 
 
 def _tf(text: str) -> dict[str, int]:

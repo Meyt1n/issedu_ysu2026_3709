@@ -1,0 +1,207 @@
+{
+  "schema_version": "hct405-scenarios-v1",
+  "data_policy": "synthetic-only",
+  "scenarios": [
+    {
+      "id": "HCT405-01",
+      "title": "注册家庭并授权照护者",
+      "status": "automated",
+      "preconditions": ["空的临时数据库", "合成 owner 与 caregiver 身份"],
+      "roles": ["owner", "caregiver"],
+      "steps": ["创建家庭和成员", "授予限时 READ_EVENTS/WRITE_EVENTS 权限", "以照护者读取授权资源"],
+      "expected_states": ["授权处于有效状态", "照护者只能看到获授权家庭和字段"],
+      "permission_boundary": "未授权身份和其他家庭统一返回资源不存在。",
+      "audit_evidence": ["授权记录包含目的、期限、动作和版本", "API 请求 ID 可关联访问日志"],
+      "cleanup": "pytest fixture 删除临时数据库中的家庭、成员和授权。",
+      "coverage_tags": ["registration", "authorization", "cross-household"],
+      "automated_tests": ["tests/e2e/test_hct405_core_flows.py::test_authorized_caregiver_can_trace_confirmed_events_to_risk_evidence"],
+      "limitations": ["生产身份认证由 HCT-107 单独验收。"]
+    },
+    {
+      "id": "HCT405-02",
+      "title": "低质量图像阻断与人工修正",
+      "status": "automated_with_limitations",
+      "preconditions": ["内存生成的暗图和清晰图", "签名的合成 adapter evidence"],
+      "roles": ["owner", "local-vision-adapter"],
+      "steps": ["暗图经过质量门", "确认无质量凭据和下游任务", "为合成复核任务提交人工修正"],
+      "expected_states": ["暗图为 RETAKE", "无未确认事件", "人工修正仅产生一个 CONFIRMED 追加事件"],
+      "permission_boundary": "质量检查只处理调用者上传的字节，复核只允许家庭 owner。",
+      "audit_evidence": ["质量配置版本与输入摘要", "复核任务、视觉任务、规则和模型版本写入事件 evidence"],
+      "cleanup": "临时图像目录和内存数据库由 pytest fixture 删除。",
+      "coverage_tags": ["low-quality", "manual-correction", "confirmed-event"],
+      "automated_tests": [
+        "tests/e2e/test_hct405_failure_degradation.py::test_low_quality_image_stops_before_downstream_vision_task",
+        "tests/e2e/test_hct405_vision_review_release.py::test_manual_review_correction_creates_one_confirmed_event"
+      ],
+      "limitations": ["合成 adapter 输出不代表真实 OCR 或模型精度。"]
+    },
+    {
+      "id": "HCT405-03",
+      "title": "MATCHED、CONFLICT 与 UNKNOWN 四状态安全门",
+      "status": "automated_with_limitations",
+      "preconditions": ["获批的合成主数据快照", "一致、冲突和缺失三组合成 evidence"],
+      "roles": ["owner", "local-vision-adapter"],
+      "steps": ["提交签名 evidence", "调用候选融合", "读取成员时间线"],
+      "expected_states": ["一致证据为 MATCHED", "冲突证据为 CONFLICT", "无候选为 UNKNOWN", "所有状态 health_event_allowed=false"],
+      "permission_boundary": "只有视觉任务创建者可提交 evidence 和执行融合。",
+      "audit_evidence": ["主数据、OCR、条码、视觉、融合规则和阈值版本", "候选证据 ID 与冲突原因"],
+      "cleanup": "临时主数据快照、图像和数据库由 pytest fixture 删除。",
+      "coverage_tags": ["matched", "conflict", "unknown", "no-unconfirmed-fact"],
+      "automated_tests": [
+        "tests/e2e/test_hct405_vision_review_release.py::test_matched_vision_result_still_requires_manual_confirmation",
+        "tests/e2e/test_hct405_vision_review_release.py::test_conflicting_vision_result_does_not_create_health_fact",
+        "tests/e2e/test_hct405_vision_review_release.py::test_unknown_vision_result_does_not_create_health_fact"
+      ],
+      "limitations": ["视觉到复核任务的自动创建仍需集成。"]
+    },
+    {
+      "id": "HCT405-04",
+      "title": "已确认事件更新不可变时间线和投影",
+      "status": "automated",
+      "preconditions": ["合成家庭、成员和 owner", "两条已确认健康事件"],
+      "roles": ["owner", "caregiver"],
+      "steps": ["追加过敏和药品事件", "读取时间线", "读取成员投影"],
+      "expected_states": ["时间线保持序号顺序", "投影指向最后事件", "事件计数为二"],
+      "permission_boundary": "只有 owner 或有效 READ_EVENTS 授权者可读取。",
+      "audit_evidence": ["事件 sequence_no、request_fingerprint、correlation_id 和 schema_version"],
+      "cleanup": "内存数据库由 pytest fixture 删除。",
+      "coverage_tags": ["append-only-event", "projection", "traceability"],
+      "automated_tests": ["tests/e2e/test_hct405_core_flows.py::test_authorized_caregiver_can_trace_confirmed_events_to_risk_evidence"],
+      "limitations": []
+    },
+    {
+      "id": "HCT405-05",
+      "title": "风险规则返回脱敏证据",
+      "status": "automated",
+      "preconditions": ["已确认的合成过敏和冲突药品事件", "有效照护者读取授权"],
+      "roles": ["owner", "caregiver"],
+      "steps": ["请求成员风险列表", "定位 allergy_conflict", "读取风险证据"],
+      "expected_states": ["规则级别为 SEVERE", "证据只返回允许的事件元数据", "不返回 payload 或原始 evidence"],
+      "permission_boundary": "无授权和跨家庭请求返回资源不存在。",
+      "audit_evidence": ["rule_id、rule_version、source event ID 和请求 ID"],
+      "cleanup": "内存数据库由 pytest fixture 删除。",
+      "coverage_tags": ["risk-rule", "redaction", "evidence"],
+      "automated_tests": ["tests/e2e/test_hct405_core_flows.py::test_authorized_caregiver_can_trace_confirmed_events_to_risk_evidence"],
+      "limitations": []
+    },
+    {
+      "id": "HCT405-06",
+      "title": "计划确认、延后和跳过",
+      "status": "automated",
+      "preconditions": ["合成家庭成员", "带目的的 WRITE_EVENTS 照护者授权"],
+      "roles": ["caregiver"],
+      "steps": ["确认计划", "延后计划", "跳过计划"],
+      "expected_states": ["分别追加 plan_confirmed、plan_deferred 和 plan_skipped CONFIRMED 事件"],
+      "permission_boundary": "缺少写授权、目的不匹配或授权过期时拒绝。",
+      "audit_evidence": ["actor、purpose、plan_event_id、时间和事件版本"],
+      "cleanup": "内存数据库由 pytest fixture 删除。",
+      "coverage_tags": ["plan", "care-action", "authorization-purpose"],
+      "automated_tests": ["tests/e2e/test_hct405_core_flows.py::test_caregiver_plan_actions_require_write_authorization"],
+      "limitations": []
+    },
+    {
+      "id": "HCT405-07",
+      "title": "知识无证据降级、危险输出拒答和 Ollama 断连",
+      "status": "automated_with_limitations",
+      "preconditions": ["私有合成知识文档", "可注入断连或危险返回的本地 Ollama 边界"],
+      "roles": ["owner", "unauthorized-actor", "local-assistant"],
+      "steps": ["按权限检索知识", "以无权限身份检索", "模拟 Ollama 连接拒绝", "模拟医疗指令和外链输出"],
+      "expected_states": ["无权限时 NO_AUTHORISED_DOCUMENTS", "断连时 MODEL_UNAVAILABLE", "危险内容被替换且 sources 为空"],
+      "permission_boundary": "检索先按 actor/household/member 过滤，未授权文档不参与评分。",
+      "audit_evidence": ["retrieval query ID、知识版本、degrade_reason 和低置信度"],
+      "cleanup": "知识文档和 chunk 在测试内删除，数据库由 fixture 重置。",
+      "coverage_tags": ["no-evidence-refusal", "model-unavailable", "network-disconnect", "medical-refusal", "no-external-link"],
+      "automated_tests": [
+        "tests/e2e/test_hct405_failure_degradation.py::test_knowledge_scope_and_deletion_propagate_through_api",
+        "tests/e2e/test_hct405_failure_degradation.py::test_assistant_returns_structured_degrade_when_local_network_is_down",
+        "tests/e2e/test_hct405_failure_degradation.py::test_assistant_refuses_unsafe_model_output_at_api_boundary"
+      ],
+      "limitations": ["真实 Ollama 工具调用和引用存在性校验仍待集成。"]
+    },
+    {
+      "id": "HCT405-08",
+      "title": "撤权立即阻断照护者",
+      "status": "automated",
+      "preconditions": ["有效 READ_EVENTS 授权", "一条已确认合成事件"],
+      "roles": ["owner", "caregiver"],
+      "steps": ["撤权前读取事件", "owner 按版本撤销授权", "照护者再次读取"],
+      "expected_states": ["撤权前成功", "撤权记录版本递增", "撤权后立即返回资源不存在"],
+      "permission_boundary": "只有授权授予者可撤销，照护者不能读取撤权后的缓存数据。",
+      "audit_evidence": ["authorization version、revoked_at、grantor 和 grantee"],
+      "cleanup": "内存数据库由 pytest fixture 删除。",
+      "coverage_tags": ["revocation", "immediate-effect", "cache-safety"],
+      "automated_tests": ["tests/e2e/test_hct405_core_flows.py::test_revocation_blocks_caregiver_immediately"],
+      "limitations": []
+    },
+    {
+      "id": "HCT405-09",
+      "title": "知识和训练出口删除传播",
+      "status": "automated_with_limitations",
+      "preconditions": ["私有知识文档", "已批准困难样本、有效训练同意和活动导出清单"],
+      "roles": ["owner", "unauthorized-actor"],
+      "steps": ["验证他人不能删除私有文档", "owner 删除文档", "删除已导出的困难样本"],
+      "expected_states": ["知识 chunk 被删除且文档不可检索", "训练同意被撤销", "导出清单被标记 invalidated"],
+      "permission_boundary": "只有资源所属家庭 owner 或文档创建者可删除。",
+      "audit_evidence": ["deleted_by/deleted_at、consent revoke、manifest invalidation 和内容哈希"],
+      "cleanup": "测试主动删除资源，fixture 最终重置数据库。",
+      "coverage_tags": ["deletion-propagation", "consent-revocation", "export-invalidation"],
+      "automated_tests": [
+        "tests/e2e/test_hct405_failure_degradation.py::test_knowledge_scope_and_deletion_propagate_through_api",
+        "tests/e2e/test_hct405_vision_review_release.py::test_hard_sample_deletion_revokes_consent_and_invalidates_export"
+      ],
+      "limitations": ["完整家庭数据、对象存储和备份擦除由后续删除 Story 验收。"]
+    },
+    {
+      "id": "HCT405-10",
+      "title": "网络断开、本地出网限制和天气最小字段",
+      "status": "automated_with_limitations",
+      "preconditions": ["默认拒绝的 egress guard", "合成城市编码", "不可达的本地模型端点"],
+      "roles": ["local-api", "weather-adapter", "local-assistant"],
+      "steps": ["验证未列入白名单的主机被拒绝", "验证天气请求只发送城市编码", "模拟模型网络断开"],
+      "expected_states": ["健康数据不出网", "天气请求无家庭/成员字段", "助手安全降级且已确认事实不变"],
+      "permission_boundary": "外部适配器不得接收成员 ID、事件正文或授权内容。",
+      "audit_evidence": ["egress decision、adapter 字段清单和 MODEL_UNAVAILABLE reason"],
+      "cleanup": "测试 monkeypatch 和临时网络状态在用例后恢复。",
+      "coverage_tags": ["network-disconnect", "egress-deny", "weather-minimization", "fact-preservation"],
+      "automated_tests": [
+        "tests/safety/test_hct004_egress_guard.py",
+        "tests/safety/test_hct004_weather_adapter.py",
+        "tests/e2e/test_hct405_failure_degradation.py::test_assistant_returns_structured_degrade_when_local_network_is_down"
+      ],
+      "limitations": ["容器级离线和重启演练仍待部署环境执行。"]
+    },
+    {
+      "id": "HCT405-11",
+      "title": "页面无购药、问诊、广告和失败数据泄露入口",
+      "status": "automated_with_limitations",
+      "preconditions": ["本地 Vue 页面", "合成 API 响应或断连"],
+      "roles": ["owner", "browser-user"],
+      "steps": ["加载本地页面", "模拟 API 不可用", "扫描可见文本和外部跳转"],
+      "expected_states": ["失败时不显示家庭或健康摘要", "页面无购买、在线问诊、广告或佣金入口"],
+      "permission_boundary": "前端只通过 API 获取授权数据，不直连数据库或模型。",
+      "audit_evidence": ["Playwright JUnit", "失败 screenshot、trace 和 video"],
+      "cleanup": "Playwright 关闭浏览器和 Vite 服务，CI 制品 14 天后删除。",
+      "coverage_tags": ["browser-failure", "no-promotion", "no-data-leak"],
+      "automated_tests": [
+        "tests/browser/hct405-visible-workflows.spec.ts",
+        "tests/safety/test_hct004_no_redirect.py"
+      ],
+      "limitations": ["当前浏览器场景使用合成 API；真实本地 API 浏览器链路仍待验收。"]
+    },
+    {
+      "id": "HCT405-12",
+      "title": "V2 固定集绑定、对照和回滚",
+      "status": "automated_with_limitations",
+      "preconditions": ["带固定集哈希和对照报告哈希的合成 V1/V2 绑定"],
+      "roles": ["model-operator", "independent-reviewer"],
+      "steps": ["激活 V1", "读取 V2 对照证据并激活", "以原因回滚 V2"],
+      "expected_states": ["V2 先为 active 后为 revoked", "V1 自动恢复 active", "对照与固定集哈希保持可追踪"],
+      "permission_boundary": "发布操作要求独立 approved_by 证据；测试不加载真实权重。",
+      "audit_evidence": ["model_id、dataset_version、fixed_set_hash、comparison_report_hash、approved_by 和 rollback reason"],
+      "cleanup": "内存数据库由 pytest fixture 删除。",
+      "coverage_tags": ["v2-comparison", "model-rollback", "version-binding"],
+      "automated_tests": ["tests/e2e/test_hct405_vision_review_release.py::test_v2_binding_comparison_and_rollback_restore_previous_release"],
+      "limitations": ["合成状态演练不代表 V2 已训练、通过固定集或获准发布。"]
+    }
+  ]
+}
