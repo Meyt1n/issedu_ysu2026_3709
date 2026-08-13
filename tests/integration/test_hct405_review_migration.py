@@ -1,12 +1,14 @@
 """Migration coverage for HCT-405 vision-review wiring."""
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import sessionmaker
 
 from app.config import get_settings
@@ -17,6 +19,7 @@ from app.review import (
     confirm_review,
     create_review_task,
 )
+from app.vision_tasks import create_vision_task
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PREVIOUS_REVISION = "0009_merge_backend_heads"
@@ -330,6 +333,81 @@ def test_review_wiring_upgrade_and_downgrade_on_mysql(
             autoflush=False,
             expire_on_commit=False,
         )
+
+        vision_request = {
+            "household_id": "actual-household",
+            "member_id": "actual-member",
+            "created_by": "owner",
+            "file_id": "concurrent-vision-file",
+            "idempotency_key": "mysql-concurrent-vision-key",
+            "model_version": "model-v1",
+            "schema_version": "schema-v1",
+            "code_version": "code-v1",
+            "data_version": "data-v1",
+        }
+        initial_select_completed = Event()
+        release_contender = Event()
+
+        def pause_after_idempotency_lookup(
+            _connection,
+            _cursor,
+            statement,
+            _parameters,
+            _context,
+            _executemany,
+        ) -> None:
+            normalized = statement.upper()
+            if (
+                normalized.lstrip().startswith("SELECT")
+                and "VISION_TASK.IDEMPOTENCY_KEY" in normalized
+            ):
+                initial_select_completed.set()
+                if not release_contender.wait(timeout=10):
+                    raise TimeoutError("MYSQL_VISION_RACE_RELEASE_TIMEOUT")
+
+        def create_competing_vision_task() -> str:
+            with session_factory() as competing_session:
+                task = create_vision_task(competing_session, **vision_request)
+                competing_session.commit()
+                return task.id
+
+        with session_factory() as first_vision_session:
+            first_vision = create_vision_task(
+                first_vision_session,
+                **vision_request,
+            )
+            first_vision_id = first_vision.id
+            event.listen(
+                engine,
+                "after_cursor_execute",
+                pause_after_idempotency_lookup,
+            )
+            try:
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    competing = executor.submit(create_competing_vision_task)
+                    assert initial_select_completed.wait(timeout=10)
+                    first_vision_session.commit()
+                    release_contender.set()
+                    assert competing.result(timeout=10) == first_vision_id
+            finally:
+                release_contender.set()
+                event.remove(
+                    engine,
+                    "after_cursor_execute",
+                    pause_after_idempotency_lookup,
+                )
+        with engine.connect() as connection:
+            vision_count = connection.execute(
+                text(
+                    """
+                    SELECT COUNT(*)
+                    FROM vision_task
+                    WHERE idempotency_key = 'mysql-concurrent-vision-key'
+                    """
+                )
+            ).scalar_one()
+        assert vision_count == 1
+
         with session_factory() as setup_session:
             same_key_review = create_review_task(
                 setup_session,

@@ -85,7 +85,7 @@ HCT-103 事件写入支持最长 128 位 `Idempotency-Key`。家庭、key、操�
 | POST | `/households/{household_id}/review-tasks/{id}/correct` | 人工修正并追加健康事件 |
 | POST | `/households/{household_id}/review-tasks/{id}/skip` | 跳过复核且不创建健康事件 |
 
-视觉任务必须绑定真实 `member_id`，服务端由成员反查家庭并校验 `health_events` 数据域、目的和有效期，禁止使用占位家庭。创建、证据提交和取消要求 `WRITE_EVENTS`，查询要求 `READ_EVENTS`，融合因读取已有证据并创建复核任务而同时要求两者；每次请求都重新鉴权，撤权后统一隐藏资源。融合响应增加 `review_task_id` 和 `review_task_version`；同一视觉任务只能有一个复核任务，并持久化覆盖阈值、权重、版本、状态和候选的规范化指纹。完全相同的重试返回原任务，配置或输入变化返回 `409 REVIEW_TASK_FUSION_CONFLICT`。
+视觉任务必须绑定真实 `member_id`，服务端由成员反查家庭并校验 `health_events` 数据域、目的和有效期，禁止使用占位家庭。创建、证据提交和取消要求 `WRITE_EVENTS`，查询要求 `READ_EVENTS`，融合因读取已有证据并创建复核任务而同时要求两者；每次请求都重新鉴权，撤权后统一隐藏资源。视觉任务创建的同 key、同完整请求（含文件、成员及全部模型/Schema/代码/数据版本）并发重试只产生并返回一条任务，异载荷返回 `409 IDEMPOTENCY_KEY_CONFLICT`。融合响应增加 `review_task_id` 和 `review_task_version`；同一视觉任务只能有一个复核任务，并持久化覆盖阈值、权重、版本、状态和候选的规范化指纹。完全相同的重试返回原任务，配置或输入变化返回 `409 REVIEW_TASK_FUSION_CONFLICT`。
 
 复核任务读取要求 `READ_EVENTS`；确认、修正和跳过因响应包含完整候选而同时要求 `READ_EVENTS` 与 `WRITE_EVENTS`，并必须携带 `expected_version`。确认和修正应携带最长 128 位 `Idempotency-Key`。服务端以 `status=PENDING_REVIEW AND version=expected_version` 条件更新争抢转换权。只有争抢成功的请求能在同一数据库事务追加一个已确认事件及一个 outbox；并发失败返回 `409 REVIEW_VERSION_CONFLICT` 或终态错误。同 key、同载荷、同操作者重试返回原转换，不再创建事件；更换候选、人工值、备注或跳过原因返回 `409 IDEMPOTENCY_KEY_CONFLICT`。无成员级权限、跨家庭或撤权访问统一返回资源不存在。
 

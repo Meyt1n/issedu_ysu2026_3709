@@ -7,6 +7,7 @@ import uuid
 import pytest
 from fastapi import HTTPException
 
+import app.vision_tasks as vision_tasks
 from app.models import VisionTask
 from app.vision_tasks import (
     _VALID_TRANSITIONS,
@@ -166,6 +167,51 @@ class TestIdempotency:
         session.commit()
         assert t1.id == t2.id
 
+    def test_unique_race_reloads_matching_task(
+        self,
+        session,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        key = f"idem-{uuid.uuid4().hex[:16]}"
+        request = {
+            "idempotency_key": key,
+            "household_id": str(uuid.uuid4()),
+            "member_id": str(uuid.uuid4()),
+            "created_by": "actor",
+            "file_id": "raced-file",
+            "model_version": "model-v1",
+            "schema_version": "schema-v1",
+            "code_version": "code-v1",
+            "data_version": "data-v1",
+        }
+        existing = create_vision_task(session, **request)
+        session.commit()
+
+        original_lookup = vision_tasks._get_task_by_idempotency_key
+
+        def miss_initial_lookup(
+            lookup_session,
+            idempotency_key,
+            *,
+            current_read=False,
+        ):
+            if not current_read:
+                return None
+            return original_lookup(
+                lookup_session,
+                idempotency_key,
+                current_read=True,
+            )
+
+        monkeypatch.setattr(
+            vision_tasks,
+            "_get_task_by_idempotency_key",
+            miss_initial_lookup,
+        )
+        retried = create_vision_task(session, **request)
+
+        assert retried.id == existing.id
+
     def test_same_key_with_different_request_is_conflict(self, session):
         key = f"idem-{uuid.uuid4().hex[:16]}"
         _make_task(session, idempotency_key=key)
@@ -178,6 +224,43 @@ class TestIdempotency:
                 household_id=str(uuid.uuid4()),
                 created_by="actor",
                 file_id="different-file",
+            )
+        assert exc_info.value.detail == "IDEMPOTENCY_KEY_CONFLICT"
+
+    @pytest.mark.parametrize(
+        ("field", "changed_value"),
+        [
+            ("model_version", "model-v2"),
+            ("schema_version", "schema-v2"),
+            ("code_version", "code-v2"),
+            ("data_version", "data-v2"),
+        ],
+    )
+    def test_same_key_rejects_changed_version_metadata(
+        self,
+        session,
+        field: str,
+        changed_value: str,
+    ):
+        key = f"idem-{uuid.uuid4().hex[:16]}"
+        request = {
+            "idempotency_key": key,
+            "household_id": str(uuid.uuid4()),
+            "member_id": str(uuid.uuid4()),
+            "created_by": "actor",
+            "file_id": "versioned-file",
+            "model_version": "model-v1",
+            "schema_version": "schema-v1",
+            "code_version": "code-v1",
+            "data_version": "data-v1",
+        }
+        create_vision_task(session, **request)
+        session.commit()
+
+        with pytest.raises(HTTPException) as exc_info:
+            create_vision_task(
+                session,
+                **{**request, field: changed_value},
             )
         assert exc_info.value.detail == "IDEMPOTENCY_KEY_CONFLICT"
 
