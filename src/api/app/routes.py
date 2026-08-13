@@ -1281,7 +1281,7 @@ def get_knowledge_document(
 ) -> KnowledgeDocumentRead:
     from app.knowledge import _check_permission
     doc = session.get(KnowledgeDocument, doc_id)
-    if doc is None:
+    if doc is None or doc.status != "active":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="DOCUMENT_NOT_FOUND")
     if not _check_permission(doc.permission_scope, actor_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="DOCUMENT_NOT_FOUND")
@@ -1349,7 +1349,7 @@ def delete_knowledge_document(
 ) -> dict:
     from app.knowledge import delete_document
     doc = session.get(KnowledgeDocument, doc_id)
-    if doc is None:
+    if doc is None or doc.status != "active" or doc.created_by != actor_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="DOCUMENT_NOT_FOUND")
     if not delete_document(session, doc_id, deleted_by=actor_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="DOCUMENT_NOT_FOUND")

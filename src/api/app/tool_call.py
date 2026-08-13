@@ -334,6 +334,18 @@ def build_degrade_response(
     )
 
 
+def _degrade_payload(response: DegradedResponse) -> dict[str, Any]:
+    """Translate the internal degrade record to the public API contract."""
+    return {
+        "answer": response.answer,
+        "sources": response.sources,
+        "confidence": "low",
+        "escalate": response.escalate,
+        "degraded": response.degraded,
+        "degrade_reason": response.reason,
+    }
+
+
 # ── Main entry point ───────────────────────────────────────────────────
 
 
@@ -377,7 +389,7 @@ def run_assistant(
         )
     except RuntimeError:
         degrade = build_degrade_response("MODEL_UNAVAILABLE")
-        return degrade.__dict__
+        return _degrade_payload(degrade)
 
     # ── Phase 4: Parse & validate structured output ────────────────
     raw_content = raw.get("message", {}).get("content", "")
@@ -389,20 +401,20 @@ def run_assistant(
             parsed = _parse_loose_output(raw_content)
         except Exception:
             degrade = build_degrade_response("SCHEMA_VALIDATION_FAILED")
-            return degrade.__dict__
+            return _degrade_payload(degrade)
 
     # ── Phase 5: Medical boundary check ────────────────────────────
     violations = _check_medical_boundary(parsed.answer)
     if violations:
         logger.warning("Medical boundary violation: %s", violations)
         degrade = build_degrade_response("MEDICAL_BOUNDARY_VIOLATION")
-        return degrade.__dict__
+        return _degrade_payload(degrade)
 
     # ── Phase 6: Check for external links ──────────────────────────
     if _contains_external_links(parsed.answer):
         logger.warning("External link detected in assistant output")
         degrade = build_degrade_response("EXTERNAL_LINK_DETECTED")
-        return degrade.__dict__
+        return _degrade_payload(degrade)
 
     # ── Phase 7: Return validated output ───────────────────────────
     return {
