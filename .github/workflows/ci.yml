@@ -58,8 +58,31 @@ jobs:
           DATABASE_URL: sqlite+pysqlite:///./ci.sqlite3
         run: uv run alembic upgrade head
 
+      - name: Record HCT-405 evidence environment
+        run: uv run python scripts/hct405_evidence_metadata.py
+
       - name: Run backend tests
         run: uv run pytest --cov=src/api/app --cov-report=term-missing
+
+      - name: Record HCT-405 API E2E evidence
+        run: >-
+          uv run pytest
+          tests/e2e/test_hct405_core_flows.py
+          tests/e2e/test_hct405_failure_degradation.py
+          tests/e2e/test_hct405_scenario_manifest.py
+          tests/e2e/test_hct405_vision_review_release.py
+          --junitxml=artifacts/hct405-api-junit.xml
+
+      - name: Upload HCT-405 API evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hct405-api-evidence
+          path: |
+            artifacts/hct405-environment.json
+            artifacts/hct405-api-junit.xml
+          if-no-files-found: warn
+          retention-days: 14
 
   frontend:
     name: Frontend typecheck and build
@@ -82,6 +105,29 @@ jobs:
 
       - name: Build frontend
         run: npm run build:web
+
+      - name: Run frontend unit tests
+        run: npm run test:web
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run HCT-405 browser E2E
+        env:
+          CI: "true"
+        run: npm run test:e2e:web
+
+      - name: Upload HCT-405 browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hct405-browser-evidence
+          path: |
+            artifacts/hct405-browser-junit.xml
+            test-results/
+            playwright-report/
+          if-no-files-found: warn
+          retention-days: 14
 
   secret-scan:
     name: Secret scan
