@@ -1,4 +1,4 @@
-import { useState } from 'react'
+﻿import { useState } from 'react'
 import { Activity, AlertTriangle, Bell, CalendarClock, CheckCircle2, ChevronRight, ClipboardCheck, Cloud, FileCheck2, FileText, Home, Lock, Menu, MessageCircle, Monitor, Network, Plus, ScanLine, Search, Send, ServerCog, Settings, ShieldAlert, ShieldCheck, Sparkles, Thermometer, UserRound, UsersRound, X } from 'lucide-react'
 
 import heroVisual from './assets/homecare-orbit.png'
@@ -40,3 +40,8 @@ function App() {
       </div></main><ArtModal open={privacyOpen} onClose={() => setPrivacyOpen(false)} icon={ShieldCheck} accent="mint" eyebrow="家庭可信域" title="本地优先正在守护你的家庭" description="健康数据只在家庭设备内流转，当前页面不会扩大数据可见范围。"><div className="art-modal-note"><Lock size={15} /><span>本地存储、字段授权和审计链均处于正常状态。</span></div><div className="art-modal-list"><div className="art-modal-list-row"><div><strong>本地存储</strong><small>健康事件保留在家庭设备</small></div><span className="privacy-modal-check">安全</span></div><div className="art-modal-list-row"><div><strong>家庭同步</strong><small>成员授权范围内实时同步</small></div><span className="privacy-modal-check">已同步</span></div></div></ArtModal></div>
 }
 export default App
+
+
+
+
+

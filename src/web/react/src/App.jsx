@@ -4,6 +4,7 @@ import { AccessPage, AddMemberPage, EvidencePage, EventsPage, MemberPage, RiskPa
 import { EmergencyContactsPage, SettingsPage } from './settings-pages.jsx'
 import { AddHealthEventPage, ReportComparisonPage, ReportsPage } from './health-pages.jsx'
 import { AssistantPage, BigScreenPage, CarePlanPage, GraphPage, ModelLabPage, ReviewCenterPage, SafetyCenterPage, ScanCenterPage } from './core-pages.jsx'
+import { AuthPage } from './AuthPage.jsx'
 
 function resolveRoute(hash) {
   const value = decodeURIComponent(hash || '')
@@ -37,6 +38,8 @@ export default function App() {
   const [hash, setHash] = useState(() => window.location.hash)
   useEffect(() => { const update = () => setHash(window.location.hash); window.addEventListener('hashchange', update); return () => window.removeEventListener('hashchange', update) }, [])
   const route = resolveRoute(hash)
+  const location = decodeURIComponent(hash || '')
+  if (!location || location.includes('登录') || location.includes('注册')) return <AuthPage onComplete={() => { window.location.hash = '#/仪表盘' }} />
   if (route === 'scan') return <ScanCenterPage />
   if (route === 'review') return <ReviewCenterPage />
   if (route === 'graph') return <GraphPage />
@@ -57,3 +60,5 @@ export default function App() {
   if (route === 'evidence') return <EvidencePage />
   return <DashboardPage />
 }
+
+
