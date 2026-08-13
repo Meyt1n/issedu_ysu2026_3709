@@ -23,15 +23,17 @@
       "status": "automated_with_limitations",
       "preconditions": ["内存生成的暗图和清晰图", "签名的合成 adapter evidence"],
       "roles": ["owner", "local-vision-adapter"],
-      "steps": ["暗图经过质量门", "确认无质量凭据和下游任务", "为合成复核任务提交人工修正"],
-      "expected_states": ["暗图为 RETAKE", "无未确认事件", "人工修正仅产生一个 CONFIRMED 追加事件"],
-      "permission_boundary": "质量检查只处理调用者上传的字节，复核只允许家庭 owner。",
-      "audit_evidence": ["质量配置版本与输入摘要", "复核任务、视觉任务、规则和模型版本写入事件 evidence"],
+      "steps": ["暗图经过质量门", "确认无质量凭据和下游任务", "融合自动创建唯一复核任务", "为复核任务提交人工修正", "并发确认同一版本"],
+      "expected_states": ["暗图为 RETAKE", "无未确认事件", "重复融合返回同一复核任务", "人工修正仅产生一个 CONFIRMED 追加事件", "并发确认仅产生一个事件和 outbox"],
+      "permission_boundary": "视觉任务绑定真实家庭成员；复核只允许家庭 owner 或同时具备成员级 READ_EVENTS/WRITE_EVENTS、字段、目的和有效期授权的照护者。",
+      "audit_evidence": ["质量配置版本与输入摘要", "复核任务、视觉任务、阈值、权重、规则和模型版本写入事件 evidence"],
       "cleanup": "临时图像目录和内存数据库由 pytest fixture 删除。",
-      "coverage_tags": ["low-quality", "manual-correction", "confirmed-event"],
+      "coverage_tags": ["low-quality", "manual-correction", "confirmed-event", "optimistic-concurrency"],
       "automated_tests": [
         "tests/e2e/test_hct405_failure_degradation.py::test_low_quality_image_stops_before_downstream_vision_task",
-        "tests/e2e/test_hct405_vision_review_release.py::test_manual_review_correction_creates_one_confirmed_event"
+        "tests/e2e/test_hct405_vision_review_release.py::test_manual_review_correction_creates_one_confirmed_event",
+        "tests/e2e/test_hct405_vision_review_release.py::test_review_confirmation_enforces_member_read_write_authorization",
+        "tests/e2e/test_hct405_vision_review_release.py::test_concurrent_review_confirm_and_correct_create_one_event_and_outbox"
       ],
       "limitations": ["合成 adapter 输出不代表真实 OCR 或模型精度。"]
     },
@@ -41,18 +43,19 @@
       "status": "automated_with_limitations",
       "preconditions": ["获批的合成主数据快照", "一致、冲突和缺失三组合成 evidence"],
       "roles": ["owner", "local-vision-adapter"],
-      "steps": ["提交签名 evidence", "调用候选融合", "读取成员时间线"],
-      "expected_states": ["一致证据为 MATCHED", "冲突证据为 CONFLICT", "无候选为 UNKNOWN", "所有状态 health_event_allowed=false"],
-      "permission_boundary": "只有视觉任务创建者可提交 evidence 和执行融合。",
+      "steps": ["提交签名 evidence", "调用并重复候选融合", "读取自动创建的复核任务", "读取成员时间线"],
+      "expected_states": ["一致证据为 MATCHED", "冲突证据为 CONFLICT", "无候选为 UNKNOWN", "相同配置的重复融合返回同一 review_task_id", "不同融合配置返回冲突", "所有状态 health_event_allowed=false"],
+      "permission_boundary": "视觉任务创建和 evidence 提交校验当前成员级 WRITE_EVENTS 授权；融合同时要求 READ_EVENTS 与 WRITE_EVENTS，避免只写授权读取已有证据。",
       "audit_evidence": ["主数据、OCR、条码、视觉、融合规则和阈值版本", "候选证据 ID 与冲突原因"],
       "cleanup": "临时主数据快照、图像和数据库由 pytest fixture 删除。",
       "coverage_tags": ["matched", "conflict", "unknown", "no-unconfirmed-fact"],
       "automated_tests": [
         "tests/e2e/test_hct405_vision_review_release.py::test_matched_vision_result_still_requires_manual_confirmation",
         "tests/e2e/test_hct405_vision_review_release.py::test_conflicting_vision_result_does_not_create_health_fact",
-        "tests/e2e/test_hct405_vision_review_release.py::test_unknown_vision_result_does_not_create_health_fact"
+        "tests/e2e/test_hct405_vision_review_release.py::test_unknown_vision_result_does_not_create_health_fact",
+        "tests/e2e/test_hct405_vision_review_release.py::test_write_only_caregiver_cannot_read_fusion_result"
       ],
-      "limitations": ["视觉到复核任务的自动创建仍需集成。"]
+      "limitations": ["合成证据只验证状态、授权和复核衔接，不代表真实视觉精度。"]
     },
     {
       "id": "HCT405-04",
@@ -122,15 +125,18 @@
       "id": "HCT405-08",
       "title": "撤权立即阻断照护者",
       "status": "automated",
-      "preconditions": ["有效 READ_EVENTS 授权", "一条已确认合成事件"],
+      "preconditions": ["有效 READ_EVENTS/WRITE_EVENTS 授权", "一条已确认合成事件", "一个照护者创建的成员级视觉任务"],
       "roles": ["owner", "caregiver"],
-      "steps": ["撤权前读取事件", "owner 按版本撤销授权", "照护者再次读取"],
-      "expected_states": ["撤权前成功", "撤权记录版本递增", "撤权后立即返回资源不存在"],
+      "steps": ["撤权前读取事件和视觉任务", "owner 按版本撤销授权", "照护者再次读取并尝试融合/取消视觉任务"],
+      "expected_states": ["撤权前成功", "撤权记录版本递增", "撤权后事件、视觉任务读取和视觉任务写操作立即返回资源不存在"],
       "permission_boundary": "只有授权授予者可撤销，照护者不能读取撤权后的缓存数据。",
       "audit_evidence": ["authorization version、revoked_at、grantor 和 grantee"],
       "cleanup": "内存数据库由 pytest fixture 删除。",
       "coverage_tags": ["revocation", "immediate-effect", "cache-safety"],
-      "automated_tests": ["tests/e2e/test_hct405_core_flows.py::test_revocation_blocks_caregiver_immediately"],
+      "automated_tests": [
+        "tests/e2e/test_hct405_core_flows.py::test_revocation_blocks_caregiver_immediately",
+        "tests/e2e/test_hct405_vision_review_release.py::test_revoked_caregiver_cannot_access_or_mutate_vision_task"
+      ],
       "limitations": []
     },
     {

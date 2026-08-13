@@ -17,6 +17,11 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    empty_json_default = (
+        sa.text("(JSON_OBJECT())")
+        if op.get_bind().dialect.name == "mysql"
+        else sa.text("'{}'")
+    )
     # ── 1. correction_diff ────────────────────────────────────────────
     op.create_table(
         "correction_diff",
@@ -43,7 +48,12 @@ def upgrade() -> None:
         sa.Column("before_value", sa.JSON(), nullable=True),
         sa.Column("after_value", sa.JSON(), nullable=True),
         sa.Column("reason", sa.String(240), nullable=False),
-        sa.Column("evidence", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
+        sa.Column(
+            "evidence",
+            sa.JSON(),
+            nullable=False,
+            server_default=empty_json_default,
+        ),
         sa.Column("operator_actor_id", sa.String(120), nullable=False),
         sa.Column("version", sa.Integer(), nullable=False, server_default=sa.text("1")),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
@@ -115,7 +125,12 @@ def upgrade() -> None:
         ),
         sa.Column("granted_by", sa.String(120), nullable=False),
         sa.Column("status", sa.String(20), nullable=False, server_default=sa.text("'active'")),
-        sa.Column("scope", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
+        sa.Column(
+            "scope",
+            sa.JSON(),
+            nullable=False,
+            server_default=empty_json_default,
+        ),
         sa.Column("license", sa.String(60), nullable=False, server_default=sa.text("'internal'")),
         sa.Column("revoked_by", sa.String(120), nullable=True),
         sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
@@ -151,20 +166,10 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     # Reverse dependency order: export_manifest → training_consent → hard_sample → correction_diff
-    op.drop_index("ix_export_manifest_status", table_name="export_manifest")
-    op.drop_index("ix_export_manifest_group_key", table_name="export_manifest")
     op.drop_table("export_manifest")
 
-    op.drop_index("ix_training_consent_status", table_name="training_consent")
-    op.drop_index("ix_training_consent_sample", table_name="training_consent")
     op.drop_table("training_consent")
 
-    op.drop_index("ix_hard_sample_category", table_name="hard_sample")
-    op.drop_index("ix_hard_sample_household_status", table_name="hard_sample")
-    op.drop_index("ix_hard_sample_source", table_name="hard_sample")
     op.drop_table("hard_sample")
 
-    op.drop_index("ix_correction_diff_operator", table_name="correction_diff")
-    op.drop_index("ix_correction_diff_household_member", table_name="correction_diff")
-    op.drop_index("ix_correction_diff_source_event", table_name="correction_diff")
     op.drop_table("correction_diff")

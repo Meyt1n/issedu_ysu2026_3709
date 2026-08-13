@@ -15,6 +15,7 @@ import uuid
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy.orm import sessionmaker
 
 from app.review import (
     FusionStatus,
@@ -45,6 +46,7 @@ def _make_task(
     member_id: str | None = None,
     fusion_status: FusionStatus = FusionStatus.MATCHED,
     candidates: list | None = None,
+    fusion_context: dict | None = None,
 ) -> ReviewTask:
     return create_review_task(
         session,
@@ -53,6 +55,7 @@ def _make_task(
         member_id=member_id or str(uuid.uuid4()),
         candidates=candidates or [{"drug_name": "阿莫西林", "confidence": 0.92}],
         fusion_status=fusion_status,
+        fusion_context=fusion_context,
     )
 
 
@@ -84,7 +87,11 @@ class TestReviewLifecycle:
         assert member_ids == {"m1", "m2"}
 
     def test_confirm_single_candidate(self, session):
-        task = _make_task(session)
+        fusion_context = {
+            "thresholds": {"matched_score": 0.8},
+            "versions": {"fusion_rule_version": "v1"},
+        }
+        task = _make_task(session, fusion_context=fusion_context)
         session.commit()
 
         _, event = confirm_review(
@@ -99,8 +106,10 @@ class TestReviewLifecycle:
         assert task.confirmed_by == "actor-1"
         assert task.confirmed_at is not None
         assert task.selected_candidate == {"drug_name": "阿莫西林"}
+        assert task.version == 2
         assert event["event_type"] == "medication_confirmed"
         assert event["evidence"]["review_task_id"] == task.id
+        assert event["evidence"]["fusion_context"] == fusion_context
 
     def test_correct_creates_compensating_event(self, session):
         task = _make_task(session)
@@ -152,6 +161,126 @@ class TestIdempotency:
             )
         session.rollback()
 
+    def test_legacy_task_without_fusion_fingerprint_cannot_match_retry(self, session):
+        task = _make_task(session)
+        session.commit()
+        task.fusion_context = None
+        task.fusion_fingerprint = None
+        session.commit()
+
+        with pytest.raises(HTTPException) as exc_info:
+            create_review_task(
+                session,
+                vision_task_id=task.vision_task_id,
+                household_id=task.household_id,
+                member_id=task.member_id,
+                candidates=task.candidates,
+                fusion_status=task.fusion_status,
+            )
+        assert exc_info.value.detail == "REVIEW_TASK_FUSION_CONFLICT"
+
+    def test_confirm_retry_with_same_key_returns_same_transition(self, session):
+        task = _make_task(session)
+        session.commit()
+
+        _, first_event = confirm_review(
+            session,
+            task,
+            actor_id="a1",
+            idempotency_key="key-1",
+            expected_version=1,
+        )
+        session.commit()
+        retried_task, retried_event = confirm_review(
+            session,
+            task,
+            actor_id="a1",
+            idempotency_key="key-1",
+            expected_version=1,
+        )
+
+        assert retried_task.version == 2
+        assert retried_event == first_event
+
+    def test_confirm_retry_with_same_key_rejects_different_payload(self, session):
+        task = _make_task(session)
+        session.commit()
+
+        confirm_review(
+            session,
+            task,
+            actor_id="a1",
+            selected_candidate={"drug_name": "first"},
+            confirmation_note="first note",
+            idempotency_key="confirm-payload-key",
+            expected_version=1,
+        )
+        session.commit()
+
+        with pytest.raises(HTTPException) as exc_info:
+            confirm_review(
+                session,
+                task,
+                actor_id="a1",
+                selected_candidate={"drug_name": "different"},
+                confirmation_note="first note",
+                idempotency_key="confirm-payload-key",
+                expected_version=1,
+            )
+        assert exc_info.value.detail == "IDEMPOTENCY_KEY_CONFLICT"
+
+    def test_correct_retry_with_same_key_rejects_different_payload(self, session):
+        task = _make_task(session)
+        session.commit()
+
+        correct_review(
+            session,
+            task,
+            actor_id="a1",
+            manual_payload={"drug_name": "first"},
+            correction_note="first note",
+            idempotency_key="correct-payload-key",
+            expected_version=1,
+        )
+        session.commit()
+
+        with pytest.raises(HTTPException) as exc_info:
+            correct_review(
+                session,
+                task,
+                actor_id="a1",
+                manual_payload={"drug_name": "different"},
+                correction_note="first note",
+                idempotency_key="correct-payload-key",
+                expected_version=1,
+            )
+        assert exc_info.value.detail == "IDEMPOTENCY_KEY_CONFLICT"
+
+    def test_skip_retry_with_same_key_rejects_different_reason(self, session):
+        task = _make_task(session)
+        session.commit()
+
+        skip_review(
+            session,
+            task,
+            actor_id="a1",
+            reason="first reason",
+            idempotency_key="skip-payload-key",
+            expected_version=1,
+        )
+        session.commit()
+
+        with pytest.raises(HTTPException) as exc_info:
+            skip_review(
+                session,
+                task,
+                actor_id="a1",
+                reason="different reason",
+                idempotency_key="skip-payload-key",
+                expected_version=1,
+            )
+        assert exc_info.value.detail == "IDEMPOTENCY_KEY_CONFLICT"
+
     def test_already_confirmed_conflict(self, session):
         task = _make_task(session)
         confirm_review(session, task, actor_id="a1")
@@ -192,6 +321,7 @@ class TestFusionStatus:
             FusionStatus.MATCHED,
             FusionStatus.CONFLICT,
             FusionStatus.UNKNOWN,
+            FusionStatus.REVIEW,
             FusionStatus.LOW_QUALITY,
         ],
     )
@@ -237,3 +367,39 @@ class TestConcurrentSafety:
         with pytest.raises(HTTPException):  # REVIEW_ALREADY_SKIPPED
             confirm_review(session, task, actor_id="a1")
         session.rollback()
+
+    def test_stale_second_session_cannot_transition_same_version(self, session):
+        task = _make_task(session)
+        session.commit()
+        session_factory = sessionmaker(
+            bind=session.get_bind(),
+            autoflush=False,
+            expire_on_commit=False,
+        )
+        competing_session = session_factory()
+        try:
+            stale_task = get_review_task(competing_session, task.id)
+            assert stale_task is not None
+
+            confirm_review(
+                session,
+                task,
+                actor_id="first",
+                idempotency_key="first-transition",
+                expected_version=1,
+            )
+            session.commit()
+
+            with pytest.raises(HTTPException) as exc_info:
+                correct_review(
+                    competing_session,
+                    stale_task,
+                    actor_id="second",
+                    manual_payload={"drug_name": "stale correction"},
+                    idempotency_key="second-transition",
+                    expected_version=1,
+                )
+            assert exc_info.value.detail == "REVIEW_VERSION_CONFLICT"
+            competing_session.rollback()
+        finally:
+            competing_session.close()

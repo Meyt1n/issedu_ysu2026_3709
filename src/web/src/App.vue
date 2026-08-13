@@ -537,7 +537,11 @@ async function revokeAuthorization(authorization: Authorization): Promise<void> 
     <p v-if="error" class="notice error" role="alert">{{ error }}</p>
     <p v-else class="notice" role="status">{{ message }}</p>
 
-    <VisionQualityPanel :actor-id="actorId.trim()" :member-id="dashboardMemberId || undefined" />
+    <VisionQualityPanel
+      :actor-id="actorId.trim()"
+      :member-id="dashboardMemberId || undefined"
+      :access-purpose="accessPurpose.trim() || undefined"
+    />
 
     <section v-if="households.length > 0" class="household-bar" aria-label="Household selection">
       <label>

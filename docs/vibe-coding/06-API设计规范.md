@@ -71,7 +71,25 @@ HCT-103 事件写入支持最长 128 位 `Idempotency-Key`。家庭、key、操�
 
 事件、最小 outbox 和在线投影在同一事务提交。outbox 不保存健康 payload，只保存事件引用、成员序号、确认状态和 Schema 版本；自动 worker 及手工恢复接口使用 `PENDING/PROCESSING/FAILED/DISPATCHED`、尝试次数、锁和稳定错误码。投影返回 `last_sequence`、`version` 和状态哈希；重放只允许家庭 Owner，checkpoint 哈希或家庭/成员不匹配返回 `409 CHECKPOINT_INVALID`。
 
-### 2.2 P1+ 未来规划接口
+### 2.2 视觉与人工复核 P0 接口
+
+| 方法 | 路径 | 用途 |
+|------|------|------|
+| POST | `/vision-tasks` | 使用安全文件引用和成员 ID 创建视觉任务 |
+| POST | `/vision-tasks/{id}/evidence` | 保存本地适配器签名的 OCR-first 证据 |
+| POST | `/vision-tasks/{id}/fusion` | 融合批准主数据候选并创建唯一待复核任务 |
+| GET | `/vision-tasks/{id}` | 查询任务、版本和证据结果 |
+| GET | `/households/{household_id}/members/{member_id}/review-tasks` | 查询有权限成员的待复核任务 |
+| GET | `/households/{household_id}/review-tasks/{id}` | 查询单个复核任务和版本 |
+| POST | `/households/{household_id}/review-tasks/{id}/confirm` | 确认候选并追加健康事件 |
+| POST | `/households/{household_id}/review-tasks/{id}/correct` | 人工修正并追加健康事件 |
+| POST | `/households/{household_id}/review-tasks/{id}/skip` | 跳过复核且不创建健康事件 |
+
+视觉任务必须绑定真实 `member_id`，服务端由成员反查家庭并校验 `health_events` 数据域、目的和有效期，禁止使用占位家庭。创建、证据提交和取消要求 `WRITE_EVENTS`，查询要求 `READ_EVENTS`，融合因读取已有证据并创建复核任务而同时要求两者；每次请求都重新鉴权，撤权后统一隐藏资源。视觉任务创建的同 key、同完整请求（含文件、成员及全部模型/Schema/代码/数据版本）并发重试只产生并返回一条任务，异载荷返回 `409 IDEMPOTENCY_KEY_CONFLICT`。融合响应增加 `review_task_id` 和 `review_task_version`；同一视觉任务只能有一个复核任务，并持久化覆盖阈值、权重、版本、状态和候选的规范化指纹。完全相同的重试返回原任务，配置或输入变化返回 `409 REVIEW_TASK_FUSION_CONFLICT`。
+
+复核任务读取要求 `READ_EVENTS`；确认、修正和跳过因响应包含完整候选而同时要求 `READ_EVENTS` 与 `WRITE_EVENTS`，并必须携带 `expected_version`。确认和修正应携带最长 128 位 `Idempotency-Key`。服务端以 `status=PENDING_REVIEW AND version=expected_version` 条件更新争抢转换权。只有争抢成功的请求能在同一数据库事务追加一个已确认事件及一个 outbox；并发失败返回 `409 REVIEW_VERSION_CONFLICT` 或终态错误。同 key、同载荷、同操作者重试返回原转换，不再创建事件；更换候选、人工值、备注或跳过原因返回 `409 IDEMPOTENCY_KEY_CONFLICT`。无成员级权限、跨家庭或撤权访问统一返回资源不存在。
+
+### 2.3 P1+ 未来规划接口
 
 | 方法 | 路径 | 用途 |
 |------|------|------|
@@ -100,7 +118,7 @@ QUEUED -> PREPROCESSING -> INFERENCING -> FUSING
 MATCHED/CONFLICT/UNKNOWN/REVIEW -> CONFIRMED | CORRECTED | REJECTED
 ```
 
-只有 `CONFIRMED`/`CORRECTED` 可触发正式状态投影、风险计算和药物计划；`UNCONFIRMED` 可作为待复核事实保存在事件表，但只能进入 pending outbox，不得更新正式状态。状态转换使用乐观锁，重复复核保持幂等。返回值必须包含模型/OCR/匹配器版本、证据帧、字段来源和人工确认状态。`CORRECTED` 必须返回原预测、修正值、修正原因、操作者和训练同意状态。
+只有 `CONFIRMED`/`CORRECTED` 可触发正式状态投影、风险计算和药物计划；融合结果只创建 `PENDING_REVIEW`，不得先写健康事件。状态转换使用数据库条件更新和单调 `version` 乐观锁，重复复核保持幂等。返回值必须包含模型/OCR/匹配器版本、证据帧、字段来源和人工确认状态。`CORRECTED` 必须返回原预测、修正值、修正原因、操作者和训练同意状态。
 
 ## 4. 证据契约
 

@@ -1,7 +1,7 @@
 """HCT-404: model version binding table for release management and rollback.
 
 Revision ID: 0006_hct404_model_version_binding
-Revises: 0005_hct208_hard_sample_consent
+Revises: 0006_expand_alembic_version
 Create Date: 2026-08-12
 """
 from collections.abc import Sequence
@@ -10,12 +10,17 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0006_hct404_model_version_binding"
-down_revision: str | None = "0005_hct208_hard_sample_consent"
+down_revision: str | None = "0006_expand_alembic_version"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    empty_json_default = (
+        sa.text("(JSON_OBJECT())")
+        if op.get_bind().dialect.name == "mysql"
+        else sa.text("'{}'")
+    )
     op.create_table(
         "model_version_binding",
         sa.Column("id", sa.String(36), primary_key=True),
@@ -34,7 +39,12 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("'inactive'"),
         ),
-        sa.Column("safety_thresholds", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
+        sa.Column(
+            "safety_thresholds",
+            sa.JSON(),
+            nullable=False,
+            server_default=empty_json_default,
+        ),
         sa.Column("comparison_report_hash", sa.String(64), nullable=True),
         sa.Column("approved_by", sa.String(120), nullable=True),
         sa.Column("approved_at", sa.DateTime(timezone=True), nullable=True),
@@ -55,6 +65,4 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_model_binding_release_status", table_name="model_version_binding")
-    op.drop_index("ix_model_binding_model_id", table_name="model_version_binding")
     op.drop_table("model_version_binding")

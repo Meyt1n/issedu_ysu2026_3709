@@ -23,6 +23,18 @@ def _encode_demo_image() -> bytes:
 def _create_task(
     client, tmp_path, monkeypatch, *, actor_id: str = "evidence-owner"
 ) -> tuple[str, str]:
+    household = client.post(
+        "/api/v1/households",
+        json={"name": "Evidence household"},
+        headers={"X-Actor-ID": actor_id},
+    )
+    assert household.status_code == 201
+    member = client.post(
+        f"/api/v1/households/{household.json()['id']}/members",
+        json={"display_name": "Evidence member"},
+        headers={"X-Actor-ID": actor_id},
+    )
+    assert member.status_code == 201
     content = _encode_demo_image()
     quality = client.post(
         "/api/v1/vision-quality/check",
@@ -37,7 +49,11 @@ def _create_task(
     monkeypatch.setattr("app.routes.settings.file_root", str(tmp_path))
     response = client.post(
         "/api/v1/vision-tasks",
-        json={"file_id": file_id, "quality_receipt": quality.json()["quality_receipt"]},
+        json={
+            "file_id": file_id,
+            "member_id": member.json()["id"],
+            "quality_receipt": quality.json()["quality_receipt"],
+        },
         headers={"X-Actor-ID": actor_id},
     )
     assert response.status_code == 201, response.text
@@ -302,3 +318,5 @@ def test_fusion_api_returns_versioned_safe_four_state_result(client, tmp_path, m
     assert body["requires_human_confirmation"] is True
     assert body["health_event_allowed"] is False
     assert "fusion_rule_version" in body["versions"]
+    assert body["review_task_id"]
+    assert body["review_task_version"] == 1

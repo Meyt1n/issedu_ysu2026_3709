@@ -266,12 +266,18 @@ def downgrade() -> None:
         )
 
     _drop_immutability_triggers()
-    op.drop_index("uq_checkpoint_member_sequence", table_name="projection_checkpoint")
     op.drop_table("projection_checkpoint")
     with op.batch_alter_table("member_state_projection") as batch_op:
         batch_op.drop_column("state_hash")
         batch_op.drop_column("version")
         batch_op.drop_column("last_sequence")
+    bind = op.get_bind()
+    if bind.dialect.name == "mysql":
+        outbox_indexes = {
+            index["name"] for index in sa.inspect(bind).get_indexes("outbox_message")
+        }
+        if "ix_outbox_event_fk" not in outbox_indexes:
+            op.create_index("ix_outbox_event_fk", "outbox_message", ["event_id"])
     with op.batch_alter_table("outbox_message") as batch_op:
         batch_op.drop_index("ix_outbox_status_available")
         batch_op.drop_index("uq_outbox_event")
@@ -283,11 +289,11 @@ def downgrade() -> None:
         batch_op.drop_column("attempts")
         batch_op.drop_column("status")
     with op.batch_alter_table("health_event") as batch_op:
+        batch_op.drop_constraint("fk_event_supersedes", type_="foreignkey")
         batch_op.drop_index("ix_event_correlation")
         batch_op.drop_index("uq_event_supersedes")
         batch_op.drop_index("uq_event_household_idempotency")
         batch_op.drop_index("uq_event_household_member_sequence")
-        batch_op.drop_constraint("fk_event_supersedes", type_="foreignkey")
         batch_op.drop_column("occurred_at")
         batch_op.drop_column("schema_version")
         batch_op.drop_column("supersedes_event_id")

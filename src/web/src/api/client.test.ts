@@ -168,6 +168,7 @@ describe('ApiClient authorization contract', () => {
 
     await client.createVisionTask({
       file_id: 'stored.png',
+      member_id: 'member-1',
       quality_receipt: 'signed-receipt',
       idempotency_key: 'request-1',
     }, { actorId: 'owner' })
