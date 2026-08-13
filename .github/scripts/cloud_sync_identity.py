@@ -119,7 +119,8 @@ def resolve_identity(pr_login: str, commits: list[dict[str, Any]]) -> dict[str, 
         details = ", ".join(mismatches[:5])
         raise IdentityError(
             f"PR 作者 {normalized_login!r} 与提交账号不一致：{details}。"
-            "一个同步 push 只能归属一个 Token，请拆分 PR 或更正提交身份"
+            "一个同步 push 只能归属一个 Token。请在合并前拆分 PR、改用正确的 PR 作者账号，"
+            "或更正提交身份；不要把其他成员的分支/提交混入本人的 PR"
         )
 
     return {

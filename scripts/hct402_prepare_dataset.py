@@ -243,12 +243,20 @@ def prepare_dataset(source_path: Path, output_dir: Path) -> dict[str, Any]:
         training_files[split] = path.name
 
     blind_inputs = [
-        {"messages": record["messages"][:2]} for record in split_records["blind"]
+        {"sample_id": record["sample_id"], "messages": record["messages"][:2]}
+        for record in split_records["blind"]
     ]
     blind_labels = []
     for record in split_records["blind"]:
         assistant = json.loads(record["messages"][2]["content"])
-        blind_labels.append({"sample_id": record["sample_id"], "label": assistant})
+        blind_labels.append(
+            {
+                "sample_id": record["sample_id"],
+                "scenario_group": record["scenario_group"],
+                "task_category": record["task_category"],
+                "label": assistant,
+            }
+        )
     _write_jsonl(output_dir / "blind" / "inputs.jsonl", blind_inputs)
     _write_jsonl(output_dir / "blind" / "labels.jsonl", blind_labels)
 

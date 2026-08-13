@@ -1,6 +1,6 @@
 # HCT-402：指令数据与 QLoRA 盲测对照
 
-- 状态：进行中（本 PR 仅完成数据准备，不训练或发布模型）
+- 状态：进行中（本 PR 增加离线盲测评估器和合成回放；不训练或发布模型）
 - 需求：FR-08、NFR-05、NFR-06
 - 风险：R3；模型输出涉及证据、权限和医疗安全边界
 - 主责角色：项目负责人（CV/LLM）
@@ -20,6 +20,8 @@
 - 按 `scenario_group` 固定划分训练、验证和盲测，防止同一场景跨集合泄漏；
 - 生成 LLaMA Factory 可消费的训练/验证 JSONL，以及与训练输入分离的盲测输入和标签；
 - 增加许可证、去标识化、路径/密钥、重复 ID 和盲测隔离审计。
+- 增加离线盲测评估器：校验预测集合完整性、结构化格式、状态/路由、引用来源、安全拒答和未授权字段泄露；
+- 用合成回放生成可复现的演示报告，报告明确标记为 `synthetic_fixture_only`。
 
 ## 明确不做
 
@@ -38,22 +40,27 @@ LLM 训练样本的输入是已授权的 OCR token、条码结果、包装候选
 - Given 两条记录属于同一 `scenario_group`；When 执行划分；Then 两条记录只能出现在同一个 split，盲测组不会进入训练或验证。
 - Given blind 记录；When 生成训练输入；Then 输入不包含 assistant 标签，标签单独保存，只供评测阶段显式加载。
 - Given 来源不是合成、未去标识化或训练许可不明；When 执行审计；Then 脚本失败，不生成可训练输出。
+- Given 盲测输入、标签和结构化预测文件；When 执行评估器；Then 预测 ID 必须与标签一一对应，并输出带输入/标签/预测哈希的指标报告。
+- Given 预测引用未出现在输入证据或泄露被授权字段；When 执行评估器；Then 对应引用/安全指标失败，不能被平均分掩盖。
 
 ## 验收条件
 
 - [ ] 数据卡记录来源、许可证、训练同意、去标识化、质量审查、删除传播和禁止用途
 - [ ] 至少覆盖 `MATCHED`、`CONFLICT`、`UNKNOWN`、`REVIEW` 与 `REFUSE` 相关样本
 - [ ] 训练/验证/盲测按场景组隔离，生成结果可由输入哈希和版本复现
-- [ ] 盲测输入与标签分离，训练输出不包含盲测样本或 assistant 目标
-- [ ] 审计拒绝重复 ID、重复场景跨 split、绝对路径、密钥模式、非合成来源和非法输出 Schema
-- [ ] 本 PR 不改变运行时模型，不改变 Ollama 配置，不产生模型权重
+- [x] 盲测输入与标签分离，训练输出不包含盲测样本或 assistant 目标
+- [x] 审计拒绝重复 ID、重复场景跨 split、绝对路径、密钥模式、非合成来源和非法输出 Schema
+- [x] 评估器拒绝预测缺失/重复/多余 ID，并输出格式、状态、路由、引用和安全指标
+- [x] 合成回放报告标记为 `synthetic_fixture_only`，不被解释为模型效果
+- [x] 本 PR 不改变运行时模型，不改变 Ollama 配置，不产生模型权重
 
 ## 验证命令
 
 ```powershell
-uv run ruff check scripts/hct402_prepare_dataset.py tests/data/test_hct402_dataset.py
-uv run pytest tests/data/test_hct402_dataset.py
-python scripts/hct402_prepare_dataset.py --source tests/fixtures/hct402/starter_source.jsonl --output-dir tmp/hct402-prepared
+uv run ruff check scripts/hct402_prepare_dataset.py scripts/hct402_evaluate_blind.py tests/data/test_hct402_dataset.py tests/data/test_hct402_blind_eval.py
+uv run pytest tests/data/test_hct402_dataset.py tests/data/test_hct402_blind_eval.py
+uv run python scripts/hct402_prepare_dataset.py --source tests/fixtures/hct402/starter_source.jsonl --output-dir tmp/hct402-blind-eval-demo/prepared
+uv run python scripts/hct402_evaluate_blind.py --inputs tmp/hct402-blind-eval-demo/prepared/blind/inputs.jsonl --labels tmp/hct402-blind-eval-demo/prepared/blind/labels.jsonl --predictions tests/fixtures/hct402/synthetic-evaluator-replay.jsonl --model-name synthetic-evaluator-replay --model-version fixture-v1 --output tmp/hct402-blind-eval-demo/report.json
 git diff --check
 ```
 
@@ -63,4 +70,4 @@ git diff --check
 
 ## 当前限制
 
-合成起步样本只用于验证数据协议和训练管线，不能证明基础模型或 QLoRA 模型效果。正式训练前仍需补充经许可的指令样本、独立盲测集、人工质量审查、模型卡和安全评估。
+合成起步样本和回放报告只用于验证数据协议、评估器和演示链，不能证明基础模型或 QLoRA 模型效果。正式训练前仍需补充经许可的指令样本、独立盲测集、真实模型预测、人工质量审查、模型卡和安全评估。

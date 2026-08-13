@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion'
 import { BlurIn } from './BlurIn'
-import ambientVisual from '../assets/ambient-health-background.png'
+import ambientVisual from '../assets/homecare-orbit.png'
 
 const cards = [
   {

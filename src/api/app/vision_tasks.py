@@ -18,8 +18,10 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException
+from fastapi import status as http_status
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import VisionTask
@@ -109,7 +111,7 @@ def transition_status(
     current = task.status
     if not _can_transition(current, next_status):
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
+            status_code=http_status.HTTP_409_CONFLICT,
             detail=f"INVALID_TRANSITION {current} → {next_status}",
         )
 
@@ -180,6 +182,54 @@ def transition_status(
 # ── CRUD ───────────────────────────────────────────────────────────────
 
 
+def _assert_matching_create_request(
+    task: VisionTask,
+    *,
+    household_id: str,
+    member_id: str | None,
+    created_by: str,
+    file_id: str,
+    task_type: str,
+    input_digest: str | None,
+    model_threshold: float | None,
+    preprocess_version: str | None,
+    model_version: str | None,
+    schema_version: str | None,
+    code_version: str | None,
+    data_version: str | None,
+) -> None:
+    if (
+        task.household_id != household_id
+        or task.member_id != member_id
+        or task.created_by != created_by
+        or task.file_id != file_id
+        or task.task_type != task_type
+        or task.input_digest != input_digest
+        or task.model_threshold != model_threshold
+        or task.preprocess_version != preprocess_version
+        or task.model_version != model_version
+        or task.schema_version != schema_version
+        or task.code_version != code_version
+        or task.data_version != data_version
+    ):
+        raise HTTPException(
+            status_code=http_status.HTTP_409_CONFLICT,
+            detail="IDEMPOTENCY_KEY_CONFLICT",
+        )
+
+
+def _get_task_by_idempotency_key(
+    session: Session,
+    idempotency_key: str,
+    *,
+    current_read: bool = False,
+) -> VisionTask | None:
+    stmt = select(VisionTask).where(VisionTask.idempotency_key == idempotency_key)
+    if current_read:
+        stmt = stmt.with_for_update().execution_options(populate_existing=True)
+    return session.scalars(stmt).first()
+
+
 def create_vision_task(
     session: Session,
     *,
@@ -198,16 +248,25 @@ def create_vision_task(
     code_version: str | None = None,
     data_version: str | None = None,
 ) -> VisionTask:  # noqa: F821
-    """Create a new vision task.  Idempotent — returns existing task if the
-    idempotency key matches a queued or running task."""
+    """Create a vision task, or return the matching task for an idempotent retry."""
     if idempotency_key is not None:
-        existing = session.scalars(
-            select(VisionTask).where(
-                VisionTask.idempotency_key == idempotency_key,
-                VisionTask.status.in_([VisionTaskStatus.QUEUED, VisionTaskStatus.RUNNING]),
-            )
-        ).first()
+        existing = _get_task_by_idempotency_key(session, idempotency_key)
         if existing is not None:
+            _assert_matching_create_request(
+                existing,
+                household_id=household_id,
+                member_id=member_id,
+                created_by=created_by,
+                file_id=file_id,
+                task_type=task_type,
+                input_digest=input_digest,
+                model_threshold=model_threshold,
+                preprocess_version=preprocess_version,
+                model_version=model_version,
+                schema_version=schema_version,
+                code_version=code_version,
+                data_version=data_version,
+            )
             logger.info("VISION_TASK_DEDUP key=%s existing=%s", idempotency_key, existing.id)
             return existing
 
@@ -227,8 +286,43 @@ def create_vision_task(
         data_version=data_version,
         created_by=created_by,
     )
-    session.add(task)
-    session.flush()
+    if idempotency_key is None:
+        session.add(task)
+        session.flush()
+    else:
+        try:
+            with session.begin_nested():
+                session.add(task)
+                session.flush()
+        except IntegrityError as exc:
+            existing = _get_task_by_idempotency_key(
+                session,
+                idempotency_key,
+                current_read=True,
+            )
+            if existing is None:
+                raise exc
+            _assert_matching_create_request(
+                existing,
+                household_id=household_id,
+                member_id=member_id,
+                created_by=created_by,
+                file_id=file_id,
+                task_type=task_type,
+                input_digest=input_digest,
+                model_threshold=model_threshold,
+                preprocess_version=preprocess_version,
+                model_version=model_version,
+                schema_version=schema_version,
+                code_version=code_version,
+                data_version=data_version,
+            )
+            logger.info(
+                "VISION_TASK_DEDUP_RACE key=%s existing=%s",
+                idempotency_key,
+                existing.id,
+            )
+            return existing
     logger.info("VISION_TASK_CREATED task=%s file=%s type=%s", task.id, file_id, task_type)
     return task
 

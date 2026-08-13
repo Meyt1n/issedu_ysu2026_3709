@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
+from ai.vision.candidate_fusion import CandidateFusionResult
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 PURPOSE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$"
@@ -275,16 +276,19 @@ class CandidateItem(BaseModel):
 
 
 class ReviewTaskConfirm(BaseModel):
+    expected_version: int = Field(ge=1)
     selected_index: int | None = None
     confirmation_note: str | None = None
 
 
 class ReviewTaskCorrect(BaseModel):
+    expected_version: int = Field(ge=1)
     manual_payload: dict[str, Any] = Field(min_length=1)
     correction_note: str | None = None
 
 
 class ReviewTaskSkip(BaseModel):
+    expected_version: int = Field(ge=1)
     reason: str = ""
 
 
@@ -302,8 +306,10 @@ class ReviewTaskRead(BaseModel):
     candidates: list[dict[str, Any]] = Field(default_factory=list)
     selected_candidate: dict[str, Any] | None = None
     manual_payload: dict[str, Any] | None = None
+    fusion_context: dict[str, Any] | None = None
     model_version: str | None = None
     rule_version: str | None = None
+    version: int
     confirmed_by: str | None = None
     confirmed_at: datetime | None = None
     created_at: datetime
@@ -315,7 +321,7 @@ class ReviewTaskRead(BaseModel):
 
 class VisionTaskCreate(BaseModel):
     file_id: str = Field(min_length=1, description="Reference to an uploaded file")
-    member_id: str | None = Field(default=None)
+    member_id: str = Field(min_length=1)
     task_type: str = Field(default="ocr", min_length=1, max_length=40)
     idempotency_key: str | None = Field(default=None, max_length=128)
     model_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -345,6 +351,11 @@ class VisionTaskRead(BaseModel):
     finished_at: datetime | None = None
     created_by: str
     created_at: datetime
+
+
+class VisionFusionRead(CandidateFusionResult):
+    review_task_id: str
+    review_task_version: int = Field(ge=1)
 
 
 class VisionQualityRead(BaseModel):
@@ -429,6 +440,12 @@ class AssistantMessage(BaseModel):
     content: str | None = None
 
 
+class AssistantCitation(BaseModel):
+    document_id: str
+    version: str
+    chunk_id: str
+
+
 class AssistantRequest(BaseModel):
     messages: list[dict[str, Any]] = Field(min_length=1)
     model: str | None = Field(default=None, max_length=64)
@@ -439,6 +456,7 @@ class AssistantRequest(BaseModel):
 class AssistantResponse(BaseModel):
     answer: str
     sources: list[str] = Field(default_factory=list)
+    citations: list[AssistantCitation] = Field(default_factory=list)
     confidence: str = "low"
     escalate: bool = False
     degraded: bool = False
@@ -610,3 +628,18 @@ class ModelVersionBindingRead(BaseModel):
     created_by: str
     created_at: datetime
     updated_at: datetime
+
+
+class ErasureTaskRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    household_id: str
+    member_id: str | None
+    requested_by: str
+    requested_at: datetime
+    completed_at: datetime | None
+    status: str
+    layers: dict[str, Any]
+    scope: dict[str, Any]
+    error_layers: list[str]

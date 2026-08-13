@@ -30,9 +30,52 @@ jobs:
           grep -Fq "开发前必读与 Vibe Coding 工作流" CONTRIBUTING.md
           grep -Fq "开发前必读与 Vibe Coding 工作流" "docs/vibe-coding/00-文档导航.md"
 
+  sync-identity:
+    name: Sync identity preflight
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PR_LOGIN: ${{ github.event.pull_request.user.login }}
+    steps:
+      - name: Checkout identity policy
+        uses: actions/checkout@v4
+
+      - name: Validate PR author and commit identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          commits_file="${RUNNER_TEMP}/pr-${PR_NUMBER}-commits.ndjson"
+          gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/commits?per_page=100" \
+            --header 'Accept: application/vnd.github+json' \
+            --jq '.[]' > "${commits_file}"
+          python .github/scripts/cloud_sync_identity.py \
+            --pr-login "${PR_LOGIN}" \
+            --commits-file "${commits_file}"
+
   backend:
     name: Backend lint, migration and tests
     runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb
+        env:
+          MYSQL_DATABASE: homecare_test
+          MYSQL_USER: homecare
+          MYSQL_PASSWORD: test-password
+          MYSQL_ROOT_PASSWORD: test-root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -uroot -ptest-root"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -58,8 +101,53 @@ jobs:
           DATABASE_URL: sqlite+pysqlite:///./ci.sqlite3
         run: uv run alembic upgrade head
 
+      - name: Test HCT-405 migration on MySQL 8.4
+        # The historical event migration creates immutability triggers, so DDL
+        # must run as the disposable database's migration administrator.
+        env:
+          HCT405_MYSQL_HOST: 127.0.0.1
+          HCT405_MYSQL_PORT: "3306"
+          HCT405_MYSQL_DATABASE: homecare_test
+          HCT405_MYSQL_USER: root
+          HCT405_MYSQL_PASSWORD: test-root
+        run: >-
+          uv run pytest
+          tests/integration/test_hct405_review_migration.py::test_review_wiring_upgrade_and_downgrade_on_mysql
+          -q
+
+      - name: Record HCT-409 API performance
+        run: uv run python scripts/hct409_api_perf.py --output artifacts/hct409-api-perf.json
+
+      - name: Audit Python runtime dependencies
+        run: uv run python scripts/hct409_dependency_audit.py
+
+      - name: Record HCT-405 evidence environment
+        run: uv run python scripts/hct405_evidence_metadata.py
+
       - name: Run backend tests
         run: uv run pytest --cov=src/api/app --cov-report=term-missing
+
+      - name: Record HCT-405 API E2E evidence
+        run: >-
+          uv run pytest
+          tests/e2e/test_hct405_core_flows.py
+          tests/e2e/test_hct405_failure_degradation.py
+          tests/e2e/test_hct405_scenario_manifest.py
+          tests/e2e/test_hct405_vision_review_release.py
+          tests/e2e/test_hct405_deletion_propagation.py
+          --junitxml=artifacts/hct405-api-junit.xml
+
+      - name: Upload HCT-405 API evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hct405-api-evidence
+          path: |
+            artifacts/hct405-environment.json
+            artifacts/hct405-api-junit.xml
+            artifacts/hct409-api-perf.json
+          if-no-files-found: warn
+          retention-days: 14
 
   frontend:
     name: Frontend typecheck and build
@@ -77,11 +165,37 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
+      - name: Audit production npm dependencies
+        run: npm audit --registry=https://registry.npmjs.org --omit=dev --audit-level=high
+
       - name: Typecheck frontend
         run: npm run check:web
 
       - name: Build frontend
         run: npm run build:web
+
+      - name: Run frontend unit tests
+        run: npm run test:web
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run HCT-405 browser E2E
+        env:
+          CI: "true"
+        run: npm run test:e2e:web
+
+      - name: Upload HCT-405 browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hct405-browser-evidence
+          path: |
+            artifacts/hct405-browser-junit.xml
+            test-results/
+            playwright-report/
+          if-no-files-found: warn
+          retention-days: 14
 
   secret-scan:
     name: Secret scan

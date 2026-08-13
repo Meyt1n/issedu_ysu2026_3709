@@ -8,6 +8,7 @@ import {
   canCreateVisionTask,
   formatMetricValue,
   metricLabels,
+  qualityStateLabel,
   queuePassedVisionFile,
   type QualityFlowState,
   validateVisionImage,
@@ -16,6 +17,7 @@ import {
 const props = defineProps<{
   actorId: string
   memberId?: string
+  accessPurpose?: string
 }>()
 
 const emit = defineEmits<{
@@ -33,7 +35,12 @@ let requestGeneration = 0
 const isBusy = computed(() => state.value === 'checking' || state.value === 'queueing')
 const canCheck = computed(() => Boolean(selectedFile.value && props.actorId && !isBusy.value))
 const canQueue = computed(
-  () => canCreateVisionTask(qualityResult.value) && !createdTask.value && !isBusy.value,
+  () => (
+    canCreateVisionTask(qualityResult.value)
+    && Boolean(props.memberId)
+    && !createdTask.value
+    && !isBusy.value
+  ),
 )
 const visibleMetrics = computed(() => {
   const metrics = qualityResult.value?.metrics ?? {}
@@ -150,6 +157,7 @@ async function queueVisionTask(): Promise<void> {
       result,
       actorId,
       memberId,
+      accessPurpose: props.accessPurpose,
       idempotencyKey: globalThis.crypto?.randomUUID?.() ?? `web-${Date.now()}`,
       isCurrent: () => generation === requestGeneration && file === selectedFile.value,
     }, apiClient)
@@ -168,7 +176,7 @@ async function queueVisionTask(): Promise<void> {
 
 onBeforeUnmount(releasePreview)
 
-watch(() => props.actorId, () => {
+watch(() => [props.actorId, props.memberId, props.accessPurpose], () => {
   resetEvidence()
   state.value = selectedFile.value ? 'ready' : 'idle'
 })

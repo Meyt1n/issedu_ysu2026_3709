@@ -89,15 +89,20 @@ jobs:
             exit 1
           fi
 
-          mapfile -t sync_shas < <(
-            git rev-list --first-parent --reverse "${cloud_sha}..${github_sha}"
-          )
+          sync_plan_json="$(python .github/scripts/cloud_sync_plan.py plan \
+            --repo . \
+            --cloud-sha "${cloud_sha}" \
+            --github-sha "${github_sha}")"
+          sync_mode="$(jq -r '.mode' <<< "${sync_plan_json}")"
+          mapfile -t sync_shas < <(jq -r '.shas[]' <<< "${sync_plan_json}")
           if [[ "${#sync_shas[@]}" -eq 0 ]]; then
             echo "::error::没有找到可快进同步的 GitHub master 提交"
             exit 1
           fi
+          echo "同步路径预检通过：${sync_mode}，共 ${#sync_shas[@]} 个快进节点"
 
           declare -a sync_plan=()
+          plan_previous_sha="${cloud_sha}"
           for sync_sha in "${sync_shas[@]}"; do
             pr_meta="$(gh api \
               "repos/${GITHUB_REPOSITORY}/commits/${sync_sha}/pulls" \
@@ -115,9 +120,23 @@ jobs:
               --header 'Accept: application/vnd.github+json' \
               --jq '.[]' > "${commits_file}"
 
-            identity_json="$(python .github/scripts/cloud_sync_identity.py \
+            boundary_json="$(python .github/scripts/cloud_sync_plan.py validate-boundary \
+              --repo . \
+              --previous-sha "${plan_previous_sha}" \
+              --target-sha "${sync_sha}" \
+              --pr-commits-file "${commits_file}")"
+            introduced_count="$(jq -r '.introduced_count' <<< "${boundary_json}")"
+
+            identity_error_file="${RUNNER_TEMP}/sync-cloud-pr-${pr_number}-identity-error.txt"
+            if ! identity_json="$(python .github/scripts/cloud_sync_identity.py \
               --pr-login "${pr_login}" \
-              --commits-file "${commits_file}")"
+              --commits-file "${commits_file}" 2>"${identity_error_file}")"; then
+              identity_error="$(tr '\n' ' ' < "${identity_error_file}")"
+              identity_error="${identity_error#::error::}"
+              echo "::error::PR #${pr_number}（作者 ${pr_login}）身份预检失败：${identity_error}"
+              echo "::error::此次未向内部云端 push。请在合并前拆分 PR、改用正确的 PR 作者账号，或更正提交身份。"
+              exit 1
+            fi
             token_env="$(jq -r '.token_env' <<< "${identity_json}")"
             cloud_username="$(jq -r '.cloud_username' <<< "${identity_json}")"
             username_env="$(jq -r '.cloud_username_env' <<< "${identity_json}")"
@@ -141,14 +160,15 @@ jobs:
             fi
 
             sync_plan+=(
-              "${sync_sha}|${pr_number}|${pr_login}|${token_env}|${cloud_username}|${username_env}|${commit_count}"
+              "${sync_sha}|${pr_number}|${pr_login}|${token_env}|${cloud_username}|${username_env}|${commit_count}|${introduced_count}"
             )
-            echo "预检通过：PR #${pr_number}，GitHub 作者 ${pr_login}，提交 ${commit_count} 个，Token ${token_env}"
+            echo "预检通过：PR #${pr_number}，GitHub 作者 ${pr_login}，PR 提交 ${commit_count} 个，本次新增可达提交 ${introduced_count} 个，Token ${token_env}"
+            plan_previous_sha="${sync_sha}"
           done
 
           for plan_row in "${sync_plan[@]}"; do
             IFS='|' read -r \
-              sync_sha pr_number pr_login token_env cloud_username username_env commit_count \
+              sync_sha pr_number pr_login token_env cloud_username username_env commit_count introduced_count \
               <<< "${plan_row}"
 
             export CLOUD_SELECTED_PASSWORD="$(printenv "${token_env}")"
@@ -158,7 +178,7 @@ jobs:
               export CLOUD_SELECTED_USERNAME="${cloud_username}"
             fi
 
-            echo "同步 PR #${pr_number}：${pr_login}，${commit_count} 个提交，目标 ${sync_sha}"
+            echo "同步 PR #${pr_number}：${pr_login}，新增可达提交 ${introduced_count} 个，目标 ${sync_sha}"
             git push original-cloud "${sync_sha}:refs/heads/master"
 
             verified_cloud_sha="$(git ls-remote original-cloud refs/heads/master | awk '{print $1}')"

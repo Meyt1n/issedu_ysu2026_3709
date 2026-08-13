@@ -1,4 +1,4 @@
-import { useState } from 'react'
+﻿import { useState } from 'react'
 import { BellRing, ChevronRight, CircleHelp, ContactRound, Database, Fingerprint, HeartPulse, Laptop, LockKeyhole, Network, Plus, ShieldCheck, Smartphone, UsersRound } from 'lucide-react'
 import { PageFrame } from './template-pages.jsx'
 
@@ -17,3 +17,4 @@ export function EmergencyContactsPage() {
   const [primary, setPrimary] = useState('林建国')
   return <PageFrame title="紧急联系人设置"><div className="settings-intro contacts-intro"><a href="#系统设置">← 返回系统设置</a><p className="eyebrow">家庭安全</p><h1>紧急联系人设置</h1><p>当系统检测到需要立即关注的健康风险时，会按照下列顺序通知联系人。</p></div><div className="contacts-layout"><section className="contact-primary"><div className="contact-primary-top"><div className="contact-avatar">林</div><div><p>首要联系人</p><h2>{primary}</h2><span>父亲 · 已验证手机号</span></div><button onClick={() => setPrimary(primary === '林建国' ? '王小明' : '林建国')}>更换</button></div><div className="contact-details"><div><span>联系电话</span><strong>138 0013 8849</strong></div><div><span>通知方式</span><strong>电话、短信与应用通知</strong></div><div><span>覆盖范围</span><strong>高风险健康事件</strong></div></div></section><section className="contact-list-panel"><div className="section-heading"><h3><UsersRound size={20} /> 通知顺序</h3><button className="add-contact"><Plus size={16} /> 添加联系人</button></div><article className="contact-row"><b>1</b><div className="contact-avatar small">林</div><div><strong>林建国</strong><small>父亲 · 电话、短信、应用通知</small></div><span>首要</span><ChevronRight size={19} /></article><article className="contact-row"><b>2</b><div className="contact-avatar small lilac">王</div><div><strong>王小明</strong><small>家庭医生 · 应用通知</small></div><span>备选</span><ChevronRight size={19} /></article><article className="contact-row"><b>3</b><div className="contact-avatar small rose">陈</div><div><strong>陈晓雨</strong><small>女儿 · 短信、应用通知</small></div><span>备选</span><ChevronRight size={19} /></article></section><section className="contact-policy"><ShieldCheck size={25} /><div><h3>本地联系策略</h3><p>联系人资料不会上传到云端。紧急通知由家庭设备在本地加密触发与发送。</p></div></section></div></PageFrame>
 }
+

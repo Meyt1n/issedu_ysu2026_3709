@@ -36,6 +36,21 @@ export function canCreateVisionTask(result: VisionQualityResponse | null): boole
   )
 }
 
+export const qualityStateLabels: Record<QualityFlowState, string> = {
+  idle: '待选择图片',
+  ready: '待检查',
+  checking: '检查中',
+  retake: '需重拍',
+  passed: '质量通过',
+  queueing: '创建任务中',
+  queued: '任务已创建',
+  error: '出现错误',
+}
+
+export function qualityStateLabel(state: QualityFlowState): string {
+  return qualityStateLabels[state] ?? state
+}
+
 export const metricLabels: Record<string, string> = {
   blur_variance: '清晰度',
   mean_luminance: '平均亮度',
@@ -59,6 +74,7 @@ interface QueueVisionFileInput {
   result: VisionQualityResponse
   actorId: string
   memberId?: string
+  accessPurpose?: string
   idempotencyKey: string
   isCurrent: () => boolean
 }
@@ -70,8 +86,12 @@ export async function queuePassedVisionFile(
   if (!canCreateVisionTask(input.result) || !input.result.quality_receipt) {
     throw new Error('QUALITY_GATE_REQUIRED')
   }
+  if (!input.memberId) {
+    throw new Error('MEMBER_REQUIRED')
+  }
 
-  const requestOptions = { actorId: input.actorId }
+  const requestOptions: RequestOptions = { actorId: input.actorId }
+  if (input.accessPurpose) requestOptions.accessPurpose = input.accessPurpose
   const uploaded = await api.uploadFile(input.file, requestOptions)
   const cleanup = () => api
     .deleteUploadedFile(uploaded.storage_key, requestOptions)

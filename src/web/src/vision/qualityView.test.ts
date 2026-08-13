@@ -4,6 +4,8 @@ import type { VisionQualityResponse } from '../api/types'
 import {
   canCreateVisionTask,
   formatMetricValue,
+  qualityStateLabel,
+  qualityStateLabels,
   queuePassedVisionFile,
   validateVisionImage,
 } from './qualityView'
@@ -48,6 +50,16 @@ describe('vision quality view rules', () => {
     expect(formatMetricValue('blur_variance', 123.456)).toBe('123.5')
   })
 
+  it('maps every flow state to a human-readable status label', () => {
+    const states = ['idle', 'ready', 'checking', 'retake', 'passed', 'queueing', 'queued', 'error'] as const
+    for (const state of states) {
+      const label = qualityStateLabel(state)
+      expect(label).toBe(qualityStateLabels[state])
+      expect(label).not.toBe(state)
+      expect(label.length).toBeGreaterThan(0)
+    }
+  })
+
   it('does not upload or queue a RETAKE result', async () => {
     const api = queueApi()
 
@@ -58,6 +70,21 @@ describe('vision quality view rules', () => {
       idempotencyKey: 'request-1',
       isCurrent: () => true,
     }, api)).rejects.toThrow('QUALITY_GATE_REQUIRED')
+
+    expect(api.uploadFile).not.toHaveBeenCalled()
+    expect(api.createVisionTask).not.toHaveBeenCalled()
+  })
+
+  it('does not upload a passed result without a selected member', async () => {
+    const api = queueApi()
+
+    await expect(queuePassedVisionFile({
+      file: new File(['image'], 'box.png', { type: 'image/png' }),
+      result: qualityResult(),
+      actorId: 'owner-a',
+      idempotencyKey: 'request-without-member',
+      isCurrent: () => true,
+    }, api)).rejects.toThrow('MEMBER_REQUIRED')
 
     expect(api.uploadFile).not.toHaveBeenCalled()
     expect(api.createVisionTask).not.toHaveBeenCalled()
@@ -76,6 +103,7 @@ describe('vision quality view rules', () => {
       result: qualityResult(),
       actorId: 'owner-before-switch',
       memberId: 'member-before-switch',
+      accessPurpose: 'family-care',
       idempotencyKey: 'request-2',
       isCurrent: () => current,
     }, api)
@@ -84,7 +112,7 @@ describe('vision quality view rules', () => {
     expect(api.createVisionTask).not.toHaveBeenCalled()
     expect(api.deleteUploadedFile).toHaveBeenCalledWith(
       'stored.png',
-      { actorId: 'owner-before-switch' },
+      { actorId: 'owner-before-switch', accessPurpose: 'family-care' },
     )
   })
 
@@ -94,6 +122,7 @@ describe('vision quality view rules', () => {
       file: new File(['image'], 'box.png', { type: 'image/png' }),
       result: qualityResult(),
       actorId: 'owner-a',
+      memberId: 'member-a',
       idempotencyKey: 'request-3',
       isCurrent: () => true,
     }

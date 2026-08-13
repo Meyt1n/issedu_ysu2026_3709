@@ -101,13 +101,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_table("member_state_projection")
     op.drop_table("outbox_message")
-    op.drop_index("ix_event_household_member_time", table_name="health_event")
     op.drop_table("health_event")
-    op.drop_index("ix_auth_grantee_actor_id", table_name="care_authorization")
-    op.drop_index("ix_auth_household_member", table_name="care_authorization")
     op.drop_table("care_authorization")
-    op.drop_index("ix_member_actor_id", table_name="member")
-    op.drop_index("ix_member_household_actor", table_name="member")
     op.drop_table("member")
-    op.drop_index("ix_household_created_by", table_name="household")
     op.drop_table("household")

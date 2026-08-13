@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import NoReturn
 
 from ai.vision.candidate_fusion import (
-    CandidateFusionResult,
     FusionRequest,
     fuse_evidence,
 )
@@ -28,6 +27,7 @@ from fastapi import (
     Form,
     Header,
     HTTPException,
+    Query,
     Request,
     UploadFile,
     status,
@@ -45,6 +45,11 @@ from app.auth import (
 )
 from app.config import get_settings
 from app.db import get_session
+from app.erasure import (
+    ErasureTask,
+    find_erasure_task,
+    request_household_erasure,
+)
 from app.event_service import (
     CheckpointInvalidError,
     EventAlreadySupersededError,
@@ -75,6 +80,7 @@ from app.models import (
     OutboxMessage,
     VisionTask,
 )
+from app.review import FusionStatus as ReviewFusionStatus
 from app.review import (
     FusionStatus as ReviewFusionStatus,
 )
@@ -101,6 +107,7 @@ from app.schemas import (
     CapabilityResponse,
     CorrectionDiffCreate,
     CorrectionDiffRead,
+    ErasureTaskRead,
     ExportManifestCreate,
     ExportManifestInvalidate,
     ExportManifestRead,
@@ -140,6 +147,7 @@ from app.schemas import (
     TrainingConsentCreate,
     TrainingConsentRead,
     TrainingConsentRevoke,
+    VisionFusionRead,
     VisionQualityRead,
     VisionTaskCreate,
     VisionTaskRead,
@@ -172,6 +180,16 @@ settings = get_settings()
 
 def _raise_resource_not_found() -> NoReturn:
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RESOURCE_NOT_FOUND")
+
+
+def _is_erased(household: Household | None, member: Member | None = None) -> bool:
+    if household is None or household.deleted_at is not None:
+        return True
+    if member is not None and (
+        member.deleted_at is not None or member.household_id != household.id
+    ):
+        return True
+    return False
 
 
 def _future_time(value: datetime) -> datetime:
@@ -276,7 +294,10 @@ def list_households(
     session: Session = Depends(get_session),
 ) -> list[Household]:
     owned = session.scalars(
-        select(Household).where(Household.created_by == actor_id)
+        select(Household).where(
+            Household.created_by == actor_id,
+            Household.deleted_at.is_(None),
+        )
     ).all()
     authorized_ids = {
         a.household_id
@@ -284,7 +305,10 @@ def list_households(
     }
     authorized = (
         list(session.scalars(
-            select(Household).where(Household.id.in_(authorized_ids))
+            select(Household).where(
+                Household.id.in_(authorized_ids),
+                Household.deleted_at.is_(None),
+            )
         ).all())
         if authorized_ids
         else []
@@ -306,15 +330,21 @@ def list_members(
     session: Session = Depends(get_session),
 ) -> list[Member]:
     household = session.get(Household, household_id)
-    if household is None:
+    if _is_erased(household):
         _raise_resource_not_found()
     if household.created_by == actor_id:
-        query = select(Member).where(Member.household_id == household_id)
+        query = select(Member).where(
+            Member.household_id == household_id,
+            Member.deleted_at.is_(None),
+        )
         return list(session.scalars(query).all())
 
     members = list(
         session.scalars(
-            select(Member).where(Member.household_id == household_id)
+            select(Member).where(
+                Member.household_id == household_id,
+                Member.deleted_at.is_(None),
+            )
         ).all()
     )
     authorized_members = [
@@ -372,6 +402,53 @@ def create_member(
     return member
 
 
+@router.delete(
+    "/households/{household_id}",
+    response_model=ErasureTaskRead,
+)
+def erase_household(
+    household_id: str,
+    member_id: str | None = None,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> ErasureTask:
+    household = require_household_owner(
+        session,
+        household_id,
+        actor_id,
+        allow_deleted=True,
+    )
+    try:
+        task = request_household_erasure(
+            session,
+            household,
+            actor_id=actor_id,
+            member_id=member_id,
+        )
+    except ValueError as exc:
+        if str(exc) == "RESOURCE_NOT_FOUND":
+            _raise_resource_not_found()
+        raise
+    session.commit()
+    session.refresh(task)
+    return task
+
+
+@router.get(
+    "/erasure-tasks/{task_id}",
+    response_model=ErasureTaskRead,
+)
+def read_erasure_task(
+    task_id: str,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> ErasureTask:
+    task = find_erasure_task(session, task_id)
+    if task is None or task.requested_by != actor_id:
+        _raise_resource_not_found()
+    return task
+
+
 @router.post(
     "/households/{household_id}/authorizations",
     response_model=AuthorizationRead,
@@ -384,9 +461,7 @@ def create_authorization(
     session: Session = Depends(get_session),
 ) -> CareAuthorization:
     household = require_household_owner(session, household_id, actor_id)
-    member = session.get(Member, payload.member_id)
-    if member is None or member.household_id != household.id:
-        _raise_resource_not_found()
+    member = _require_household_member(session, household_id, payload.member_id)
     valid_until = _future_time(payload.valid_until)
     authorization = CareAuthorization(
         household_id=household.id,
@@ -600,10 +675,10 @@ def append_health_event(
     session: Session = Depends(get_session),
 ) -> HealthEvent:
     household = session.get(Household, household_id)
-    if household is None:
+    if _is_erased(household):
         _raise_resource_not_found()
     member = session.get(Member, payload.member_id)
-    if member is None or member.household_id != household.id:
+    if _is_erased(household, member):
         _raise_resource_not_found()
     if not has_authorized_action(
         session,
@@ -754,9 +829,14 @@ def list_health_events(
     session: Session = Depends(get_session),
 ) -> list[HealthEvent]:
     household = session.get(Household, household_id)
-    if household is None:
+    if _is_erased(household):
         _raise_resource_not_found()
-    members = session.scalars(select(Member).where(Member.household_id == household.id)).all()
+    members = session.scalars(
+        select(Member).where(
+            Member.household_id == household.id,
+            Member.deleted_at.is_(None),
+        )
+    ).all()
     allowed_member_ids = {
         member.id
         for member in members
@@ -772,12 +852,15 @@ def list_health_events(
     }
     if member_id is not None and member_id not in allowed_member_ids:
         _raise_resource_not_found()
-    if member_id is None and household.created_by != actor_id and not allowed_member_ids:
+    if not allowed_member_ids:
+        if household.created_by == actor_id:
+            return []
         _raise_resource_not_found()
-    query = select(HealthEvent).where(HealthEvent.household_id == household.id)
-    if household.created_by != actor_id:
-        query = query.where(HealthEvent.member_id.in_(allowed_member_ids))
-    elif member_id is not None:
+    query = select(HealthEvent).where(
+        HealthEvent.household_id == household.id,
+        HealthEvent.member_id.in_(allowed_member_ids),
+    )
+    if member_id is not None:
         query = query.where(HealthEvent.member_id == member_id)
     return list(session.scalars(query.order_by(HealthEvent.sequence_no)).all())
 
@@ -795,7 +878,7 @@ def read_member_state(
 ) -> MemberStateProjection:
     household = session.get(Household, household_id)
     member = session.get(Member, member_id)
-    if household is None or member is None or member.household_id != household_id:
+    if _is_erased(household, member):
         _raise_resource_not_found()
     if not has_authorized_action(
         session,
@@ -819,7 +902,7 @@ def _require_household_member(
     member_id: str,
 ) -> Member:
     member = session.get(Member, member_id)
-    if member is None or member.household_id != household_id:
+    if member is None or member.household_id != household_id or member.deleted_at is not None:
         _raise_resource_not_found()
     return member
 
@@ -1033,7 +1116,7 @@ def member_timeline(
 ) -> list[HealthEventRead]:
     household = session.get(Household, household_id)
     member = session.get(Member, member_id)
-    if household is None or member is None or member.household_id != household_id:
+    if _is_erased(household, member):
         _raise_resource_not_found()
     if not has_authorized_action(
         session, household, member_id, actor_id, "READ_EVENTS", "health_events", access_purpose,
@@ -1056,7 +1139,7 @@ def rebuild_member_projection(
     session: Session = Depends(get_session),
 ) -> dict:
     household = session.get(Household, household_id)
-    if household is None or household.created_by != actor_id:
+    if _is_erased(household) or household.created_by != actor_id:
         _raise_resource_not_found()
     from app.projection import rebuild_projection
 
@@ -1075,7 +1158,8 @@ def run_rules_endpoint(
     session: Session = Depends(get_session),
 ) -> list[dict]:
     household = session.get(Household, household_id)
-    if household is None:
+    member = session.get(Member, member_id)
+    if _is_erased(household, member):
         _raise_resource_not_found()
     from app.projection import build_relationship_graph, get_timeline
     from app.rules import run_rules
@@ -1136,7 +1220,7 @@ def confirm_plan_endpoint(
 ) -> HealthEventRead:
     household = session.get(Household, household_id)
     member = session.get(Member, member_id)
-    if household is None or member is None or member.household_id != household_id:
+    if _is_erased(household, member):
         _raise_resource_not_found()
     if not has_authorized_action(
         session, household, member_id, actor_id, "WRITE_EVENTS", "health_events", access_purpose,
@@ -1171,7 +1255,7 @@ def defer_plan_endpoint(
 ) -> HealthEventRead:
     household = session.get(Household, household_id)
     member = session.get(Member, member_id)
-    if household is None or member is None or member.household_id != household_id:
+    if _is_erased(household, member):
         _raise_resource_not_found()
     if not has_authorized_action(
         session, household, member_id, actor_id, "WRITE_EVENTS", "health_events", access_purpose,
@@ -1210,7 +1294,7 @@ def skip_plan_endpoint(
 ) -> HealthEventRead:
     household = session.get(Household, household_id)
     member = session.get(Member, member_id)
-    if household is None or member is None or member.household_id != household_id:
+    if _is_erased(household, member):
         _raise_resource_not_found()
     if not has_authorized_action(
         session, household, member_id, actor_id, "WRITE_EVENTS", "health_events", access_purpose,
@@ -1292,7 +1376,7 @@ def get_knowledge_document(
 ) -> KnowledgeDocumentRead:
     from app.knowledge import _check_permission
     doc = session.get(KnowledgeDocument, doc_id)
-    if doc is None:
+    if doc is None or doc.status != "active":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="DOCUMENT_NOT_FOUND")
     if not _check_permission(doc.permission_scope, actor_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="DOCUMENT_NOT_FOUND")
@@ -1360,7 +1444,7 @@ def delete_knowledge_document(
 ) -> dict:
     from app.knowledge import delete_document
     doc = session.get(KnowledgeDocument, doc_id)
-    if doc is None:
+    if doc is None or doc.status != "active" or doc.created_by != actor_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="DOCUMENT_NOT_FOUND")
     if not delete_document(session, doc_id, deleted_by=actor_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="DOCUMENT_NOT_FOUND")
@@ -1505,6 +1589,7 @@ def assistant_chat(
         max_tokens=payload.max_tokens,
         temperature=payload.temperature,
     )
+    session.commit()
     return AssistantResponse(**result)
 
 
@@ -1611,6 +1696,47 @@ async def check_vision_quality(
     return result
 
 
+def _require_vision_task_access(
+    session: Session,
+    task_id: str,
+    *,
+    actor_id: str,
+    action: str,
+    access_purpose: str | None,
+) -> VisionTask:
+    task = get_vision_task(session, task_id)
+    member = (
+        session.get(Member, task.member_id)
+        if task is not None and task.member_id is not None
+        else None
+    )
+    household = (
+        session.get(Household, task.household_id)
+        if task is not None
+        else None
+    )
+    if (
+        task is None
+        or member is None
+        or household is None
+        or _is_erased(household, member)
+        or not has_authorized_action(
+            session,
+            household,
+            member.id,
+            actor_id,
+            action,
+            "health_events",
+            access_purpose,
+        )
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="VISION_TASK_NOT_FOUND",
+        )
+    return task
+
+
 @router.post(
     "/vision-tasks",
     response_model=VisionTaskRead,
@@ -1619,6 +1745,7 @@ async def check_vision_quality(
 def create_vision_task_endpoint(
     payload: VisionTaskCreate,
     actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
     session: Session = Depends(get_session),
 ) -> VisionTask:
     """Create a new vision processing task.
@@ -1627,7 +1754,27 @@ def create_vision_task_endpoint(
     /files/upload).  The task is queued asynchronously and a worker picks it
     up later.  Use the idempotency key to avoid duplicate tasks on retry.
     """
-    settings = get_settings()
+    member = session.get(Member, payload.member_id)
+    household = (
+        session.get(Household, member.household_id)
+        if member is not None
+        else None
+    )
+    if (
+        member is None
+        or household is None
+        or not has_authorized_action(
+            session,
+            household,
+            member.id,
+            actor_id,
+            "WRITE_EVENTS",
+            "health_events",
+            access_purpose,
+        )
+    ):
+        _raise_resource_not_found()
+
     file_root = Path(settings.file_root).resolve()
     target = (file_root / payload.file_id).resolve()
 
@@ -1666,7 +1813,7 @@ def create_vision_task_endpoint(
 
     task = create_vision_task(
         session,
-        household_id="system",
+        household_id=household.id,
         created_by=actor_id,
         file_id=payload.file_id,
         member_id=payload.member_id,
@@ -1812,6 +1959,7 @@ def submit_vision_evidence_endpoint(
     task_id: str,
     payload: EvidencePipelineRequest,
     actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
     session: Session = Depends(get_session),
 ) -> EvidencePipelineResult:
     """Store OCR-first adapter evidence and produce a safe fusion input.
@@ -1820,9 +1968,13 @@ def submit_vision_evidence_endpoint(
     never confirms an identity or creates a health event; HCT-206 performs
     candidate fusion and HCT-207 performs human confirmation.
     """
-    task = get_vision_task(session, task_id)
-    if task is None or task.created_by != actor_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="VISION_TASK_NOT_FOUND")
+    task = _require_vision_task_access(
+        session,
+        task_id,
+        actor_id=actor_id,
+        action="WRITE_EVENTS",
+        access_purpose=access_purpose,
+    )
     if task.status in {
         VisionTaskStatus.SUCCEEDED,
         VisionTaskStatus.FAILED,
@@ -1898,23 +2050,35 @@ def submit_vision_evidence_endpoint(
 
 @router.post(
     "/vision-tasks/{task_id}/fusion",
-    response_model=CandidateFusionResult,
+    response_model=VisionFusionRead,
 )
 def fuse_vision_task_endpoint(
     task_id: str,
     payload: FusionRequest,
     actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
     session: Session = Depends(get_session),
-) -> CandidateFusionResult:
-    """Rank existing local candidates without confirming or writing a fact.
+) -> VisionFusionRead:
+    """Rank local candidates and persist the single pending review task.
 
-    Fusion is deliberately a separate, repeatable read of the stored
-    OCR-first evidence.  It may only consume a completed task result and an
-    approved local master-data snapshot; no health event is created here.
+    Fusion consumes completed OCR-first evidence and an approved local
+    master-data snapshot.  It never confirms or writes a health fact; only a
+    human review task is created, idempotently, for the member-scoped task.
     """
-    task = get_vision_task(session, task_id)
-    if task is None or task.created_by != actor_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="VISION_TASK_NOT_FOUND")
+    task = _require_vision_task_access(
+        session,
+        task_id,
+        actor_id=actor_id,
+        action="WRITE_EVENTS",
+        access_purpose=access_purpose,
+    )
+    task = _require_vision_task_access(
+        session,
+        task_id,
+        actor_id=actor_id,
+        action="READ_EVENTS",
+        access_purpose=access_purpose,
+    )
     if task.status != VisionTaskStatus.SUCCEEDED or not task.result:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="VISION_EVIDENCE_REQUIRED")
     try:
@@ -1931,14 +2095,62 @@ def fuse_vision_task_endpoint(
         approved_versions=settings.master_data_approved_version_set,
     )
     result = fuse_evidence(evidence, master_data, thresholds=payload.thresholds())
+    if task.member_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="VISION_MEMBER_REQUIRED",
+        )
+    records = {record.record_id: record for record in master_data.records}
+    review_candidates: list[dict] = []
+    for candidate in result.candidates:
+        review_candidate = candidate.model_dump(mode="json")
+        record = records.get(candidate.candidate_id)
+        if record is not None:
+            review_candidate.update(
+                {
+                    "drug_name": (
+                        record.name_aliases[0]
+                        if record.name_aliases
+                        else record.record_id
+                    ),
+                    "confidence": candidate.score,
+                    "product_barcode": record.product_barcode,
+                    "specification": record.specification,
+                    "manufacturer": record.manufacturer,
+                    "packaging_type": record.packaging_type,
+                }
+            )
+        review_candidates.append(review_candidate)
+    review_task = create_review_task(
+        session,
+        vision_task_id=task.id,
+        household_id=task.household_id,
+        member_id=task.member_id,
+        candidates=review_candidates,
+        fusion_status=ReviewFusionStatus(result.status.value),
+        model_version=task.model_version,
+        rule_version=result.versions.get("fusion_rule_version"),
+        fusion_context={
+            "thresholds": result.thresholds.model_dump(mode="json"),
+            "weights": result.weights.model_dump(mode="json"),
+            "versions": result.versions,
+        },
+    )
+    session.commit()
+    session.refresh(review_task)
     logger.info(
-        "VISION_FUSION_EVALUATED task=%s actor=%s status=%s candidates=%d",
+        "VISION_FUSION_REVIEW_READY task=%s review=%s actor=%s status=%s candidates=%d",
         task.id,
+        review_task.id,
         actor_id,
         result.status,
         len(result.candidates),
     )
-    return result
+    return VisionFusionRead(
+        **result.model_dump(mode="json"),
+        review_task_id=review_task.id,
+        review_task_version=review_task.version,
+    )
 
 
 @router.get("/vision-tasks", response_model=list[VisionTaskRead])
@@ -1975,46 +2187,85 @@ def list_my_vision_tasks_endpoint(
 def get_vision_task_endpoint(
     task_id: str,
     actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
     session: Session = Depends(get_session),
 ) -> VisionTask:
-    task = get_vision_task(session, task_id)
-    if task is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="VISION_TASK_NOT_FOUND")
-    return task
+    return _require_vision_task_access(
+        session,
+        task_id,
+        actor_id=actor_id,
+        action="READ_EVENTS",
+        access_purpose=access_purpose,
+    )
 
 
 @router.get("/households/{household_id}/vision-tasks", response_model=list[VisionTaskRead])
 def list_vision_tasks_endpoint(
     household_id: str,
     member_id: str | None = None,
-    status: str | None = None,
+    task_status: str | None = Query(default=None, alias="status"),
     actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
     session: Session = Depends(get_session),
 ) -> list[VisionTask]:
-    # Verify actor has read access to the household
     household = session.get(Household, household_id)
-    if household is None or household.created_by != actor_id:
+    if _is_erased(household):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="HOUSEHOLD_NOT_FOUND")
+    if member_id is None:
+        if household.created_by != actor_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="HOUSEHOLD_NOT_FOUND",
+            )
+    else:
+        member = session.get(Member, member_id)
+        if (
+            member is None
+            or member.household_id != household.id
+            or not has_authorized_action(
+                session,
+                household,
+                member.id,
+                actor_id,
+                "READ_EVENTS",
+                "health_events",
+                access_purpose,
+            )
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="HOUSEHOLD_NOT_FOUND",
+            )
 
-    if status is not None and status not in {s.value for s in VisionTaskStatus}:
+    if task_status is not None and task_status not in {s.value for s in VisionTaskStatus}:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"INVALID_STATUS: {status}",
+            detail=f"INVALID_STATUS: {task_status}",
         )
 
-    return list_vision_tasks(session, household_id, member_id=member_id, status=status)
+    return list_vision_tasks(
+        session,
+        household_id,
+        member_id=member_id,
+        status=task_status,
+    )
 
 
 @router.post("/vision-tasks/{task_id}/cancel", response_model=VisionTaskRead)
 def cancel_vision_task_endpoint(
     task_id: str,
     actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
     session: Session = Depends(get_session),
 ) -> VisionTask:
     """Cancel a queued or running vision task."""
-    task = get_vision_task(session, task_id)
-    if task is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="VISION_TASK_NOT_FOUND")
+    task = _require_vision_task_access(
+        session,
+        task_id,
+        actor_id=actor_id,
+        action="WRITE_EVENTS",
+        access_purpose=access_purpose,
+    )
 
     if task.status in (VisionTaskStatus.SUCCEEDED, VisionTaskStatus.FAILED,
                        VisionTaskStatus.TIMEOUT, VisionTaskStatus.CANCELLED):
@@ -2034,6 +2285,36 @@ def cancel_vision_task_endpoint(
 
 
 # ── HCT-207: Manual review API ────────────────────────────────────────
+
+
+def _require_review_access(
+    session: Session,
+    task: ReviewTask,
+    *,
+    household_id: str,
+    actor_id: str,
+    action: str,
+    access_purpose: str | None,
+) -> Household:
+    household = session.get(Household, household_id)
+    member = session.get(Member, task.member_id)
+    if (
+        household is None
+        or member is None
+        or _is_erased(household, member)
+        or task.household_id != household.id
+        or not has_authorized_action(
+            session,
+            household,
+            member.id,
+            actor_id,
+            action,
+            "health_events",
+            access_purpose,
+        )
+    ):
+        _raise_resource_not_found()
+    return household
 
 
 def _commit_review_event(
@@ -2089,7 +2370,7 @@ def list_review_tasks(
 ) -> list[ReviewTask]:
     household = session.get(Household, household_id)
     member = session.get(Member, member_id)
-    if household is None or member is None or member.household_id != household_id:
+    if _is_erased(household, member):
         _raise_resource_not_found()
     if not has_authorized_action(
         session,
@@ -2113,17 +2394,20 @@ def get_review_task_endpoint(
     household_id: str,
     task_id: str,
     actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
     session: Session = Depends(get_session),
 ) -> ReviewTask:
     task = get_review_task(session, task_id)
     if task is None or task.household_id != household_id:
         _raise_resource_not_found()
-    if task.household_id != household_id:
-        _raise_resource_not_found()
-    # Verify actor has read access to this household
-    household = session.get(Household, household_id)
-    if household is None or household.created_by != actor_id:
-        _raise_resource_not_found()
+    _require_review_access(
+        session,
+        task,
+        household_id=household_id,
+        actor_id=actor_id,
+        action="READ_EVENTS",
+        access_purpose=access_purpose,
+    )
     return task
 
 
@@ -2138,6 +2422,7 @@ def confirm_review_endpoint(
     payload: ReviewTaskConfirm,
     request: Request,
     actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     session: Session = Depends(get_session),
 ) -> ReviewTask:
@@ -2145,9 +2430,22 @@ def confirm_review_endpoint(
     if task is None or task.household_id != household_id:
         _raise_resource_not_found()
 
-    household = session.get(Household, household_id)
-    if household is None or household.created_by != actor_id:
-        _raise_resource_not_found()
+    household = _require_review_access(
+        session,
+        task,
+        household_id=household_id,
+        actor_id=actor_id,
+        action="WRITE_EVENTS",
+        access_purpose=access_purpose,
+    )
+    _require_review_access(
+        session,
+        task,
+        household_id=household_id,
+        actor_id=actor_id,
+        action="READ_EVENTS",
+        access_purpose=access_purpose,
+    )
 
     candidates = task.candidates or []
     selected = candidates[0] if payload.selected_index is None and len(candidates) == 1 else None
@@ -2171,6 +2469,7 @@ def confirm_review_endpoint(
         selected_candidate=selected,
         confirmation_note=payload.confirmation_note,
         idempotency_key=idempotency_key,
+        expected_version=payload.expected_version,
     )
 
     _commit_review_event(
@@ -2197,6 +2496,7 @@ def correct_review_endpoint(
     payload: ReviewTaskCorrect,
     request: Request,
     actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     session: Session = Depends(get_session),
 ) -> ReviewTask:
@@ -2204,9 +2504,22 @@ def correct_review_endpoint(
     if task is None or task.household_id != household_id:
         _raise_resource_not_found()
 
-    household = session.get(Household, household_id)
-    if household is None or household.created_by != actor_id:
-        _raise_resource_not_found()
+    household = _require_review_access(
+        session,
+        task,
+        household_id=household_id,
+        actor_id=actor_id,
+        action="WRITE_EVENTS",
+        access_purpose=access_purpose,
+    )
+    _require_review_access(
+        session,
+        task,
+        household_id=household_id,
+        actor_id=actor_id,
+        action="READ_EVENTS",
+        access_purpose=access_purpose,
+    )
 
     updated_task, event_dict = correct_review(
         session,
@@ -2215,6 +2528,7 @@ def correct_review_endpoint(
         manual_payload=payload.manual_payload,
         correction_note=payload.correction_note,
         idempotency_key=idempotency_key,
+        expected_version=payload.expected_version,
     )
 
     _commit_review_event(
@@ -2239,21 +2553,38 @@ def skip_review_endpoint(
     task_id: str,
     payload: ReviewTaskSkip,
     actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     session: Session = Depends(get_session),
 ) -> ReviewTask:
     task = get_review_task(session, task_id)
     if task is None or task.household_id != household_id:
         _raise_resource_not_found()
 
-    household = session.get(Household, household_id)
-    if household is None or household.created_by != actor_id:
-        _raise_resource_not_found()
+    _require_review_access(
+        session,
+        task,
+        household_id=household_id,
+        actor_id=actor_id,
+        action="WRITE_EVENTS",
+        access_purpose=access_purpose,
+    )
+    _require_review_access(
+        session,
+        task,
+        household_id=household_id,
+        actor_id=actor_id,
+        action="READ_EVENTS",
+        access_purpose=access_purpose,
+    )
 
     updated_task = skip_review(
         session,
         task,
         actor_id=actor_id,
         reason=payload.reason,
+        idempotency_key=idempotency_key,
+        expected_version=payload.expected_version,
     )
     session.commit()
     session.refresh(updated_task)
@@ -2276,7 +2607,7 @@ def list_risks(
 ) -> dict:
     household = session.get(Household, household_id)
     member = session.get(Member, member_id)
-    if household is None or member is None or member.household_id != household_id:
+    if _is_erased(household, member):
         _raise_resource_not_found()
     if not has_authorized_action(
         session, household, member_id, actor_id, "READ_EVENTS", "health_events", access_purpose,
@@ -2323,7 +2654,7 @@ def get_risk_detail(
 ) -> dict:
     household = session.get(Household, household_id)
     member = session.get(Member, member_id)
-    if household is None or member is None or member.household_id != household_id:
+    if _is_erased(household, member):
         _raise_resource_not_found()
     if not has_authorized_action(
         session, household, member_id, actor_id, "READ_EVENTS", "health_events", access_purpose,
@@ -2367,10 +2698,7 @@ from app import hard_sample as _hs  # noqa: E402
 
 
 def _hs_household(session: Session, household_id: str, actor_id: str) -> Household:
-    household = session.get(Household, household_id)
-    if household is None or household.created_by != actor_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RESOURCE_NOT_FOUND")
-    return household
+    return require_household_owner(session, household_id, actor_id)
 
 
 def _hs_raise_val(err: str) -> NoReturn:

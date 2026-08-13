@@ -22,6 +22,7 @@ from typing import Any
 
 import httpx
 from pydantic import BaseModel, Field, ValidationError
+from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ OLLAMA_DEFAULT_URL = "http://localhost:11434"
 REQUEST_TIMEOUT = 30.0
 MAX_RETRIES = 2
 RETRY_BACKOFF = 2.0
+MAX_TOOL_ROUNDS = 3
 
 # Medical boundary keywords that must never appear in output
 _MEDICAL_PROHIBITIONS: list[str] = [
@@ -360,6 +362,24 @@ def build_degrade_response(
             degraded=True,
             reason=reason,
         )
+    if reason == "NO_AUTHORISED_DOCUMENTS":
+        return DegradedResponse(
+            answer="当前范围内没有可引用的授权知识证据，助手不能编造来源。",
+            degraded=True,
+            reason=reason,
+        )
+    if reason in {"CITATION_NOT_FOUND", "EVIDENCE_REQUIRED"}:
+        return DegradedResponse(
+            answer="当前回答缺少可核验的本地知识引用，请查阅已确认记录或联系照护者。",
+            degraded=True,
+            reason=reason,
+        )
+    if reason == "TOOL_SCOPE_DENIED":
+        return DegradedResponse(
+            answer="助手工具请求超出当前家庭或成员范围，已拒绝执行。",
+            degraded=True,
+            reason=reason,
+        )
     return DegradedResponse(
         answer=_DEGRADE_TEMPLATE,
         degraded=True,
@@ -367,7 +387,261 @@ def build_degrade_response(
     )
 
 
-# ── Main entry point ───────────────────────────────────────────────────
+_EVIDENCE_DEGRADE_REASONS = {
+    "EVIDENCE_REQUIRED",
+    "CITATION_NOT_FOUND",
+    "NO_AUTHORISED_DOCUMENTS",
+}
+
+
+def _degrade_payload(response: DegradedResponse) -> dict[str, Any]:
+    """Translate the internal degrade record to the public API contract."""
+    return {
+        "answer": response.answer,
+        "sources": response.sources,
+        "citations": [],
+        "confidence": "low",
+        "escalate": response.escalate,
+        "degraded": response.degraded,
+        "degrade_reason": response.reason,
+        "route": (
+            "EVIDENCE_REQUIRED"
+            if response.reason in _EVIDENCE_DEGRADE_REASONS
+            else "REFUSE"
+        ),
+    }
+
+
+# ── Tool execution and citation binding ────────────────────────────────
+
+
+def _parse_tool_arguments(raw_args: Any) -> dict[str, Any]:
+    if raw_args is None:
+        return {}
+    if isinstance(raw_args, dict):
+        return raw_args
+    if isinstance(raw_args, str):
+        try:
+            parsed = json.loads(raw_args)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def extract_tool_calls(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    """Normalize Ollama/OpenAI-style tool calls to {name, arguments}."""
+    message = raw.get("message") or {}
+    calls = message.get("tool_calls") or []
+    normalized: list[dict[str, Any]] = []
+    for call in calls:
+        function = call.get("function") if isinstance(call, dict) else None
+        if isinstance(function, dict):
+            name = function.get("name")
+            arguments = _parse_tool_arguments(function.get("arguments"))
+        elif isinstance(call, dict):
+            name = call.get("name")
+            arguments = _parse_tool_arguments(call.get("arguments"))
+        else:
+            continue
+        if not name:
+            continue
+        normalized.append({"name": str(name), "arguments": arguments})
+    return normalized
+
+
+def _bound_scope_value(
+    requested: Any,
+    bound: str | None,
+) -> tuple[str | None, str | None]:
+    if requested in (None, ""):
+        return bound, None
+    requested_text = str(requested)
+    if bound and requested_text != bound:
+        return bound, "TOOL_SCOPE_DENIED"
+    return requested_text, None
+
+
+def _citation_from_chunk(chunk: dict[str, Any]) -> dict[str, str]:
+    return {
+        "document_id": str(chunk["document_id"]),
+        "version": str(chunk.get("version") or ""),
+        "chunk_id": str(chunk["chunk_id"]),
+    }
+
+
+def _index_allowed_citations(
+    allowed: list[dict[str, str]],
+) -> dict[str, dict[str, str]]:
+    indexed: dict[str, dict[str, str]] = {}
+    for citation in allowed:
+        indexed[citation["chunk_id"]] = citation
+        indexed[citation["document_id"]] = citation
+        indexed[f"{citation['document_id']}:{citation['chunk_id']}"] = citation
+    return indexed
+
+
+def filter_claimed_citations(
+    claimed_sources: list[str],
+    allowed: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    indexed = _index_allowed_citations(allowed)
+    matched: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for token in claimed_sources:
+        citation = indexed.get(str(token).strip())
+        if citation is None or citation["chunk_id"] in seen:
+            continue
+        seen.add(citation["chunk_id"])
+        matched.append(citation)
+    return matched
+
+
+def _execute_retrieve_knowledge(
+    session: Session,
+    *,
+    actor_id: str,
+    household_id: str | None,
+    member_id: str | None,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    from app.knowledge import log_query, retrieve
+
+    bound_household, household_error = _bound_scope_value(
+        arguments.get("household_id"), household_id
+    )
+    bound_member, member_error = _bound_scope_value(
+        arguments.get("member_id"), member_id
+    )
+    if household_error or member_error:
+        return {"error": "TOOL_SCOPE_DENIED", "results": [], "total": 0}
+
+    query = str(arguments.get("query") or "").strip()
+    try:
+        top_k = int(arguments.get("top_k") or 5)
+    except (TypeError, ValueError):
+        top_k = 5
+    top_k = max(1, min(top_k, 10))
+    try:
+        results = retrieve(
+            session,
+            query=query,
+            actor_id=actor_id,
+            household_id=bound_household,
+            member_id=bound_member,
+            top_k=top_k,
+        )
+        log_query(
+            session,
+            query_text=query,
+            actor_id=actor_id,
+            household_id=bound_household,
+            member_id=bound_member,
+            top_chunk_ids=[item["chunk_id"] for item in results],
+            returned_count=len(results),
+        )
+        public_results = [
+            {
+                "chunk_id": item["chunk_id"],
+                "document_id": item["document_id"],
+                "title": item["title"],
+                "version": item["version"],
+                "locator": item.get("locator"),
+                "text": item["text"],
+                "score": item["score"],
+            }
+            for item in results
+        ]
+        return {"results": public_results, "total": len(public_results)}
+    except ValueError as exc:
+        return {
+            "error": str(exc),
+            "results": [],
+            "total": 0,
+            "degraded": True,
+            "degrade_reason": str(exc),
+        }
+
+
+def _execute_get_document_metadata(
+    session: Session,
+    *,
+    actor_id: str,
+    household_id: str | None,
+    member_id: str | None,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    from app.knowledge import KnowledgeDocument, _check_permission
+
+    document_id = str(arguments.get("document_id") or "").strip()
+    if not document_id:
+        return {"error": "DOCUMENT_NOT_FOUND"}
+    document = session.get(KnowledgeDocument, document_id)
+    if document is None or document.status != "active":
+        return {"error": "DOCUMENT_NOT_FOUND"}
+    if not _check_permission(
+        document.permission_scope or {},
+        actor_id,
+        household_id,
+        member_id,
+    ):
+        return {"error": "DOCUMENT_NOT_FOUND"}
+    return {
+        "document_id": document.id,
+        "title": document.title,
+        "version": document.version,
+        "source": document.source,
+        "status": document.status,
+    }
+
+
+def execute_whitelisted_tool(
+    session: Session | None,
+    *,
+    name: str,
+    arguments: dict[str, Any],
+    actor_id: str,
+    household_id: str | None,
+    member_id: str | None,
+) -> dict[str, Any]:
+    if not is_tool_allowed(name):
+        return {"error": "TOOL_NOT_ALLOWED"}
+    tool = get_tool(name)
+    try:
+        validated = tool.validate_args(arguments)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    if session is None:
+        return {"error": "TOOL_SESSION_REQUIRED"}
+    if name == "retrieve_knowledge":
+        return _execute_retrieve_knowledge(
+            session,
+            actor_id=actor_id,
+            household_id=household_id,
+            member_id=member_id,
+            arguments=validated,
+        )
+    if name == "get_document_metadata":
+        return _execute_get_document_metadata(
+            session,
+            actor_id=actor_id,
+            household_id=household_id,
+            member_id=member_id,
+            arguments=validated,
+        )
+    return {"error": "TOOL_NOT_BOUND"}
+
+
+def _parse_assistant_output(raw_content: str) -> HealthAssistantOutput | None:
+    if not raw_content or not str(raw_content).strip():
+        return None
+    try:
+        return HealthAssistantOutput.model_validate_json(raw_content)
+    except (ValidationError, json.JSONDecodeError):
+        try:
+            return _parse_loose_output(raw_content)
+        except Exception:
+            return None
 
 
 def run_assistant(
@@ -381,7 +655,7 @@ def run_assistant(
     max_tokens: int = 512,
     temperature: float = 0.3,
 ) -> dict[str, Any]:
-    """Run the health assistant with tool calling and safety checks.
+    """Run the health assistant with tool calling and citation checks.
 
     Returns a dict with:
         answer, sources, confidence, escalate, degraded, degrade_reason, model
@@ -411,11 +685,13 @@ def run_assistant(
 
     # ── Phase 2: Build structured request ───────────────────────────
     request = HealthAssistantRequest(
-        messages=messages,
+        messages=conversation,
         tools=approved_tools,
         temperature=temperature,
         max_tokens=max_tokens,
     )
+    allowed_citations: list[dict[str, str]] = []
+    tool_errors: list[str] = []
 
     # ── Phase 3: Call the local model server ───────────────────────
     try:
@@ -439,7 +715,46 @@ def run_assistant(
         degrade = build_degrade_response("SCHEMA_VALIDATION_FAILED")
         return degrade_result(degrade, model)
 
-    # ── Phase 5: Medical boundary check ────────────────────────────
+        tool_calls = extract_tool_calls(raw)
+        raw_content = (raw.get("message") or {}).get("content") or ""
+        if tool_calls:
+            conversation.append(
+                {
+                    "role": "assistant",
+                    "content": raw_content or None,
+                    "tool_calls": tool_calls,
+                }
+            )
+            for call in tool_calls:
+                result = execute_whitelisted_tool(
+                    db_session,
+                    name=call["name"],
+                    arguments=call["arguments"],
+                    actor_id=actor_id,
+                    household_id=household_id,
+                    member_id=member_id,
+                )
+                if result.get("error"):
+                    tool_errors.append(str(result["error"]))
+                for chunk in result.get("results") or []:
+                    allowed_citations.append(_citation_from_chunk(chunk))
+                conversation.append(
+                    {
+                        "role": "tool",
+                        "name": call["name"],
+                        "content": json.dumps(result, ensure_ascii=False),
+                    }
+                )
+            continue
+
+        parsed = _parse_assistant_output(raw_content)
+        if parsed is None:
+            return _degrade_payload(build_degrade_response("SCHEMA_VALIDATION_FAILED"))
+        break
+    else:
+        return _degrade_payload(build_degrade_response("SCHEMA_VALIDATION_FAILED"))
+
+    assert parsed is not None
     violations = _check_medical_boundary(parsed.answer)
     if violations:
         logger.warning("Medical boundary violation: %s", violations)
@@ -452,10 +767,10 @@ def run_assistant(
         degrade = build_degrade_response("EXTERNAL_LINK_DETECTED")
         return degrade_result(degrade, model)
 
-    # ── Phase 7: Return validated output ───────────────────────────
     return {
         "answer": parsed.answer,
-        "sources": parsed.sources,
+        "sources": [item["chunk_id"] for item in matched_citations],
+        "citations": matched_citations,
         "confidence": parsed.confidence,
         "escalate": parsed.escalate,
         "degraded": False,

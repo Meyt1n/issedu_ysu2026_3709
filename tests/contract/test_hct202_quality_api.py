@@ -34,6 +34,22 @@ def _check_quality(client, content: bytes, actor_id: str = "demo-owner"):
     )
 
 
+def _create_member(client, actor_id: str) -> str:
+    household = client.post(
+        "/api/v1/households",
+        json={"name": f"{actor_id} household"},
+        headers={"X-Actor-ID": actor_id},
+    )
+    assert household.status_code == 201
+    member = client.post(
+        f"/api/v1/households/{household.json()['id']}/members",
+        json={"display_name": f"{actor_id} member"},
+        headers={"X-Actor-ID": actor_id},
+    )
+    assert member.status_code == 201
+    return member.json()["id"]
+
+
 def _tamper_receipt(receipt: str) -> str:
     encoded, signature = receipt.split(".", maxsplit=1)
     replacement = "A" if signature[0] != "A" else "B"
@@ -105,6 +121,19 @@ def test_quality_api_rejects_multipart_content_type_mismatch(client) -> None:
 def test_vision_task_requires_matching_actor_and_file_receipt(
     client, tmp_path, monkeypatch
 ) -> None:
+    household = client.post(
+        "/api/v1/households",
+        json={"name": "Quality household"},
+        headers={"X-Actor-ID": "owner-a"},
+    )
+    assert household.status_code == 201
+    member = client.post(
+        f"/api/v1/households/{household.json()['id']}/members",
+        json={"display_name": "Quality member"},
+        headers={"X-Actor-ID": "owner-a"},
+    )
+    assert member.status_code == 201
+    other_member_id = _create_member(client, "owner-b")
     content = _encode_demo_image()
     quality = _check_quality(client, content, actor_id="owner-a")
     assert quality.status_code == 200
@@ -115,17 +144,25 @@ def test_vision_task_requires_matching_actor_and_file_receipt(
 
     missing_receipt = client.post(
         "/api/v1/vision-tasks",
-        json={"file_id": file_id},
+        json={"file_id": file_id, "member_id": member.json()["id"]},
         headers={"X-Actor-ID": "owner-a"},
     )
     wrong_actor = client.post(
         "/api/v1/vision-tasks",
-        json={"file_id": file_id, "quality_receipt": receipt},
+        json={
+            "file_id": file_id,
+            "member_id": other_member_id,
+            "quality_receipt": receipt,
+        },
         headers={"X-Actor-ID": "owner-b"},
     )
     accepted = client.post(
         "/api/v1/vision-tasks",
-        json={"file_id": file_id, "quality_receipt": receipt},
+        json={
+            "file_id": file_id,
+            "member_id": member.json()["id"],
+            "quality_receipt": receipt,
+        },
         headers={"X-Actor-ID": "owner-a"},
     )
 
@@ -138,9 +175,46 @@ def test_vision_task_requires_matching_actor_and_file_receipt(
     assert accepted.json()["preprocess_version"] == "opencv-quality-demo-v1"
 
 
+def test_vision_task_rejects_cross_household_member(
+    client, tmp_path, monkeypatch
+) -> None:
+    household = client.post(
+        "/api/v1/households",
+        json={"name": "Private household"},
+        headers={"X-Actor-ID": "member-owner"},
+    )
+    member = client.post(
+        f"/api/v1/households/{household.json()['id']}/members",
+        json={"display_name": "Private member"},
+        headers={"X-Actor-ID": "member-owner"},
+    )
+    assert member.status_code == 201
+
+    content = _encode_demo_image()
+    quality = _check_quality(client, content, actor_id="other-actor")
+    assert quality.status_code == 200
+    file_id = "cross-household.png"
+    (tmp_path / file_id).write_bytes(content)
+    monkeypatch.setattr("app.routes.settings.file_root", str(tmp_path))
+
+    response = client.post(
+        "/api/v1/vision-tasks",
+        json={
+            "file_id": file_id,
+            "member_id": member.json()["id"],
+            "quality_receipt": quality.json()["quality_receipt"],
+        },
+        headers={"X-Actor-ID": "other-actor"},
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "RESOURCE_NOT_FOUND"}
+
+
 def test_vision_task_rejects_tampered_or_different_file_receipt(
     client, tmp_path, monkeypatch
 ) -> None:
+    member_id = _create_member(client, "demo-owner")
     content = _encode_demo_image()
     quality = _check_quality(client, content)
     receipt = quality.json()["quality_receipt"]
@@ -150,12 +224,20 @@ def test_vision_task_rejects_tampered_or_different_file_receipt(
 
     different_file = client.post(
         "/api/v1/vision-tasks",
-        json={"file_id": file_id, "quality_receipt": receipt},
+        json={
+            "file_id": file_id,
+            "member_id": member_id,
+            "quality_receipt": receipt,
+        },
         headers={"X-Actor-ID": "demo-owner"},
     )
     tampered = client.post(
         "/api/v1/vision-tasks",
-        json={"file_id": file_id, "quality_receipt": _tamper_receipt(receipt)},
+        json={
+            "file_id": file_id,
+            "member_id": member_id,
+            "quality_receipt": _tamper_receipt(receipt),
+        },
         headers={"X-Actor-ID": "demo-owner"},
     )
 
@@ -168,13 +250,18 @@ def test_vision_task_rejects_tampered_or_different_file_receipt(
 def test_vision_task_rejects_malformed_receipt_as_controlled_conflict(
     client, tmp_path, monkeypatch
 ) -> None:
+    member_id = _create_member(client, "demo-owner")
     file_id = "stored.png"
     (tmp_path / file_id).write_bytes(_encode_demo_image())
     monkeypatch.setattr("app.routes.settings.file_root", str(tmp_path))
 
     response = client.post(
         "/api/v1/vision-tasks",
-        json={"file_id": file_id, "quality_receipt": "x" * 32},
+        json={
+            "file_id": file_id,
+            "member_id": member_id,
+            "quality_receipt": "x" * 32,
+        },
         headers={"X-Actor-ID": "demo-owner"},
     )
 
