@@ -158,6 +158,40 @@ describe('ApiClient authorization contract', () => {
     }
   })
 
+  it('converts a hung request into DEPENDENCY_UNAVAILABLE instead of pending forever', async () => {
+    // 复现 dev 代理丢失响应的场景：fetch 永不 resolve，只能被超时信号中止。
+    const fetcher: typeof fetch = (_input, init) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(new DOMException('The operation was aborted.', 'AbortError'))
+        })
+      })
+    const client = new ApiClient({ baseUrl: 'http://local.test', fetcher })
+
+    await expect(
+      client.listHouseholds({ actorId: 'owner', timeoutMs: 40 }),
+    ).rejects.toMatchObject({
+      status: 0,
+      code: 'DEPENDENCY_UNAVAILABLE',
+      message: expect.stringContaining('timed out'),
+    })
+  })
+
+  it('propagates caller-initiated aborts without masking them as unavailability', async () => {
+    const fetcher: typeof fetch = (_input, init) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(new DOMException('The operation was aborted.', 'AbortError'))
+        })
+      })
+    const client = new ApiClient({ baseUrl: 'http://local.test', fetcher })
+    const controller = new AbortController()
+    const pending = client.listHouseholds({ actorId: 'owner', signal: controller.signal })
+    controller.abort()
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+  })
+
   it('creates and cleans up vision tasks through encoded local API paths', async () => {
     const requests: Array<{ url: string; init: RequestInit }> = []
     const fetcher: typeof fetch = async (input, init) => {

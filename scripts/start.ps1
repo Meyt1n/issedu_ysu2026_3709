@@ -24,10 +24,21 @@ function Invoke-CheckedCommand {
     return $output
 }
 
+function Get-ComposeProfile {
+    if ($env:COMPOSE_PROFILE) {
+        return $env:COMPOSE_PROFILE
+    }
+    if ($env:COMPOSE_PROFILES) {
+        return ($env:COMPOSE_PROFILES.Split(",")[0]).Trim()
+    }
+    return "basic"
+}
+
 function Get-ComposeServiceStatus {
-    $rows = @(Invoke-CheckedCommand { docker compose ps --all --format json } | ConvertFrom-Json)
+    $profile = Get-ComposeProfile
+    $rows = @(Invoke-CheckedCommand { docker compose --profile $profile ps --all --format json } | ConvertFrom-Json)
     if ($rows.Count -eq 0) {
-        throw "没有找到 Compose 服务，请先执行 scripts/start.ps1 up。"
+        throw "没有找到 Compose 服务，请先执行 scripts/start.ps1 up（默认 profile=basic）。"
     }
     foreach ($service in @("db", "api", "web")) {
         if ($service -notin $rows.Service) {
@@ -44,7 +55,8 @@ function Get-ComposeServiceStatus {
 function Get-ComposeHostPort {
     param([Parameter(Mandatory = $true)][string]$Service, [Parameter(Mandatory = $true)][int]$ContainerPort)
 
-    $published = @(Invoke-CheckedCommand { docker compose port $Service $ContainerPort })[0]
+    $profile = Get-ComposeProfile
+    $published = @(Invoke-CheckedCommand { docker compose --profile $profile port $Service $ContainerPort })[0]
     if (-not $published) {
         throw "无法定位 ${Service}:$ContainerPort 的宿主端口。"
     }
@@ -86,17 +98,20 @@ switch ($Target) {
         Invoke-CheckedCommand { uv run pytest }
         Invoke-CheckedCommand { npm run check:web }
         Invoke-CheckedCommand { npm run build:web }
-        Invoke-CheckedCommand { docker compose config --quiet }
+        Invoke-CheckedCommand { docker compose --profile (Get-ComposeProfile) config --quiet }
     }
     "up" {
-        Invoke-CheckedCommand { docker compose up -d --build --wait --wait-timeout 60 }
+        $profile = Get-ComposeProfile
+        Invoke-CheckedCommand { docker compose --profile $profile up -d --build --wait --wait-timeout 60 }
+        Write-Host "Compose profile=$profile 已启动。"
         Invoke-HealthCheck
     }
     "health" {
         Invoke-HealthCheck
     }
     "down" {
-        Invoke-CheckedCommand { docker compose down }
-        Write-Host "Compose 服务已停止；默认保留 mysql_data 卷。"
+        $profile = Get-ComposeProfile
+        Invoke-CheckedCommand { docker compose --profile $profile down }
+        Write-Host "Compose 服务已停止（profile=$profile）；默认保留 mysql_data 卷。"
     }
 }

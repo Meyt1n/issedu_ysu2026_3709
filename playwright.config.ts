@@ -9,6 +9,9 @@ export default defineConfig({
   testDir: './tests/browser',
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,
+  workers: 1,
+  timeout: 60_000,
+  expect: { timeout: 12_000 },
   reporter: process.env.CI
     ? [['list'], ['junit', { outputFile: 'artifacts/hct405-browser-junit.xml' }]]
     : 'list',

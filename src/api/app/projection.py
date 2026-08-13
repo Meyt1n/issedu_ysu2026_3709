@@ -19,9 +19,23 @@ from app.models import HealthEvent, MemberStateProjection
 
 logger = logging.getLogger(__name__)
 
+
+def _drug_from_payload(payload: dict[str, Any], event_id: str, *, name: Any) -> dict[str, Any]:
+    """Keep expiry/stock/ingredient so HCT-302 rules can fire from confirmed events."""
+    return {
+        "name": name,
+        "added_by": event_id,
+        "expiry_date": payload.get("expiry_date"),
+        "stock": payload.get("stock"),
+        "ingredient": payload.get("ingredient"),
+    }
+
+
 # Known event types that contribute to the relationship graph.
 RELATION_EVENT_TYPES = frozenset({
     "medication_added",
+    "medication_confirmed",
+    "medication_stopped",
     "medication_corrected",
     "allergy_added",
     "allergy_removed",
@@ -62,16 +76,15 @@ def build_relationship_graph(
         payload = event.payload or {}
 
         if etype == "medication_added":
-            # 保留规则引擎（app/rules.py）依赖的风险字段：
-            # expiry_check 读 expiry_date，low_stock 读 stock，
-            # duplicate_ingredient / allergy_conflict 读 ingredient。
-            drugs.append({
-                "name": payload.get("drug"),
-                "expiry_date": payload.get("expiry_date"),
-                "stock": payload.get("stock"),
-                "ingredient": payload.get("ingredient"),
-                "added_by": event.id,
-            })
+            drugs.append(_drug_from_payload(payload, event.id, name=payload.get("drug")))
+        elif etype == "medication_confirmed":
+            # Vision review confirmations archive with drug_name (HCT-207).
+            name = payload.get("drug_name") or payload.get("drug")
+            if name:
+                drugs.append(_drug_from_payload(payload, event.id, name=name))
+        elif etype == "medication_stopped":
+            stopped = payload.get("drug_name") or payload.get("drug")
+            drugs = [item for item in drugs if item.get("name") != stopped]
         elif etype == "allergy_added":
             allergies.append({"name": payload.get("allergy"), "added_by": event.id})
         elif etype == "allergy_removed":

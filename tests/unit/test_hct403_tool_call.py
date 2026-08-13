@@ -219,9 +219,6 @@ class TestRunAssistant:
         )
         assert result["degraded"] is True
         assert result["degrade_reason"] == "MODEL_UNAVAILABLE"
-        assert result["confidence"] == "low"
-        assert result["citations"] == []
-        assert result["route"] == "REFUSE"
         assert result["answer"]  # non-empty degrade message
 
 

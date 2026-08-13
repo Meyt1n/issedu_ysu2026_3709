@@ -321,7 +321,7 @@ class ReviewTaskRead(BaseModel):
 
 class VisionTaskCreate(BaseModel):
     file_id: str = Field(min_length=1, description="Reference to an uploaded file")
-    member_id: str = Field(min_length=1)
+    member_id: str | None = Field(default=None)
     task_type: str = Field(default="ocr", min_length=1, max_length=40)
     idempotency_key: str | None = Field(default=None, max_length=128)
     model_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -448,7 +448,7 @@ class AssistantCitation(BaseModel):
 
 class AssistantRequest(BaseModel):
     messages: list[dict[str, Any]] = Field(min_length=1)
-    model: str = Field(default="llama3.2:3b", max_length=64)
+    model: str | None = Field(default=None, max_length=64)
     temperature: float = Field(default=0.3, ge=0.0, le=2.0)
     max_tokens: int = Field(default=512, ge=1, le=4096)
 
@@ -461,6 +461,7 @@ class AssistantResponse(BaseModel):
     escalate: bool = False
     degraded: bool = False
     degrade_reason: str | None = None
+    model: str | None = None
     route: str | None = None
 
 

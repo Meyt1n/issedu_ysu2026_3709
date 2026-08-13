@@ -1,0 +1,20 @@
+[
+  {
+    "id": "ocr-1-name",
+    "raw_value": "演示药甲片",
+    "confidence": 0.97,
+    "engine_version": "external-paddleocr-v1"
+  },
+  {
+    "id": "ocr-1-spec",
+    "raw_value": "0.25g×24片",
+    "confidence": 0.9,
+    "engine_version": "external-paddleocr-v1"
+  },
+  {
+    "id": "ocr-1-expiry",
+    "raw_value": "2027-05",
+    "confidence": 0.91,
+    "engine_version": "external-paddleocr-v1"
+  }
+]

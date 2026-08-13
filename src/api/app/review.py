@@ -107,6 +107,79 @@ def _canonical_fingerprint(payload: dict[str, Any]) -> str:
     return hashlib.sha256(canonical).hexdigest()
 
 
+def _assert_same_review_input(
+    task: ReviewTask,
+    *,
+    household_id: str,
+    member_id: str,
+    candidates: list[dict[str, Any]],
+    fusion_status: FusionStatus,
+    model_version: str | None,
+    rule_version: str | None,
+    fusion_context: dict[str, Any],
+    fusion_fingerprint: str,
+) -> None:
+    if (
+        task.household_id != household_id
+        or task.member_id != member_id
+        or task.candidates != candidates
+        or task.fusion_status != fusion_status
+        or task.model_version != model_version
+        or task.rule_version != rule_version
+        or task.fusion_context != fusion_context
+        or task.fusion_fingerprint != fusion_fingerprint
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="REVIEW_TASK_FUSION_CONFLICT",
+        )
+
+
+def _adopt_or_assert_review_input(
+    session: Session,
+    task: ReviewTask,
+    *,
+    household_id: str,
+    member_id: str,
+    candidates: list[dict[str, Any]],
+    fusion_status: FusionStatus,
+    model_version: str | None,
+    rule_version: str | None,
+    fusion_context: dict[str, Any],
+    fusion_fingerprint: str,
+) -> None:
+    """Reuse a pending evidence-bridge placeholder, else require an exact match.
+
+    Evidence submission creates the review row before the fusion endpoint
+    attaches thresholds and ranked candidates. That first row has an empty
+    fusion_context; the later fusion call is allowed to fill it in once.
+    """
+    if (
+        task.status == ReviewStatus.PENDING_REVIEW
+        and not task.fusion_context
+        and fusion_context
+    ):
+        task.candidates = candidates
+        task.fusion_status = fusion_status
+        task.model_version = model_version
+        task.rule_version = rule_version
+        task.fusion_context = fusion_context
+        task.fusion_fingerprint = fusion_fingerprint
+        session.flush()
+        return
+    _assert_same_review_input(
+        task,
+        household_id=household_id,
+        member_id=member_id,
+        candidates=candidates,
+        fusion_status=fusion_status,
+        model_version=model_version,
+        rule_version=rule_version,
+        fusion_context=fusion_context,
+        fusion_fingerprint=fusion_fingerprint,
+    )
+
+
 def create_review_task(
     session: Session,
     *,
@@ -135,7 +208,8 @@ def create_review_task(
     )
     existing = get_review_task_by_vision_task(session, vision_task_id)
     if existing is not None:
-        _assert_same_review_input(
+        _adopt_or_assert_review_input(
+            session,
             existing,
             household_id=household_id,
             member_id=member_id,
@@ -171,7 +245,8 @@ def create_review_task(
         existing = get_review_task_by_vision_task(session, vision_task_id)
         if existing is None:
             raise
-        _assert_same_review_input(
+        _adopt_or_assert_review_input(
+            session,
             existing,
             household_id=household_id,
             member_id=member_id,
@@ -198,37 +273,10 @@ def get_review_task_by_vision_task(
     session: Session,
     vision_task_id: str,
 ) -> ReviewTask | None:
-    return session.scalar(
+    """Return the review task bound to a vision task (one per vision task)."""
+    return session.scalars(
         select(ReviewTask).where(ReviewTask.vision_task_id == vision_task_id)
-    )
-
-
-def _assert_same_review_input(
-    task: ReviewTask,
-    *,
-    household_id: str,
-    member_id: str,
-    candidates: list[dict[str, Any]],
-    fusion_status: FusionStatus,
-    model_version: str | None,
-    rule_version: str | None,
-    fusion_context: dict[str, Any],
-    fusion_fingerprint: str,
-) -> None:
-    if (
-        task.household_id != household_id
-        or task.member_id != member_id
-        or task.candidates != candidates
-        or task.fusion_status != fusion_status
-        or task.model_version != model_version
-        or task.rule_version != rule_version
-        or task.fusion_context != fusion_context
-        or task.fusion_fingerprint != fusion_fingerprint
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="REVIEW_TASK_FUSION_CONFLICT",
-        )
+    ).first()
 
 
 def list_pending_reviews(
@@ -242,6 +290,22 @@ def list_pending_reviews(
             ReviewTask.household_id == household_id,
             ReviewTask.status == ReviewStatus.PENDING_REVIEW,
         )
+        .order_by(ReviewTask.created_at.desc())
+    )
+    if member_id is not None:
+        stmt = stmt.where(ReviewTask.member_id == member_id)
+    return list(session.scalars(stmt).all())
+
+
+def list_review_tasks(
+    session: Session,
+    household_id: str,
+    member_id: str | None = None,
+) -> list[ReviewTask]:
+    """All review tasks (pending and settled) so the UI can show处理记录."""
+    stmt = (
+        select(ReviewTask)
+        .where(ReviewTask.household_id == household_id)
         .order_by(ReviewTask.created_at.desc())
     )
     if member_id is not None:

@@ -1,834 +1,388 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
 
+import AppIcon from './components/AppIcon.vue'
+import CommandPalette from './components/CommandPalette.vue'
+import ConfirmDialog from './components/ConfirmDialog.vue'
+import SkeletonList from './components/SkeletonList.vue'
 import {
-  buildAuthorizationPreview,
-  isAuthorizationActive,
-} from './authorization/authorizationView'
-import { ApiClientError, apiClient } from './api/client'
-import { riskLevelLabel, toRiskCardModel } from './risk/riskView'
-import VisionQualityPanel from './vision/VisionQualityPanel.vue'
-import type {
-  Authorization,
-  AuthorizationAction,
-  CapabilityResponse,
-  CreateAuthorizationInput,
-  HealthEvent,
-  Household,
-  MemberState,
-  Member,
-  RequestOptions,
-  RiskAlert,
-  RiskDetailResponse,
-  RiskListResponse,
-  UpdateAuthorizationInput,
-} from './api/types'
+  dismissToast,
+  selectHousehold,
+  session,
+  setView,
+  signOut,
+  type ViewName,
+} from './store'
+import { installRipple, vMagnet } from './ui/motion'
+import { THEMES, applyTheme, currentTheme, type ThemeId } from './ui/themes'
+// 欢迎页是首屏必经路径，保持同步加载；十二个业务视图按需拆包，
+// 首屏只下载当前视图的代码，切换视图时由 Vite 预构建的 chunk 即时载入。
+import WelcomeView from './views/WelcomeView.vue'
 
-const FIELD_OPTIONS = [
-  { value: 'health_events', label: 'Confirmed health events' },
-] as const
+function lazyView(loader: () => Promise<{ default: Component }>) {
+  return defineAsyncComponent({
+    loader,
+    loadingComponent: SkeletonList,
+    delay: 0,
+    timeout: 20_000,
+  })
+}
 
-const ACTION_OPTIONS: Array<{ value: AuthorizationAction; label: string }> = [
-  { value: 'READ_EVENTS', label: 'View confirmed events' },
-  { value: 'WRITE_EVENTS', label: 'Add confirmed events' },
+const VIEW_LOADERS = {
+  overview: () => import('./views/OverviewView.vue'),
+  members: () => import('./views/MembersView.vue'),
+  plans: () => import('./views/PlansView.vue'),
+  scan: () => import('./views/ScanView.vue'),
+  review: () => import('./views/ReviewView.vue'),
+  risks: () => import('./views/RisksView.vue'),
+  graph: () => import('./views/GraphView.vue'),
+  assistant: () => import('./views/AssistantView.vue'),
+  bigscreen: () => import('./views/BigScreenView.vue'),
+  authorizations: () => import('./views/AuthView.vue'),
+  knowledge: () => import('./views/KnowledgeView.vue'),
+  modellab: () => import('./views/ModelLabView.vue'),
+} satisfies Record<ViewName, () => Promise<{ default: Component }>>
+
+const OverviewView = lazyView(VIEW_LOADERS.overview)
+const MembersView = lazyView(VIEW_LOADERS.members)
+const PlansView = lazyView(VIEW_LOADERS.plans)
+const ScanView = lazyView(VIEW_LOADERS.scan)
+const ReviewView = lazyView(VIEW_LOADERS.review)
+const RisksView = lazyView(VIEW_LOADERS.risks)
+const GraphView = lazyView(VIEW_LOADERS.graph)
+const AssistantView = lazyView(VIEW_LOADERS.assistant)
+const BigScreenView = lazyView(VIEW_LOADERS.bigscreen)
+const AuthView = lazyView(VIEW_LOADERS.authorizations)
+const KnowledgeView = lazyView(VIEW_LOADERS.knowledge)
+const ModelLabView = lazyView(VIEW_LOADERS.modellab)
+
+const NAV_ITEMS: Array<{ view: ViewName; label: string; icon: string; group: string }> = [
+  { view: 'overview', label: '家庭总览', icon: 'home', group: '日常照护' },
+  { view: 'members', label: '成员档案', icon: 'members', group: '日常照护' },
+  { view: 'plans', label: '健康计划', icon: 'plan', group: '日常照护' },
+  { view: 'scan', label: '视觉扫描', icon: 'scan', group: '证据录入' },
+  { view: 'review', label: '人工复核', icon: 'review', group: '证据录入' },
+  { view: 'risks', label: '用药安全', icon: 'shield', group: '安全与洞察' },
+  { view: 'graph', label: '健康图谱', icon: 'compass', group: '安全与洞察' },
+  { view: 'assistant', label: '本地助手', icon: 'assistant', group: '安全与洞察' },
+  { view: 'bigscreen', label: '家庭大屏', icon: 'sun', group: '家庭与研发' },
+  { view: 'authorizations', label: '授权管理', icon: 'key', group: '家庭与研发' },
+  { view: 'knowledge', label: '知识文档', icon: 'leaf', group: '家庭与研发' },
+  { view: 'modellab', label: '模型实验室', icon: 'sparkle', group: '家庭与研发' },
 ]
 
-const purposePattern = /^[A-Za-z0-9._:-]{1,64}$/
+const VIEW_COMPONENTS: Record<ViewName, unknown> = {
+  overview: OverviewView,
+  members: MembersView,
+  plans: PlansView,
+  scan: ScanView,
+  review: ReviewView,
+  risks: RisksView,
+  graph: GraphView,
+  assistant: AssistantView,
+  authorizations: AuthView,
+  bigscreen: BigScreenView,
+  knowledge: KnowledgeView,
+  modellab: ModelLabView,
+}
 
-const actorId = ref('')
-const accessPurpose = ref('family-care')
-const households = ref<Household[]>([])
-const members = ref<Member[]>([])
-const authorizations = ref<Authorization[]>([])
-const selectedHouseholdId = ref('')
-const selectedAuthorizationId = ref<string | null>(null)
-const previewActorId = ref('')
-const isOwnerView = ref(false)
-const loadingHouseholds = ref(false)
-const loadingScope = ref(false)
-const saving = ref(false)
-const message = ref('Enter a development identity to load its households.')
-const error = ref('')
-const formError = ref('')
-const riskMemberId = ref('')
-const riskList = ref<RiskListResponse | null>(null)
-const riskDetails = ref<Record<string, RiskDetailResponse>>({})
-const loadingRisks = ref(false)
-const riskError = ref('')
-const expandedRiskId = ref<string | null>(null)
-const dashboardMemberId = ref('')
-const dashboardTimeline = ref<HealthEvent[]>([])
-const dashboardState = ref<MemberState | null>(null)
-const capabilities = ref<CapabilityResponse | null>(null)
-const loadingDashboard = ref(false)
-const dashboardError = ref('')
-const refreshingRules = ref(false)
-const carePlanEventId = ref('')
-const deferHours = ref(4)
-const skipReason = ref('')
-const pendingCareAction = ref<'confirm' | 'defer' | 'skip' | null>(null)
-const careActionMessage = ref('')
-const careActionError = ref('')
-
-const draft = reactive({
-  memberId: '',
-  granteeActorId: '',
-  dataFields: ['health_events'] as string[],
-  actions: ['READ_EVENTS'] as AuthorizationAction[],
-  purpose: 'family-care',
-  validUntil: localDateTimeInput(7),
+const navGroups = computed(() => {
+  const groups: Array<{ name: string; items: typeof NAV_ITEMS }> = []
+  for (const item of NAV_ITEMS) {
+    const group = groups.find(entry => entry.name === item.group)
+    if (group) group.items.push(item)
+    else groups.push({ name: item.group, items: [item] })
+  }
+  return groups
 })
 
-const requestOptions = computed<RequestOptions>(() => ({
-  actorId: actorId.value.trim() || undefined,
-  accessPurpose: accessPurpose.value.trim() || undefined,
-}))
-
-const selectedAuthorization = computed(
-  () => authorizations.value.find(item => item.id === selectedAuthorizationId.value) ?? null,
+const activeNav = computed(
+  () => NAV_ITEMS.find(item => item.view === session.currentView) ?? NAV_ITEMS[0]!,
 )
 
-const memberNames = computed(() => new Map(members.value.map(member => [member.id, member.display_name])))
-const dashboardMemberName = computed(
-  () => memberNames.value.get(dashboardMemberId.value) ?? 'Selected member',
-)
-const recentTimeline = computed(() => dashboardTimeline.value.slice(0, 4))
-const privacyScopeLabel = computed(
-  () => isOwnerView.value ? 'Owner-managed household scope' : 'API-filtered caregiver scope',
+const currentComponent = computed(() => VIEW_COMPONENTS[session.currentView])
+
+const toastIcon: Record<string, string> = {
+  success: 'check',
+  error: 'alert',
+  info: 'info',
+}
+
+/* ── 命令面板（Ctrl+K） ── */
+
+const paletteRef = ref<InstanceType<typeof CommandPalette> | null>(null)
+
+/* ── 主题切换 ── */
+
+const themeMenuOpen = ref(false)
+
+function pickTheme(id: ThemeId): void {
+  applyTheme(id)
+  themeMenuOpen.value = false
+}
+
+/* ── 折叠侧栏 ── */
+
+const SIDEBAR_KEY = 'hct-sidebar'
+const sidebarMini = ref(globalThis.localStorage?.getItem(SIDEBAR_KEY) === 'mini')
+
+function toggleSidebar(): void {
+  sidebarMini.value = !sidebarMini.value
+  try {
+    globalThis.localStorage?.setItem(SIDEBAR_KEY, sidebarMini.value ? 'mini' : 'full')
+  } catch {
+    // 无法持久化时仅本次会话生效。
+  }
+}
+
+/* ── 方向感页面过渡 ── */
+
+const transitionName = ref('page-forward')
+const transitioning = ref(false)
+
+watch(
+  () => session.currentView,
+  (next, previous) => {
+    const nextIndex = NAV_ITEMS.findIndex(item => item.view === next)
+    const previousIndex = NAV_ITEMS.findIndex(item => item.view === previous)
+    transitionName.value = nextIndex >= previousIndex ? 'page-forward' : 'page-back'
+    globalThis.scrollTo?.({ top: 0, behavior: 'smooth' })
+  },
 )
 
-const authorizationPreview = computed(() => {
-  const previewActor = previewActorId.value.trim()
-  if (!previewActor) return []
+function prefetchViews(): void {
+  const schedule =
+    typeof globalThis.requestIdleCallback === 'function'
+      ? (cb: () => void) => globalThis.requestIdleCallback(cb, { timeout: 1600 })
+      : (cb: () => void) => globalThis.setTimeout(cb, 280)
+  schedule(() => {
+    for (const load of Object.values(VIEW_LOADERS)) void load()
+  })
+}
 
-  return buildAuthorizationPreview(authorizations.value, previewActor).map(scope => ({
-    ...scope,
-    memberName: memberNames.value.get(scope.memberId) ?? 'Authorized member',
-  }))
+watch(
+  () => session.status,
+  status => {
+    if (status === 'ready') prefetchViews()
+  },
+)
+
+async function onHouseholdChange(event: Event): Promise<void> {
+  const target = event.target as HTMLSelectElement
+  await selectHousehold(target.value)
+}
+
+/* ── 光标追光 ── */
+
+const glowEl = ref<HTMLElement | null>(null)
+let glowFrame = 0
+let glowHandler: ((event: PointerEvent) => void) | null = null
+
+onMounted(() => {
+  installRipple()
+
+  const motionOk =
+    globalThis.matchMedia?.('(hover: hover)').matches &&
+    !globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+  if (!motionOk) return
+
+  glowHandler = (event: PointerEvent) => {
+    cancelAnimationFrame(glowFrame)
+    glowFrame = requestAnimationFrame(() => {
+      glowEl.value?.style.setProperty(
+        'transform',
+        `translate3d(${event.clientX}px, ${event.clientY}px, 0)`,
+      )
+    })
+  }
+  window.addEventListener('pointermove', glowHandler, { passive: true })
 })
 
-const canSave = computed(
-  () =>
-    draft.memberId.length > 0 &&
-    draft.granteeActorId.trim().length > 0 &&
-    draft.dataFields.length > 0 &&
-    draft.actions.length > 0 &&
-    purposePattern.test(draft.purpose) &&
-    isFutureDate(draft.validUntil),
-)
-
-const canSubmitCarePlan = computed(
-  () =>
-    Boolean(selectedHouseholdId.value && dashboardMemberId.value && carePlanEventId.value.trim()) &&
-    deferHours.value >= 1,
-)
-
-function localDateTimeInput(daysFromNow: number): string {
-  const date = new Date()
-  date.setDate(date.getDate() + daysFromNow)
-  date.setSeconds(0, 0)
-  const timezoneOffset = date.getTimezoneOffset() * 60_000
-  return new Date(date.getTime() - timezoneOffset).toISOString().slice(0, 16)
-}
-
-function isFutureDate(value: string): boolean {
-  const timestamp = Date.parse(value)
-  return Number.isFinite(timestamp) && timestamp > Date.now()
-}
-
-function createIdempotencyKey(): string {
-  return globalThis.crypto?.randomUUID?.() ?? `web-${Date.now()}-${Math.random().toString(16).slice(2)}`
-}
-
-function formatError(cause: unknown): string {
-  if (cause instanceof ApiClientError) {
-    if (cause.code === 'DEPENDENCY_UNAVAILABLE') return 'The local API is unavailable. No data was changed.'
-    if (cause.status === 401) return 'Sign in is required before this request can continue.'
-    if (cause.status === 404) return 'This resource is unavailable for the current identity.'
-    if (cause.status === 409) return 'The authorization changed elsewhere. Reload before trying again.'
-  }
-  return 'The request could not be completed. No health data is shown from this page.'
-}
-
-function clearScope(): void {
-  selectedHouseholdId.value = ''
-  members.value = []
-  authorizations.value = []
-  selectedAuthorizationId.value = null
-  previewActorId.value = ''
-  isOwnerView.value = false
-  riskMemberId.value = ''
-  riskList.value = null
-  riskDetails.value = {}
-  riskError.value = ''
-  expandedRiskId.value = null
-  dashboardMemberId.value = ''
-  dashboardTimeline.value = []
-  dashboardState.value = null
-  capabilities.value = null
-  dashboardError.value = ''
-  refreshingRules.value = false
-  carePlanEventId.value = ''
-  deferHours.value = 4
-  skipReason.value = ''
-  pendingCareAction.value = null
-  careActionMessage.value = ''
-  careActionError.value = ''
-  resetDraft()
-}
-
-function resetDraft(): void {
-  selectedAuthorizationId.value = null
-  formError.value = ''
-  draft.memberId = members.value[0]?.id ?? ''
-  draft.granteeActorId = ''
-  draft.dataFields = ['health_events']
-  draft.actions = ['READ_EVENTS']
-  draft.purpose = 'family-care'
-  draft.validUntil = localDateTimeInput(7)
-}
-
-async function loadHouseholds(): Promise<void> {
-  const currentActor = actorId.value.trim()
-  if (!currentActor) {
-    clearScope()
-    error.value = 'Enter a development identity before loading households.'
-    return
-  }
-
-  loadingHouseholds.value = true
-  error.value = ''
-  clearScope()
-  try {
-    households.value = await apiClient.listHouseholds(requestOptions.value)
-    if (households.value.length === 0) {
-      message.value = 'No household is visible to this identity.'
-      return
-    }
-    selectedHouseholdId.value = households.value[0]?.id ?? ''
-    await loadSelectedHousehold()
-  } catch (cause) {
-    households.value = []
-    error.value = formatError(cause)
-  } finally {
-    loadingHouseholds.value = false
-  }
-}
-
-async function loadSelectedHousehold(): Promise<void> {
-  const householdId = selectedHouseholdId.value
-  if (!householdId) return
-
-  loadingScope.value = true
-  error.value = ''
-  members.value = []
-  authorizations.value = []
-  selectedAuthorizationId.value = null
-  previewActorId.value = ''
-  riskMemberId.value = ''
-  riskList.value = null
-  riskDetails.value = {}
-  riskError.value = ''
-  expandedRiskId.value = null
-  dashboardMemberId.value = ''
-  dashboardTimeline.value = []
-  dashboardState.value = null
-  capabilities.value = null
-  dashboardError.value = ''
-  refreshingRules.value = false
-  carePlanEventId.value = ''
-  deferHours.value = 4
-  skipReason.value = ''
-  pendingCareAction.value = null
-  careActionMessage.value = ''
-  careActionError.value = ''
-  try {
-    members.value = await apiClient.listMembers(householdId, requestOptions.value)
-    draft.memberId = members.value[0]?.id ?? ''
-    riskMemberId.value = members.value[0]?.id ?? ''
-    dashboardMemberId.value = members.value[0]?.id ?? ''
-
-    try {
-      authorizations.value = await apiClient.listAuthorizations(householdId, requestOptions.value)
-      isOwnerView.value = true
-      message.value = 'Owner view: manage grants and preview a caregiver scope.'
-    } catch (cause) {
-      if (cause instanceof ApiClientError && cause.status === 404) {
-        isOwnerView.value = false
-        message.value = 'Caregiver view: the API has already filtered this identity to the granted member scope.'
-        await loadDashboard()
-        return
-      }
-      throw cause
-    }
-    await loadDashboard()
-  } catch (cause) {
-    members.value = []
-    authorizations.value = []
-    isOwnerView.value = false
-    error.value = formatError(cause)
-  } finally {
-    loadingScope.value = false
-  }
-}
-
-async function loadDashboard(): Promise<void> {
-  const householdId = selectedHouseholdId.value
-  const memberId = dashboardMemberId.value
-  if (!householdId || !memberId) return
-
-  loadingDashboard.value = true
-  dashboardError.value = ''
-  riskMemberId.value = memberId
-  try {
-    const [timelineResult, stateResult, capabilityResult] = await Promise.allSettled([
-      apiClient.listMemberTimeline(householdId, memberId, requestOptions.value),
-      apiClient.getMemberState(householdId, memberId, requestOptions.value),
-      apiClient.getCapabilities(requestOptions.value),
-    ])
-    if (timelineResult.status === 'fulfilled') dashboardTimeline.value = timelineResult.value
-    else dashboardTimeline.value = []
-    if (stateResult.status === 'fulfilled') dashboardState.value = stateResult.value
-    else dashboardState.value = null
-    if (capabilityResult.status === 'fulfilled') capabilities.value = capabilityResult.value
-    else capabilities.value = null
-
-    await loadMemberRisks()
-    if (timelineResult.status === 'rejected' || stateResult.status === 'rejected') {
-      dashboardError.value = 'Some permitted dashboard data is currently unavailable. No hidden data is inferred.'
-    }
-  } finally {
-    loadingDashboard.value = false
-  }
-}
-
-async function loadMemberRisks(): Promise<void> {
-  const householdId = selectedHouseholdId.value
-  const memberId = riskMemberId.value
-  if (!householdId || !memberId) {
-    riskList.value = null
-    return
-  }
-
-  loadingRisks.value = true
-  riskError.value = ''
-  expandedRiskId.value = null
-  try {
-    riskList.value = await apiClient.listMemberRisks(householdId, memberId, requestOptions.value)
-    riskDetails.value = {}
-  } catch (cause) {
-    riskList.value = null
-    riskError.value = formatError(cause)
-  } finally {
-    loadingRisks.value = false
-  }
-}
-
-async function runMemberRules(): Promise<void> {
-  const householdId = selectedHouseholdId.value
-  const memberId = riskMemberId.value
-  if (!householdId || !memberId) return
-
-  refreshingRules.value = true
-  riskError.value = ''
-  try {
-    const alerts = await apiClient.runMemberRules(
-      householdId,
-      memberId,
-      { ...requestOptions.value, idempotencyKey: createIdempotencyKey() },
-    )
-    await loadMemberRisks()
-    message.value = `Risk evaluation completed. ${alerts.length} signal${alerts.length === 1 ? '' : 's'} returned.`
-  } catch (cause) {
-    riskError.value = formatError(cause)
-  } finally {
-    refreshingRules.value = false
-  }
-}
-
-async function submitCarePlanAction(action: 'confirm' | 'defer' | 'skip'): Promise<void> {
-  const householdId = selectedHouseholdId.value
-  const memberId = dashboardMemberId.value
-  const planEventId = carePlanEventId.value.trim()
-  if (!householdId || !memberId || !planEventId || !canSubmitCarePlan.value) return
-  if (action === 'skip' && !skipReason.value.trim()) {
-    careActionError.value = 'Add a reason before skipping this care plan.'
-    return
-  }
-
-  pendingCareAction.value = action
-  careActionError.value = ''
-  careActionMessage.value = ''
-  const options = { ...requestOptions.value, idempotencyKey: createIdempotencyKey() }
-
-  try {
-    if (action === 'confirm') {
-      await apiClient.confirmCarePlan(householdId, memberId, planEventId, options)
-      careActionMessage.value = 'Care plan confirmed and recorded.'
-    } else if (action === 'defer') {
-      await apiClient.deferCarePlan(householdId, memberId, planEventId, deferHours.value, options)
-      careActionMessage.value = `Care plan deferred by ${deferHours.value} hour${deferHours.value === 1 ? '' : 's'}.`
-    } else {
-      await apiClient.skipCarePlan(householdId, memberId, planEventId, skipReason.value.trim(), options)
-      careActionMessage.value = 'Care plan skip recorded.'
-    }
-    await loadDashboard()
-  } catch (cause) {
-    careActionError.value = formatError(cause)
-  } finally {
-    pendingCareAction.value = null
-  }
-}
-
-async function toggleRiskDetail(alert: RiskAlert): Promise<void> {
-  if (expandedRiskId.value === alert.rule_id) {
-    expandedRiskId.value = null
-    return
-  }
-
-  expandedRiskId.value = alert.rule_id
-  if (riskDetails.value[alert.rule_id]) return
-
-  try {
-    const detail = await apiClient.getRiskDetail(
-      selectedHouseholdId.value,
-      riskMemberId.value,
-      alert.rule_id,
-      requestOptions.value,
-    )
-    riskDetails.value = { ...riskDetails.value, [alert.rule_id]: detail }
-  } catch (cause) {
-    expandedRiskId.value = null
-    riskError.value = formatError(cause)
-  }
-}
-
-function editAuthorization(authorization: Authorization): void {
-  selectedAuthorizationId.value = authorization.id
-  draft.memberId = authorization.member_id
-  draft.granteeActorId = authorization.grantee_actor_id
-  draft.dataFields = [...authorization.data_fields]
-  draft.actions = [...authorization.actions]
-  draft.purpose = authorization.purpose
-  draft.validUntil = toLocalDateTimeInput(authorization.valid_until)
-  formError.value = ''
-}
-
-function toLocalDateTimeInput(value: string): string {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return localDateTimeInput(7)
-  const timezoneOffset = date.getTimezoneOffset() * 60_000
-  return new Date(date.getTime() - timezoneOffset).toISOString().slice(0, 16)
-}
-
-function updateSelectedFields(value: string, checked: boolean): void {
-  draft.dataFields = checked
-    ? [...new Set([...draft.dataFields, value])]
-    : draft.dataFields.filter(field => field !== value)
-}
-
-function updateSelectedActions(value: AuthorizationAction, checked: boolean): void {
-  draft.actions = checked
-    ? [...new Set([...draft.actions, value])]
-    : draft.actions.filter(action => action !== value)
-}
-
-async function saveAuthorization(): Promise<void> {
-  if (!selectedHouseholdId.value || !canSave.value) {
-    formError.value = 'Choose a member, a caregiver identity, at least one field and action, a valid purpose code, and a future expiry.'
-    return
-  }
-
-  const validUntil = new Date(draft.validUntil).toISOString()
-  saving.value = true
-  formError.value = ''
-  try {
-    const existing = selectedAuthorization.value
-    if (existing) {
-      const input: UpdateAuthorizationInput = {
-        expected_version: existing.version,
-        data_fields: [...draft.dataFields],
-        actions: [...draft.actions],
-        purpose: draft.purpose,
-        valid_until: validUntil,
-      }
-      const updated = await apiClient.updateAuthorization(
-        selectedHouseholdId.value,
-        existing.id,
-        input,
-        { ...requestOptions.value, idempotencyKey: createIdempotencyKey() },
-      )
-      authorizations.value = authorizations.value.map(item => (item.id === updated.id ? updated : item))
-      message.value = 'Authorization updated. The preview now reflects the new active scope.'
-    } else {
-      const input: CreateAuthorizationInput = {
-        member_id: draft.memberId,
-        grantee_actor_id: draft.granteeActorId.trim(),
-        data_fields: [...draft.dataFields],
-        actions: [...draft.actions],
-        purpose: draft.purpose,
-        valid_until: validUntil,
-      }
-      const created = await apiClient.createAuthorization(
-        selectedHouseholdId.value,
-        input,
-        { ...requestOptions.value, idempotencyKey: createIdempotencyKey() },
-      )
-      authorizations.value = [...authorizations.value, created]
-      message.value = 'Authorization created. The preview now reflects the new active scope.'
-    }
-    resetDraft()
-  } catch (cause) {
-    formError.value = formatError(cause)
-  } finally {
-    saving.value = false
-  }
-}
-
-async function revokeAuthorization(authorization: Authorization): Promise<void> {
-  if (!selectedHouseholdId.value || !isAuthorizationActive(authorization)) return
-
-  saving.value = true
-  error.value = ''
-  try {
-    const revoked = await apiClient.revokeAuthorization(
-      selectedHouseholdId.value,
-      authorization.id,
-      authorization.version,
-      { ...requestOptions.value, idempotencyKey: createIdempotencyKey() },
-    )
-    authorizations.value = authorizations.value.map(item => (item.id === revoked.id ? revoked : item))
-    if (selectedAuthorizationId.value === authorization.id) resetDraft()
-    message.value = 'Authorization revoked. It is removed from the caregiver preview immediately.'
-  } catch (cause) {
-    error.value = formatError(cause)
-  } finally {
-    saving.value = false
-  }
-}
+onBeforeUnmount(() => {
+  if (glowHandler) window.removeEventListener('pointermove', glowHandler)
+  cancelAnimationFrame(glowFrame)
+})
 </script>
 
 <template>
-  <!-- The document lang is zh-CN; this view is authored in English (WCAG 3.1.2). -->
-  <main class="workspace" lang="en">
-    <header class="topbar">
-      <div>
-        <p class="eyebrow">HomeCare Twin</p>
-        <h1>Household overview</h1>
-        <p class="subtitle">Local household operations, bounded by member, purpose, and current API authorization.</p>
-      </div>
-      <p class="privacy-badge">Local-only health data</p>
-    </header>
+  <div class="bg-wash" aria-hidden="true" />
+  <div class="aurora" aria-hidden="true"><span /><span /><span /></div>
+  <div class="fireflies" aria-hidden="true"><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /></div>
+  <div class="leaves" aria-hidden="true"><i /><i /><i /><i /></div>
+  <div ref="glowEl" class="cursor-glow" aria-hidden="true" />
 
-    <section class="identity-bar" aria-label="Development session">
-      <label>
-        Development identity
-        <input v-model="actorId" autocomplete="off" placeholder="Actor ID" @change="clearScope" />
-      </label>
-      <label>
-        Access purpose code
-        <input v-model="accessPurpose" autocomplete="off" placeholder="family-care" @change="clearScope" />
-      </label>
-      <button type="button" :disabled="loadingHouseholds" @click="loadHouseholds">
-        {{ loadingHouseholds ? 'Loading' : 'Load households' }}
-      </button>
-    </section>
+  <WelcomeView v-if="session.status !== 'ready'" />
 
-    <p v-if="error" class="notice error" role="alert">{{ error }}</p>
-    <p v-else class="notice" role="status">{{ message }}</p>
-
-    <VisionQualityPanel
-      :actor-id="actorId.trim()"
-      :member-id="dashboardMemberId || undefined"
-      :access-purpose="accessPurpose.trim() || undefined"
-    />
-
-    <section v-if="households.length > 0" class="household-bar" aria-label="Household selection">
-      <label>
-        Household
-        <select v-model="selectedHouseholdId" :disabled="loadingScope" @change="loadSelectedHousehold">
-          <option v-for="household in households" :key="household.id" :value="household.id">
-            {{ household.name }}
-          </option>
-        </select>
-      </label>
-      <span class="view-status">{{ isOwnerView ? 'Owner management view' : 'Caregiver filtered view' }}</span>
-    </section>
-
-    <section v-if="loadingScope" class="state-panel" aria-live="polite">Loading the permitted household scope.</section>
-
-    <section v-if="selectedHouseholdId && dashboardMemberId" class="dashboard-overview" aria-labelledby="overview-title">
-      <div class="dashboard-heading">
+  <div v-else class="app-frame" :class="{ mini: sidebarMini }">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark"><AppIcon name="home" :size="24" /></span>
         <div>
-          <p class="section-label">Daily view</p>
-          <h2 id="overview-title">{{ dashboardMemberName }}</h2>
+          <div class="brand-name">家健镜</div>
+          <div class="brand-sub">HomeCare Twin</div>
         </div>
-        <label class="dashboard-member-select">
-          Member
-          <select v-model="dashboardMemberId" :disabled="loadingDashboard" @change="loadDashboard">
-            <option v-for="member in members" :key="member.id" :value="member.id">{{ member.display_name }}</option>
-          </select>
-        </label>
       </div>
 
-      <p v-if="dashboardError" class="notice error" role="alert">{{ dashboardError }}</p>
-      <div class="overview-grid">
-        <section class="overview-item">
-          <p class="section-label">Visible scope</p>
-          <strong>{{ privacyScopeLabel }}</strong>
-          <span>Identity: {{ actorId || 'Not set' }}</span>
-          <span>Purpose: {{ accessPurpose || 'Not set' }}</span>
-        </section>
-        <section class="overview-item">
-          <p class="section-label">Local status</p>
-          <strong>{{ capabilities ? 'API connected' : 'API status unavailable' }}</strong>
-          <span>{{ capabilities?.available.length ?? 0 }} local capabilities reported</span>
-          <span>Network egress remains policy-controlled</span>
-        </section>
-        <section class="overview-item">
-          <p class="section-label">Event projection</p>
-          <strong>{{ dashboardState?.state.events_count ?? 0 }} confirmed events</strong>
-          <span>{{ dashboardState?.last_event_id ? 'Current projection available' : 'No projected event yet' }}</span>
-          <span>Event details remain API-authorized</span>
-        </section>
-        <section class="overview-item">
-          <p class="section-label">Risk signals</p>
-          <strong>{{ riskList?.total ?? 0 }} active signals</strong>
-          <span>{{ riskList?.severe_count ?? 0 }} severe · {{ riskList?.warning_count ?? 0 }} warning</span>
-          <span>{{ riskError ? 'Risk dependency unavailable' : 'Desensitized evidence only' }}</span>
-        </section>
-      </div>
-
-      <div class="dashboard-columns">
-        <section class="dashboard-section" aria-labelledby="timeline-title">
-          <div class="panel-heading">
-            <div>
-              <p class="section-label">Recent activity</p>
-              <h2 id="timeline-title">Event timeline</h2>
-            </div>
-            <span class="section-status">{{ loadingDashboard ? 'Loading' : `${dashboardTimeline.length} visible` }}</span>
-          </div>
-          <p v-if="!loadingDashboard && recentTimeline.length === 0" class="empty-state">No confirmed event summary is available for this member.</p>
-          <ul v-else class="timeline-list">
-            <li v-for="event in recentTimeline" :key="event.id">
-              <strong>{{ event.event_type }}</strong>
-              <span>{{ event.confirmation_status }}</span>
-              <span>{{ new Date(event.created_at).toLocaleString() }}</span>
-            </li>
-          </ul>
-        </section>
-        <section class="dashboard-section" aria-labelledby="reminder-title">
-          <div class="panel-heading">
-            <div>
-              <p class="section-label">Care actions</p>
-              <h2 id="reminder-title">Care plan</h2>
-            </div>
-            <span class="section-status">Write access required</span>
-          </div>
-          <form class="care-plan-form" @submit.prevent="submitCarePlanAction('confirm')">
-            <label>
-              Plan event ID
-              <input v-model.trim="carePlanEventId" autocomplete="off" required placeholder="Plan event ID" />
-            </label>
-            <div class="care-action-row">
-              <button type="submit" :disabled="!canSubmitCarePlan || pendingCareAction !== null">
-                {{ pendingCareAction === 'confirm' ? 'Confirming' : 'Confirm' }}
-              </button>
-              <label>
-                Delay hours
-                <input v-model.number="deferHours" type="number" min="1" max="168" required />
-              </label>
-              <button type="button" :disabled="!canSubmitCarePlan || pendingCareAction !== null" @click="submitCarePlanAction('defer')">
-                {{ pendingCareAction === 'defer' ? 'Deferring' : 'Defer' }}
-              </button>
-            </div>
-            <label>
-              Skip reason
-              <input v-model.trim="skipReason" autocomplete="off" placeholder="Reason for skipping" />
-            </label>
-            <button type="button" class="danger-button" :disabled="!canSubmitCarePlan || pendingCareAction !== null" @click="submitCarePlanAction('skip')">
-              {{ pendingCareAction === 'skip' ? 'Recording' : 'Skip plan' }}
+      <template v-for="group in navGroups" :key="group.name">
+        <p class="nav-group-label">{{ group.name }}</p>
+        <ul class="nav-list">
+          <li v-for="item in group.items" :key="item.view">
+            <button
+              type="button"
+              class="nav-item"
+              :class="{ active: session.currentView === item.view }"
+              :title="sidebarMini ? item.label : undefined"
+              @click="setView(item.view)"
+            >
+              <AppIcon :name="item.icon" :size="19" />
+              <span class="nav-label">{{ item.label }}</span>
             </button>
-            <p v-if="careActionError" class="form-error" role="alert">{{ careActionError }}</p>
-            <p v-else-if="careActionMessage" class="action-success" role="status">{{ careActionMessage }}</p>
-          </form>
-        </section>
-      </div>
-    </section>
-
-    <section v-if="selectedHouseholdId && isOwnerView" class="owner-layout">
-      <section class="panel grant-editor" aria-labelledby="editor-title">
-        <div class="panel-heading">
-          <div>
-            <p class="section-label">Authorization editor</p>
-            <h2 id="editor-title">{{ selectedAuthorization ? 'Edit grant' : 'Create grant' }}</h2>
-          </div>
-          <button v-if="selectedAuthorization" type="button" class="quiet-button" @click="resetDraft">New grant</button>
-        </div>
-
-        <form @submit.prevent="saveAuthorization">
-          <label>
-            Caregiver identity
-            <input v-model="draft.granteeActorId" autocomplete="off" required placeholder="Caregiver actor ID" />
-          </label>
-          <label>
-            Household member
-            <select v-model="draft.memberId" required>
-              <option v-for="member in members" :key="member.id" :value="member.id">{{ member.display_name }}</option>
-            </select>
-          </label>
-          <fieldset>
-            <legend>Data fields</legend>
-            <label v-for="field in FIELD_OPTIONS" :key="field.value" class="check-row">
-              <input
-                type="checkbox"
-                :checked="draft.dataFields.includes(field.value)"
-                @change="updateSelectedFields(field.value, ($event.target as HTMLInputElement).checked)"
-              />
-              {{ field.label }}
-            </label>
-          </fieldset>
-          <fieldset>
-            <legend>Allowed actions</legend>
-            <label v-for="action in ACTION_OPTIONS" :key="action.value" class="check-row">
-              <input
-                type="checkbox"
-                :checked="draft.actions.includes(action.value)"
-                @change="updateSelectedActions(action.value, ($event.target as HTMLInputElement).checked)"
-              />
-              {{ action.label }}
-            </label>
-          </fieldset>
-          <!-- The hint stays outside the label so it is a description, not part of the accessible name. -->
-          <div>
-            <label>
-              Purpose code
-              <input
-                v-model="draft.purpose"
-                pattern="[A-Za-z0-9._:-]{1,64}"
-                required
-                placeholder="family-care"
-                aria-describedby="purpose-format-hint"
-                :aria-invalid="!purposePattern.test(draft.purpose)"
-              />
-            </label>
-            <small id="purpose-format-hint">ASCII code, 1-64 characters: letters, digits, period, underscore, colon, or hyphen.</small>
-          </div>
-          <label>
-            Expiry
-            <input v-model="draft.validUntil" type="datetime-local" required />
-          </label>
-          <p v-if="formError" class="form-error" role="alert">{{ formError }}</p>
-          <button type="submit" :disabled="saving || !canSave">{{ saving ? 'Saving' : selectedAuthorization ? 'Save changes' : 'Create grant' }}</button>
-        </form>
-      </section>
-
-      <section class="panel grants-panel" aria-labelledby="grants-title">
-        <div class="panel-heading">
-          <div>
-            <p class="section-label">Current scope</p>
-            <h2 id="grants-title">Active grants</h2>
-          </div>
-          <button type="button" class="quiet-button" :disabled="loadingScope" @click="loadSelectedHousehold">Refresh</button>
-        </div>
-
-        <p v-if="authorizations.length === 0" class="empty-state">No caregiver grant has been created for this household.</p>
-        <ul v-else class="grant-list">
-          <li v-for="authorization in authorizations" :key="authorization.id" class="grant-row">
-            <div>
-              <p class="grant-title">{{ memberNames.get(authorization.member_id) ?? 'Authorized member' }}</p>
-              <p class="grant-meta">{{ authorization.grantee_actor_id }} | {{ authorization.purpose }} | version {{ authorization.version }}</p>
-              <p class="grant-meta">{{ authorization.data_fields.join(', ') }} | {{ authorization.actions.join(', ') }}</p>
-              <p class="grant-meta">{{ isAuthorizationActive(authorization) ? `Expires ${new Date(authorization.valid_until).toLocaleString()}` : authorization.revoked_at ? 'Revoked' : 'Expired' }}</p>
-            </div>
-            <div class="row-actions">
-              <button type="button" class="quiet-button" :disabled="saving || !isAuthorizationActive(authorization)" @click="editAuthorization(authorization)">Edit</button>
-              <button type="button" class="danger-button" :disabled="saving || !isAuthorizationActive(authorization)" @click="revokeAuthorization(authorization)">Revoke</button>
-            </div>
-          </li>
-        </ul>
-      </section>
-
-      <section class="panel preview-panel" aria-labelledby="preview-title">
-        <div class="panel-heading">
-          <div>
-            <p class="section-label">Caregiver preview</p>
-            <h2 id="preview-title">Visible scope only</h2>
-          </div>
-        </div>
-        <label>
-          Preview caregiver identity
-          <input v-model="previewActorId" autocomplete="off" placeholder="Caregiver actor ID" />
-        </label>
-        <p class="preview-note">This preview uses grant metadata only. It never loads health event content; the API remains responsible for field filtering on a caregiver request.</p>
-        <p v-if="previewActorId && authorizationPreview.length === 0" class="empty-state">No active fields are granted to this caregiver.</p>
-        <ul v-else-if="authorizationPreview.length > 0" class="preview-list">
-          <li v-for="scope in authorizationPreview" :key="scope.authorizationId">
-            <strong>{{ scope.memberName }}</strong>
-            <span>{{ scope.fields.join(', ') }}</span>
-            <span>{{ scope.actions.join(', ') }}</span>
-            <span>{{ scope.purpose }} until {{ new Date(scope.validUntil).toLocaleString() }}</span>
-          </li>
-        </ul>
-      </section>
-    </section>
-
-    <section v-else-if="selectedHouseholdId" class="panel caregiver-panel" aria-labelledby="caregiver-title">
-      <p class="section-label">Filtered caregiver scope</p>
-      <h2 id="caregiver-title">Members available to this identity</h2>
-      <p class="preview-note">Only the API decides whether a member or event is returned. This view does not infer or reveal ungranted fields.</p>
-      <p v-if="members.length === 0" class="empty-state">No member is available for the current identity and purpose code.</p>
-      <ul v-else class="member-list">
-        <li v-for="member in members" :key="member.id">{{ member.display_name }}</li>
-      </ul>
-    </section>
-
-    <section v-if="selectedHouseholdId && riskMemberId" class="panel risk-panel" aria-labelledby="risk-title">
-      <div class="panel-heading">
-        <div>
-          <p class="section-label">Confirmed evidence</p>
-          <h2 id="risk-title">Risk signals</h2>
-        </div>
-        <button type="button" class="quiet-button" :disabled="loadingRisks || refreshingRules" @click="runMemberRules">
-          {{ refreshingRules ? 'Evaluating' : 'Re-evaluate' }}
-        </button>
-        <label class="risk-member-select">
-          Member
-          <select v-model="riskMemberId" :disabled="loadingRisks" @change="loadMemberRisks">
-            <option v-for="member in members" :key="member.id" :value="member.id">{{ member.display_name }}</option>
-          </select>
-        </label>
-      </div>
-
-      <p v-if="loadingRisks" class="state-panel" aria-live="polite">Loading permitted risk signals.</p>
-      <p v-else-if="riskError" class="notice error" role="alert">{{ riskError }}</p>
-      <p v-else-if="riskList && riskList.alerts.length === 0" class="empty-state">No active risk signals were returned for this member.</p>
-      <template v-else-if="riskList">
-        <p class="risk-summary">{{ riskList.total }} signals · {{ riskList.severe_count }} severe · {{ riskList.warning_count }} warning</p>
-        <ul class="risk-list">
-          <li v-for="alert in riskList.alerts" :key="alert.rule_id" class="risk-card">
-            <button type="button" class="risk-card-toggle" :aria-expanded="expandedRiskId === alert.rule_id" @click="toggleRiskDetail(alert)">
-              <span class="risk-level" :data-level="alert.level">{{ riskLevelLabel(alert.level) }}</span>
-              <span class="risk-message">{{ alert.message }}</span>
-              <span class="risk-source-count">{{ toRiskCardModel(alert).sourceCount }} source events</span>
-              <span aria-hidden="true">{{ expandedRiskId === alert.rule_id ? 'Hide' : 'View evidence' }}</span>
-            </button>
-            <div v-if="expandedRiskId === alert.rule_id" class="risk-detail">
-              <p class="preview-note">Evidence is limited to the API's desensitized summary. This page never loads health event payloads.</p>
-              <p v-if="riskDetails[alert.rule_id]?.source_events.length === 0" class="empty-state">Evidence is unavailable for this signal.</p>
-              <ul v-else class="source-list">
-                <li v-for="source in riskDetails[alert.rule_id]?.source_events ?? []" :key="source.id">
-                  <strong>{{ source.event_type }}</strong>
-                  <span>{{ source.confirmation_status }}</span>
-                  <span>{{ source.created_at ? new Date(source.created_at).toLocaleString() : 'Time unavailable' }}</span>
-                </li>
-              </ul>
-            </div>
           </li>
         </ul>
       </template>
-    </section>
 
-    <footer>Teaching demonstration only. This page does not diagnose, prescribe, or make medication decisions.</footer>
-  </main>
+      <div class="sidebar-foot">
+        <p class="privacy-note">
+          <AppIcon name="lock" :size="16" />
+          <span>家庭健康数据默认不出网，全部保存在本地可信域。</span>
+        </p>
+        <p class="privacy-note">
+          <AppIcon name="leaf" :size="16" />
+          <span>教学演示系统，不提供诊断、处方或用药决策。</span>
+        </p>
+        <button type="button" class="sidebar-collapse" :title="sidebarMini ? '展开导航' : '收起导航'" @click="toggleSidebar">
+          <AppIcon name="arrow-right" :size="15" style="transform: rotate(180deg)" />
+          <span v-if="!sidebarMini">收起导航</span>
+        </button>
+      </div>
+    </aside>
+
+    <div class="main-area">
+      <div v-if="transitioning" class="route-progress" aria-hidden="true" />
+
+      <header class="topbar">
+        <div class="crumb">
+          <span class="crumb-group">{{ activeNav.group }}</span>
+          <span class="crumb-sep">/</span>
+          <h1 class="topbar-title">{{ activeNav.label }}</h1>
+        </div>
+        <div class="topbar-side">
+          <button
+            type="button"
+            class="palette-trigger"
+            title="打开命令面板（Ctrl+K）"
+            @click="paletteRef?.show()"
+          >
+            <AppIcon name="compass" :size="15" />
+            <span class="palette-trigger-text">快速跳转</span>
+            <kbd class="palette-kbd">Ctrl</kbd><kbd class="palette-kbd">K</kbd>
+          </button>
+          <span class="api-dot" :title="session.capabilities ? `本地 API 已连接 · 阶段 ${session.capabilities.phase}` : '本地 API 状态未知'">
+            <i :class="session.capabilities ? 'on' : 'off'" />
+            {{ session.capabilities ? '本地在线' : '状态未知' }}
+          </span>
+          <label v-if="session.households.length > 0" class="context-select">
+            家庭
+            <select
+              :value="session.selectedHouseholdId"
+              :disabled="session.loadingScope"
+              @change="onHouseholdChange"
+            >
+              <option v-for="household in session.households" :key="household.id" :value="household.id">
+                {{ household.name }}
+              </option>
+            </select>
+          </label>
+          <button
+            v-if="session.currentView !== 'members'"
+            v-magnet="3"
+            type="button"
+            class="btn btn-clay btn-small"
+            title="到成员档案手工记录一条健康事实"
+            @click="setView('members')"
+          >
+            <AppIcon name="plus" :size="15" />
+            记一笔
+          </button>
+          <div class="theme-menu-wrap">
+            <button
+              type="button"
+              class="icon-button"
+              title="切换界面主题"
+              :aria-expanded="themeMenuOpen"
+              @click="themeMenuOpen = !themeMenuOpen"
+            >
+              <AppIcon name="palette" :size="19" />
+            </button>
+            <div v-if="themeMenuOpen" class="theme-backdrop" @click="themeMenuOpen = false" />
+            <div v-if="themeMenuOpen" class="theme-menu" role="menu">
+              <p class="theme-menu-label">界面主题</p>
+              <button
+                v-for="theme in THEMES"
+                :key="theme.id"
+                type="button"
+                class="theme-option"
+                :class="{ active: currentTheme === theme.id }"
+                role="menuitem"
+                @click="pickTheme(theme.id)"
+              >
+                <span class="theme-dots">
+                  <i v-for="color in theme.swatches" :key="color" :style="{ background: color }" />
+                </span>
+                <span class="theme-name">
+                  <strong>{{ theme.name }}</strong>
+                  <span>{{ theme.tagline }}</span>
+                </span>
+                <AppIcon v-if="currentTheme === theme.id" class="theme-check" name="check" :size="15" />
+              </button>
+            </div>
+          </div>
+          <span class="identity-chip">
+            {{ session.actorId }}
+            <span class="role-tag" :class="{ caregiver: !session.isOwnerView }">
+              {{ session.isOwnerView ? '家庭管理员' : '授权照护者' }}
+            </span>
+            <button type="button" class="icon-button" title="退出当前身份" @click="signOut">
+              <AppIcon name="signout" :size="17" />
+            </button>
+          </span>
+        </div>
+      </header>
+
+      <main class="view-stage">
+        <Transition
+          :name="transitionName"
+          mode="out-in"
+          @before-leave="transitioning = true"
+          @after-enter="transitioning = false"
+        >
+          <div class="view-container" :key="session.currentView">
+            <Suspense>
+              <component :is="currentComponent" />
+              <template #fallback>
+                <SkeletonList variant="cards" :rows="4" />
+              </template>
+            </Suspense>
+          </div>
+        </Transition>
+      </main>
+
+      <footer class="app-footer">
+        家健镜 HomeCare Twin · 教学演示，不用于诊断或治疗 · 紧急情况请联系医生或当地急救服务
+      </footer>
+    </div>
+  </div>
+
+  <ConfirmDialog />
+  <CommandPalette v-if="session.status === 'ready'" ref="paletteRef" :nav-items="NAV_ITEMS" />
+
+  <div class="toast-region" role="status" aria-live="polite">
+    <div v-for="toast in session.toasts" :key="toast.id" class="toast" :class="toast.kind">
+      <AppIcon :name="toastIcon[toast.kind] ?? 'info'" :size="17" />
+      <span>{{ toast.text }}</span>
+      <button type="button" class="icon-button toast-close" title="关闭提醒" @click="dismissToast(toast.id)">
+        <AppIcon name="close" :size="14" />
+      </button>
+    </div>
+  </div>
 </template>

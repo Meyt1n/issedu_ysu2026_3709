@@ -9,9 +9,13 @@ from ai.vision.candidate_fusion import (
     FusionRequest,
     fuse_evidence,
 )
+from ai.vision.candidate_fusion import (
+    FusionStatus as VisionFusionStatus,
+)
 from ai.vision.evidence_pipeline import (
     EvidencePipelineRequest,
     EvidencePipelineResult,
+    LocalMasterData,
     process_evidence,
     verify_adapter_receipt,
 )
@@ -78,13 +82,19 @@ from app.models import (
 )
 from app.review import FusionStatus as ReviewFusionStatus
 from app.review import (
+    FusionStatus as ReviewFusionStatus,
+)
+from app.review import (
     ReviewTask,
     confirm_review,
     correct_review,
     create_review_task,
     get_review_task,
-    list_pending_reviews,
+    get_review_task_by_vision_task,
     skip_review,
+)
+from app.review import (
+    list_review_tasks as list_review_tasks_query,
 )
 from app.schemas import (
     AccessAuditRead,
@@ -1472,23 +1482,106 @@ def list_assistant_tools(
     return {"tools": tools, "count": len(tools)}
 
 
+def _summarize_event_payload(payload: dict | None) -> str:
+    if not payload:
+        return ""
+    for key in ("drug_name", "drug", "allergy", "disease", "plan", "note"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _build_assistant_context(
+    session: Session,
+    actor_id: str,
+    household_id: str | None,
+    member_id: str | None,
+) -> str | None:
+    """Ground the assistant in the member's confirmed local facts (RAG-lite).
+
+    The v5 adapter is trained evidence-first: without grounds it refuses or
+    hedges. Injecting the projection facts and active rule alerts gives it
+    the "先依据后解释" context the product spec requires. Only the household
+    owner gets the injection; anyone else keeps the ungrounded behaviour.
+    """
+    if not household_id or not member_id:
+        return None
+    household = session.get(Household, household_id)
+    member = session.get(Member, member_id)
+    if (
+        household is None
+        or member is None
+        or member.household_id != household_id
+        or household.created_by != actor_id
+    ):
+        return None
+
+    from app.projection import build_relationship_graph, get_timeline
+    from app.rules import run_rules
+
+    events = get_timeline(session, member_id)
+    facts = build_relationship_graph(events)
+    alerts = run_rules(facts)
+
+    def joined(items: list[dict], key: str = "name") -> str:
+        values = [str(item.get(key)) for item in items if item.get(key)]
+        return "、".join(dict.fromkeys(values)) if values else "无记录"
+
+    lines = [
+        f"【本地已确认事实 · 成员：{member.display_name}】",
+        f"在用药品：{joined(facts['drugs'])}",
+        f"过敏史：{joined(facts['allergies'])}",
+        f"疾病记录：{joined(facts['diseases'])}",
+    ]
+    plan_texts = [
+        f"{plan.get('drug')}（{plan.get('schedule') or '未定时间'}）"
+        for plan in facts["plans"]
+        if plan.get("drug")
+    ]
+    lines.append("用药计划：" + ("；".join(plan_texts) if plan_texts else "无记录"))
+    if alerts:
+        lines.append("活跃风险提醒：")
+        lines.extend(
+            f"- [{alert.level}] {alert.message}（规则 {alert.rule_id}）" for alert in alerts[:6]
+        )
+    else:
+        lines.append("活跃风险提醒：当前无触发规则")
+    recent = events[-5:]
+    if recent:
+        lines.append("最近已确认事件：")
+        for event in recent:
+            summary = _summarize_event_payload(event.payload)
+            stamp = event.created_at.strftime("%m-%d") if event.created_at else ""
+            lines.append(f"- {stamp} {event.event_type} {summary}".rstrip())
+    lines.append(
+        "以上为该成员当前授权范围内的本地事实，回答家庭照护问题时请以此为依据，"
+        "在 sources 中引用相关的规则编号或事件类型；事实之外的内容请说明无法判断。"
+    )
+    return "\n".join(lines)
+
+
 @router.post("/assistant/chat", response_model=AssistantResponse)
 def assistant_chat(
     payload: AssistantRequest,
     actor_id: str = Depends(get_actor_id),
+    household_id: str | None = None,
+    member_id: str | None = None,
     session: Session = Depends(get_session),
-    household_id: str | None = Query(default=None),
-    member_id: str | None = Query(default=None),
 ) -> AssistantResponse:
     """Run the local health assistant with Ollama tool calling.
 
-    Tool calls execute against the caller's authorized knowledge scope.
-    Final answers must cite chunks returned by those tools; fabricated
-    sources are dropped and the response degrades.
+    Grounds the conversation in the selected member's confirmed facts, then
+    falls back to a structured degrade response if the model is unavailable,
+    output fails schema validation, or medical boundary checks are triggered.
     """
+    messages = list(payload.messages)
+    context = _build_assistant_context(session, actor_id, household_id, member_id)
+    if context:
+        messages = [{"role": "system", "content": context}, *messages]
     result = run_assistant(
         session,
-        messages=payload.messages,
+        messages=messages,
         actor_id=actor_id,
         household_id=household_id,
         member_id=member_id,
@@ -1612,19 +1705,22 @@ def _require_vision_task_access(
     access_purpose: str | None,
 ) -> VisionTask:
     task = get_vision_task(session, task_id)
-    member = (
-        session.get(Member, task.member_id)
-        if task is not None and task.member_id is not None
-        else None
-    )
-    household = (
-        session.get(Household, task.household_id)
-        if task is not None
-        else None
-    )
+    if task is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="VISION_TASK_NOT_FOUND",
+        )
+    if not task.member_id:
+        if task.created_by != actor_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="VISION_TASK_NOT_FOUND",
+            )
+        return task
+    member = session.get(Member, task.member_id)
+    household = session.get(Household, task.household_id)
     if (
-        task is None
-        or member is None
+        member is None
         or household is None
         or _is_erased(household, member)
         or not has_authorized_action(
@@ -1661,26 +1757,30 @@ def create_vision_task_endpoint(
     /files/upload).  The task is queued asynchronously and a worker picks it
     up later.  Use the idempotency key to avoid duplicate tasks on retry.
     """
-    member = session.get(Member, payload.member_id)
-    household = (
-        session.get(Household, member.household_id)
-        if member is not None
-        else None
-    )
-    if (
-        member is None
-        or household is None
-        or not has_authorized_action(
-            session,
-            household,
-            member.id,
-            actor_id,
-            "WRITE_EVENTS",
-            "health_events",
-            access_purpose,
+    household_id = "system"
+    if payload.member_id:
+        member = session.get(Member, payload.member_id)
+        household = (
+            session.get(Household, member.household_id)
+            if member is not None
+            else None
         )
-    ):
-        _raise_resource_not_found()
+        if (
+            member is None
+            or household is None
+            or _is_erased(household, member)
+            or not has_authorized_action(
+                session,
+                household,
+                member.id,
+                actor_id,
+                "WRITE_EVENTS",
+                "health_events",
+                access_purpose,
+            )
+        ):
+            _raise_resource_not_found()
+        household_id = household.id
 
     file_root = Path(settings.file_root).resolve()
     target = (file_root / payload.file_id).resolve()
@@ -1720,7 +1820,7 @@ def create_vision_task_endpoint(
 
     task = create_vision_task(
         session,
-        household_id=household.id,
+        household_id=household_id,
         created_by=actor_id,
         file_id=payload.file_id,
         member_id=payload.member_id,
@@ -1737,6 +1837,125 @@ def create_vision_task_endpoint(
     session.refresh(task)
     logger.info("VISION_TASK_ENQUEUED task=%s actor=%s", task.id, actor_id)
     return task
+
+
+_FUSION_TO_REVIEW_STATUS: dict[VisionFusionStatus, ReviewFusionStatus] = {
+    VisionFusionStatus.MATCHED: ReviewFusionStatus.MATCHED,
+    VisionFusionStatus.CONFLICT: ReviewFusionStatus.CONFLICT,
+    VisionFusionStatus.UNKNOWN: ReviewFusionStatus.UNKNOWN,
+    VisionFusionStatus.REVIEW: ReviewFusionStatus.LOW_QUALITY,
+}
+
+_FUSION_CHANNEL_LABELS = {
+    "ocr": "OCR 文本",
+    "barcode": "条码",
+    "packaging": "包装特征",
+    "metadata": "规格/厂家",
+}
+
+
+def _ensure_review_task_for_vision(
+    session: Session,
+    *,
+    task: VisionTask,
+    result: EvidencePipelineResult,
+    master_data: LocalMasterData,
+) -> ReviewTask | None:
+    """HCT-206 → HCT-207 bridge: turn fusion output into a review task.
+
+    Every four-state outcome (including MATCHED) must pass human review
+    before any health fact exists; without this bridge the vision loop
+    stopped at fusion and nothing ever reached the review center.
+    Idempotent: at most one review task per vision task.
+    """
+    if not task.member_id:
+        return None
+    member = session.get(Member, task.member_id)
+    if member is None:
+        return None
+    existing = get_review_task_by_vision_task(session, task.id)
+    if existing is not None:
+        return existing
+
+    fusion = fuse_evidence(result, master_data)
+    names_by_record = {
+        record.record_id: (record.name_aliases[0] if record.name_aliases else record.record_id)
+        for record in master_data.records
+    }
+    specs_by_record = {
+        record.record_id: record.specification for record in master_data.records
+    }
+
+    candidates: list[dict] = []
+    for fused in fusion.candidates:
+        evidence_notes: list[str] = []
+        for channel, label in _FUSION_CHANNEL_LABELS.items():
+            channel_evidence = fused.channel_evidence.get(channel)
+            if channel_evidence is None or channel_evidence.missing:
+                continue
+            if channel_evidence.support:
+                evidence_notes.append(f"{label}一致（{channel_evidence.score:.2f}）")
+            if channel_evidence.conflict:
+                evidence_notes.append(f"{label}冲突")
+        candidates.append(
+            {
+                "drug_name": names_by_record.get(fused.candidate_id, fused.candidate_id),
+                "confidence": fused.score,
+                "evidence": evidence_notes,
+                "dosage": specs_by_record.get(fused.candidate_id),
+                "frequency": None,
+                "candidate_id": fused.candidate_id,
+                "rank": fused.rank,
+                "conflicts": fused.conflicts,
+            }
+        )
+
+    if not candidates:
+        # Master data had no match. Surface the raw OCR field extraction so
+        # the reviewer still sees what the engines read and can correct or
+        # skip with context instead of facing an empty task.
+        spec_value = next(
+            (
+                field.normalized_value
+                for field in result.fields
+                if field.field_name == "specification"
+            ),
+            None,
+        )
+        for index, field in enumerate(
+            field for field in result.fields if field.field_name == "drug_name"
+        ):
+            candidates.append(
+                {
+                    "drug_name": field.normalized_value,
+                    "confidence": field.confidence,
+                    "evidence": ["OCR 提取，主数据未收录，需人工核对"],
+                    "dosage": spec_value,
+                    "frequency": None,
+                    "candidate_id": None,
+                    "rank": index + 1,
+                    "conflicts": [],
+                }
+            )
+
+    review = create_review_task(
+        session,
+        vision_task_id=task.id,
+        household_id=member.household_id,
+        member_id=member.id,
+        candidates=candidates,
+        fusion_status=_FUSION_TO_REVIEW_STATUS[fusion.status],
+        model_version=result.versions.get("vision_model_version") or task.model_version,
+        rule_version=fusion.versions.get("fusion_rule_version", "fusion-rules-v1"),
+    )
+    logger.info(
+        "REVIEW_TASK_BRIDGED vision_task=%s review_task=%s status=%s candidates=%d",
+        task.id,
+        review.id,
+        fusion.status,
+        len(candidates),
+    )
+    return review
 
 
 @router.post(
@@ -1817,6 +2036,12 @@ def submit_vision_evidence_endpoint(
         schema_version=result.schema_version,
         code_version=payload.code_version,
         data_version=payload.master_data_version,
+    )
+    _ensure_review_task_for_vision(
+        session,
+        task=updated,
+        result=result,
+        master_data=master_data,
     )
     session.commit()
     session.refresh(updated)
@@ -1933,6 +2158,36 @@ def fuse_vision_task_endpoint(
         review_task_id=review_task.id,
         review_task_version=review_task.version,
     )
+
+
+@router.get("/vision-tasks", response_model=list[VisionTaskRead])
+def list_my_vision_tasks_endpoint(
+    task_status: str | None = None,
+    limit: int = 20,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> list[VisionTask]:
+    """List the caller's own vision tasks (adapter worker poll endpoint).
+
+    Actor-scoped: only tasks created by the requesting identity are returned,
+    so a family-trusted-domain worker can pick up its queued jobs without a
+    household-owner lookup (web tasks are stored under the synthetic
+    "system" household).
+    """
+    if task_status is not None and task_status not in {s.value for s in VisionTaskStatus}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"INVALID_STATUS: {task_status}",
+        )
+    stmt = (
+        select(VisionTask)
+        .where(VisionTask.created_by == actor_id)
+        .order_by(VisionTask.created_at.asc())
+        .limit(max(1, min(limit, 100)))
+    )
+    if task_status is not None:
+        stmt = stmt.where(VisionTask.status == task_status)
+    return list(session.scalars(stmt).all())
 
 
 @router.get("/vision-tasks/{task_id}", response_model=VisionTaskRead)
@@ -2134,7 +2389,8 @@ def list_review_tasks(
         access_purpose,
     ):
         _raise_resource_not_found()
-    return list_pending_reviews(session, household_id, member_id)
+    # 返回全部状态（待复核 + 已处理），前端负责分组展示处理记录。
+    return list_review_tasks_query(session, household_id, member_id)
 
 
 @router.get(

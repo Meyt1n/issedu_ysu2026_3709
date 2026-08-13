@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 import { ApiClientError, apiClient } from '../api/client'
 import type { VisionQualityResponse, VisionTask } from '../api/types'
+import AppIcon from '../components/AppIcon.vue'
 import {
   canCreateVisionTask,
   formatMetricValue,
@@ -17,6 +18,10 @@ const props = defineProps<{
   actorId: string
   memberId?: string
   accessPurpose?: string
+}>()
+
+const emit = defineEmits<{
+  (event: 'task-created', task: VisionTask): void
 }>()
 
 const selectedFile = ref<File | null>(null)
@@ -42,6 +47,24 @@ const visibleMetrics = computed(() => {
   return Object.keys(metricLabels)
     .filter(key => metrics[key])
     .map(key => ({ key, label: metricLabels[key], metric: metrics[key]! }))
+})
+
+const stepStates = computed(() => {
+  const flow = state.value
+  const hasFile = Boolean(selectedFile.value)
+  const passed = flow === 'passed' || flow === 'queueing' || flow === 'queued'
+  return [
+    { label: '选择图片', state: hasFile ? 'done' : 'current' },
+    {
+      label: '质量检查',
+      state: passed ? 'done' : flow === 'checking' ? 'current' : hasFile ? 'current' : 'idle',
+    },
+    {
+      label: '创建识别任务',
+      state: flow === 'queued' ? 'done' : passed ? 'current' : 'idle',
+    },
+    { label: '人工复核后入档', state: 'idle' },
+  ]
 })
 
 function releasePreview(): void {
@@ -97,7 +120,7 @@ async function checkQuality(): Promise<void> {
   if (!file) return
   if (!props.actorId) {
     state.value = 'error'
-    error.value = '请先填写顶部的开发身份。'
+    error.value = '请先进入家庭空间。'
     return
   }
 
@@ -141,6 +164,7 @@ async function queueVisionTask(): Promise<void> {
     if (!task || generation !== requestGeneration) return
     createdTask.value = task
     state.value = 'queued'
+    emit('task-created', task)
   } catch (cause) {
     if (generation !== requestGeneration) return
     state.value = 'error'
@@ -159,75 +183,113 @@ watch(() => [props.actorId, props.memberId, props.accessPurpose], () => {
 </script>
 
 <template>
-  <!-- This panel is authored in Chinese inside an English-labelled page (WCAG 3.1.2). -->
-  <section class="panel vision-quality-panel" aria-labelledby="vision-quality-title" lang="zh-CN">
-    <div class="panel-heading">
+  <section class="card" aria-labelledby="vision-quality-title">
+    <div class="card-heading">
       <div>
-        <p class="section-label">本地药盒采集</p>
-        <h2 id="vision-quality-title">先检查图片，再进入识别</h2>
+        <p class="eyebrow">本地药盒采集</p>
+        <h3 id="vision-quality-title" class="card-title">先检查图片质量，再进入识别</h3>
       </div>
-      <span class="quality-state" :data-state="state" role="status" aria-live="polite">{{ qualityStateLabel(state) }}</span>
+      <span
+        class="pill"
+        :class="state === 'queued' ? 'pine' : state === 'retake' || state === 'error' ? 'rose' : state === 'passed' ? 'gold' : 'plain'"
+      >
+        {{
+          state === 'idle' ? '等待图片'
+          : state === 'ready' ? '待检查'
+          : state === 'checking' ? '正在检查'
+          : state === 'retake' ? '需要重拍'
+          : state === 'passed' ? '质量通过'
+          : state === 'queueing' ? '正在创建任务'
+          : state === 'queued' ? '任务已入队'
+          : '出现问题'
+        }}
+      </span>
     </div>
 
-    <p class="preview-note">图片只发送到本机 API。质量通过不代表药品识别或用药结论，后续结果仍需人工确认。</p>
+    <div class="step-rail" style="margin-bottom: 16px">
+      <span
+        v-for="(step, index) in stepStates"
+        :key="step.label"
+        class="step-chip"
+        :class="step.state"
+      >
+        <span class="step-no">{{ index + 1 }}</span>
+        {{ step.label }}
+      </span>
+    </div>
 
-    <div class="capture-layout">
-      <div class="capture-preview">
+    <p class="card-note" style="margin: 0 0 14px">
+      图片只发送到本机 API。质量通过不代表识别成功，识别结果仅为候选，确认后才进入健康记录。
+    </p>
+
+    <div class="grid-two">
+      <label class="capture-zone" :class="{ checking: state === 'checking' }" :aria-disabled="isBusy">
         <img v-if="previewUrl" :src="previewUrl" alt="当前待检查药盒图片的本地预览" />
-        <p v-else>把药盒正面放入画面，避免反光和裁切。</p>
-      </div>
-      <div class="capture-actions">
-        <label class="file-picker">
-          拍照或选择图片
-          <input
-            type="file"
-            accept=".jpg,.jpeg,.png,image/jpeg,image/png"
-            capture="environment"
-            :disabled="isBusy"
-            @change="selectFile"
-          />
-        </label>
-        <p v-if="selectedFile" class="local-file-note">已选择：{{ selectedFile.name }}（仅本地预览）</p>
-        <div class="capture-buttons">
-          <button type="button" :disabled="!canCheck" @click="checkQuality">
+        <template v-else>
+          <AppIcon name="scan" :size="36" />
+          <span class="capture-hint">
+            把药盒正面放入画面，避免反光和裁切。<br />
+            点击此处拍照或选择 JPEG / PNG 图片
+          </span>
+        </template>
+        <input
+          type="file"
+          accept=".jpg,.jpeg,.png,image/jpeg,image/png"
+          capture="environment"
+          :disabled="isBusy"
+          style="display: none"
+          @change="selectFile"
+        />
+      </label>
+
+      <div class="section-stack">
+        <p v-if="selectedFile" class="text-soft" style="font-size: 13px; margin: 0">
+          已选择：{{ selectedFile.name }}（仅本地预览，未上传）
+        </p>
+        <div class="row-actions">
+          <button type="button" class="btn btn-primary" :disabled="!canCheck" @click="checkQuality">
             {{ state === 'checking' ? '正在检查' : '检查图片质量' }}
           </button>
-          <button v-if="selectedFile" type="button" class="quiet-button" :disabled="isBusy" @click="clearFile">清除</button>
+          <button v-if="selectedFile" type="button" class="btn btn-ghost" :disabled="isBusy" @click="clearFile">
+            清除
+          </button>
+        </div>
+
+        <p v-if="error" class="notice error" role="alert">
+          <AppIcon name="alert" :size="16" />
+          {{ error }}
+        </p>
+
+        <div v-if="qualityResult?.decision === 'RETAKE'" class="notice warn" role="status" style="display: block">
+          <strong style="display: block; margin-bottom: 6px">需要重新拍摄</strong>
+          <ul style="margin: 0 0 6px; padding-left: 18px">
+            <li v-for="prompt in qualityResult.retake_prompts" :key="prompt">{{ prompt }}</li>
+          </ul>
+          本次不会上传文件，也不会创建识别任务。
+        </div>
+
+        <template v-if="qualityResult?.decision === 'PASS'">
+          <div class="notice ok" role="status">
+            <AppIcon name="check" :size="16" />
+            图片质量通过（配置 {{ qualityResult.config_version }}），可以创建本地识别任务。
+          </div>
+          <dl class="quality-metrics">
+            <div v-for="item in visibleMetrics" :key="item.key">
+              <dt>{{ item.label }}</dt>
+              <dd :data-passed="item.metric.passed">{{ formatMetricValue(item.key, item.metric.value) }}</dd>
+            </div>
+          </dl>
+          <button type="button" class="btn btn-clay" :disabled="!canQueue" @click="queueVisionTask">
+            {{ state === 'queueing' ? '正在创建任务' : '通过并创建识别任务' }}
+            <AppIcon v-if="state !== 'queueing'" name="arrow-right" :size="16" />
+          </button>
+        </template>
+
+        <div v-if="createdTask" class="notice ok" role="status" style="display: block">
+          <strong style="display: block; margin-bottom: 4px">本地识别任务已创建</strong>
+          任务编号 {{ createdTask.id }} · 当前进入 OCR 待处理队列，不会自动写入健康记录。
         </div>
       </div>
-    </div>
-
-    <p v-if="error" class="notice error" role="alert">{{ error }}</p>
-
-    <div v-if="qualityResult?.decision === 'RETAKE'" class="quality-result retake" role="status">
-      <strong>需要重新拍摄</strong>
-      <ul>
-        <li v-for="prompt in qualityResult.retake_prompts" :key="prompt">{{ prompt }}</li>
-      </ul>
-      <p>本次不会上传文件，也不会创建识别任务。</p>
-    </div>
-
-    <div v-else-if="qualityResult?.decision === 'PASS'" class="quality-result passed" role="status">
-      <div>
-        <strong>图片质量通过</strong>
-        <span>配置 {{ qualityResult.config_version }}</span>
-      </div>
-      <dl class="quality-metrics">
-        <div v-for="item in visibleMetrics" :key="item.key">
-          <dt>{{ item.label }}</dt>
-          <dd :data-passed="item.metric.passed">{{ formatMetricValue(item.key, item.metric.value) }}</dd>
-        </div>
-      </dl>
-      <button type="button" :disabled="!canQueue" @click="queueVisionTask">
-        {{ state === 'queueing' ? '正在创建任务' : '通过并创建本地识别任务' }}
-      </button>
-    </div>
-
-    <div v-if="createdTask" class="quality-result queued" role="status">
-      <strong>本地识别任务已创建</strong>
-      <span>状态：{{ createdTask.status }}</span>
-      <span>任务编号：{{ createdTask.id }}</span>
-      <p>当前只进入 OCR 待处理队列，不会自动写入健康记录。</p>
     </div>
   </section>
 </template>
