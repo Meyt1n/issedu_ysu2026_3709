@@ -53,6 +53,16 @@ def commit_tree(repo: Path, tree: str, message: str, *parents: str) -> str:
     return git(repo, "commit-tree", tree, *parent_args, "-m", message)
 
 
+def test_loads_unique_pr_commit_shas_from_ndjson(tmp_path: Path) -> None:
+    commits_file = tmp_path / "commits.ndjson"
+    commits_file.write_text(
+        '{"sha":"first"}\n{"sha":"second"}\n{"sha":"first"}\n',
+        encoding="utf-8",
+    )
+
+    assert SYNC_PLAN.load_pr_commit_shas(commits_file) == {"first", "second"}
+
+
 def test_builds_first_parent_plan_for_normal_master_history(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     base, tree = initialize_repo(repo)
@@ -79,7 +89,7 @@ def test_keeps_only_master_merge_nodes_for_normal_pr_merge(tmp_path: Path) -> No
     }
 
 
-def test_uses_ancestry_chain_after_reviewed_history_reconciliation(tmp_path: Path) -> None:
+def test_rejects_non_first_parent_reconciliation_path(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     base, tree = initialize_repo(repo)
     github_commit = commit_tree(repo, tree, "github", base)
@@ -93,12 +103,8 @@ def test_uses_ancestry_chain_after_reviewed_history_reconciliation(tmp_path: Pat
     )
     merged_pr = commit_tree(repo, tree, "merged-pr", github_commit, reconciliation)
 
-    plan = SYNC_PLAN.build_sync_plan(repo, cloud_commit, merged_pr)
-
-    assert plan == {
-        "mode": "ancestry-reconciliation",
-        "shas": [reconciliation, merged_pr],
-    }
+    with pytest.raises(SYNC_PLAN.SyncPlanError, match="第一父链"):
+        SYNC_PLAN.build_sync_plan(repo, cloud_commit, merged_pr)
 
 
 def test_rejects_unreconciled_divergence(tmp_path: Path) -> None:
@@ -124,3 +130,75 @@ def test_reports_already_synced_and_cloud_ahead_without_pushes(tmp_path: Path) -
         "mode": "cloud-ahead",
         "shas": [],
     }
+
+
+def test_accepts_boundary_containing_only_pr_and_merge_commits(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    base, tree = initialize_repo(repo)
+    feature_commit = commit_tree(repo, tree, "feature", base)
+    merge_commit = commit_tree(repo, tree, "merge", base, feature_commit)
+
+    boundary = SYNC_PLAN.validate_pr_boundary(
+        repo,
+        base,
+        merge_commit,
+        {feature_commit},
+    )
+
+    assert set(boundary["introduced_shas"]) == {feature_commit, merge_commit}
+    assert boundary["introduced_count"] == 2
+
+
+def test_rejects_boundary_that_imports_commit_outside_pr(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    base, tree = initialize_repo(repo)
+    pr_commit = commit_tree(repo, tree, "pr", base)
+    foreign_commit = commit_tree(repo, tree, "foreign", base)
+    merge_commit = commit_tree(repo, tree, "merge", pr_commit, foreign_commit)
+
+    with pytest.raises(SYNC_PLAN.SyncPlanError, match="不属于该 PR"):
+        SYNC_PLAN.validate_pr_boundary(
+            repo,
+            base,
+            merge_commit,
+            {pr_commit},
+        )
+
+
+def test_rejects_incident_shape_that_imports_other_pr_on_final_merge(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    base, tree = initialize_repo(repo)
+    github_commit = commit_tree(repo, tree, "github", base)
+    cloud_commit = commit_tree(repo, tree, "cloud", base)
+    reconciliation = commit_tree(
+        repo,
+        tree,
+        "reconciliation",
+        github_commit,
+        cloud_commit,
+    )
+    other_pr_commit = commit_tree(repo, tree, "other-pr", github_commit)
+    other_pr_merge = commit_tree(
+        repo,
+        tree,
+        "other-pr-merge",
+        github_commit,
+        other_pr_commit,
+    )
+    final_merge = commit_tree(
+        repo,
+        tree,
+        "final-merge",
+        other_pr_merge,
+        reconciliation,
+    )
+
+    with pytest.raises(SYNC_PLAN.SyncPlanError, match="不属于该 PR"):
+        SYNC_PLAN.validate_pr_boundary(
+            repo,
+            reconciliation,
+            final_merge,
+            {cloud_commit, reconciliation},
+        )
