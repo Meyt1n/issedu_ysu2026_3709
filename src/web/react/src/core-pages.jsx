@@ -223,7 +223,7 @@ function ModelLabState({ mode, onReset }) {
   const states = {
     empty: [Database, '暂无已登记实验', '当前筛选没有登记记录；不会加载真实家庭数据或模型权重。'],
     error: [CircleAlert, '登记校验失败', '无法校验模型卡和登记哈希。页面保持只读，家庭运行时继续使用 unavailable。'],
-    offline: [Cloud, '离线只读', '本地登记仅供查看；发布与回滚操作已停用，禁止云端回退。'],
+    offline: [Cloud, '离线只读', '显示本地登记摘要；发布和回滚演练入口已停用，禁止云端回退。'],
     unauthorized: [LockKeyhole, '无模型管理员权限', '非管理员不能查看指标详情、样本摘要或执行回滚演练。'],
   }
   const [Icon, title, detail] = states[mode]

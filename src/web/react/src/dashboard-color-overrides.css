@@ -1,4 +1,4 @@
-﻿body {
+body {
   background:
     radial-gradient(circle at 14% 8%, rgba(190, 218, 244, .9), transparent 36%),
     radial-gradient(circle at 88% 16%, rgba(248, 211, 219, .86), transparent 34%),
@@ -50,4 +50,3 @@ footer { border-top-color: rgba(255, 255, 255, .72); }
 
 
 .task-panel, .task-item, .sync-bar { background: rgba(255, 255, 255, .34); }
-

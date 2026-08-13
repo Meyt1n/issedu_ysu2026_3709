@@ -126,9 +126,3 @@ body, button, input, textarea, select { font-family: var(--font-ui); }
 @media (prefers-reduced-motion: reduce) {
   .feed-icon, .timeline-pin, .evidence-alert, .scan-orb, .risk-score, .graph-canvas path, .template-intro::after, .settings-intro::after, .reports-top::after, .event-page-head::after, .medication-intro::after { animation: none !important; }
 }
-
-/* Keep the family-member switcher above the profile and following panels. */
-.member-hero { overflow: visible; z-index: 20; }
-.member-avatar-control { z-index: 30; }
-.member-switch-menu { z-index: 60; }
-.member-layout { position: relative; z-index: 1; }

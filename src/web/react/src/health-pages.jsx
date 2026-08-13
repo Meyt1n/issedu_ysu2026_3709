@@ -1,4 +1,4 @@
-﻿import { useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { Activity, ArrowLeft, Camera, CheckCircle2, ClipboardPenLine, Download, FilePlus2, FileText, Grid2X2, HeartPulse, List, Plus, ScanLine, Sparkles, Upload, UsersRound } from 'lucide-react'
 import { PageFrame } from './template-pages.jsx'
 import { FamilyAvatar } from './avatar-system.jsx'
@@ -45,6 +45,3 @@ export function ReportComparisonPage() {
   ]
   return <PageFrame title="健康报告"><div className="compare-breadcrumb"><a href="#健康报告">报告</a><span>›</span><b>体检报告结构化解析</b></div><div className="compare-head"><div><h1>体检报告对比视图</h1><p>▣ 2024-05-15　⌑ XX国际体检中心　♙ 父亲</p></div><div><button><Download size={17} /> 下载 PDF</button><button className="consult-button"><HeartPulse size={17} /> 查看医疗边界</button></div></div><div className="compare-layout"><aside className="compare-sidebar"><div className="compare-stat"><span>指标总数</span><strong>32</strong></div><div className="compare-stat danger"><span>异常项</span><strong>3 <Activity size={24} /></strong></div><section className="compare-risk"><h2><Activity size={23} /> 核心风险提示</h2><article><b>↑</b><div><strong>空腹血糖</strong><p>近2年持续偏高</p></div></article><article><b>↑</b><div><strong>收缩压</strong><p>处于一级高血压临界点</p></div></article></section><section className="compare-ai"><h2><Sparkles size={23} /> 证据摘要</h2><p>血糖较去年（2023-05-10）上升了 15%，这是基于报告数据的趋势摘要，不代表诊断或治疗建议。需要进一步判断时，请把原始报告交给医生或药师核对。</p></section></aside><section className="comparison-table"><div className="comparison-table-head"><h2>指标对比详情</h2><div><span className="dot high" /> 偏高 <span className="dot low" /> 偏低 <span className="dot normal" /> 正常</div></div><div className="compare-table-scroll"><table><thead><tr><th>检测项目</th><th>当前数值<br />(24/05/15)</th><th>参考区间</th><th>历史数值<br />(23/05/10)</th><th>变化趋势</th></tr></thead><tbody>{rows.map(([item, now, ref, old, tone]) => <tr className={tone} key={item}><td>{item}</td><td>{now}</td><td>{ref}</td><td>{old}</td><td><span className="mini-trend"><i /><b className={tone} /></span></td></tr>)}</tbody></table></div></section></div></PageFrame>
 }
-
-
-
