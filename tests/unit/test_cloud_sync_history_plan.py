@@ -98,6 +98,55 @@ def test_plans_mixed_pr_commit_and_merge_with_separate_owners(tmp_path: Path) ->
     assert [item["sha"] for item in plan["actions"]] == [pr_commit, merge_commit]
     assert [item["github_login"] for item in plan["actions"]] == ["ry12-20", "Meyt1n"]
     assert [item["kind"] for item in plan["actions"]] == ["pr-commit", "pr-merge"]
+    assert [item["push_mode"] for item in plan["actions"]] == [
+        "fast-forward",
+        "fast-forward",
+    ]
+
+
+def test_stages_pr_commit_when_current_master_moved_from_branch_base(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    base = initialize_repo(repo)
+    master_commit = commit(repo, base, "master-change")
+    feature_tree = git(repo, "rev-parse", f"{base}^{{tree}}")
+    feature_commit = git(
+        repo,
+        "commit-tree",
+        feature_tree,
+        "-p",
+        base,
+        "-m",
+        "feature-change",
+    )
+    merge_commit = merge(repo, master_commit, feature_commit, "merge-pr-141")
+
+    plan = HISTORY.build_history_plan(
+        repo,
+        master_commit,
+        merge_commit,
+        [
+            {
+                "sha": merge_commit,
+                "pr_number": 141,
+                "pr_login": "Meyt1n",
+                "pr_commits": [
+                    linked_commit(
+                        feature_commit,
+                        "ry12-20",
+                        "ry12-20",
+                        "1970591935@qq.com",
+                    )
+                ],
+            }
+        ],
+    )
+
+    assert [item["push_mode"] for item in plan["actions"]] == [
+        "force-with-lease-staging",
+        "fast-forward",
+    ]
 
 
 def test_plans_direct_commit_by_commit_owner(tmp_path: Path) -> None:
@@ -127,6 +176,7 @@ def test_plans_direct_commit_by_commit_owner(tmp_path: Path) -> None:
             "sha": direct,
             "kind": "direct-commit",
             "previous_sha": base,
+            "push_mode": "fast-forward",
             "github_login": "ry12-20",
             "token_env": "CLOUD_TOKEN_RY12_20",
             "cloud_username": "ry12-20",
