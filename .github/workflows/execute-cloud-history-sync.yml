@@ -1,0 +1,193 @@
+name: 一次性执行双仓库历史归属同步
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: '必须填写：EXECUTE LEGACY HISTORY TOKEN SYNC'
+        required: true
+        type: string
+      expected_cloud_sha:
+        description: '预期内部 master SHA；必须与本次审计起点一致'
+        required: true
+        type: string
+      expected_github_sha:
+        description: '预期 GitHub master SHA；必须与本次审计目标一致'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  execute:
+    name: 按提交归属逐个快进内部 master
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CLOUD_REPO_URL: http://119.3.217.118:30181/29092881243490627/issedu_ysu2026_3709.git
+      GH_TOKEN: ${{ github.token }}
+      CLOUD_REPO_USERNAME: ${{ secrets.CLOUD_REPO_USERNAME }}
+      CLOUD_REPO_PASSWORD: ${{ secrets.CLOUD_REPO_PASSWORD }}
+      CLOUD_TOKEN_SHEN_HUANG_123: ${{ secrets.CLOUD_TOKEN_SHEN_HUANG_123 }}
+      CLOUD_TOKEN_RY12_20: ${{ secrets.CLOUD_TOKEN_RY12_20 }}
+      CLOUD_TOKEN_389883656_LGTM: ${{ secrets.CLOUD_TOKEN_389883656_LGTM }}
+      CLOUD_TOKEN_JIN_123_ZIP: ${{ secrets.CLOUD_TOKEN_JIN_123_ZIP }}
+
+    steps:
+      - name: 检出目标 GitHub master 完整历史
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: 验证操作确认和 SHA 基线
+        shell: bash
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+          EXPECTED_CLOUD_SHA: ${{ inputs.expected_cloud_sha }}
+          EXPECTED_GITHUB_SHA: ${{ inputs.expected_github_sha }}
+        run: |
+          set -euo pipefail
+          if [[ "${CONFIRM}" != "EXECUTE LEGACY HISTORY TOKEN SYNC" ]]; then
+            echo "::error::确认短语不匹配，拒绝执行历史同步"
+            exit 1
+          fi
+          github_sha="$(git rev-parse HEAD)"
+          if [[ "${github_sha}" != "${EXPECTED_GITHUB_SHA}" ]]; then
+            echo "::error::GitHub master 已变化：当前=${github_sha}，预期=${EXPECTED_GITHUB_SHA}"
+            exit 1
+          fi
+          if [[ ! "${EXPECTED_CLOUD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::内部 master 预期 SHA 格式非法"
+            exit 1
+          fi
+          echo "github_sha=${github_sha}" >> "${GITHUB_ENV}"
+          echo "cloud_sha=${EXPECTED_CLOUD_SHA}" >> "${GITHUB_ENV}"
+
+      - name: 配置只读身份并读取内部 master
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${CLOUD_REPO_USERNAME}" || -z "${CLOUD_REPO_PASSWORD}" ]]; then
+            echo "::error::缺少维护者读取凭据，拒绝执行历史同步"
+            exit 1
+          fi
+          askpass="${RUNNER_TEMP}/cloud-history-askpass.sh"
+          trap 'rm -f "${askpass}"' EXIT
+          cat > "${askpass}" <<'EOF'
+          #!/usr/bin/env bash
+          case "$1" in
+            *Username*) printf '%s\n' "${CLOUD_SELECTED_USERNAME}" ;;
+            *Password*) printf '%s\n' "${CLOUD_SELECTED_PASSWORD}" ;;
+            *) exit 1 ;;
+          esac
+          EOF
+          chmod 700 "${askpass}"
+          export GIT_ASKPASS="${askpass}"
+          export GIT_TERMINAL_PROMPT=0
+          export CLOUD_SELECTED_USERNAME="${CLOUD_REPO_USERNAME}"
+          export CLOUD_SELECTED_PASSWORD="${CLOUD_REPO_PASSWORD}"
+          git remote add original-cloud "${CLOUD_REPO_URL}"
+          remote_sha="$(git ls-remote original-cloud refs/heads/master | awk '{print $1}')"
+          if [[ "${remote_sha}" != "${cloud_sha}" ]]; then
+            echo "::error::内部 master 已变化：当前=${remote_sha}，预期=${cloud_sha}"
+            exit 1
+          fi
+          echo "内部 master 基线确认：${remote_sha}"
+
+      - name: 生成并执行逐提交归属计划
+        shell: bash
+        run: |
+          set -euo pipefail
+          askpass="${RUNNER_TEMP}/cloud-history-execute-askpass.sh"
+          trap 'rm -f "${askpass}"' EXIT
+          cat > "${askpass}" <<'EOF'
+          #!/usr/bin/env bash
+          case "$1" in
+            *Username*) printf '%s\n' "${CLOUD_SELECTED_USERNAME}" ;;
+            *Password*) printf '%s\n' "${CLOUD_SELECTED_PASSWORD}" ;;
+            *) exit 1 ;;
+          esac
+          EOF
+          chmod 700 "${askpass}"
+          export GIT_ASKPASS="${askpass}"
+          export GIT_TERMINAL_PROMPT=0
+
+          plan_file="${RUNNER_TEMP}/cloud-history-plan.json"
+          python .github/scripts/cloud_sync_history_repair.py \
+            --repo . \
+            --github-repository "${GITHUB_REPOSITORY}" \
+            --cloud-sha "${cloud_sha}" \
+            --github-sha "${github_sha}" \
+            --output "${plan_file}"
+
+          action_number=0
+          while IFS= read -r action; do
+            action_number=$((action_number + 1))
+            sync_sha="$(jq -r '.sha' <<< "${action}")"
+            previous_sha="$(jq -r '.previous_sha' <<< "${action}")"
+            token_env="$(jq -r '.token_env' <<< "${action}")"
+            cloud_username="$(jq -r '.cloud_username' <<< "${action}")"
+            username_env="$(jq -r '.cloud_username_env' <<< "${action}")"
+            github_login="$(jq -r '.github_login' <<< "${action}")"
+            kind="$(jq -r '.kind' <<< "${action}")"
+            pr_number="$(jq -r '.pr_number // "-"' <<< "${action}")"
+
+            if [[ ! "${token_env}" =~ ^CLOUD_[A-Z0-9_]+$ ]]; then
+              echo "::error::动作 ${action_number} 返回非法 Token 环境变量名"
+              exit 1
+            fi
+            selected_password="$(printenv "${token_env}" || true)"
+            if [[ -z "${selected_password}" ]]; then
+              echo "::error::动作 ${action_number} 缺少 ${token_env} Secret"
+              exit 1
+            fi
+            if [[ -n "${username_env}" ]]; then
+              selected_username="$(printenv "${username_env}" || true)"
+            else
+              selected_username="${cloud_username}"
+            fi
+            if [[ -z "${selected_username}" ]]; then
+              echo "::error::动作 ${action_number} 缺少内部用户名"
+              exit 1
+            fi
+
+            export CLOUD_SELECTED_USERNAME="${CLOUD_REPO_USERNAME}"
+            export CLOUD_SELECTED_PASSWORD="${CLOUD_REPO_PASSWORD}"
+            current_sha="$(git ls-remote original-cloud refs/heads/master | awk '{print $1}')"
+            if [[ "${current_sha}" != "${previous_sha}" ]]; then
+              echo "::error::动作 ${action_number} 执行前内部 SHA 不匹配：当前=${current_sha}，预期=${previous_sha}"
+              exit 1
+            fi
+
+            export CLOUD_SELECTED_USERNAME="${selected_username}"
+            export CLOUD_SELECTED_PASSWORD="${selected_password}"
+            echo "动作 ${action_number}：${kind} ${sync_sha:0:12}，归属 ${github_login}，PR ${pr_number}"
+            git push original-cloud "${sync_sha}:refs/heads/master"
+
+            export CLOUD_SELECTED_USERNAME="${CLOUD_REPO_USERNAME}"
+            export CLOUD_SELECTED_PASSWORD="${CLOUD_REPO_PASSWORD}"
+            verified_sha="$(git ls-remote original-cloud refs/heads/master | awk '{print $1}')"
+            if [[ "${verified_sha}" != "${sync_sha}" ]]; then
+              echo "::error::动作 ${action_number} push 后 SHA 校验失败：当前=${verified_sha}，预期=${sync_sha}"
+              exit 1
+            fi
+          done < <(jq -c '.actions[]' "${plan_file}")
+
+          final_sha="$(git ls-remote original-cloud refs/heads/master | awk '{print $1}')"
+          if [[ "${final_sha}" != "${github_sha}" ]]; then
+            echo "::error::历史同步未到达 GitHub master：内部=${final_sha}，GitHub=${github_sha}"
+            exit 1
+          fi
+          echo "同步完成：两端 master SHA=${github_sha}"
+
+      - name: 保存执行计划
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloud-history-sync-execution-${{ github.run_id }}
+          path: ${{ runner.temp }}/cloud-history-plan.json
+          if-no-files-found: warn
