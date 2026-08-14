@@ -135,12 +135,14 @@ def _action(
     kind: str,
     identity: dict[str, Any],
     previous_sha: str,
+    push_mode: str,
     pr_number: int | None = None,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
         "sha": sha,
         "kind": kind,
         "previous_sha": previous_sha,
+        "push_mode": push_mode,
         **_owner_fields(identity),
     }
     if pr_number is not None:
@@ -209,6 +211,11 @@ def build_history_plan(
                         kind="pr-commit",
                         identity=identity,
                         previous_sha=current,
+                        push_mode=(
+                            "fast-forward"
+                            if _is_ancestor(repo, current, commit_sha)
+                            else "force-with-lease-staging"
+                        ),
                         pr_number=pr_number,
                     )
                 )
@@ -223,6 +230,7 @@ def build_history_plan(
                     kind="pr-merge",
                     identity=merge_identity,
                     previous_sha=current,
+                    push_mode="fast-forward",
                     pr_number=pr_number,
                 )
             )
@@ -248,6 +256,7 @@ def build_history_plan(
                 kind="direct-commit",
                 identity=identity,
                 previous_sha=current,
+                push_mode="fast-forward",
             )
         )
         current = target_sha
@@ -257,7 +266,7 @@ def build_history_plan(
             f"同步计划未到达 GitHub master：计划={current[:12]}，目标={github_sha[:12]}"
         )
     return {
-        "mode": "legacy-per-commit-dry-run",
+        "mode": "legacy-per-commit-with-lease-staging",
         "cloud_sha": cloud_sha,
         "github_sha": github_sha,
         "first_parent_count": len(first_parent_shas),

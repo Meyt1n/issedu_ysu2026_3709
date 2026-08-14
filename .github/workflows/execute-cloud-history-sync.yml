@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   execute:
-    name: 按提交归属逐个快进内部 master
+    name: 按提交归属逐个同步内部 master
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -134,6 +134,7 @@ jobs:
             username_env="$(jq -r '.cloud_username_env' <<< "${action}")"
             github_login="$(jq -r '.github_login' <<< "${action}")"
             kind="$(jq -r '.kind' <<< "${action}")"
+            push_mode="$(jq -r '.push_mode' <<< "${action}")"
             pr_number="$(jq -r '.pr_number // "-"' <<< "${action}")"
 
             if [[ ! "${token_env}" =~ ^CLOUD_[A-Z0-9_]+$ ]]; then
@@ -165,8 +166,25 @@ jobs:
 
             export CLOUD_SELECTED_USERNAME="${selected_username}"
             export CLOUD_SELECTED_PASSWORD="${selected_password}"
-            echo "动作 ${action_number}：${kind} ${sync_sha:0:12}，归属 ${github_login}，PR ${pr_number}"
-            git push original-cloud "${sync_sha}:refs/heads/master"
+            echo "动作 ${action_number}：${kind} ${sync_sha:0:12}，归属 ${github_login}，PR ${pr_number}，模式 ${push_mode}"
+            case "${push_mode}" in
+              fast-forward)
+                git push original-cloud "${sync_sha}:refs/heads/master"
+                ;;
+              force-with-lease-staging)
+                if [[ "${kind}" != "pr-commit" ]]; then
+                  echo "::error::只有 PR 分支提交允许使用带租约暂存模式"
+                  exit 1
+                fi
+                git push original-cloud \
+                  "--force-with-lease=refs/heads/master:${previous_sha}" \
+                  "${sync_sha}:refs/heads/master"
+                ;;
+              *)
+                echo "::error::动作 ${action_number} 返回非法推送模式：${push_mode}"
+                exit 1
+                ;;
+            esac
 
             export CLOUD_SELECTED_USERNAME="${CLOUD_REPO_USERNAME}"
             export CLOUD_SELECTED_PASSWORD="${CLOUD_REPO_PASSWORD}"
