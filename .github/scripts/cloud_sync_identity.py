@@ -75,6 +75,15 @@ def _identity_for_login(pr_login: str) -> dict[str, Any]:
     return identity
 
 
+def resolve_login_identity(github_login: str) -> dict[str, Any]:
+    """Return the configured identity for a known GitHub login."""
+
+    normalized_login = _text(github_login)
+    if not normalized_login:
+        raise IdentityError("提交或 PR 缺少 GitHub 作者账号")
+    return _identity_for_login(normalized_login)
+
+
 def _commit_matches(identity: dict[str, Any], commit: dict[str, Any]) -> bool:
     linked_login = _text((commit.get("author") or {}).get("login"))
     if linked_login:
@@ -89,6 +98,37 @@ def _commit_matches(identity: dict[str, Any], commit: dict[str, Any]) -> bool:
     if git_email:
         return git_email in known_emails
     return bool(git_name and git_name in known_names)
+
+
+def resolve_commit_identity(commit: dict[str, Any]) -> dict[str, Any]:
+    """Resolve one GitHub commit to exactly one configured internal identity."""
+
+    linked_login = _text((commit.get("author") or {}).get("login"))
+    if linked_login:
+        identity = _identity_for_login(linked_login)
+        if not _commit_matches(identity, commit):
+            raise IdentityError(
+                f"提交 {_commit_label(commit)} 的 GitHub 关联账号与提交作者不一致"
+            )
+    else:
+        matches = [
+            identity
+            for identity in IDENTITIES.values()
+            if _commit_matches(identity, commit)
+        ]
+        if len(matches) != 1:
+            raise IdentityError(
+                f"提交 {_commit_label(commit)} 无法唯一匹配已登记的内部身份；"
+                "请补齐 GitHub 关联账号或已审核的姓名/邮箱映射"
+            )
+        identity = matches[0]
+
+    return {
+        "github_login": identity["github_login"],
+        "token_env": identity["token_env"],
+        "cloud_username": identity["cloud_username"],
+        "cloud_username_env": identity["cloud_username_env"],
+    }
 
 
 def _commit_label(commit: dict[str, Any]) -> str:
