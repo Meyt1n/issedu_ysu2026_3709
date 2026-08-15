@@ -81,6 +81,20 @@ def test_quality_api_retake_has_no_receipt(client) -> None:
     assert response.json()["quality_receipt"] is None
 
 
+def test_quality_api_advisory_demo_mode_allows_diagnostic_retake(client, monkeypatch) -> None:
+    monkeypatch.setattr("app.routes.settings.vision_quality_enforce_retake", False)
+
+    response = _check_quality(client, _encode_demo_image(dark=True))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["decision"] == "PASS"
+    assert body["allow_downstream"] is True
+    assert body["quality_receipt"]
+    assert "TOO_DARK" in body["reasons"]
+    assert "quality enforcement disabled" in body["limitations"][-1]
+
+
 def test_quality_api_rejects_corrupt_image_without_leaking_path(client) -> None:
     response = client.post(
         "/api/v1/vision-quality/check",
@@ -172,7 +186,7 @@ def test_vision_task_requires_matching_actor_and_file_receipt(
     assert wrong_actor.json() == {"detail": "QUALITY_RECEIPT_MISMATCH"}
     assert accepted.status_code == 201
     assert accepted.json()["input_digest"] == quality.json()["source"]["sha256"]
-    assert accepted.json()["preprocess_version"] == "opencv-quality-demo-v1"
+    assert accepted.json()["preprocess_version"] == "opencv-quality-demo-v2-lenient-exposure"
 
 
 def test_vision_task_rejects_cross_household_member(

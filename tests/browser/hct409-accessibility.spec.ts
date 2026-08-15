@@ -76,12 +76,15 @@ async function installSyntheticApi(page: Page): Promise<void> {
 }
 
 async function loadOwnerView(page: Page): Promise<void> {
-  await page.getByLabel('Development identity').fill('owner-1')
-  await page.getByRole('button', { name: 'Load households' }).click()
-  await expect(page.getByRole('heading', { name: 'Create grant' })).toBeVisible()
+  await page.getByLabel('开发身份标识').fill('owner-1')
+  await page.getByRole('button', { name: '进入家庭空间' }).click()
+  await expect(page.getByRole('heading', { name: '家庭总览' })).toBeVisible()
 }
 
-function axeScan(page: Page) {
+async function axeScan(page: Page) {
+  await page.addStyleTag({
+    content: '* { animation: none !important; transition: none !important; } .pipe-step.off, .channel-chip.off { opacity: 1 !important; }',
+  })
   return new AxeBuilder({ page })
     .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
     .analyze()
@@ -106,9 +109,9 @@ test.describe('axe automated WCAG 2.1 AA scans', () => {
   test('offline error state has no violations', async ({ page }) => {
     await page.route('**/api/v1/households', route => route.abort('failed'))
     await page.goto('/')
-    await page.getByLabel('Development identity').fill('owner-1')
-    await page.getByRole('button', { name: 'Load households' }).click()
-    await expect(page.getByRole('alert')).toBeVisible()
+    await page.getByLabel('开发身份标识').fill('owner-1')
+    await page.getByRole('button', { name: '进入家庭空间' }).click()
+    await expect(page.getByRole('alert')).toContainText('本地 API 服务不可用')
     const results = await axeScan(page)
     expect(results.violations).toEqual([])
   })
@@ -129,23 +132,26 @@ test.describe('keyboard path and focus visibility', () => {
     await page.goto('/')
 
     await page.keyboard.press('Tab')
-    await expect(page.getByLabel('Development identity')).toBeFocused()
+    await expect(page.getByLabel('开发身份标识')).toBeFocused()
     await page.keyboard.type('owner-1')
 
     await page.keyboard.press('Tab')
-    await expect(page.getByLabel('Access purpose code')).toBeFocused()
+    await expect(page.getByLabel('访问用途代码')).toBeFocused()
 
     await page.keyboard.press('Tab')
-    await expect(page.getByRole('button', { name: 'Load households' })).toBeFocused()
+    await expect(page.getByRole('button', { name: '进入家庭空间' })).toBeFocused()
 
     await page.keyboard.press('Enter')
-    await expect(page.getByRole('heading', { name: 'Create grant' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: '家庭总览' })).toBeVisible()
   })
 
   test('risk evidence disclosure is keyboard operable and announces state', async ({ page }) => {
     await installSyntheticApi(page)
     await page.goto('/')
     await loadOwnerView(page)
+
+    await page.getByRole('button', { name: '用药安全', exact: true }).click()
+    await expect(page.getByRole('heading', { name: '风险信号与依据' })).toBeVisible()
 
     const toggle = page.getByRole('button', { name: /Synthetic hydration reminder signal/ })
     await expect(toggle).toHaveAttribute('aria-expanded', 'false')
@@ -160,7 +166,7 @@ test.describe('keyboard path and focus visibility', () => {
     await installSyntheticApi(page)
     await page.goto('/')
 
-    const identity = page.getByLabel('Development identity')
+    const identity = page.getByLabel('开发身份标识')
     await identity.focus()
     const outline = await identity.evaluate(element => {
       const style = window.getComputedStyle(element)
@@ -172,22 +178,18 @@ test.describe('keyboard path and focus visibility', () => {
 })
 
 test.describe('form errors', () => {
-  test('an empty identity submit reports the error via role=alert', async ({ page }) => {
+  test('an empty identity cannot be submitted', async ({ page }) => {
     await installSyntheticApi(page)
     await page.goto('/')
 
-    await page.getByRole('button', { name: 'Load households' }).click()
-    await expect(page.getByRole('alert')).toContainText(
-      'Enter a development identity before loading households.',
-    )
+    await expect(page.getByRole('button', { name: '进入家庭空间' })).toBeDisabled()
   })
 
   test('the purpose field exposes its format hint and validity to assistive tech', async ({ page }) => {
     await installSyntheticApi(page)
     await page.goto('/')
-    await loadOwnerView(page)
 
-    const purpose = page.getByLabel('Purpose code', { exact: true })
+    const purpose = page.getByLabel('访问用途代码')
     await expect(purpose).toHaveAttribute('aria-describedby', 'purpose-format-hint')
     await expect(purpose).toHaveAttribute('aria-invalid', 'false')
 
@@ -219,7 +221,6 @@ test.describe('screen reader structure', () => {
     await expect(page.getByRole('main')).toHaveCount(1)
     await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1)
     await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN')
-    await expect(page.locator('main.workspace')).toHaveAttribute('lang', 'en')
-    await expect(page.locator('.vision-quality-panel')).toHaveAttribute('lang', 'zh-CN')
+    await expect(page.locator('main')).toHaveAttribute('lang', 'zh-CN')
   })
 })

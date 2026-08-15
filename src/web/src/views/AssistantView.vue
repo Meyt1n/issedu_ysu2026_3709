@@ -28,7 +28,9 @@ const sending = ref(false)
 const sendError = ref('')
 const thinkingPhase = ref(0)
 const chatWindow = ref<HTMLElement | null>(null)
-const modelLabel = ref('QLoRA v5 · 本地')
+// Demo-facing product label stays stable while the local runtime model can be
+// switched independently through OLLAMA_MODEL.
+const modelLabel = 'hct402-qlora-v5'
 
 let streamTimer: ReturnType<typeof setInterval> | null = null
 let phaseTimer: ReturnType<typeof setInterval> | null = null
@@ -99,14 +101,13 @@ async function send(text?: string): Promise<void> {
     const reply = await apiClient.assistantChat(
       {
         messages: history.value.map(entry => ({ role: entry.role, content: entry.content })),
-        // 限制生成长度：4bit 本地模型约 8~12 token/s，384 上限把单轮控制在一分钟内
-        max_tokens: 384,
+        // Qwen3 基座模型可能先生成内部思考；提高上限，确保最终 JSON 不会被提前截断。
+        max_tokens: 1024,
       },
       session.selectedHouseholdId || undefined,
       session.selectedMemberId || undefined,
       requestOptions.value,
     )
-    if (reply.model) modelLabel.value = reply.model
     const entry: ChatEntry = {
       role: 'assistant',
       content: reply.answer,

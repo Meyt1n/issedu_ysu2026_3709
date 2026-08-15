@@ -43,6 +43,7 @@ const householdDraft = reactive({
 
 const showCreateForm = computed(() => session.status === 'empty')
 const canConnect = computed(() => actorId.value.trim().length > 0 && !connecting.value)
+const accessPurposeValid = computed(() => /^[a-z][a-z0-9-]{1,63}$/.test(accessPurpose.value.trim()))
 const canCreate = computed(
   () =>
     householdDraft.name.trim().length > 0 &&
@@ -122,8 +123,15 @@ async function submitCreate(): Promise<void> {
           </label>
           <label class="field">
             访问用途代码
-            <input v-model="accessPurpose" autocomplete="off" placeholder="family-care" />
-            <small>照护者访问被授权数据时，需要与授权中登记的用途一致。</small>
+            <input
+              v-model="accessPurpose"
+              autocomplete="off"
+              placeholder="family-care"
+              aria-label="访问用途代码"
+              aria-describedby="purpose-format-hint"
+              :aria-invalid="accessPurpose.trim().length > 0 && !accessPurposeValid"
+            />
+            <small id="purpose-format-hint">照护者访问被授权数据时，需要与授权中登记的用途一致；格式为小写字母、数字和连字符。</small>
           </label>
           <p v-if="session.error" class="notice error" role="alert">
             <AppIcon name="alert" :size="16" />

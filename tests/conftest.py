@@ -6,6 +6,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.config import get_settings
 from app.db import get_session
 from app.main import app
 from app.models import Base
@@ -35,6 +36,14 @@ def client(db_session: Session) -> Generator[TestClient, None, None]:
         yield db_session
 
     app.dependency_overrides[get_session] = override_get_session
+    settings = get_settings()
+    previous_enforcement = settings.vision_quality_enforce_retake
+    # API contract/e2e tests cover the strict safety path even when a local
+    # developer .env enables advisory-only demo mode.
+    settings.vision_quality_enforce_retake = True
     with TestClient(app) as test_client:
-        yield test_client
-    app.dependency_overrides.clear()
+        try:
+            yield test_client
+        finally:
+            settings.vision_quality_enforce_retake = previous_enforcement
+            app.dependency_overrides.clear()

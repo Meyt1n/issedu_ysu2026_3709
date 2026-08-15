@@ -17,7 +17,7 @@ import cv2
 import numpy as np
 
 SCHEMA_VERSION = "vision-quality-result-v1"
-DEFAULT_CONFIG_VERSION = "opencv-quality-demo-v1"
+DEFAULT_CONFIG_VERSION = "opencv-quality-demo-v2-lenient-exposure"
 
 
 @dataclass(frozen=True)
@@ -26,10 +26,14 @@ class QualityThresholds:
     min_height: int = 480
     min_blur_variance: float = 80.0
     min_mean_luminance: float = 45.0
+    # White cartons and white studio backgrounds are common.  Exposure is
+    # therefore only a hard failure when the whole image is very bright or a
+    # large share of pixels is clipped; ordinary bright packaging remains
+    # eligible for OCR.
     max_mean_luminance: float = 220.0
     max_dark_ratio: float = 0.45
-    max_bright_ratio: float = 0.35
-    max_glare_ratio: float = 0.15
+    max_bright_ratio: float = 0.60
+    max_glare_ratio: float = 0.35
     min_edge_density: float = 0.005
     min_subject_area_ratio: float = 0.08
     max_border_touch_ratio: float = 0.50
@@ -212,12 +216,22 @@ def assess_image(
 
     size_passed = width >= thresholds.min_width and height >= thresholds.min_height
     blur_passed = blur_variance >= thresholds.min_blur_variance
+    # A white carton can legitimately make the global mean bright.  Use a
+    # small, deterministic detail proxy before rejecting exposure: visible
+    # dark print/edges inside a sufficiently large subject means OCR still
+    # has usable structure.  A flat bright frame remains a RETAKE.
+    readable_detail = (
+        edge_density >= max(thresholds.min_edge_density * 2.0, 0.01)
+        and subject_area_ratio >= thresholds.min_subject_area_ratio * 2.0
+        and dark_ratio >= 0.005
+    )
     luminance_passed = (
         thresholds.min_mean_luminance <= mean_luminance <= thresholds.max_mean_luminance
+        or readable_detail
     )
     dark_passed = dark_ratio <= thresholds.max_dark_ratio
-    bright_passed = bright_ratio <= thresholds.max_bright_ratio
-    glare_passed = glare_ratio <= thresholds.max_glare_ratio
+    bright_passed = bright_ratio <= thresholds.max_bright_ratio or readable_detail
+    glare_passed = glare_ratio <= thresholds.max_glare_ratio or readable_detail
     edge_passed = edge_density >= thresholds.min_edge_density
     subject_passed = subject_area_ratio >= thresholds.min_subject_area_ratio
     border_passed = border_touch_ratio <= thresholds.max_border_touch_ratio
@@ -268,6 +282,12 @@ def assess_image(
             unit="ratio_proxy",
             threshold={"max": thresholds.max_glare_ratio},
         ),
+        "readable_detail": _metric(
+            1.0 if readable_detail else 0.0,
+            passed=readable_detail,
+            unit="boolean_proxy",
+            threshold={"min": 1},
+        ),
         "edge_density": _metric(
             edge_density,
             passed=edge_passed,
@@ -295,13 +315,15 @@ def assess_image(
         reasons.append("BLURRY")
     if mean_luminance < thresholds.min_mean_luminance:
         reasons.append("TOO_DARK")
-    elif mean_luminance > thresholds.max_mean_luminance:
+    elif mean_luminance > thresholds.max_mean_luminance and not readable_detail:
         reasons.append("TOO_BRIGHT")
     if not dark_passed:
         reasons.append("TOO_MANY_DARK_PIXELS")
-    if not bright_passed:
+    # Bright packaging with readable print is allowed through.  Only a
+    # heavily clipped frame without that detail proxy is blocked.
+    if not bright_passed and not readable_detail:
         reasons.append("TOO_MANY_BRIGHT_PIXELS")
-    if not glare_passed:
+    if not glare_passed and not readable_detail:
         reasons.append("GLARE")
     if not edge_passed or subject_box is None:
         reasons.append("NO_TARGET")

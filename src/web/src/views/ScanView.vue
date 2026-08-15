@@ -216,7 +216,10 @@ onBeforeUnmount(() => {
           创建于 {{ formatDateTime(task.created_at) }} · 任务 {{ task.id.slice(0, 8) }}…
         </p>
         <p v-if="task.status === 'queued'" class="row-meta" style="margin: 0">
-          正在等待本地识别适配器处理；适配器离线时任务保持排队，不会显示虚假结果。
+          已进入本地 OCR 队列；worker 会在本机处理，首次加载 PaddleOCR 模型可能需要十几秒。
+        </p>
+        <p v-if="task.status === 'running'" class="row-meta" style="margin: 0">
+          本地 OCR 正在处理图片，完成后会自动生成待人工复核的候选结果。
         </p>
         <p v-if="task.error_message" class="notice error" style="margin: 0">
           <AppIcon name="alert" :size="15" />

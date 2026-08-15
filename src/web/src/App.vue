@@ -211,7 +211,9 @@ onBeforeUnmount(() => {
   <div class="leaves" aria-hidden="true"><i /><i /><i /><i /></div>
   <div ref="glowEl" class="cursor-glow" aria-hidden="true" />
 
-  <WelcomeView v-if="session.status !== 'ready'" />
+  <main v-if="session.status !== 'ready'" lang="zh-CN">
+    <WelcomeView />
+  </main>
 
   <div v-else class="app-frame" :class="{ mini: sidebarMini }">
     <aside class="sidebar">
@@ -349,7 +351,7 @@ onBeforeUnmount(() => {
         </div>
       </header>
 
-      <main class="view-stage">
+      <main class="view-stage" lang="zh-CN">
         <Transition
           :name="transitionName"
           mode="out-in"

@@ -244,7 +244,7 @@ const FIELD_LABELS: Record<string, string> = {
           <span class="scan-corner bl" /><span class="scan-corner br" />
           <span class="scan-status">
             <span class="loading-dots"><span /><span /><span /></span>
-            正在等待本地识别…
+            {{ props.task.status === 'running' ? '本地 OCR 正在处理…' : '正在等待本地 OCR worker…' }}
           </span>
         </div>
       </template>
@@ -323,8 +323,8 @@ const FIELD_LABELS: Record<string, string> = {
       <div v-else-if="scanning" class="section-stack" style="gap: 8px">
         <p class="eyebrow" style="margin: 0">识别进行中</p>
         <span class="rail-line text-faint">
-          任务已进入本地识别队列；由家庭可信域内的本地适配器（PaddleOCR 全图识别 + 条码解码）处理，
-          完成后会自动生成待复核任务。
+          任务已进入本地识别队列；由家庭可信域内的 OCR worker（PaddleOCR 全图识别 + 条码解码）处理。
+          首次运行会加载本地模型，可能需要十几秒；完成后会自动生成待复核任务。
         </span>
       </div>
 
