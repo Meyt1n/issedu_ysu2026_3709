@@ -141,7 +141,8 @@ input:focus, select:focus, textarea:focus { background: var(--card); }
 textarea { resize: vertical; min-height: 76px; line-height: 1.55; }
 
 input:focus, select:focus, textarea:focus {
-  outline: none;
+  outline: 3px solid rgba(56, 102, 90, 0.45);
+  outline-offset: 2px;
   border-color: var(--pine);
   box-shadow: 0 0 0 3.5px rgba(56, 102, 90, 0.16);
 }
@@ -389,7 +390,7 @@ button:focus-visible, a:focus-visible {
 
 /* ---------- 主区域 ---------- */
 
-.main-area { display: flex; flex-direction: column; min-width: 0; }
+.main-area { display: flex; flex-direction: column; min-width: 0; overflow-x: hidden; }
 
 .topbar {
   align-items: center;
@@ -3109,9 +3110,9 @@ button:focus-visible, a:focus-visible {
 
 .pipe-step.yolo b { background: color-mix(in srgb, #c26744 22%, transparent); }
 
-.pipe-step.off { opacity: 0.55; }
+.pipe-step.off { color: var(--ink-soft); opacity: 1; }
 
-.pipe-arrow { color: var(--text-faint); font-size: 11px; }
+.pipe-arrow { color: var(--ink-faint); font-size: 11px; }
 
 .viewer-placeholder {
   align-items: center;
