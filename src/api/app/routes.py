@@ -80,7 +80,6 @@ from app.models import (
     OutboxMessage,
     VisionTask,
 )
-from app.review import FusionStatus as ReviewFusionStatus
 from app.review import (
     FusionStatus as ReviewFusionStatus,
 )
@@ -1672,6 +1671,17 @@ async def check_vision_quality(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         ) from exc
+
+    if not settings.vision_quality_enforce_retake:
+        # Local demo mode: preserve all quality metrics and diagnostics, but
+        # do not block a valid, decodable upload from reaching OCR.  This is
+        # deliberately a policy switch in the API layer so the strict gate
+        # remains available for regression tests and production deployment.
+        result["decision"] = "PASS"
+        result["allow_downstream"] = True
+        result.setdefault("limitations", []).append(
+            "quality enforcement disabled: metrics are advisory for local OCR demo"
+        )
 
     result["source"]["sha256"] = input_digest
     result["source"]["digest_scope"] = "uploaded_file_bytes"

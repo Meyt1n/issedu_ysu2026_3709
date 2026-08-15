@@ -48,7 +48,7 @@ def test_clear_synthetic_subject_passes_with_versioned_evidence() -> None:
     assert result["decision"] == "PASS"
     assert result["allow_downstream"] is True
     assert result["schema_version"] == "vision-quality-result-v1"
-    assert result["config_version"] == "opencv-quality-demo-v1"
+    assert result["config_version"] == "opencv-quality-demo-v2-lenient-exposure"
     assert result["source"]["source_id"] == "synthetic-clear"
     assert result["source"]["unchanged"] is True
     assert "path" not in str(result).lower()
@@ -81,6 +81,31 @@ def test_blur_is_rejected() -> None:
 
     assert result["decision"] == "RETAKE"
     assert "BLURRY" in result["reasons"]
+
+
+def test_bright_packaging_with_text_detail_is_not_rejected_as_overexposed() -> None:
+    image = np.full((480, 640, 3), 238, dtype=np.uint8)
+    cv2.rectangle(image, (110, 70), (530, 410), (250, 250, 250), -1)
+    cv2.rectangle(image, (110, 70), (530, 410), (25, 25, 25), 6)
+    cv2.putText(image, "MEDICINE", (170, 235), cv2.FONT_HERSHEY_SIMPLEX, 1.4, (30, 30, 30), 4)
+
+    result = assess_image(image, source_id="bright-white-packaging")
+
+    assert result["decision"] == "PASS"
+    assert "TOO_BRIGHT" not in result["reasons"]
+    assert "TOO_MANY_BRIGHT_PIXELS" not in result["reasons"]
+    assert "GLARE" not in result["reasons"]
+    assert result["metrics"]["readable_detail"]["passed"] is True
+
+
+def test_uniform_clipped_image_still_requires_retake() -> None:
+    result = assess_image(
+        np.full((480, 640, 3), 255, dtype=np.uint8),
+        source_id="uniform-clipped",
+    )
+
+    assert result["decision"] == "RETAKE"
+    assert "TOO_BRIGHT" in result["reasons"]
 
 
 def test_decode_image_rejects_invalid_bytes() -> None:

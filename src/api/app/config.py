@@ -24,15 +24,19 @@ class Settings(BaseSettings):
     ocr_version: str = "unavailable"
     vision_adapter_signing_key: str = "dev-only-change-me"
     vision_adapter_allowlist: str = "homecare-local-vision"
-    vision_quality_config_version: str = "opencv-quality-demo-v1"
+    vision_quality_config_version: str = "opencv-quality-demo-v2-lenient-exposure"
+    # Keep strict rejection as the safe default.  The local demo can switch
+    # this off to make quality metrics advisory while OCR integration is being
+    # tuned.
+    vision_quality_enforce_retake: bool = True
     vision_quality_min_width: int = 640
     vision_quality_min_height: int = 480
     vision_quality_min_blur_variance: float = 80.0
     vision_quality_min_mean_luminance: float = 45.0
     vision_quality_max_mean_luminance: float = 220.0
     vision_quality_max_dark_ratio: float = 0.45
-    vision_quality_max_bright_ratio: float = 0.35
-    vision_quality_max_glare_ratio: float = 0.15
+    vision_quality_max_bright_ratio: float = 0.60
+    vision_quality_max_glare_ratio: float = 0.35
     vision_quality_min_edge_density: float = 0.005
     vision_quality_min_subject_area_ratio: float = 0.08
     vision_quality_max_border_touch_ratio: float = 0.50
