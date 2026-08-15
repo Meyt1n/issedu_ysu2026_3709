@@ -61,6 +61,43 @@ class TestToolWhitelist:
             for key, schema in tool.params.items():
                 assert schema.type, f"{tool.name}.{key} missing type"
 
+    def test_run_assistant_sends_ollama_function_tool_schema(self, monkeypatch):
+        captured: dict[str, object] = {}
+
+        def scripted_chat(_client: OllamaClient, **kwargs: object) -> dict:
+            captured["tools"] = kwargs["tools"]
+            return {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "answer": "演示问候。",
+                            "sources": [],
+                            "confidence": "low",
+                            "escalate": False,
+                        },
+                        ensure_ascii=False,
+                    )
+                }
+            }
+
+        monkeypatch.setattr(OllamaClient, "chat", scripted_chat)
+        result = run_assistant(
+            None,
+            messages=[{"role": "user", "content": "请问候我"}],
+            actor_id="test-user",
+        )
+
+        assert result["degraded"] is False
+        tools = captured["tools"]
+        assert isinstance(tools, list)
+        retrieve = next(tool for tool in tools if tool["function"]["name"] == "retrieve_knowledge")
+        assert retrieve["type"] == "function"
+        assert retrieve["function"]["description"]
+        parameters = retrieve["function"]["parameters"]
+        assert parameters["type"] == "object"
+        assert parameters["properties"]["query"]["type"] == "string"
+        assert parameters["properties"]["top_k"]["default"] == 5
+
 
 # ── Parameter validation ──────────────────────────────────────────────
 
@@ -220,6 +257,33 @@ class TestRunAssistant:
         assert result["degraded"] is True
         assert result["degrade_reason"] == "MODEL_UNAVAILABLE"
         assert result["answer"]  # non-empty degrade message
+
+    @pytest.mark.parametrize("label", ["hello", "healthy", "cannot_answer", "REFUSE"])
+    def test_degrade_when_model_returns_classification_label(self, monkeypatch, label):
+        def label_only(*_args, **_kwargs):
+            return {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "answer": label,
+                            "sources": [],
+                            "confidence": "low",
+                            "escalate": False,
+                        }
+                    )
+                }
+            }
+
+        monkeypatch.setattr(OllamaClient, "chat", label_only)
+        result = run_assistant(
+            None,
+            messages=[{"role": "user", "content": "测试问题"}],
+            actor_id="test-user",
+        )
+
+        assert result["degraded"] is True
+        assert result["degrade_reason"] == "SCHEMA_VALIDATION_FAILED"
+        assert label not in result["answer"]
 
 
 def test_extract_tool_calls_normalizes_openai_and_ollama_shapes() -> None:

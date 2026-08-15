@@ -18,8 +18,10 @@ export default defineConfig({
   root: 'src/web',
   plugins: [vue()],
   server: {
+    host: '0.0.0.0',
     port: webPort,
     strictPort: true,
+    allowedHosts: ['.cpolar.cn', '.cpolar.top'],
     proxy: {
       '/health': proxyOptions,
       '/api': proxyOptions,

@@ -55,16 +55,45 @@ _DEGRADE_TEMPLATE = """当前助手服务暂时不可用。您可以：
 # The fine-tuned v5 model answers evidence-first; this fixes the JSON shape
 # the parser below expects regardless of caller-provided system context.
 ASSISTANT_SYSTEM_PROMPT = (
+    "/no_think\n"
     "你是「家健镜」家庭健康助手，运行在家庭本地设备上，服务于家庭照护的教学演示。"
+    "首要任务是直接、完整地回答用户问题，不是做意图分类。\n"
+    "不要逐条复述或检查这些规则，不要展示分析草稿或内部推理；尽快只输出最终 JSON。\n"
     "回答要求：\n"
-    "1. 只依据对话中提供的本地事实、规则结果与文档片段回答；资料不足时明确说「无法判断」。\n"
-    "2. 绝不做诊断、开处方、决定用药剂量或建议停药换药；不提供购买链接或外部网址。\n"
-    "3. 用温和、口语化的简体中文，先给依据再给解释，回答控制在 150 字以内。\n"
-    "4. 输出必须是一个 JSON 对象，且只有 JSON，格式："
+    "1. answer 必须是 1 至 6 句自然、完整的简体中文；绝不能只输出 hello、healthy、"
+    "cannot_answer、unknown、DIRECT、REFUSE 等标签，也不要复述内部路由名称。\n"
+    "2. 只依据系统消息中的本地事实、工具结果、规则结果与文档片段回答。资料不足时，"
+    "明确说明缺少哪项资料和可以去哪个本地页面核对，不能猜测或补造事实。\n"
+    "3. 用户问当前药品时，只列出已确认记录中明确出现的药名、规格等字段；如果只有"
+    "medication_added 事件但没有药名，就回答「存在已确认的用药记录，但当前证据未提供"
+    "药名和规格」。\n"
+    "4. 用户问症状时，不诊断疾病；可复述用户描述、提示记录发生时间和伴随情况，并建议"
+    "必要时联系医生。出现呼吸困难、意识异常、疑似中毒等紧急描述时 escalate=true。\n"
+    "5. 用户问药品能否同服、停药、换药或剂量时，不自行判断；只解释已命中的确定性规则"
+    "或授权文档。没有对应证据就明确无法判断，并建议咨询医生或药师。\n"
+    "6. 普通问候要用简短中文正常回应；不得把问候误识别为健康结论。\n"
+    "7. 需要更多事实时优先调用白名单工具。sources 只能填写本轮上下文或工具结果真实提供的"
+    "事件类型、规则编号或知识片段 ID；没有依据时使用空数组，禁止伪造引用。\n"
+    "8. 绝不做诊断、开处方、决定用药剂量或建议停药换药；不提供购买链接、问诊导流或外部网址。\n"
+    "9. 用温和、口语化的简体中文，先给依据再给解释，回答控制在 300 字以内。\n"
+    "10. 输出必须是一个 JSON 对象，且只有 JSON，格式："
     '{"answer": "回答正文", "sources": ["引用的依据标识"], '
     '"confidence": "high|medium|low", "escalate": false}。'
     "紧急情况（如疑似中毒、呼吸困难）时 escalate 设为 true 并提醒联系医务人员。"
 )
+
+_PLACEHOLDER_ANSWER_LABELS = {
+    "hello",
+    "healthy",
+    "cannot_answer",
+    "cannot answer",
+    "unknown",
+    "direct",
+    "evidence_required",
+    "risk_only",
+    "refuse",
+    "urgent_escalate",
+}
 
 
 # ── Tool Schema ────────────────────────────────────────────────────────
@@ -83,6 +112,39 @@ class ToolDefinition(BaseModel):
     name: str
     description: str
     params: dict[str, ToolParamSchema] = Field(default_factory=dict)
+
+    def to_ollama_tool(self) -> dict[str, Any]:
+        """Convert the internal whitelist entry to Ollama's tool schema.
+
+        The registry intentionally keeps a small internal representation for
+        argument validation. Ollama expects the OpenAI-compatible wire shape
+        instead: ``type=function`` with a nested ``function`` object and a
+        JSON-Schema ``parameters`` object. Sending the registry model dump
+        directly makes Ollama reject the request with HTTP 500.
+        """
+        properties: dict[str, dict[str, Any]] = {}
+        for name, schema in self.params.items():
+            property_schema: dict[str, Any] = {
+                "type": schema.type,
+                "description": schema.description,
+            }
+            if schema.enum is not None:
+                property_schema["enum"] = list(schema.enum)
+            if schema.default is not None:
+                property_schema["default"] = schema.default
+            properties[name] = property_schema
+
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": properties,
+                },
+            },
+        }
 
     def validate_args(self, args: dict[str, Any]) -> dict[str, Any]:
         """Validate and coerce tool arguments."""
@@ -663,7 +725,8 @@ def _parse_assistant_output(raw_content: str) -> HealthAssistantOutput | None:
         parsed = parse_model_output(raw_content)
     except (ValidationError, json.JSONDecodeError, ValueError):
         return None
-    if not parsed.answer.strip():
+    answer = parsed.answer.strip()
+    if not answer or answer.casefold() in _PLACEHOLDER_ANSWER_LABELS:
         return None
     return parsed
 
@@ -705,7 +768,7 @@ def run_assistant(
         *[message for message in messages if message.get("role") != "system"],
     ]
 
-    approved_tools = [tool.model_dump() for tool in get_approved_tools()]
+    approved_tools = [tool.to_ollama_tool() for tool in get_approved_tools()]
     request = HealthAssistantRequest(
         messages=conversation,
         tools=approved_tools,
