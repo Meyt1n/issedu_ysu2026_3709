@@ -302,6 +302,8 @@ def retrieve(
             })
 
     scored.sort(key=lambda r: r["score"], reverse=True)
+    if not scored:
+        raise ValueError("NO_RELEVANT_RESULTS")
     return scored[:top_k]
 
 
@@ -332,6 +334,64 @@ def log_query(
 
 # ── Index snapshot ────────────────────────────────────────────────────
 
+def compute_index_checksum(session: Session) -> str:
+    """Return a deterministic checksum for the active local index.
+
+    Chunk UUIDs are intentionally excluded: rebuilding the same approved
+    source creates new row IDs, but must still produce the same audit hash.
+    The checksum covers document identity/version/permission metadata and
+    the ordered content hash of every chunk.
+    """
+    active_docs = session.scalars(
+        select(KnowledgeDocument)
+        .where(KnowledgeDocument.status == "active")
+        .order_by(
+            KnowledgeDocument.content_hash,
+            KnowledgeDocument.version,
+            KnowledgeDocument.source,
+            KnowledgeDocument.title,
+        )
+    ).all()
+    payload: list[dict] = []
+    for doc in active_docs:
+        chunks = session.scalars(
+            select(KnowledgeChunk)
+            .where(KnowledgeChunk.document_id == doc.id)
+            .order_by(KnowledgeChunk.chunk_index)
+        ).all()
+        payload.append(
+            {
+                "content_hash": doc.content_hash,
+                "title": doc.title,
+                "source": doc.source,
+                "license": doc.license,
+                "version": doc.version,
+                "permission_scope": doc.permission_scope or {},
+                "effective_from": doc.effective_from.isoformat()
+                if doc.effective_from
+                else None,
+                "effective_until": doc.effective_until.isoformat()
+                if doc.effective_until
+                else None,
+                "chunks": [
+                    {
+                        "chunk_index": chunk.chunk_index,
+                        "text_hash": _content_hash(chunk.text),
+                        "locator": chunk.locator,
+                    }
+                    for chunk in chunks
+                ],
+            }
+        )
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def create_index_snapshot(
     session: Session,
     *,
@@ -349,9 +409,7 @@ def create_index_snapshot(
     chunk_count = int(
         session.scalar(select(func.count()).select_from(KnowledgeChunk)) or 0
     )
-    checksum = hashlib.sha256(
-        json.dumps([c.id for c in session.scalars(select(KnowledgeChunk)).all()]).encode()
-    ).hexdigest()
+    checksum = compute_index_checksum(session)
     idx = KnowledgeIndex(
         version=version,
         document_count=doc_count,
