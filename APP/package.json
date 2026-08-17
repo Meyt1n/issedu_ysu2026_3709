@@ -1,0 +1,32 @@
+{
+  "name": "homecare-twin-mobile",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "家健镜 HomeCare Twin 随身照护移动端（教学演示，含无障碍长辈模式）",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "vue-tsc --noEmit",
+    "test": "vitest run",
+    "android:sync": "npm run build && cap sync android",
+    "seed:live": "node scripts/seed-live-demo.mjs"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/core": "^8.5.0",
+    "vue": "3.5.13",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.5.0",
+    "@types/node": "22.15.30",
+    "@vitejs/plugin-vue": "5.2.1",
+    "happy-dom": "^17.4.4",
+    "typescript": "5.7.3",
+    "vite": "6.4.3",
+    "vitest": "^3.2.6",
+    "vue-tsc": "^2.2.8"
+  }
+}
