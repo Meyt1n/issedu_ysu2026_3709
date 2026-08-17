@@ -22,6 +22,7 @@ const error = ref('')
 const actionMessage = ref('')
 const actionError = ref('')
 const acknowledging = ref(false)
+const supportsAcknowledgement = computed(() => session.dataMode === 'demo')
 
 const phoneHref = computed(() =>
   session.caregiverPhone ? `tel:${session.caregiverPhone.replace(/\s+/g, '')}` : '',
@@ -41,7 +42,7 @@ onMounted(async () => {
 })
 
 async function acknowledge(): Promise<void> {
-  if (!risk.value) return
+  if (!risk.value || !supportsAcknowledgement.value) return
   acknowledging.value = true
   actionError.value = ''
   try {
@@ -106,13 +107,14 @@ async function acknowledge(): Promise<void> {
       <section class="card" aria-labelledby="suggestion-title">
         <h2 id="suggestion-title">建议处理</h2>
         <p>{{ risk.suggestion }}</p>
+        <p v-if="!supportsAcknowledgement" class="notice" data-tone="warn" role="status">The family server does not provide acknowledgement write-back. This page will not mark it as recorded.</p>
         <p v-if="actionError" class="notice" data-tone="error" role="alert">{{ actionError }}</p>
         <p v-else-if="actionMessage" class="notice" data-tone="success" role="status">{{ actionMessage }}</p>
         <div class="btn-row">
           <button
             type="button"
             class="btn"
-            :disabled="acknowledging || risk.acknowledged"
+            :disabled="acknowledging || risk.acknowledged || !supportsAcknowledgement"
             @click="acknowledge"
           >
             <AppIcon name="check" :size="18" />
