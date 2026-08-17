@@ -132,6 +132,14 @@ export interface RecognitionCandidate {
   /** 永远为 true：任何候选都必须人工确认（主仓库 FR-03 硬约束） */
   requiresHumanConfirmation: true
   notice: string
+  handoff?: ReviewHandoff
+}
+
+export interface ReviewHandoff {
+  taskId: string
+  taskStatus: string
+  source: 'DEMO' | 'FAMILY_SERVER'
+  nextStep: string
 }
 
 export interface TodaySnapshot {
