@@ -23,6 +23,12 @@ const previewUrl = ref('')
 const quality = ref<QualityCheckResult | null>(null)
 const candidate = ref<RecognitionCandidate | null>(null)
 const error = ref('')
+const handoff = computed(() => candidate.value?.handoff ?? {
+  taskId: 'demo-review-pending',
+  taskStatus: 'PENDING_REVIEW',
+  source: 'DEMO' as const,
+  nextStep: '????????????????????????',
+})
 
 const steps = [
   { key: 'shoot', label: '拍摄' },
@@ -231,6 +237,13 @@ onBeforeUnmount(releasePreview)
         冲突：{{ conflict }}
       </p>
       <p class="notice" data-tone="warn">{{ candidate.notice }}</p>
+      <section class="handoff" aria-labelledby="handoff-title">
+        <h3 id="handoff-title">??????</h3>
+        <p><strong>?????</strong>{{ handoff.taskStatus }}</p>
+        <p><strong>?????</strong>{{ handoff.taskId }}</p>
+        <p>{{ handoff.nextStep }}</p>
+        <p v-if="handoff.source === 'DEMO'" class="meta-line">????????????????????????</p>
+      </section>
       <p class="meta-line">
         版本：<template v-for="(version, key) in candidate.versions" :key="key">{{ key }} {{ version }}　</template>
       </p>
@@ -340,5 +353,7 @@ html[data-contrast='high'] .vf-line { background: #000; box-shadow: none; }
   box-shadow: inset 0 1px 0 var(--hilite);
 }
 .metric-grid strong[data-passed='false'] { color: var(--c-danger-deep); }
+.handoff { margin-top: 12px; padding: 12px; border: 1px solid var(--c-border); border-radius: var(--r-card); }
+.handoff p { margin-top: 6px; }
 html[data-contrast='high'] .metric-grid li { border: 2px solid #000; background: #fff; }
 </style>
