@@ -1,0 +1,19 @@
+{
+  "name": "家健镜随身版 HomeCare Twin Companion",
+  "short_name": "家健镜",
+  "description": "家健镜 HomeCare Twin 随身照护端（教学演示，不用于诊断或治疗）",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f6f3ec",
+  "theme_color": "#2f6d5a",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
