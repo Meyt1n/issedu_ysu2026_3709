@@ -198,7 +198,7 @@ watch(() => sessionContextKey(session), () => void reload())
 <style scoped>
 .filter-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .filter-chip {
-  min-height: calc(var(--tap) - 6px);
+  min-height: var(--tap);
   padding: 4px 17px;
   border: 1px solid var(--glass-border);
   border-radius: var(--r-pill);
