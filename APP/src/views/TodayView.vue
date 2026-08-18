@@ -36,6 +36,7 @@ const loading = ref(true)
 const error = ref('')
 const actionError = ref('')
 const busyTaskId = ref('')
+const failedAction = ref<{ taskId: string; action: TaskAction; payload: TaskActionPayload } | null>(null)
 const announced = ref(false)
 const confetti = ref<InstanceType<typeof ConfettiBurst> | null>(null)
 
@@ -94,15 +95,14 @@ async function loadSnapshot(): Promise<void> {
     trend.value = []
     return
   }
-  snapshot.value = await activeProvider().getTodaySnapshot(session.currentMemberId)
-  activeProvider()
-    .getWeeklyTrend(session.currentMemberId)
-    .then(points => {
-      trend.value = points
-    })
-    .catch(() => {
-      trend.value = []
-    })
+  const memberId = session.currentMemberId
+  const [nextSnapshot, nextTrend] = await Promise.all([
+    activeProvider().getTodaySnapshot(memberId),
+    activeProvider().getWeeklyTrend(memberId),
+  ])
+  // 任务、趋势和时间线来自同一轮刷新，避免操作后显示不同步的旧数据。
+  snapshot.value = nextSnapshot
+  trend.value = nextTrend
   if (!announced.value && settings.voiceBroadcast) {
     announced.value = true
     speech.speak(summaryText())
@@ -140,6 +140,7 @@ async function onMemberChange(): Promise<void> {
 async function onTaskAction(taskId: string, action: TaskAction, payload: TaskActionPayload): Promise<void> {
   busyTaskId.value = taskId
   actionError.value = ''
+  failedAction.value = null
   const hadPending = pendingTasks.value.length
   try {
     const task = await activeProvider().submitTaskAction(taskId, action, payload)
@@ -155,9 +156,16 @@ async function onTaskAction(taskId: string, action: TaskAction, payload: TaskAct
     }
   } catch (cause) {
     actionError.value = cause instanceof Error ? cause.message : '操作失败，请稍后重试'
+    failedAction.value = { taskId, action, payload }
   } finally {
     busyTaskId.value = ''
   }
+}
+
+async function retryTaskAction(): Promise<void> {
+  const failed = failedAction.value
+  if (!failed) return
+  await onTaskAction(failed.taskId, failed.action, failed.payload)
 }
 
 function speakSummary(): void {
@@ -234,7 +242,10 @@ onMounted(reload)
     </label>
 
     <p v-if="error" class="notice" data-tone="error" role="alert">{{ error }}</p>
-    <p v-if="actionError" class="notice" data-tone="error" role="alert">{{ actionError }}</p>
+        <div v-if="actionError" class="notice" data-tone="error" role="alert">
+      <span>{{ actionError }}</span>
+      <button v-if="failedAction" type="button" class="btn btn-quiet" @click="retryTaskAction">重试操作</button>
+    </div>
 
     <div v-if="loading" class="plain-list" aria-label="正在加载" aria-live="polite">
       <SkeletonCard />
