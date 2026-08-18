@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resolve a merged PR to one explicitly configured internal-cloud identity."""
+"""Resolve GitHub PR and approved direct-maintenance identities."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from typing import Any
 
 
 class IdentityError(ValueError):
-    """Raised when a PR cannot be attributed to exactly one configured identity."""
+    """Raised when a commit or PR cannot be attributed safely."""
 
 
 IDENTITIES: dict[str, dict[str, Any]] = {
@@ -59,6 +59,11 @@ IDENTITIES: dict[str, dict[str, Any]] = {
         "git_emails": {"3487355487@qq.com"},
     },
 }
+
+# Direct master commits are an exception to the normal PR-only sync path.
+# Keep this allowlist deliberately narrow: meeting and project documentation are
+# maintenance artifacts, while source/configuration changes must still go via PR.
+DIRECT_MAINTENANCE_PATH_PREFIXES = ("doc/", "docs/")
 
 
 def _text(value: object) -> str:
@@ -131,6 +136,79 @@ def resolve_commit_identity(commit: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _load_direct_commit_files(commit: dict[str, Any]) -> list[dict[str, Any]]:
+    files = commit.get("files")
+    if not isinstance(files, list) or not files:
+        raise IdentityError(
+            f"提交 {_commit_label(commit)} 缺少完整文件清单；"
+            "直接维护提交必须由 GitHub API 提供文件路径"
+        )
+    if not all(isinstance(item, dict) for item in files):
+        raise IdentityError(f"提交 {_commit_label(commit)} 的文件清单格式无效")
+    return files
+
+
+def resolve_direct_maintenance_identity(commit: dict[str, Any]) -> dict[str, Any]:
+    """Resolve one safe, documentation-only direct master maintenance commit.
+
+    This path intentionally requires both GitHub linked identities. Git author
+    text alone is not sufficient because it can be changed locally without a
+    corresponding GitHub account association.
+    """
+
+    author_login = _text((commit.get("author") or {}).get("login"))
+    committer_login = _text((commit.get("committer") or {}).get("login"))
+    if not author_login or not committer_login:
+        raise IdentityError(
+            f"提交 {_commit_label(commit)} 缺少 GitHub author 或 committer 账号；"
+            "直接维护提交不得使用未关联身份"
+        )
+    if author_login.casefold() != committer_login.casefold():
+        raise IdentityError(
+            f"提交 {_commit_label(commit)} 的 GitHub author 与 committer 不一致；"
+            "直接维护提交只能归属一个已登记成员"
+        )
+    parents = commit.get("parents")
+    if parents is not None and (not isinstance(parents, list) or len(parents) != 1):
+        raise IdentityError(
+            f"提交 {_commit_label(commit)} 不是普通单父提交；"
+            "直接维护提交不得使用合并或无父拓扑"
+        )
+
+    identity = _identity_for_login(author_login)
+    files = _load_direct_commit_files(commit)
+    invalid_paths: list[str] = []
+    deleted_paths: list[str] = []
+    for file_info in files:
+        path = _text(file_info.get("filename")).replace("\\", "/")
+        status = _text(file_info.get("status")).casefold()
+        if not path or not path.startswith(DIRECT_MAINTENANCE_PATH_PREFIXES):
+            invalid_paths.append(path or "<missing-path>")
+        if status == "removed":
+            deleted_paths.append(path or "<missing-path>")
+    if invalid_paths:
+        details = ", ".join(invalid_paths[:5])
+        raise IdentityError(
+            f"提交 {_commit_label(commit)} 含非维护文档路径：{details}；"
+            "直接 master 提交只允许 doc/ 或 docs/"
+        )
+    if deleted_paths:
+        details = ", ".join(deleted_paths[:5])
+        raise IdentityError(
+            f"提交 {_commit_label(commit)} 删除维护文档：{details}；"
+            "删除操作必须通过 PR 进行审查"
+        )
+
+    return {
+        "github_login": identity["github_login"],
+        "token_env": identity["token_env"],
+        "cloud_username": identity["cloud_username"],
+        "cloud_username_env": identity["cloud_username_env"],
+        "commit_count": 1,
+        "kind": "direct-maintenance",
+    }
+
+
 def _commit_label(commit: dict[str, Any]) -> str:
     sha = _text(commit.get("sha"))[:12] or "unknown-sha"
     linked_login = _text((commit.get("author") or {}).get("login"))
@@ -189,14 +267,35 @@ def load_commits(path: Path) -> list[dict[str, Any]]:
     return commits
 
 
+def load_commit(path: Path) -> dict[str, Any]:
+    """Load one GitHub commit JSON object."""
+
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise IdentityError("直接提交元数据不是合法 JSON") from error
+    if not isinstance(value, dict):
+        raise IdentityError("直接提交元数据不是 JSON 对象")
+    return value
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--pr-login", required=True)
-    parser.add_argument("--commits-file", type=Path, required=True)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--pr-login")
+    mode.add_argument("--direct-commit-file", type=Path)
+    parser.add_argument("--commits-file", type=Path)
     args = parser.parse_args()
 
     try:
-        result = resolve_identity(args.pr_login, load_commits(args.commits_file))
+        if args.direct_commit_file is not None:
+            result = resolve_direct_maintenance_identity(
+                load_commit(args.direct_commit_file)
+            )
+        else:
+            if not args.pr_login or args.commits_file is None:
+                raise IdentityError("PR 身份解析需要 --pr-login 和 --commits-file")
+            result = resolve_identity(args.pr_login, load_commits(args.commits_file))
     except (IdentityError, OSError) as error:
         print(f"::error::{error}", file=sys.stderr)
         return 1

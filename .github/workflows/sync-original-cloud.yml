@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   sync:
-    name: 按 PR 成员身份快进同步到原云端
+    name: 按登记成员身份快进同步到原云端
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -29,7 +29,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: 预检身份并按 PR Token 逐个同步
+      - name: 预检身份并按成员 Token 逐个同步
         shell: bash
         env:
           CLOUD_REPO_USERNAME: ${{ secrets.CLOUD_REPO_USERNAME }}
@@ -104,71 +104,114 @@ jobs:
           declare -a sync_plan=()
           plan_previous_sha="${cloud_sha}"
           for sync_sha in "${sync_shas[@]}"; do
-            pr_meta="$(gh api \
-              "repos/${GITHUB_REPOSITORY}/commits/${sync_sha}/pulls" \
-              --header 'Accept: application/vnd.github+json' \
-              --jq 'map(select(.base.ref == "master" and .merged_at != null)) | if length == 1 then .[0] | [.number, .user.login] | @tsv else "" end')"
-            if [[ -z "${pr_meta}" ]]; then
-              echo "::error::提交 ${sync_sha} 未关联唯一的已合并 master PR；禁止使用其他成员 Token"
+            parent_line="$(git rev-list --parents -n 1 "${sync_sha}")"
+            read -ra parent_fields <<< "${parent_line}"
+            parent_count=$((${#parent_fields[@]} - 1))
+
+            kind=""
+            reference=""
+            pr_number=""
+            pr_login=""
+            commit_count=""
+            introduced_count=""
+            if [[ "${parent_count}" -eq 1 ]]; then
+              if [[ "$(git rev-parse "${sync_sha}^")" != "${plan_previous_sha}" ]]; then
+                echo "::error::直接维护提交 ${sync_sha} 的父提交不是当前同步点；拒绝跳过历史"
+                exit 1
+              fi
+              direct_commit_file="${RUNNER_TEMP}/sync-cloud-direct-${sync_sha}.json"
+              gh api \
+                "repos/${GITHUB_REPOSITORY}/commits/${sync_sha}" \
+                --header 'Accept: application/vnd.github+json' > "${direct_commit_file}"
+              identity_error_file="${RUNNER_TEMP}/sync-cloud-direct-${sync_sha}-identity-error.txt"
+              if ! identity_json="$(python .github/scripts/cloud_sync_identity.py \
+                --direct-commit-file "${direct_commit_file}" 2>"${identity_error_file}")"; then
+                identity_error="$(tr '\n' ' ' < "${identity_error_file}")"
+                identity_error="${identity_error#::error::}"
+                echo "::error::直接维护提交 ${sync_sha} 身份预检失败：${identity_error}"
+                echo "::error::此次未向内部云端 push。直接 master 提交只允许已登记成员、author=committer 且 doc/docs 文档维护变更。"
+                exit 1
+              fi
+              kind="direct-maintenance"
+              reference="direct"
+              commit_count="$(jq -r '.commit_count' <<< "${identity_json}")"
+              introduced_count="1"
+            elif [[ "${parent_count}" -eq 2 ]]; then
+              pr_meta="$(gh api \
+                "repos/${GITHUB_REPOSITORY}/commits/${sync_sha}/pulls" \
+                --header 'Accept: application/vnd.github+json' \
+                --jq 'map(select(.base.ref == "master" and .merged_at != null)) | if length == 1 then .[0] | [.number, .user.login] | @tsv else "" end')"
+              if [[ -z "${pr_meta}" ]]; then
+                echo "::error::提交 ${sync_sha} 未关联唯一的已合并 master PR；禁止使用其他成员 Token"
+                exit 1
+              fi
+
+              IFS=$'\t' read -r pr_number pr_login <<< "${pr_meta}"
+              commits_file="${RUNNER_TEMP}/sync-cloud-pr-${pr_number}-commits.ndjson"
+              gh api --paginate \
+                "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}/commits?per_page=100" \
+                --header 'Accept: application/vnd.github+json' \
+                --jq '.[]' > "${commits_file}"
+
+              boundary_json="$(python .github/scripts/cloud_sync_plan.py validate-boundary \
+                --repo . \
+                --previous-sha "${plan_previous_sha}" \
+                --target-sha "${sync_sha}" \
+                --pr-commits-file "${commits_file}")"
+              introduced_count="$(jq -r '.introduced_count' <<< "${boundary_json}")"
+
+              identity_error_file="${RUNNER_TEMP}/sync-cloud-pr-${pr_number}-identity-error.txt"
+              if ! identity_json="$(python .github/scripts/cloud_sync_identity.py \
+                --pr-login "${pr_login}" \
+                --commits-file "${commits_file}" 2>"${identity_error_file}")"; then
+                identity_error="$(tr '\n' ' ' < "${identity_error_file}")"
+                identity_error="${identity_error#::error::}"
+                echo "::error::PR #${pr_number}（作者 ${pr_login}）身份预检失败：${identity_error}"
+                echo "::error::此次未向内部云端 push。请在合并前拆分 PR、改用正确的 PR 作者账号，或更正提交身份。"
+                exit 1
+              fi
+              kind="pr-merge"
+              reference="${pr_number}"
+              commit_count="$(jq -r '.commit_count' <<< "${identity_json}")"
+            else
+              echo "::error::提交 ${sync_sha} 的父提交数量为 ${parent_count}；仅支持普通单父提交或双父 PR merge 提交"
               exit 1
             fi
 
-            IFS=$'\t' read -r pr_number pr_login <<< "${pr_meta}"
-            commits_file="${RUNNER_TEMP}/sync-cloud-pr-${pr_number}-commits.ndjson"
-            gh api --paginate \
-              "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}/commits?per_page=100" \
-              --header 'Accept: application/vnd.github+json' \
-              --jq '.[]' > "${commits_file}"
-
-            boundary_json="$(python .github/scripts/cloud_sync_plan.py validate-boundary \
-              --repo . \
-              --previous-sha "${plan_previous_sha}" \
-              --target-sha "${sync_sha}" \
-              --pr-commits-file "${commits_file}")"
-            introduced_count="$(jq -r '.introduced_count' <<< "${boundary_json}")"
-
-            identity_error_file="${RUNNER_TEMP}/sync-cloud-pr-${pr_number}-identity-error.txt"
-            if ! identity_json="$(python .github/scripts/cloud_sync_identity.py \
-              --pr-login "${pr_login}" \
-              --commits-file "${commits_file}" 2>"${identity_error_file}")"; then
-              identity_error="$(tr '\n' ' ' < "${identity_error_file}")"
-              identity_error="${identity_error#::error::}"
-              echo "::error::PR #${pr_number}（作者 ${pr_login}）身份预检失败：${identity_error}"
-              echo "::error::此次未向内部云端 push。请在合并前拆分 PR、改用正确的 PR 作者账号，或更正提交身份。"
-              exit 1
-            fi
             token_env="$(jq -r '.token_env' <<< "${identity_json}")"
             cloud_username="$(jq -r '.cloud_username' <<< "${identity_json}")"
             username_env="$(jq -r '.cloud_username_env' <<< "${identity_json}")"
-            commit_count="$(jq -r '.commit_count' <<< "${identity_json}")"
+            if [[ -z "${pr_login}" ]]; then
+              pr_login="$(jq -r '.github_login' <<< "${identity_json}")"
+            fi
 
             if [[ ! "${token_env}" =~ ^CLOUD_[A-Z0-9_]+$ ]]; then
-              echo "::error::PR #${pr_number} 返回了非法 Token 环境变量名"
+              echo "::error::${kind} ${reference} 返回了非法 Token 环境变量名"
               exit 1
             fi
             if [[ -z "$(printenv "${token_env}" || true)" ]]; then
-              echo "::error::PR #${pr_number} 作者 ${pr_login} 缺少 ${token_env} Repository Secret"
+              echo "::error::${kind} ${reference} 作者 ${pr_login} 缺少 ${token_env} Repository Secret"
               exit 1
             fi
             if [[ -n "${username_env}" && -z "$(printenv "${username_env}" || true)" ]]; then
-              echo "::error::PR #${pr_number} 作者 ${pr_login} 缺少 ${username_env}"
+              echo "::error::${kind} ${reference} 作者 ${pr_login} 缺少 ${username_env}"
               exit 1
             fi
             if [[ -z "${username_env}" && -z "${cloud_username}" ]]; then
-              echo "::error::PR #${pr_number} 作者 ${pr_login} 缺少内部云端用户名映射"
+              echo "::error::${kind} ${reference} 作者 ${pr_login} 缺少内部云端用户名映射"
               exit 1
             fi
 
             sync_plan+=(
-              "${sync_sha}|${pr_number}|${pr_login}|${token_env}|${cloud_username}|${username_env}|${commit_count}|${introduced_count}"
+              "${sync_sha}|${kind}|${reference}|${pr_login}|${token_env}|${cloud_username}|${username_env}|${commit_count}|${introduced_count}"
             )
-            echo "预检通过：PR #${pr_number}，GitHub 作者 ${pr_login}，PR 提交 ${commit_count} 个，本次新增可达提交 ${introduced_count} 个，Token ${token_env}"
+            echo "预检通过：${kind} ${reference}，GitHub 作者 ${pr_login}，提交 ${commit_count} 个，本次新增可达提交 ${introduced_count} 个，Token ${token_env}"
             plan_previous_sha="${sync_sha}"
           done
 
           for plan_row in "${sync_plan[@]}"; do
             IFS='|' read -r \
-              sync_sha pr_number pr_login token_env cloud_username username_env commit_count introduced_count \
+              sync_sha kind reference pr_login token_env cloud_username username_env commit_count introduced_count \
               <<< "${plan_row}"
 
             export CLOUD_SELECTED_PASSWORD="$(printenv "${token_env}")"
@@ -178,12 +221,12 @@ jobs:
               export CLOUD_SELECTED_USERNAME="${cloud_username}"
             fi
 
-            echo "同步 PR #${pr_number}：${pr_login}，新增可达提交 ${introduced_count} 个，目标 ${sync_sha}"
+            echo "同步 ${kind} ${reference}：${pr_login}，新增可达提交 ${introduced_count} 个，目标 ${sync_sha}"
             git push original-cloud "${sync_sha}:refs/heads/master"
 
             verified_cloud_sha="$(git ls-remote original-cloud refs/heads/master | awk '{print $1}')"
             if [[ "${verified_cloud_sha}" != "${sync_sha}" ]]; then
-              echo "::error::PR #${pr_number} 推送后校验失败：原云端=${verified_cloud_sha}，预期=${sync_sha}"
+              echo "::error::${kind} ${reference} 推送后校验失败：原云端=${verified_cloud_sha}，预期=${sync_sha}"
               exit 1
             fi
           done

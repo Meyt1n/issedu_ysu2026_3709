@@ -21,10 +21,16 @@ def _load_identity_module() -> Any:
         from cloud_sync_identity import (  # type: ignore[import-not-found]
             IdentityError,
             resolve_commit_identity,
+            resolve_direct_maintenance_identity,
             resolve_login_identity,
         )
 
-        return IdentityError, resolve_commit_identity, resolve_login_identity
+        return (
+            IdentityError,
+            resolve_commit_identity,
+            resolve_direct_maintenance_identity,
+            resolve_login_identity,
+        )
     except ModuleNotFoundError:
         path = Path(__file__).with_name("cloud_sync_identity.py")
         spec = importlib.util.spec_from_file_location("cloud_sync_identity", path)
@@ -35,11 +41,17 @@ def _load_identity_module() -> Any:
         return (
             module.IdentityError,
             module.resolve_commit_identity,
+            module.resolve_direct_maintenance_identity,
             module.resolve_login_identity,
         )
 
 
-IdentityError, resolve_commit_identity, resolve_login_identity = _load_identity_module()
+(
+    IdentityError,
+    resolve_commit_identity,
+    resolve_direct_maintenance_identity,
+    resolve_login_identity,
+) = _load_identity_module()
 
 
 def _run_git(repo: Path, *args: str) -> str:
@@ -247,7 +259,7 @@ def build_history_plan(
         if not isinstance(commit_metadata, dict) or _metadata_sha(commit_metadata) != target_sha:
             raise HistoryPlanError(f"直接提交 {target_sha[:12]} 缺少匹配的提交作者元数据")
         try:
-            identity = resolve_commit_identity(commit_metadata)
+            identity = resolve_direct_maintenance_identity(commit_metadata)
         except IdentityError as error:
             raise HistoryPlanError(f"直接提交 {target_sha[:12]}：{error}") from error
         actions.append(

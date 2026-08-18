@@ -1,4 +1,4 @@
-"""Tests for PR-to-cloud-token identity resolution."""
+"""Tests for PR and approved direct-maintenance identity resolution."""
 
 from __future__ import annotations
 
@@ -25,6 +25,25 @@ def commit(
         "sha": sha,
         "author": {"login": login} if login else None,
         "commit": {"author": {"name": name, "email": email}},
+    }
+
+
+def direct_maintenance_commit(
+    *,
+    author_login: str = "Shen-huang-123",
+    committer_login: str = "Shen-huang-123",
+    status: str = "added",
+    filename: str = "doc/07.会议记录/会议记录_8.18.docx",
+) -> dict:
+    return {
+        "sha": "abcdef0123456789",
+        "author": {"login": author_login},
+        "committer": {"login": committer_login},
+        "commit": {
+            "author": {"name": "Wind", "email": "z85963541@qq.com"},
+            "committer": {"name": "Wind", "email": "z85963541@qq.com"},
+        },
+        "files": [{"filename": filename, "status": status}],
     }
 
 
@@ -161,4 +180,41 @@ def test_rejects_unlinked_commit_with_unknown_email() -> None:
         IDENTITY.resolve_identity(
             "Shen-huang-123",
             [commit(login=None, name="zhang", email="other@example.com")],
+        )
+
+
+def test_resolves_registered_direct_document_commit() -> None:
+    result = IDENTITY.resolve_direct_maintenance_identity(direct_maintenance_commit())
+
+    assert result["github_login"] == "Shen-huang-123"
+    assert result["token_env"] == "CLOUD_TOKEN_SHEN_HUANG_123"
+    assert result["kind"] == "direct-maintenance"
+
+
+def test_rejects_direct_commit_when_github_author_and_committer_differ() -> None:
+    with pytest.raises(IDENTITY.IdentityError, match="author 与 committer 不一致"):
+        IDENTITY.resolve_direct_maintenance_identity(
+            direct_maintenance_commit(committer_login="Meyt1n")
+        )
+
+
+def test_rejects_direct_commit_with_merge_topology() -> None:
+    commit_metadata = direct_maintenance_commit()
+    commit_metadata["parents"] = [{"sha": "one"}, {"sha": "two"}]
+
+    with pytest.raises(IDENTITY.IdentityError, match="不是普通单父提交"):
+        IDENTITY.resolve_direct_maintenance_identity(commit_metadata)
+
+
+def test_rejects_direct_commit_outside_document_directories() -> None:
+    with pytest.raises(IDENTITY.IdentityError, match="非维护文档路径"):
+        IDENTITY.resolve_direct_maintenance_identity(
+            direct_maintenance_commit(filename="src/api/app/main.py")
+        )
+
+
+def test_rejects_direct_document_deletion() -> None:
+    with pytest.raises(IDENTITY.IdentityError, match="删除维护文档"):
+        IDENTITY.resolve_direct_maintenance_identity(
+            direct_maintenance_commit(status="removed")
         )
