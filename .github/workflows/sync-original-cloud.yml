@@ -92,7 +92,7 @@ jobs:
             exit 1
           fi
 
-          sync_plan_json="$(python .github/scripts/cloud_sync_plan.py plan \
+          sync_plan_json="$(python3 .github/scripts/cloud_sync_plan.py plan \
             --repo . \
             --cloud-sha "${cloud_sha}" \
             --github-sha "${github_sha}")"
@@ -132,7 +132,7 @@ jobs:
                 --header 'Accept: application/vnd.github+json' > "${direct_commit_file}"
               direct_parent_sha="$(git rev-parse "${sync_sha}^")"
               identity_error_file="${RUNNER_TEMP}/sync-cloud-direct-${sync_sha}-identity-error.txt"
-              if ! identity_json="$(python .github/scripts/cloud_sync_identity.py \
+              if ! identity_json="$(python3 .github/scripts/cloud_sync_identity.py \
                 --direct-commit-file "${direct_commit_file}" \
                 --repo . \
                 --commit-sha "${sync_sha}" \
@@ -161,7 +161,7 @@ jobs:
                 --header 'Accept: application/vnd.github+json' \
                 --jq '.[]' > "${commits_file}"
 
-              boundary_json="$(python .github/scripts/cloud_sync_plan.py validate-boundary \
+              boundary_json="$(python3 .github/scripts/cloud_sync_plan.py validate-boundary \
                 --repo . \
                 --previous-sha "${plan_previous_sha}" \
                 --target-sha "${sync_sha}" \
@@ -169,7 +169,7 @@ jobs:
               introduced_count="$(jq -r '.introduced_count' <<< "${boundary_json}")"
 
               identity_error_file="${RUNNER_TEMP}/sync-cloud-pr-${pr_number}-identity-error.txt"
-              if ! identity_json="$(python .github/scripts/cloud_sync_identity.py \
+              if ! identity_json="$(python3 .github/scripts/cloud_sync_identity.py \
                 --pr-login "${pr_login}" \
                 --commits-file "${commits_file}" 2>"${identity_error_file}")"; then
                 identity_error="$(tr '\n' ' ' < "${identity_error_file}")"
