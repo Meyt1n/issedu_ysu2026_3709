@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -138,6 +140,11 @@ def resolve_commit_identity(commit: dict[str, Any]) -> dict[str, Any]:
 
 
 def _load_direct_commit_files(commit: dict[str, Any]) -> list[dict[str, Any]]:
+    if commit.get("files_complete") is not True:
+        raise IdentityError(
+            f"提交 {_commit_label(commit)} 的文件清单未证明完整；"
+            "直接维护提交必须基于本地完整 Git diff，不能直接信任 GitHub API 截断清单"
+        )
     files = commit.get("files")
     if not isinstance(files, list) or not files:
         raise IdentityError(
@@ -147,6 +154,124 @@ def _load_direct_commit_files(commit: dict[str, Any]) -> list[dict[str, Any]]:
     if not all(isinstance(item, dict) for item in files):
         raise IdentityError(f"提交 {_commit_label(commit)} 的文件清单格式无效")
     return files
+
+
+def _git_path_is_safe_maintenance_path(value: object) -> bool:
+    """Validate a Git path without normalizing away traversal evidence."""
+
+    if not isinstance(value, str) or not value or "\\" in value:
+        return False
+    if value.startswith("/"):
+        return False
+    parts = value.split("/")
+    if len(parts) < 2 or parts[0] not in {"doc", "docs"}:
+        return False
+    return all(part not in {"", ".", ".."} for part in parts)
+
+
+def _run_git_bytes(repo: Path, *args: str) -> bytes:
+    if shutil.which("git") is None:
+        raise IdentityError("当前环境找不到 git，无法生成完整直接提交文件清单")
+    process = subprocess.run(
+        ["git", "-C", str(repo), *args],
+        capture_output=True,
+        check=False,
+    )
+    if process.returncode != 0:
+        detail = (process.stderr or process.stdout).decode("utf-8", errors="replace").strip()
+        raise IdentityError(f"生成直接提交完整 Git diff 失败：{detail or 'unknown git error'}")
+    return process.stdout
+
+
+def _complete_direct_commit_files(
+    repo: Path, parent_sha: str, commit_sha: str
+) -> list[dict[str, Any]]:
+    """Collect every changed path from the local Git object database.
+
+    GitHub's commit endpoint may truncate ``files`` for large commits. The
+    sync workflow has a full-history checkout, so the local diff is the
+    authoritative, non-truncated manifest for this narrow exception path.
+    """
+
+    actual_commit = _run_git_bytes(
+        repo, "rev-parse", "--verify", f"{commit_sha}^{{commit}}"
+    ).decode().strip()
+    actual_parent = _run_git_bytes(
+        repo, "rev-parse", "--verify", f"{parent_sha}^{{commit}}"
+    ).decode().strip()
+    first_parent = _run_git_bytes(
+        repo, "rev-parse", "--verify", f"{commit_sha}^"
+    ).decode().strip()
+    if actual_commit != commit_sha or first_parent != actual_parent:
+        raise IdentityError(
+            f"直接提交 {commit_sha[:12]} 的本地提交/第一父提交与预检元数据不一致"
+        )
+
+    raw = _run_git_bytes(
+        repo,
+        "diff-tree",
+        "--no-commit-id",
+        "-r",
+        "--name-status",
+        "-z",
+        "--find-renames",
+        parent_sha,
+        commit_sha,
+    )
+    fields = raw.decode("utf-8", errors="surrogateescape").split("\0")
+    files: list[dict[str, Any]] = []
+    index = 0
+    while index < len(fields) - 1:
+        status = fields[index]
+        index += 1
+        if not status:
+            continue
+        if status[0] in {"R", "C"}:
+            if index + 1 >= len(fields):
+                raise IdentityError("本地 Git diff 的 rename/copy 条目不完整")
+            previous_filename = fields[index]
+            filename = fields[index + 1]
+            index += 2
+            files.append(
+                {
+                    "filename": filename,
+                    "previous_filename": previous_filename,
+                    "status": "renamed" if status[0] == "R" else "copied",
+                }
+            )
+            continue
+        if index >= len(fields):
+            raise IdentityError("本地 Git diff 的文件条目不完整")
+        filename = fields[index]
+        index += 1
+        status_name = {
+            "A": "added",
+            "M": "modified",
+            "D": "deleted",
+            "T": "modified",
+        }.get(status[0], status)
+        files.append({"filename": filename, "status": status_name})
+    if not files:
+        raise IdentityError(f"直接提交 {commit_sha[:12]} 没有可审计的文件变更")
+    return files
+
+
+def build_complete_direct_commit_metadata(
+    commit: dict[str, Any],
+    repo: Path,
+    commit_sha: str,
+    parent_sha: str,
+) -> dict[str, Any]:
+    """Attach a complete local-Git file manifest to GitHub commit metadata."""
+
+    if _text(commit.get("sha")) != commit_sha:
+        raise IdentityError("GitHub 提交元数据 SHA 与本地同步节点不一致")
+    result = dict(commit)
+    result["parents"] = [{"sha": parent_sha}]
+    result["files"] = _complete_direct_commit_files(repo, parent_sha, commit_sha)
+    result["files_complete"] = True
+    result["file_count"] = len(result["files"])
+    return result
 
 
 def resolve_direct_maintenance_identity(commit: dict[str, Any]) -> dict[str, Any]:
@@ -183,9 +308,9 @@ def resolve_direct_maintenance_identity(commit: dict[str, Any]) -> dict[str, Any
     renamed_paths: list[str] = []
     for file_info in files:
         raw_filename = file_info.get("filename")
-        path = _text(raw_filename).replace("\\", "/")
+        path = _text(raw_filename)
         status = _text(file_info.get("status")).casefold()
-        if not path or not path.startswith(DIRECT_MAINTENANCE_PATH_PREFIXES):
+        if not _git_path_is_safe_maintenance_path(raw_filename):
             invalid_paths.append(path or "<missing-path>")
         if status not in DIRECT_MAINTENANCE_FILE_STATUSES:
             invalid_statuses.append(f"{path or '<missing-path>'} ({status or 'missing-status'})")
@@ -296,12 +421,26 @@ def main() -> int:
     mode.add_argument("--pr-login")
     mode.add_argument("--direct-commit-file", type=Path)
     parser.add_argument("--commits-file", type=Path)
+    parser.add_argument("--repo", type=Path)
+    parser.add_argument("--commit-sha")
+    parser.add_argument("--parent-sha")
     args = parser.parse_args()
 
     try:
         if args.direct_commit_file is not None:
+            if args.repo is None or not args.commit_sha or not args.parent_sha:
+                raise IdentityError(
+                    "直接维护提交身份解析需要 --repo、--commit-sha 和 --parent-sha，"
+                    "以生成未截断的本地 Git 文件清单"
+                )
+            commit = build_complete_direct_commit_metadata(
+                load_commit(args.direct_commit_file),
+                args.repo,
+                args.commit_sha,
+                args.parent_sha,
+            )
             result = resolve_direct_maintenance_identity(
-                load_commit(args.direct_commit_file)
+                commit
             )
         else:
             if not args.pr_login or args.commits_file is None:

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib.util
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -45,6 +47,7 @@ def direct_maintenance_commit(
             "committer": {"name": "Wind", "email": "z85963541@qq.com"},
         },
         "files": [{"filename": filename, "status": status}],
+        "files_complete": True,
     }
 
 
@@ -221,6 +224,30 @@ def test_rejects_direct_document_deletion() -> None:
         )
 
 
+def test_rejects_direct_metadata_without_complete_manifest() -> None:
+    commit_metadata = direct_maintenance_commit()
+    del commit_metadata["files_complete"]
+
+    with pytest.raises(IDENTITY.IdentityError, match="未证明完整"):
+        IDENTITY.resolve_direct_maintenance_identity(commit_metadata)
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        r"docs\\meeting-record.md",
+        "docs/../src/api/main.py",
+        "docs2/meeting-record.md",
+        "docs/meeting-record.md/../secret.txt",
+    ],
+)
+def test_rejects_noncanonical_direct_maintenance_paths(filename: str) -> None:
+    with pytest.raises(IDENTITY.IdentityError, match="非维护文档路径"):
+        IDENTITY.resolve_direct_maintenance_identity(
+            direct_maintenance_commit(filename=filename)
+        )
+
+
 def test_rejects_direct_rename_with_previous_filename() -> None:
     commit_metadata = direct_maintenance_commit(status="renamed")
     commit_metadata["files"][0]["previous_filename"] = "src/api/app/main.py"
@@ -235,3 +262,62 @@ def test_rejects_direct_metadata_without_parents() -> None:
 
     with pytest.raises(IDENTITY.IdentityError, match="不是普通单父提交"):
         IDENTITY.resolve_direct_maintenance_identity(commit_metadata)
+
+
+def _git(repo: Path, *args: str) -> str:
+    process = subprocess.run(
+        ["git", "-C", str(repo), *args],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env={
+            **os.environ,
+            "GIT_AUTHOR_NAME": "Shen-huang-123",
+            "GIT_AUTHOR_EMAIL": "z85963541@qq.com",
+            "GIT_COMMITTER_NAME": "Shen-huang-123",
+            "GIT_COMMITTER_EMAIL": "z85963541@qq.com",
+        },
+        check=False,
+    )
+    assert process.returncode == 0, process.stderr
+    return process.stdout.strip()
+
+
+def test_complete_manifest_catches_mixed_change_beyond_api_page_limit(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-b", "master")
+    (repo / "base.txt").write_text("base\n", encoding="utf-8")
+    _git(repo, "add", "base.txt")
+    _git(repo, "commit", "-m", "base")
+    parent = _git(repo, "rev-parse", "HEAD")
+
+    for index in range(301):
+        path = repo / "docs" / f"record-{index:03d}.md"
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(f"record {index}\n", encoding="utf-8")
+    source_path = repo / "src" / "api" / "unexpected.py"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text("unexpected = True\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "large-direct-maintenance")
+    commit_sha = _git(repo, "rev-parse", "HEAD")
+    metadata = {
+        "sha": commit_sha,
+        "author": {"login": "Shen-huang-123"},
+        "committer": {"login": "Shen-huang-123"},
+        "commit": {
+            "author": {"name": "Shen-huang-123", "email": "z85963541@qq.com"},
+            "committer": {"name": "Shen-huang-123", "email": "z85963541@qq.com"},
+        },
+    }
+
+    complete = IDENTITY.build_complete_direct_commit_metadata(
+        metadata, repo, commit_sha, parent
+    )
+
+    assert complete["files_complete"] is True
+    assert complete["file_count"] == 302
+    with pytest.raises(IDENTITY.IdentityError, match="非维护文档路径"):
+        IDENTITY.resolve_direct_maintenance_identity(complete)

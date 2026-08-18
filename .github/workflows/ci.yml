@@ -139,6 +139,9 @@ jobs:
 
       - name: Upload HCT-405 API evidence
         if: always()
+        # Artifact quota exhaustion must not mask the test result. The test
+        # commands above remain blocking; evidence upload is best-effort.
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: hct405-api-evidence
@@ -187,6 +190,9 @@ jobs:
 
       - name: Upload HCT-405 browser evidence
         if: always()
+        # Artifact quota exhaustion must not mask the test result. The test
+        # commands above remain blocking; evidence upload is best-effort.
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: hct405-browser-evidence

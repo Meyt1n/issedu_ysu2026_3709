@@ -11,6 +11,10 @@ from pathlib import Path
 from typing import Any
 
 from cloud_sync_history_plan import HistoryPlanError, build_history_plan
+from cloud_sync_identity import (
+    IdentityError,
+    build_complete_direct_commit_metadata,
+)
 
 
 def _run(command: list[str]) -> str:
@@ -113,10 +117,21 @@ def collect_metadata(
                 }
             )
         elif len(parents) == 1:
+            try:
+                commit_metadata = build_complete_direct_commit_metadata(
+                    _gh_json(repository, f"commits/{sha}"),
+                    repo,
+                    sha,
+                    parents[0],
+                )
+            except (IdentityError, OSError) as error:
+                raise HistoryPlanError(
+                    f"直接提交 {sha[:12]} 无法生成完整本地 Git 文件清单：{error}"
+                ) from error
             metadata.append(
                 {
                     "sha": sha,
-                    "commit": _gh_json(repository, f"commits/{sha}"),
+                    "commit": commit_metadata,
                 }
             )
         else:

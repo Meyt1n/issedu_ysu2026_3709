@@ -81,6 +81,7 @@ def direct_commit_metadata(sha: str, login: str, name: str, email: str) -> dict:
         "files": [
             {"filename": "doc/07.会议记录/meeting-record.docx", "status": "added"}
         ],
+        "files_complete": True,
     }
 
 
