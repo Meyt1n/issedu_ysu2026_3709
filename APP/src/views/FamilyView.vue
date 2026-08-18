@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue'
 
 import AppIcon from '@/components/AppIcon.vue'
+import ErrorNotice from '@/components/ErrorNotice.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import PrivacyBadge from '@/components/PrivacyBadge.vue'
 import SkeletonCard from '@/components/SkeletonCard.vue'
@@ -9,20 +10,26 @@ import { activeProvider } from '@/data'
 import { memberRoleLabel } from '@/data/labels'
 import type { MemberSummary } from '@/data/types'
 import { avatarHue, formatDay } from '@/utils/format'
+import { presentApiError, type ErrorPresentation } from '@/api/errors'
 
 const members = ref<MemberSummary[]>([])
 const loading = ref(true)
-const error = ref('')
+const error = ref<ErrorPresentation | null>(null)
 
-onMounted(async () => {
+async function reload(): Promise<void> {
+  loading.value = true
+  error.value = null
+  members.value = []
   try {
     members.value = await activeProvider().listMembers()
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : '加载失败，请稍后重试'
+    error.value = presentApiError(cause)
   } finally {
     loading.value = false
   }
-})
+}
+
+onMounted(reload)
 </script>
 
 <template>
@@ -34,7 +41,7 @@ onMounted(async () => {
       <PrivacyBadge />
     </header>
 
-    <p v-if="error" class="notice" data-tone="error" role="alert">{{ error }}</p>
+    <ErrorNotice v-if="error" :error="error" @retry="reload" />
     <div v-if="loading" class="plain-list" aria-label="正在加载" aria-live="polite">
       <SkeletonCard />
       <SkeletonCard />

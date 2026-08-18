@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import AppIcon from '@/components/AppIcon.vue'
+import ErrorNotice from '@/components/ErrorNotice.vue'
 import LevelTag from '@/components/LevelTag.vue'
 import { useSpeech } from '@/composables/useSpeech'
 import { activeProvider } from '@/data'
@@ -10,6 +11,7 @@ import { eventStatusLabel, riskLevelLabel } from '@/data/labels'
 import type { RiskCard } from '@/data/types'
 import { useSession } from '@/stores/session'
 import { formatDateTime } from '@/utils/format'
+import { presentApiError, type ErrorPresentation } from '@/api/errors'
 
 const route = useRoute()
 const router = useRouter()
@@ -18,9 +20,9 @@ const speech = useSpeech()
 
 const risk = ref<RiskCard | null>(null)
 const loading = ref(true)
-const error = ref('')
+const error = ref<ErrorPresentation | null>(null)
 const actionMessage = ref('')
-const actionError = ref('')
+const actionError = ref<ErrorPresentation | null>(null)
 const acknowledging = ref(false)
 const supportsAcknowledgement = computed(() => session.dataMode === 'demo')
 
@@ -28,28 +30,33 @@ const phoneHref = computed(() =>
   session.caregiverPhone ? `tel:${session.caregiverPhone.replace(/\s+/g, '')}` : '',
 )
 
-onMounted(async () => {
+async function load(): Promise<void> {
+  loading.value = true
+  error.value = null
+  risk.value = null
   const memberId = String(route.params.memberId ?? '')
   const ruleId = decodeURIComponent(String(route.params.ruleId ?? ''))
   try {
     risk.value = await activeProvider().getRiskDetail(memberId, ruleId)
     speech.speak(`${riskLevelLabel(risk.value.level)}风险：${risk.value.message}。${risk.value.suggestion}`)
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : '加载失败或未获授权'
+    error.value = presentApiError(cause)
   } finally {
     loading.value = false
   }
-})
+}
+
+onMounted(load)
 
 async function acknowledge(): Promise<void> {
   if (!risk.value || !supportsAcknowledgement.value) return
   acknowledging.value = true
-  actionError.value = ''
+  actionError.value = null
   try {
     risk.value = await activeProvider().acknowledgeRisk(risk.value.memberId, risk.value.ruleId)
     actionMessage.value = '已记录你的知晓状态，家人可以在事件中心看到。'
   } catch (cause) {
-    actionError.value = cause instanceof Error ? cause.message : '操作失败，请稍后重试'
+    actionError.value = presentApiError(cause)
   } finally {
     acknowledging.value = false
   }
@@ -63,7 +70,7 @@ async function acknowledge(): Promise<void> {
       返回
     </button>
 
-    <p v-if="error" class="notice" data-tone="error" role="alert">{{ error }}</p>
+    <ErrorNotice v-if="error" :error="error" @retry="load" />
     <section v-if="loading" class="card" aria-live="polite">
       <p class="empty-state">正在加载风险依据…</p>
     </section>
@@ -108,7 +115,7 @@ async function acknowledge(): Promise<void> {
         <h2 id="suggestion-title">建议处理</h2>
         <p>{{ risk.suggestion }}</p>
         <p v-if="!supportsAcknowledgement" class="notice" data-tone="warn" role="status">家庭服务器暂不支持回写“已知晓”状态；本页不会将其标记为已记录。</p>
-        <p v-if="actionError" class="notice" data-tone="error" role="alert">{{ actionError }}</p>
+        <ErrorNotice v-if="actionError" :error="actionError" @retry="acknowledge" />
         <p v-else-if="actionMessage" class="notice" data-tone="success" role="status">{{ actionMessage }}</p>
         <div class="btn-row">
           <button
