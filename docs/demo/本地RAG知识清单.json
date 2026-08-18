@@ -1,0 +1,16 @@
+{
+  "manifest_version": "1",
+  "status": "approved",
+  "approval_note": "仅用于 HomeCare Twin 本地教学演示；不含真实家庭健康数据。",
+  "documents": [
+    {
+      "path": "家庭用药安全演示知识.md",
+      "title": "HomeCare Twin 家庭用药安全演示知识卡",
+      "source": "homecare-demo-kb",
+      "license": "internal-demo",
+      "version": "demo-cn-en-v1",
+      "permission_scope": {},
+      "content_sha256": "6e695840a617c188273d137985eee203e086da3c111f8fdb90ccd44ee77d60a3"
+    }
+  ]
+}

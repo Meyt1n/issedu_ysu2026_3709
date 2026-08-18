@@ -56,6 +56,16 @@ def test_knowledge_scope_and_deletion_propagate_through_api(
     assert retrieved.json()["results"][0]["version"] == "e2e-v1"
     assert retrieved.json()["query_id"]
 
+    no_match = client.post(
+        "/api/v1/knowledge/retrieve",
+        headers=OWNER_HEADERS,
+        json={"query": "完全无关的天气查询", "top_k": 3},
+    )
+    assert no_match.status_code == 200, no_match.text
+    assert no_match.json()["degraded"] is True
+    assert no_match.json()["degrade_reason"] == "NO_RELEVANT_RESULTS"
+    assert no_match.json()["results"] == []
+
     hidden = client.post(
         "/api/v1/knowledge/retrieve",
         headers=OTHER_HEADERS,

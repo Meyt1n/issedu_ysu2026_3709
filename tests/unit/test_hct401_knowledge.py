@@ -138,11 +138,9 @@ class TestRetrieval:
         )
         assert all(r["title"] == "Test Doc" for r in results)
 
-        # Unauthorised household → degrade
-        results_unauth = retrieve(
-            db_session, query="阿莫西林", actor_id="u1", household_id="h-other"
-        )
-        assert len(results_unauth) == 0
+        # A permitted household with no matching evidence degrades explicitly.
+        with pytest.raises(ValueError, match="NO_RELEVANT_RESULTS"):
+            retrieve(db_session, query="阿莫西林", actor_id="u1", household_id="h-other")
 
     def test_empty_query_raises(self, db_session):
         with pytest.raises(ValueError):
@@ -206,6 +204,13 @@ class TestRetrieval:
 
         assert len(results) == 1
         assert results[0]["score"] > 0
+
+    def test_no_relevant_result_is_explicit_degradation(self, db_session):
+        _make_doc(db_session, content="阿莫西林 说明书 用法用量")
+        db_session.commit()
+
+        with pytest.raises(ValueError, match="NO_RELEVANT_RESULTS"):
+            retrieve(db_session, query="天气温度", actor_id="u1")
 
 # ── Index snapshot ─────────────────────────────────────────────────────
 class TestIndexSnapshot:
