@@ -11,6 +11,7 @@ import {
   setElderMode,
   setFontScale,
   setHighContrast,
+  setReduceMotion,
   setTheme,
   useA11y,
 } from './accessibility'
@@ -110,6 +111,45 @@ describe('无障碍设置 store', () => {
     expect(document.documentElement.dataset.theme).toBe('dark')
     applySettingsToDocument({ ...DEFAULT_SETTINGS, theme: 'auto' }, document, false)
     expect(document.documentElement.dataset.theme).toBe('light')
+  })
+
+  it('三种外观与三档字号可和高对比/减少动效组合持久应用', () => {
+    const combinations = [
+      ['light', 'standard', false],
+      ['light', 'large', true],
+      ['light', 'xlarge', false],
+      ['dark', 'standard', false],
+      ['dark', 'large', true],
+      ['dark', 'xlarge', false],
+      ['auto', 'standard', true],
+      ['auto', 'large', false],
+      ['auto', 'xlarge', true],
+    ] as const
+
+    for (const [theme, fontScale, systemDark] of combinations) {
+      applySettingsToDocument(
+        { ...DEFAULT_SETTINGS, theme, fontScale, highContrast: true, reduceMotion: true },
+        document,
+        systemDark,
+      )
+
+      expect(document.documentElement.dataset.theme).toBe(
+        theme === 'auto' ? (systemDark ? 'dark' : 'light') : theme,
+      )
+      expect(document.documentElement.dataset.fontScale).toBe(fontScale)
+      expect(document.documentElement.dataset.contrast).toBe('high')
+      expect(document.documentElement.dataset.motion).toBe('reduced')
+    }
+  })
+
+  it('减少动效开关写入设置并立即更新文档属性', () => {
+    const { settings } = useA11y()
+
+    setReduceMotion(true)
+
+    expect(settings.reduceMotion).toBe(true)
+    expect(document.documentElement.dataset.motion).toBe('reduced')
+    expect(JSON.parse(localStorage.getItem(A11Y_STORAGE_KEY) ?? '{}').reduceMotion).toBe(true)
   })
 
   it('normalizeSettings 拒绝非法主题值', () => {
