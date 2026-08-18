@@ -143,6 +143,8 @@ MATCHED/CONFLICT/UNKNOWN/REVIEW -> CONFIRMED | CORRECTED | REJECTED
 
 `POST /assistant/chat` 只执行白名单只读工具。`retrieve_knowledge` 必须使用请求中的 `household_id`/`member_id`，模型不得改写范围。最终 `citations` 只能引用本次工具返回的 `document_id`/`version`/`chunk_id`；伪造来源返回 `CITATION_NOT_FOUND`，无授权文档返回 `NO_AUTHORISED_DOCUMENTS`。降级响应的 `sources` 和 `citations` 必须为空。
 
+语音输入不新增 API：浏览器只把用户主动授权后的识别文字写入聊天草稿，用户发送后沿用本接口；服务端不接收或保存音频。语音回复由客户端浏览器本地 `speechSynthesis` 按用户操作播放，不改变回答、引用、权限或审计契约。
+
 正常回答可返回 `suggested_questions`（最多 3 条）作为交互提示。该字段只由最新用户问题的受控意图模板生成，不是事实、规则、健康事件或模型思考链；建议必须去重、限长、无外链/广告/问诊导流/医疗指令。模型不可用、无证据降级、引用校验失败或请求失败时返回空数组，客户端不得把建议写入健康事实。
 
 回答接口必须明确返回 `route`、证据完整性和降级状态。模型不可用时只能返回结构化事实/规则结果或 `MODEL_UNAVAILABLE`，不得把云端服务当作家庭版默认回退。
