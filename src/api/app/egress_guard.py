@@ -68,7 +68,7 @@ def get_whitelist() -> set[str]:
     if not raw:
         return set()
     return {
-        _normalize_host(item if "://" in item else f"https://{item}")
+        _normalize_host(item.strip() if "://" in item else f"https://{item.strip()}")
         for item in raw.split(",")
         if item.strip()
     }
@@ -77,6 +77,10 @@ def get_whitelist() -> set[str]:
 def is_egress_allowed(url: str) -> bool:
     """Check whether outbound traffic to *url* is permitted."""
     settings = get_settings()
+    parsed = urlparse(url)
+    if parsed.scheme.lower() != "https":
+        logger.warning("EGRESS_BLOCKED: weather egress requires HTTPS")
+        return False
     if not settings.egress_default_deny:
         return True
 
@@ -132,7 +136,7 @@ def allowed_weather_payload(body: dict[str, Any] | None) -> tuple[bool, str | No
     if body is None:
         return True, None
 
-    allowed_keys = {"city_code", "district_code", "city", "district", "lat", "lon"}
+    allowed_keys = {"city_code", "district_code"}
     for key in body:
         if key not in allowed_keys:
             reason = (

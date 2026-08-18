@@ -6,6 +6,7 @@ import type { WeatherResponse } from '../api/types'
 import AppIcon from '../components/AppIcon.vue'
 import CountUp from '../components/CountUp.vue'
 import { requestOptions, session } from '../store'
+import { presentWeather } from '../weather/weatherView'
 
 interface DayPoint {
   label: string
@@ -24,6 +25,7 @@ const pendingOutbox = ref(0)
 const weekSeries = ref<DayPoint[]>([])
 const weather = ref<WeatherResponse | null>(null)
 const lastUpdated = ref<Date | null>(null)
+const weatherView = computed(() => presentWeather(weather.value))
 
 let clockTimer: ReturnType<typeof setInterval> | null = null
 let refreshTimer: ReturnType<typeof setInterval> | null = null
@@ -259,8 +261,8 @@ onBeforeUnmount(() => {
           <span>事件出箱 · {{ pendingOutbox === 0 ? '全部送达' : `${pendingOutbox} 条待派发` }}</span>
         </div>
         <div class="bs-light-row">
-          <span class="bs-light" :class="weather && weather.status === 'ok' ? 'on' : 'off'" />
-          <span>天气行动卡 · {{ weather?.status === 'ok' ? '正常' : weather?.status === 'disabled' ? '未启用（默认不出网）' : '不可用' }}</span>
+          <span class="bs-light" :class="weatherView.available && !weatherView.stale ? 'on' : 'off'" />
+          <span>天气行动卡 · {{ weatherView.statusLabel }} · {{ weatherView.scopeLabel }}</span>
         </div>
       </div>
     </div>

@@ -1891,6 +1891,81 @@ button:focus-visible, a:focus-visible {
 
 .rail-divider { border: 0; border-top: 1px dashed var(--line); margin: 0; }
 
+/* ---------- 环境行动卡：可见、可降级、带来源与规则版本 ---------- */
+
+.weather-action-panel {
+  background:
+    radial-gradient(circle at 86% 12%, color-mix(in srgb, var(--sky-tint) 78%, transparent), transparent 34%),
+    linear-gradient(135deg, color-mix(in srgb, var(--paper) 92%, var(--sage-tint)), var(--paper));
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-soft);
+  display: grid;
+  gap: 20px;
+  overflow: hidden;
+  padding: 24px 26px;
+  position: relative;
+}
+
+.weather-action-panel::after {
+  color: color-mix(in srgb, var(--sky) 11%, transparent);
+  content: "☁";
+  font-size: 150px;
+  line-height: 1;
+  pointer-events: none;
+  position: absolute;
+  right: 22px;
+  top: -50px;
+}
+
+.weather-action-head,
+.weather-head-actions,
+.weather-action-body,
+.weather-reading,
+.weather-evidence span {
+  align-items: center;
+  display: flex;
+}
+
+.weather-action-head { gap: 20px; justify-content: space-between; position: relative; z-index: 1; }
+.weather-action-head h3 { font-family: var(--font-display); font-size: 24px; margin: 5px 0 0; }
+.weather-eyebrow { align-items: center; color: var(--sky); display: flex; font-size: 12px; font-weight: 750; gap: 7px; letter-spacing: 1px; }
+.weather-head-actions { flex-wrap: wrap; gap: 10px; justify-content: flex-end; }
+.weather-action-body { align-items: stretch; gap: 28px; position: relative; z-index: 1; }
+
+.weather-reading {
+  border-right: 1px solid var(--line);
+  flex: 0 0 260px;
+  gap: 18px;
+  padding-right: 28px;
+}
+
+.weather-reading.stale { filter: saturate(0.75); }
+.weather-temperature { color: var(--sky); font-family: var(--font-display); font-size: 66px; font-weight: 700; letter-spacing: -4px; line-height: 1; }
+.weather-reading-copy { display: grid; gap: 5px; }
+.weather-reading-copy strong { font-size: 16px; }
+.weather-reading-copy span { color: var(--ink-soft); font-size: 12.5px; }
+.weather-card-list { display: grid; flex: 1; gap: 10px; }
+.weather-advice { align-items: flex-start; border-radius: var(--radius-sm); display: flex; gap: 11px; padding: 12px 14px; }
+.weather-advice.warning { background: var(--gold-tint); color: var(--gold-ink); }
+.weather-advice.info { background: var(--sky-tint); color: var(--sky-ink); }
+.weather-advice strong { font-size: 12px; }
+.weather-advice p { font-size: 13px; line-height: 1.55; margin: 3px 0 0; }
+.weather-calm { align-items: center; color: var(--sage-ink); display: flex; gap: 10px; padding: 14px; }
+.weather-unavailable { align-items: center; background: var(--paper-deep); border-radius: var(--radius-sm); color: var(--ink-soft); display: flex; gap: 15px; padding: 18px; position: relative; z-index: 1; }
+.weather-unavailable strong { color: var(--ink); }
+.weather-unavailable p { font-size: 13px; line-height: 1.6; margin: 4px 0 0; }
+.weather-evidence { border-top: 1px dashed var(--line); color: var(--ink-faint); display: flex; flex-wrap: wrap; font-size: 11.5px; gap: 8px 18px; padding-top: 14px; position: relative; z-index: 1; }
+.weather-evidence span { gap: 5px; }
+.weather-evidence p { flex-basis: 100%; line-height: 1.5; margin: 0; }
+.weather-evidence .weather-degraded { color: var(--gold-ink); font-weight: 650; }
+
+@media (max-width: 760px) {
+  .weather-action-head, .weather-action-body { align-items: stretch; flex-direction: column; }
+  .weather-head-actions { justify-content: flex-start; }
+  .weather-reading { border-bottom: 1px solid var(--line); border-right: 0; flex-basis: auto; padding-bottom: 18px; padding-right: 0; }
+}
+
 /* ---------- 陶土印章 ---------- */
 
 .seal {

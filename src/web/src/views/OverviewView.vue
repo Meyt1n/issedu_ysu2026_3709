@@ -13,6 +13,7 @@ import emptyCorner from '../assets/empty-corner.jpg'
 import AppIcon from '../components/AppIcon.vue'
 import CountUp from '../components/CountUp.vue'
 import SkeletonList from '../components/SkeletonList.vue'
+import WeatherActionPanel from '../components/WeatherActionPanel.vue'
 import { vTilt } from '../ui/tilt'
 import {
   formatError,
@@ -36,6 +37,7 @@ const memberState = ref<MemberState | null>(null)
 const risks = ref<RiskListResponse | null>(null)
 const reviewTasks = ref<ReviewTask[]>([])
 const weather = ref<WeatherResponse | null>(null)
+const weatherLoading = ref(false)
 const loading = ref(false)
 const loadError = ref('')
 
@@ -49,6 +51,25 @@ const pendingReviews = computed(
   () => reviewTasks.value.filter(task => task.status === 'PENDING_REVIEW').length,
 )
 
+async function loadWeather(): Promise<void> {
+  weatherLoading.value = true
+  try {
+    weather.value = await apiClient.getWeatherActionCards(
+      undefined,
+      undefined,
+      requestOptions.value,
+    )
+  } catch {
+    weather.value = {
+      status: 'provider_unavailable',
+      degraded_reason: 'provider_unavailable',
+      action_cards: [],
+    }
+  } finally {
+    weatherLoading.value = false
+  }
+}
+
 async function loadOverview(): Promise<void> {
   const householdId = session.selectedHouseholdId
   const memberId = session.selectedMemberId
@@ -57,13 +78,12 @@ async function loadOverview(): Promise<void> {
   loading.value = true
   loadError.value = ''
   try {
-    const [timelineResult, stateResult, riskResult, reviewResult, weatherResult] =
+    const [timelineResult, stateResult, riskResult, reviewResult] =
       await Promise.allSettled([
         apiClient.listMemberTimeline(householdId, memberId, requestOptions.value),
         apiClient.getMemberState(householdId, memberId, requestOptions.value),
         apiClient.listMemberRisks(householdId, memberId, requestOptions.value),
         apiClient.listReviewTasks(householdId, memberId, requestOptions.value),
-        apiClient.getWeatherActionCards(undefined, undefined, requestOptions.value),
       ])
 
     // 新成员还没有状态投影/风险数据属于正常情况（404），
@@ -72,7 +92,6 @@ async function loadOverview(): Promise<void> {
     memberState.value = stateResult.status === 'fulfilled' ? stateResult.value : null
     risks.value = riskResult.status === 'fulfilled' ? riskResult.value : null
     reviewTasks.value = reviewResult.status === 'fulfilled' ? reviewResult.value : []
-    weather.value = weatherResult.status === 'fulfilled' ? weatherResult.value : null
   } catch (cause) {
     loadError.value = formatError(cause)
   } finally {
@@ -89,7 +108,10 @@ watch(
   () => void loadOverview(),
 )
 
-onMounted(() => void loadOverview())
+onMounted(() => {
+  void loadOverview()
+  void loadWeather()
+})
 </script>
 
 <template>
@@ -174,6 +196,12 @@ onMounted(() => void loadOverview())
     </button>
   </section>
 
+  <WeatherActionPanel
+    :weather="weather"
+    :loading="weatherLoading"
+    @refresh="loadWeather"
+  />
+
   <div class="grid-main-side" style="gap: 34px">
     <section aria-label="近期变化">
       <div class="sec-head">
@@ -229,37 +257,6 @@ onMounted(() => void loadOverview())
           </span>
         </div>
       </div>
-
-      <hr class="rail-divider" />
-
-      <div class="rail-block">
-        <span class="rail-title"><AppIcon name="cloud" :size="15" />今日环境</span>
-        <template v-if="weather && weather.status === 'ok'">
-          <span class="rail-line">
-            {{ weather.temperature != null ? `${weather.temperature}℃` : '' }}
-            {{ weather.humidity != null ? ` · 湿度 ${weather.humidity}%` : '' }}
-            {{ weather.aqi != null ? ` · AQI ${weather.aqi}` : '' }}
-          </span>
-          <span v-if="weather.action_cards.length === 0" class="rail-line text-faint">
-            今日环境平稳，没有需要特别注意的行动建议。
-          </span>
-          <p
-            v-for="(card, index) in weather.action_cards"
-            :key="index"
-            class="notice"
-            :class="card.level === 'warning' ? 'warn' : 'info'"
-            style="margin: 0"
-          >
-            <AppIcon :name="card.level === 'warning' ? 'alert' : 'info'" :size="15" />
-            {{ card.message }}
-          </p>
-        </template>
-        <span v-else class="rail-line text-faint">
-          天气服务当前{{ weather?.status === 'disabled' ? '未启用' : '不可用' }}（默认不出网），家庭事实、规则与任务不受影响。
-        </span>
-      </div>
-
-      <hr class="rail-divider" />
 
       <div class="rail-block">
         <span class="rail-title"><AppIcon name="key" :size="15" />谁能看到这些数据</span>
