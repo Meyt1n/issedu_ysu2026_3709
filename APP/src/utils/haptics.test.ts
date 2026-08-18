@@ -18,4 +18,13 @@ describe('触觉反馈', () => {
     vi.stubGlobal('navigator', {})
     expect(tapFeedback()).toBe(false)
   })
+
+  it('振动 API 调用失败时也静默降级', () => {
+    const vibrate = vi.fn(() => {
+      throw new Error('vibration denied')
+    })
+    vi.stubGlobal('navigator', { vibrate })
+    expect(() => tapFeedback()).not.toThrow()
+    expect(tapFeedback()).toBe(false)
+  })
 })
