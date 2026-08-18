@@ -20,6 +20,7 @@ const ICONS: Record<ToastTone, IconName> = {
         type="button"
         class="toast"
         :data-tone="toast.tone"
+        :aria-label="`${toast.text}，点按关闭提示`"
         @click="dismissToast(toast.id)"
       >
         <span class="toast-icon" aria-hidden="true">

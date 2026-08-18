@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { nextTick, ref } from 'vue'
 
 import AppIcon from '@/components/AppIcon.vue'
 import LevelTag from '@/components/LevelTag.vue'
@@ -23,6 +23,13 @@ const skipReason = ref('')
 const skipError = ref('')
 
 const DEFER_OPTIONS = [1, 2, 4]
+const taskDomId = String(props.task.id).replace(/[^a-zA-Z0-9_-]/g, '-')
+const deferPanelId = `task-${taskDomId}-defer-panel`
+const skipPanelId = `task-${taskDomId}-skip-panel`
+const deferButtonId = `task-${taskDomId}-defer-button`
+const skipButtonId = `task-${taskDomId}-skip-button`
+const skipInputId = `task-${taskDomId}-skip-reason`
+const skipErrorId = `task-${taskDomId}-skip-error`
 
 function confirm(): void {
   emit('action', 'confirm', {})
@@ -31,6 +38,14 @@ function confirm(): void {
 function defer(hours: number): void {
   panel.value = 'none'
   emit('action', 'defer', { deferHours: hours })
+}
+
+async function togglePanel(nextPanel: 'defer' | 'skip'): Promise<void> {
+  panel.value = panel.value === nextPanel ? 'none' : nextPanel
+  if (panel.value === 'none') return
+  await nextTick()
+  const targetId = nextPanel === 'defer' ? deferPanelId : skipInputId
+  document.getElementById(targetId)?.focus()
 }
 
 function submitSkip(): void {
@@ -75,26 +90,37 @@ function submitSkip(): void {
           完成
         </button>
         <button
+          :id="deferButtonId"
           type="button"
           class="btn btn-quiet"
           :disabled="props.busy"
           :aria-expanded="panel === 'defer'"
-          @click="panel = panel === 'defer' ? 'none' : 'defer'"
+          :aria-controls="deferPanelId"
+          @click="togglePanel('defer')"
         >
           稍后
         </button>
         <button
+          :id="skipButtonId"
           type="button"
           class="btn btn-danger"
           :disabled="props.busy"
           :aria-expanded="panel === 'skip'"
-          @click="panel = panel === 'skip' ? 'none' : 'skip'"
+          :aria-controls="skipPanelId"
+          @click="togglePanel('skip')"
         >
           跳过
         </button>
       </div>
 
-      <div v-if="panel === 'defer'" class="task-panel">
+      <div
+        v-if="panel === 'defer'"
+        :id="deferPanelId"
+        class="task-panel"
+        role="region"
+        :aria-labelledby="deferButtonId"
+        tabindex="-1"
+      >
         <p class="meta-line">延后多长时间再提醒？</p>
         <div class="btn-row">
           <button
@@ -110,12 +136,25 @@ function submitSkip(): void {
         </div>
       </div>
 
-      <div v-if="panel === 'skip'" class="task-panel">
-        <label class="field">
+      <div
+        v-if="panel === 'skip'"
+        :id="skipPanelId"
+        class="task-panel"
+        role="region"
+        :aria-labelledby="skipButtonId"
+      >
+        <label class="field" :for="skipInputId">
           跳过原因（必填）
-          <input v-model="skipReason" type="text" placeholder="例如：今日已在医院服药" />
+          <input
+            :id="skipInputId"
+            v-model="skipReason"
+            type="text"
+            placeholder="例如：今日已在医院服药"
+            :aria-invalid="Boolean(skipError)"
+            :aria-describedby="skipError ? skipErrorId : undefined"
+          />
         </label>
-        <p v-if="skipError" class="notice" data-tone="error" role="alert">{{ skipError }}</p>
+        <p v-if="skipError" :id="skipErrorId" class="notice" data-tone="error" role="alert">{{ skipError }}</p>
         <button type="button" class="btn btn-danger btn-block" :disabled="props.busy" @click="submitSkip">
           记录跳过
         </button>
