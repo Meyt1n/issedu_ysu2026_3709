@@ -1,13 +1,10 @@
 name: HomeCare Twin CI
 
+# Automatic CI is intentionally disabled by project-owner decision on 2026-08-18.
+# Keep the workflow file for rollback/manual diagnostics only. The dual-repository
+# sync workflow is separate and remains enabled.
 on:
-  pull_request:
-    branches:
-      - master
-  push:
-    branches:
-      - master
-      - "codex/**"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -137,21 +134,6 @@ jobs:
           tests/e2e/test_hct405_deletion_propagation.py
           --junitxml=artifacts/hct405-api-junit.xml
 
-      - name: Upload HCT-405 API evidence
-        if: always()
-        # Artifact quota exhaustion must not mask the test result. The test
-        # commands above remain blocking; evidence upload is best-effort.
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: hct405-api-evidence
-          path: |
-            artifacts/hct405-environment.json
-            artifacts/hct405-api-junit.xml
-            artifacts/hct409-api-perf.json
-          if-no-files-found: warn
-          retention-days: 14
-
   frontend:
     name: Frontend typecheck and build
     runs-on: ubuntu-latest
@@ -188,21 +170,6 @@ jobs:
           CI: "true"
         run: npm run test:e2e:web
 
-      - name: Upload HCT-405 browser evidence
-        if: always()
-        # Artifact quota exhaustion must not mask the test result. The test
-        # commands above remain blocking; evidence upload is best-effort.
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: hct405-browser-evidence
-          path: |
-            artifacts/hct405-browser-junit.xml
-            test-results/
-            playwright-report/
-          if-no-files-found: warn
-          retention-days: 14
-
   secret-scan:
     name: Secret scan
     runs-on: ubuntu-latest
@@ -216,7 +183,6 @@ jobs:
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Artifact storage quota must not turn a clean scan into a failed check.
-          # The action still reports findings in the job summary and preserves the
-          # non-zero scan result; only SARIF artifact upload is disabled.
+          # Artifact storage is disabled; the scan still reports findings in the
+          # job summary and preserves its non-zero result.
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"

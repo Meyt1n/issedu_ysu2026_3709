@@ -28,6 +28,7 @@ WORKFLOW_PATH = (
     / "workflows"
     / "sync-original-cloud.yml"
 )
+WORKFLOW_ROOT = WORKFLOW_PATH.parent
 
 
 @dataclass(frozen=True)
@@ -88,6 +89,41 @@ def workflow_run_script() -> str:
     run_script = document["jobs"]["sync"]["steps"][1]["run"]
     assert isinstance(run_script, str)
     return run_script
+
+
+def test_sync_job_is_master_only_on_the_dedicated_runner() -> None:
+    document = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
+    job = document["jobs"]["sync"]
+
+    assert job["runs-on"] == ["self-hosted", "linux", "hct-sync"]
+    assert job["if"] == "github.ref == 'refs/heads/master'"
+
+
+def test_artifact_uploads_are_disabled() -> None:
+    workflow_paths = [
+        WORKFLOW_ROOT / "ci.yml",
+        WORKFLOW_ROOT / "execute-cloud-history-sync.yml",
+        WORKFLOW_ROOT / "sync-cloud-history-dry-run.yml",
+    ]
+
+    upload_steps: list[dict] = []
+    for workflow_path in workflow_paths:
+        document = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+        for job in document["jobs"].values():
+            for step in job.get("steps", []):
+                if step.get("uses", "").startswith("actions/upload-artifact@"):
+                    upload_steps.append(step)
+
+    assert upload_steps == []
+
+
+def test_ci_and_relay_review_are_manual_only() -> None:
+    for workflow_name in ("ci.yml", "relay-review-bot.yml"):
+        document = yaml.safe_load(
+            (WORKFLOW_ROOT / workflow_name).read_text(encoding="utf-8")
+        )
+        events = document.get("on", document.get(True))
+        assert events == {"workflow_dispatch": None}
 
 
 def test_workflow_uses_full_history_and_preflights_before_push() -> None:
