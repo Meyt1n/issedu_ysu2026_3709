@@ -210,3 +210,7 @@ jobs:
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Artifact storage quota must not turn a clean scan into a failed check.
+          # The action still reports findings in the job summary and preserves the
+          # non-zero scan result; only SARIF artifact upload is disabled.
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
