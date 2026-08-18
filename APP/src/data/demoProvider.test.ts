@@ -92,4 +92,16 @@ describe('演示数据 provider', () => {
     const after = await demoProvider.getWeeklyTrend('m-wang')
     expect(after[6]!.done).toBe(1)
   })
+
+  it('确认、延期和跳过均写回今日快照', async () => {
+    await demoProvider.submitTaskAction('t-am-med', 'confirm')
+    await demoProvider.submitTaskAction('t-pm-med', 'defer', { deferHours: 1 })
+    await demoProvider.submitTaskAction('t-bp', 'skip', { reason: '今日在医院已测量' })
+    const snapshot = await demoProvider.getTodaySnapshot('m-wang')
+    expect(Object.fromEntries(snapshot.tasks.map(task => [task.id, task.status]))).toMatchObject({
+      't-am-med': 'CONFIRMED',
+      't-pm-med': 'DEFERRED',
+      't-bp': 'SKIPPED',
+    })
+  })
 })
