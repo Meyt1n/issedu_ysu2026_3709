@@ -68,6 +68,23 @@ def linked_commit(sha: str, login: str, name: str, email: str) -> dict:
     }
 
 
+def direct_commit_metadata(sha: str, login: str, name: str, email: str) -> dict:
+    return {
+        "sha": sha,
+        "author": {"login": login},
+        "committer": {"login": login},
+        "parents": [{"sha": "parent"}],
+        "commit": {
+            "author": {"name": name, "email": email},
+            "committer": {"name": name, "email": email},
+        },
+        "files": [
+            {"filename": "doc/07.会议记录/meeting-record.docx", "status": "added"}
+        ],
+        "files_complete": True,
+    }
+
+
 def test_plans_mixed_pr_commit_and_merge_with_separate_owners(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     base = initialize_repo(repo)
@@ -161,7 +178,7 @@ def test_plans_direct_commit_by_commit_owner(tmp_path: Path) -> None:
         [
             {
                 "sha": direct,
-                "commit": linked_commit(
+                "commit": direct_commit_metadata(
                     direct,
                     "ry12-20",
                     "ry12-20",
