@@ -1067,6 +1067,28 @@ button:focus-visible, a:focus-visible {
   font-size: 15px;
 }
 
+.chat-follow-ups {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 11px;
+}
+
+.chat-follow-ups-label {
+  color: var(--ink-soft);
+  font-family: var(--font-body);
+  font-size: 12px;
+  width: 100%;
+}
+
+.chat-follow-up {
+  border-color: var(--glass-border);
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: left;
+}
+
 .stream-caret {
   animation: caret-blink 0.9s steps(2) infinite;
   background: var(--clay);

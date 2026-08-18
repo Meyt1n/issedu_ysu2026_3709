@@ -457,6 +457,7 @@ class AssistantResponse(BaseModel):
     answer: str
     sources: list[str] = Field(default_factory=list)
     citations: list[AssistantCitation] = Field(default_factory=list)
+    suggested_questions: list[str] = Field(default_factory=list)
     confidence: str = "low"
     escalate: bool = False
     degraded: bool = False
