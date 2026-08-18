@@ -3,8 +3,10 @@ import { ref } from 'vue'
 
 import AppIcon from '@/components/AppIcon.vue'
 import SwitchRow from '@/components/SwitchRow.vue'
+import ErrorNotice from '@/components/ErrorNotice.vue'
 import { createSpeaker } from '@/composables/useSpeech'
 import { ApiClient } from '@/api/client'
+import { presentApiError, type ErrorPresentation } from '@/api/errors'
 import { resetDemoData } from '@/data/demoProvider'
 import { useA11y } from '@/stores/accessibility'
 import { useSession } from '@/stores/session'
@@ -16,6 +18,7 @@ const feedbackSpeaker = createSpeaker(() => true)
 
 const connectionState = ref<'idle' | 'testing' | 'ok' | 'failed'>('idle')
 const connectionMessage = ref('')
+const connectionError = ref<ErrorPresentation | null>(null)
 const demoResetMessage = ref('')
 
 function onElderModeChange(enabled: boolean): void {
@@ -34,11 +37,13 @@ function onModeChange(mode: 'demo' | 'live'): void {
   updateSession({ dataMode: mode })
   connectionState.value = 'idle'
   connectionMessage.value = ''
+  connectionError.value = null
 }
 
 async function testConnection(): Promise<void> {
   connectionState.value = 'testing'
   connectionMessage.value = ''
+  connectionError.value = null
   const client = new ApiClient({ baseUrl: session.serverBaseUrl })
   try {
     const health = await client.getHealth({
@@ -54,7 +59,7 @@ async function testConnection(): Promise<void> {
     }`
   } catch (cause) {
     connectionState.value = 'failed'
-    connectionMessage.value = cause instanceof Error ? cause.message : '连接失败'
+    connectionError.value = presentApiError(cause)
   }
 }
 
@@ -171,6 +176,7 @@ function restoreDemoData(): void {
         >
           {{ connectionMessage }}
         </p>
+        <ErrorNotice v-if="connectionError" :error="connectionError" @retry="testConnection" />
       </template>
 
       <template v-else>

@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import AppIcon from '@/components/AppIcon.vue'
+import ErrorNotice from '@/components/ErrorNotice.vue'
 import LevelTag from '@/components/LevelTag.vue'
 import PrivacyBadge from '@/components/PrivacyBadge.vue'
 import { useSpeech } from '@/composables/useSpeech'
@@ -9,6 +10,7 @@ import { activeProvider } from '@/data'
 import { recognitionStatusLabel } from '@/data/labels'
 import type { MemberSummary, QualityCheckResult, RecognitionCandidate } from '@/data/types'
 import { useSession } from '@/stores/session'
+import { presentApiError, type ErrorPresentation } from '@/api/errors'
 
 type Stage = 'idle' | 'checking' | 'quality' | 'recognizing' | 'result'
 
@@ -22,7 +24,7 @@ const file = ref<File | null>(null)
 const previewUrl = ref('')
 const quality = ref<QualityCheckResult | null>(null)
 const candidate = ref<RecognitionCandidate | null>(null)
-const error = ref('')
+const error = ref<ErrorPresentation | null>(null)
 const handoff = computed(() => candidate.value?.handoff ?? {
   taskId: 'demo-review-pending',
   taskStatus: 'PENDING_REVIEW',
@@ -56,7 +58,7 @@ function reset(): void {
   file.value = null
   quality.value = null
   candidate.value = null
-  error.value = ''
+  error.value = null
   stage.value = 'idle'
 }
 
@@ -71,9 +73,12 @@ async function onFilePicked(event: Event): Promise<void> {
   previewUrl.value = URL.createObjectURL(picked)
   quality.value = null
   candidate.value = null
-  error.value = ''
-  stage.value = 'checking'
+  await checkQuality(picked)
+}
 
+async function checkQuality(picked: File): Promise<void> {
+  error.value = null
+  stage.value = 'checking'
   try {
     quality.value = await activeProvider().checkImageQuality(picked)
     stage.value = 'quality'
@@ -83,7 +88,7 @@ async function onFilePicked(event: Event): Promise<void> {
       speech.speak(`照片需要重拍。${quality.value.retakePrompts.join('，')}`)
     }
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : '质量检查失败，请重试'
+    error.value = presentApiError(cause)
     stage.value = 'idle'
   }
 }
@@ -91,25 +96,40 @@ async function onFilePicked(event: Event): Promise<void> {
 async function recognize(): Promise<void> {
   if (!file.value || !memberId.value) return
   stage.value = 'recognizing'
-  error.value = ''
+  error.value = null
   try {
     candidate.value = await activeProvider().recognizeMedicine(file.value, memberId.value)
     stage.value = 'result'
     speech.speak(`识别结果：${recognitionStatusLabel(candidate.value.status)}。${candidate.value.notice}`)
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : '识别失败，请重试'
+    error.value = presentApiError(cause)
     stage.value = 'quality'
   }
 }
 
-onMounted(async () => {
+async function loadMembers(): Promise<void> {
+  error.value = null
   try {
     members.value = await activeProvider().listMembers()
     memberId.value = session.currentMemberId || members.value[0]?.id || ''
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : '成员加载失败'
+    error.value = presentApiError(cause)
   }
-})
+}
+
+async function retry(): Promise<void> {
+  if (file.value && !quality.value) {
+    await checkQuality(file.value)
+    return
+  }
+  if (file.value && quality.value) {
+    await recognize()
+    return
+  }
+  await loadMembers()
+}
+
+onMounted(loadMembers)
 
 onBeforeUnmount(releasePreview)
 </script>
@@ -185,7 +205,7 @@ onBeforeUnmount(releasePreview)
       </div>
     </div>
 
-    <p v-if="error" class="notice" data-tone="error" role="alert">{{ error }}</p>
+    <ErrorNotice v-if="error" :error="error" @retry="retry" />
     <p v-if="stage === 'checking'" class="notice" role="status">正在进行图片质量检查…</p>
     <p v-if="stage === 'recognizing'" class="notice" role="status">正在提取 OCR、条码与包装特征证据…</p>
 

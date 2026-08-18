@@ -3,29 +3,36 @@ import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import AppIcon from '@/components/AppIcon.vue'
+import ErrorNotice from '@/components/ErrorNotice.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import { activeProvider } from '@/data'
 import { eventStatusLabel, memberRoleLabel } from '@/data/labels'
 import type { MemberDetail } from '@/data/types'
 import { avatarHue, formatDateTime, formatDay } from '@/utils/format'
+import { presentApiError, type ErrorPresentation } from '@/api/errors'
 
 const route = useRoute()
 const router = useRouter()
 
 const detail = ref<MemberDetail | null>(null)
 const loading = ref(true)
-const error = ref('')
+const error = ref<ErrorPresentation | null>(null)
 
-onMounted(async () => {
+async function load(): Promise<void> {
+  loading.value = true
+  error.value = null
+  detail.value = null
   const memberId = String(route.params.memberId ?? '')
   try {
     detail.value = await activeProvider().getMemberDetail(memberId)
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : '加载失败或未获授权'
+    error.value = presentApiError(cause)
   } finally {
     loading.value = false
   }
-})
+}
+
+onMounted(load)
 </script>
 
 <template>
@@ -35,7 +42,7 @@ onMounted(async () => {
       返回
     </button>
 
-    <p v-if="error" class="notice" data-tone="error" role="alert">{{ error }}</p>
+    <ErrorNotice v-if="error" :error="error" @retry="load" />
     <section v-if="loading" class="card" aria-live="polite">
       <p class="empty-state">正在加载成员档案…</p>
     </section>

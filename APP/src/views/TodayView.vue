@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 
 import AppIcon from '@/components/AppIcon.vue'
 import ConfettiBurst from '@/components/ConfettiBurst.vue'
+import ErrorNotice from '@/components/ErrorNotice.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import LevelTag from '@/components/LevelTag.vue'
 import PrivacyBadge from '@/components/PrivacyBadge.vue'
@@ -14,6 +15,7 @@ import { useCountUp } from '@/composables/useCountUp'
 import { usePullToRefresh } from '@/composables/usePullToRefresh'
 import { createSpeaker, useSpeech } from '@/composables/useSpeech'
 import { showToast } from '@/composables/useToast'
+import { presentApiError, type ErrorPresentation } from '@/api/errors'
 import { activeProvider } from '@/data'
 import { eventStatusLabel, riskLevelLabel, riskLevelTone, taskLevelLabel } from '@/data/labels'
 import type { MemberSummary, TaskAction, TaskActionPayload, TodaySnapshot, TrendPoint } from '@/data/types'
@@ -33,8 +35,8 @@ const members = ref<MemberSummary[]>([])
 const snapshot = ref<TodaySnapshot | null>(null)
 const trend = ref<TrendPoint[]>([])
 const loading = ref(true)
-const error = ref('')
-const actionError = ref('')
+const error = ref<ErrorPresentation | null>(null)
+const actionError = ref<ErrorPresentation | null>(null)
 const busyTaskId = ref('')
 const failedAction = ref<{ taskId: string; action: TaskAction; payload: TaskActionPayload } | null>(null)
 const announced = ref(false)
@@ -111,12 +113,12 @@ async function loadSnapshot(): Promise<void> {
 
 async function reload(): Promise<void> {
   loading.value = true
-  error.value = ''
+  error.value = null
   try {
     await loadMembers()
     await loadSnapshot()
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : '加载失败，请稍后重试'
+    error.value = presentApiError(cause)
     snapshot.value = null
   } finally {
     loading.value = false
@@ -126,12 +128,12 @@ async function reload(): Promise<void> {
 async function onMemberChange(): Promise<void> {
   updateSession({ currentMemberId: session.currentMemberId })
   loading.value = true
-  error.value = ''
-  actionError.value = ''
+  error.value = null
+  actionError.value = null
   try {
     await loadSnapshot()
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : '加载失败，请稍后重试'
+    error.value = presentApiError(cause)
   } finally {
     loading.value = false
   }
@@ -139,7 +141,7 @@ async function onMemberChange(): Promise<void> {
 
 async function onTaskAction(taskId: string, action: TaskAction, payload: TaskActionPayload): Promise<void> {
   busyTaskId.value = taskId
-  actionError.value = ''
+  actionError.value = null
   failedAction.value = null
   const hadPending = pendingTasks.value.length
   try {
@@ -155,7 +157,7 @@ async function onTaskAction(taskId: string, action: TaskAction, payload: TaskAct
       speech.speak('今日照护任务全部完成，辛苦了！')
     }
   } catch (cause) {
-    actionError.value = cause instanceof Error ? cause.message : '操作失败，请稍后重试'
+    actionError.value = presentApiError(cause)
     failedAction.value = { taskId, action, payload }
   } finally {
     busyTaskId.value = ''
@@ -241,11 +243,8 @@ onMounted(reload)
       </select>
     </label>
 
-    <p v-if="error" class="notice" data-tone="error" role="alert">{{ error }}</p>
-        <div v-if="actionError" class="notice" data-tone="error" role="alert">
-      <span>{{ actionError }}</span>
-      <button v-if="failedAction" type="button" class="btn btn-quiet" @click="retryTaskAction">重试操作</button>
-    </div>
+    <ErrorNotice v-if="error" :error="error" @retry="reload" />
+    <ErrorNotice v-if="actionError" :error="actionError" @retry="retryTaskAction" />
 
     <div v-if="loading" class="plain-list" aria-label="正在加载" aria-live="polite">
       <SkeletonCard />

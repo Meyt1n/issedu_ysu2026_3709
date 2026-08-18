@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 
 import AppIcon from '@/components/AppIcon.vue'
+import ErrorNotice from '@/components/ErrorNotice.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import LevelTag from '@/components/LevelTag.vue'
 import PrivacyBadge from '@/components/PrivacyBadge.vue'
@@ -11,6 +12,7 @@ import { activeProvider } from '@/data'
 import { riskLevelLabel, riskLevelTone } from '@/data/labels'
 import type { RiskCard } from '@/data/types'
 import { formatDateTime } from '@/utils/format'
+import { presentApiError, type ErrorPresentation } from '@/api/errors'
 
 const LEVEL_FILTERS = [
   { value: 'ALL', label: '全部' },
@@ -24,7 +26,7 @@ type LevelFilter = (typeof LEVEL_FILTERS)[number]['value']
 
 const risks = ref<RiskCard[]>([])
 const loading = ref(true)
-const error = ref('')
+const error = ref<ErrorPresentation | null>(null)
 const levelFilter = ref<LevelFilter>('ALL')
 const manualSpeaker = createSpeaker(() => true)
 
@@ -56,11 +58,12 @@ const distributionLabel = computed(() =>
 
 async function reload(): Promise<void> {
   loading.value = true
-  error.value = ''
+  error.value = null
+  risks.value = []
   try {
     risks.value = await activeProvider().listRisks()
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : '加载失败，请稍后重试'
+    error.value = presentApiError(cause)
   } finally {
     loading.value = false
   }
@@ -135,7 +138,7 @@ onMounted(reload)
     <p v-if="severeCount > 0" class="notice" data-tone="error" role="alert">
       有 {{ severeCount }} 条严重风险待处理，请优先查看。
     </p>
-    <p v-if="error" class="notice" data-tone="error" role="alert">{{ error }}</p>
+    <ErrorNotice v-if="error" :error="error" @retry="reload" />
 
     <div v-if="loading" class="plain-list" aria-label="正在加载" aria-live="polite">
       <SkeletonCard />
