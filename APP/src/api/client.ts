@@ -13,6 +13,7 @@ import type {
   VisionQualityResponse,
   VisionTask,
 } from './types'
+import type { AuthSession } from './auth'
 
 /** 与主仓库 web 端 ApiClient 相同的错误封装与请求头约定。 */
 export class ApiClientError extends Error {
@@ -41,15 +42,19 @@ function fallbackErrorCode(status: number): ApiErrorCode {
 interface ApiClientOptions {
   baseUrl?: string
   fetcher?: typeof fetch
+  /** 配置后不再回退到 X-Actor-Id；未配置时保留开发期联调头。 */
+  authSessionProvider?: () => AuthSession | null
 }
 
 export class ApiClient {
   private readonly baseUrl: string
   private readonly fetcher: typeof fetch
+  private readonly authSessionProvider?: () => AuthSession | null
 
   constructor(options: ApiClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? '').replace(/\/+$/, '')
     this.fetcher = options.fetcher ?? globalThis.fetch.bind(globalThis)
+    this.authSessionProvider = options.authSessionProvider
   }
 
   private async request<T>(path: string, init: RequestInit = {}, options: RequestOptions = {}): Promise<T> {
@@ -58,13 +63,42 @@ export class ApiClient {
     if (init.body !== undefined && !(init.body instanceof FormData)) {
       headers.set('Content-Type', 'application/json')
     }
-    if (options.actorId) headers.set('X-Actor-Id', options.actorId)
-    if (options.accessPurpose) headers.set('X-Access-Purpose', options.accessPurpose)
+    const hasAuthProvider = this.authSessionProvider !== undefined
+    const hasPerRequestAuth = Object.prototype.hasOwnProperty.call(options, 'authSession')
+    const authSession = hasPerRequestAuth ? options.authSession : this.authSessionProvider?.()
+    if (authSession) {
+      const expiresAt = Date.parse(authSession.expiresAt)
+      if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+        throw new ApiClientError('登录会话已过期', { status: 401, code: 'SESSION_EXPIRED' })
+      }
+      if (authSession.transport === 'bearer') {
+        if (!authSession.accessToken) {
+          throw new ApiClientError('登录会话已过期', { status: 401, code: 'SESSION_EXPIRED' })
+        }
+        headers.set('Authorization', `Bearer ${authSession.accessToken}`)
+      } else if (authSession.transport === 'cookie') {
+        // Cookie 由 WebView/浏览器管理，客户端不读取或持久化其内容。
+      } else {
+        headers.set('X-Actor-Id', authSession.actorId)
+      }
+      if (authSession.accessPurpose) headers.set('X-Access-Purpose', authSession.accessPurpose)
+    } else if (!hasAuthProvider) {
+      // 仅保留给主仓库 HCT-107 尚未接入前的本地联调路径。
+      if (options.actorId) headers.set('X-Actor-Id', options.actorId)
+      if (options.accessPurpose) headers.set('X-Access-Purpose', options.accessPurpose)
+    } else if (options.accessPurpose) {
+      headers.set('X-Access-Purpose', options.accessPurpose)
+    }
     if (options.idempotencyKey) headers.set('Idempotency-Key', options.idempotencyKey)
+
+    const requestInit: RequestInit = { ...init, headers, signal: options.signal }
+    if (authSession?.transport === 'cookie' && requestInit.credentials === undefined) {
+      requestInit.credentials = 'include'
+    }
 
     let response: Response
     try {
-      response = await this.fetcher(`${this.baseUrl}${path}`, { ...init, headers, signal: options.signal })
+      response = await this.fetcher(`${this.baseUrl}${path}`, requestInit)
     } catch {
       throw new ApiClientError('家庭服务器暂时无法访问', { status: 0, code: 'DEPENDENCY_UNAVAILABLE' })
     }

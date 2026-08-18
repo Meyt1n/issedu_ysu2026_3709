@@ -45,6 +45,30 @@ export function presentApiError(cause: unknown): ErrorPresentation {
     return settings('当前家庭暂无可用成员，请检查家庭设置和授权范围。')
   }
 
+  if (code === 'AUTH_FAILED' || code === 'AUTH_LOCKED') {
+    return settings('登录信息不正确或暂时无法验证，请稍后重试。')
+  }
+
+  if (code === 'AUTH_UNAVAILABLE') {
+    return retry('家庭服务器暂时无法验证身份，请稍后重试。')
+  }
+
+  if (code === 'SESSION_EXPIRED' || code === 'AUTH_REVOKED') {
+    return settings('登录会话已失效，请重新登录后重试。')
+  }
+
+  if (code === 'STEP_UP_REQUIRED') {
+    return settings('该操作需要 PIN 或二维码二次确认，请完成确认后重试。')
+  }
+
+  if (code === 'STEP_UP_EXPIRED' || code === 'STEP_UP_REPLAY') {
+    return retry('二次确认已过期或已经使用，请重新发起该操作。')
+  }
+
+  if (code === 'STEP_UP_FAILED') {
+    return retry('二次确认未通过，请检查后重试。')
+  }
+
   if (code === 'DEPENDENCY_UNAVAILABLE' || cause.status === 0) {
     return retry('家庭服务器暂时无法访问，请检查网络或服务器状态后重试。')
   }

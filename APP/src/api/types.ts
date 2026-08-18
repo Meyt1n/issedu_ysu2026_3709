@@ -1,3 +1,5 @@
+import type { AuthSession } from './auth'
+
 /** 与主仓库 src/web/src/api/types.ts 对齐的服务端契约子集。 */
 
 export type ApiErrorCode = string
@@ -131,6 +133,8 @@ export interface VisionTask {
 export interface RequestOptions {
   actorId?: string
   accessPurpose?: string
+  /** 单次请求覆盖值；正式会话只在内存中传入，不能写入 localStorage。 */
+  authSession?: AuthSession | null
   idempotencyKey?: string
   signal?: AbortSignal
 }
