@@ -141,7 +141,7 @@ function buildInitialState(): DemoState {
         explanation:
           '依据已确认的药品批次事实（登记有效期）与过期检查规则 rule-expiry-01 得出，属于确定性规则结论，不是模型推断。',
         suggestion:
-          '请勿继续服用该批次，并请家人协助处理过期药品、补充登记新批次。本提示不构成停药或换药建议，如有疑问请联系医生或药师。',
+          '发现已知资料，需要进一步确认。请家人协助核对该批次信息，并按当地规范处置过期物品；如有疑问请联系医生或药师。',
         acknowledged: false,
         sourceEvents: [
           {
@@ -170,7 +170,7 @@ function buildInitialState(): DemoState {
         explanation:
           '两条已确认用药事实的成分表中出现同一成分，触发重复成分规则 rule-duplicate-02。',
         suggestion:
-          '请注意避免同时服用含相同成分的药品；如已同时服用或不确定，请联系医生或药师确认。',
+          '发现已知资料，需要进一步确认。请携带现有药品信息联系医生或药师核对，不在本应用内作出用药决定。',
         acknowledged: false,
         sourceEvents: [
           {

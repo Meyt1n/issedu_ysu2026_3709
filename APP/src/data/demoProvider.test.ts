@@ -44,6 +44,17 @@ describe('演示数据 provider', () => {
     expect(new Date(task.dueAt).getTime()).toBeGreaterThan(before)
   })
 
+  it('风险详情保留证据和非医疗建议，并可记录知晓状态', async () => {
+    const risk = await demoProvider.getRiskDetail('m-wang', 'rule-expiry-01')
+    expect(risk.sourceEvents).toHaveLength(risk.sourceCount)
+    expect(risk.explanation).toContain('确定性规则')
+    expect(risk.suggestion).toContain('需要进一步确认')
+    expect(risk.suggestion).not.toMatch(/停药|换药|剂量|诊断|处方/)
+
+    const acknowledged = await demoProvider.acknowledgeRisk('m-wang', risk.ruleId)
+    expect(acknowledged.acknowledged).toBe(true)
+  })
+
   it('记录知晓后风险不再出现在今日快照', async () => {
     const acknowledged = await demoProvider.acknowledgeRisk('m-wang', 'rule-expiry-01')
     expect(acknowledged.acknowledged).toBe(true)
