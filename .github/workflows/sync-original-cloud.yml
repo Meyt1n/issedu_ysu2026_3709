@@ -32,6 +32,15 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: 配置同步 Runner 工具
+        shell: bash
+        run: |
+          runner_bin="/data1/ytm/hct-sync-runner/bin"
+          echo "${runner_bin}" >> "${GITHUB_PATH}"
+          export PATH="${runner_bin}:${PATH}"
+          command -v python3
+          command -v jq
+
       - name: 预检身份并按成员 Token 逐个同步
         shell: bash
         env:
