@@ -1,6 +1,8 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
+import { nextTick } from 'vue'
 
 import { useSpeech } from '@/composables/useSpeech'
+import { focusRouteMain } from '@/utils/accessibility'
 
 export const router = createRouter({
   history: createWebHashHistory(),
@@ -41,4 +43,6 @@ router.afterEach(to => {
   document.title = title ? `${title} · 家健镜随身版` : '家健镜随身版'
   // 切换页面时停止上一页尚未播完的语音，避免播报串台。
   useSpeech().stop()
+  // SPA 路由不会像原生页面加载一样重置读屏焦点；将焦点移到新页面主区域并播报页面名。
+  void nextTick(() => focusRouteMain(title || '家健镜随身版'))
 })

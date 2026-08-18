@@ -29,7 +29,7 @@ const handoff = computed(() => candidate.value?.handoff ?? {
   taskId: 'demo-review-pending',
   taskStatus: 'PENDING_REVIEW',
   source: 'DEMO' as const,
-  nextStep: '????????????????????????',
+  nextStep: '请在网页端人工复核中心确认识别候选。',
 })
 
 const steps = [
@@ -144,7 +144,12 @@ onBeforeUnmount(releasePreview)
     </header>
 
     <ol class="steps" aria-label="录入步骤">
-      <li v-for="(step, index) in steps" :key="step.key" :data-active="index === activeStepIndex">
+      <li
+        v-for="(step, index) in steps"
+        :key="step.key"
+        :data-active="index === activeStepIndex"
+        :aria-current="index === activeStepIndex ? 'step' : undefined"
+      >
         {{ index + 1 }}.{{ step.label }}
       </li>
     </ol>
@@ -209,7 +214,7 @@ onBeforeUnmount(releasePreview)
     <p v-if="stage === 'checking'" class="notice" role="status">正在进行图片质量检查…</p>
     <p v-if="stage === 'recognizing'" class="notice" role="status">正在提取 OCR、条码与包装特征证据…</p>
 
-    <section v-if="quality && stage !== 'checking'" class="card" aria-labelledby="quality-title">
+    <section v-if="quality && stage !== 'checking'" class="card" aria-labelledby="quality-title" aria-live="polite">
       <div class="card-title-row">
         <h2 id="quality-title">质量检查</h2>
         <span
@@ -239,7 +244,7 @@ onBeforeUnmount(releasePreview)
       </button>
     </section>
 
-    <section v-if="candidate && stage === 'result'" class="card" aria-labelledby="candidate-title">
+    <section v-if="candidate && stage === 'result'" class="card" aria-labelledby="candidate-title" aria-live="polite">
       <div class="card-title-row">
         <h2 id="candidate-title">识别候选</h2>
         <LevelTag kind="recognition" :value="candidate.status" />
@@ -258,11 +263,11 @@ onBeforeUnmount(releasePreview)
       </p>
       <p class="notice" data-tone="warn">{{ candidate.notice }}</p>
       <section class="handoff" aria-labelledby="handoff-title">
-        <h3 id="handoff-title">??????</h3>
-        <p><strong>?????</strong>{{ handoff.taskStatus }}</p>
-        <p><strong>?????</strong>{{ handoff.taskId }}</p>
+        <h3 id="handoff-title">后续人工复核</h3>
+        <p><strong>任务状态：</strong>{{ handoff.taskStatus }}</p>
+        <p><strong>任务编号：</strong>{{ handoff.taskId }}</p>
         <p>{{ handoff.nextStep }}</p>
-        <p v-if="handoff.source === 'DEMO'" class="meta-line">????????????????????????</p>
+        <p v-if="handoff.source === 'DEMO'" class="meta-line">演示模式不会创建真实复核任务。</p>
       </section>
       <p class="meta-line">
         版本：<template v-for="(version, key) in candidate.versions" :key="key">{{ key }} {{ version }}　</template>
