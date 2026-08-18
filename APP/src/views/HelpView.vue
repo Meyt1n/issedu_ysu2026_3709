@@ -1,19 +1,51 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 
 import AppIcon from '@/components/AppIcon.vue'
 import { createSpeaker } from '@/composables/useSpeech'
 import { activeProvider } from '@/data'
 import { riskLevelLabel } from '@/data/labels'
 import { useSession } from '@/stores/session'
+import { tapFeedback } from '@/utils/haptics'
+import { getHelpCallConfirmation, type HelpCallTarget } from '@/utils/help'
 
 const { session } = useSession()
 const manualSpeaker = createSpeaker(() => true)
 const speaking = ref(false)
+const pendingCall = ref<HelpCallTarget | null>(null)
+const confirmButton = ref<HTMLButtonElement | null>(null)
+const emergencyTrigger = ref<HTMLButtonElement | null>(null)
+const caregiverTrigger = ref<HTMLButtonElement | null>(null)
 
 const phoneHref = computed(() =>
   session.caregiverPhone ? `tel:${session.caregiverPhone.replace(/\s+/g, '')}` : '',
 )
+const confirmation = computed(() =>
+  pendingCall.value
+    ? getHelpCallConfirmation(pendingCall.value, session.caregiverPhone, session.caregiverName)
+    : null,
+)
+
+function requestCall(target: HelpCallTarget): void {
+  pendingCall.value = target
+  // 设备不支持振动时 tapFeedback 会返回 false，但不会阻断确认流程或抛错。
+  tapFeedback(12)
+  void nextTick(() => confirmButton.value?.focus())
+}
+
+function closeCallDialog(): void {
+  const trigger = pendingCall.value === 'emergency' ? emergencyTrigger : caregiverTrigger
+  pendingCall.value = null
+  void nextTick(() => trigger.value?.focus())
+}
+
+function confirmCall(): void {
+  if (!confirmation.value) return
+  const href = confirmation.value.href
+  pendingCall.value = null
+  tapFeedback([12, 60, 18])
+  window.location.href = href
+}
 
 async function speakImportant(): Promise<void> {
   speaking.value = true
@@ -42,16 +74,27 @@ async function speakImportant(): Promise<void> {
       <p class="screen-subtitle">如果感到严重不适，请立即拨打急救电话或联系家人，不要等待应用提示。</p>
     </header>
 
-    <a class="btn btn-lg btn-block emergency-btn" href="tel:120">
+    <button
+      ref="emergencyTrigger"
+      type="button"
+      class="btn btn-lg btn-block emergency-btn"
+      @click="requestCall('emergency')"
+    >
       <AppIcon name="phone" :size="24" />
       拨打急救电话 120
-    </a>
+    </button>
     <p class="meta-line">点按后会打开手机拨号界面；本应用是教学演示，请在真实紧急情况下拨打。</p>
 
-    <a v-if="phoneHref" class="btn btn-lg btn-block" :href="phoneHref">
+    <button
+      v-if="phoneHref"
+      ref="caregiverTrigger"
+      type="button"
+      class="btn btn-lg btn-block"
+      @click="requestCall('caregiver')"
+    >
       <AppIcon name="family" :size="24" />
       联系家人{{ session.caregiverName ? `：${session.caregiverName}` : '' }}（{{ session.caregiverPhone }}）
-    </a>
+    </button>
     <div v-else class="card">
       <p class="notice" data-tone="warn">还没有设置紧急联系人。</p>
       <RouterLink class="btn btn-quiet btn-block" to="/me">去「我的」页设置家人电话</RouterLink>
@@ -74,6 +117,27 @@ async function speakImportant(): Promise<void> {
     <footer class="disclaimer">
       家健镜不提供在线问诊或购药入口；紧急情况请始终以医生和急救服务的判断为准。
     </footer>
+
+    <div v-if="confirmation" class="dialog-backdrop" @click.self="closeCallDialog">
+      <section
+        class="confirm-dialog card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="call-dialog-title"
+        aria-describedby="call-dialog-description"
+        @keydown.esc="closeCallDialog"
+      >
+        <h2 id="call-dialog-title">{{ confirmation.title }}</h2>
+        <p id="call-dialog-description">{{ confirmation.description }}</p>
+        <p class="notice" data-tone="warn">拨号后将离开应用进入手机电话界面，请确认号码和当前情况。</p>
+        <div class="btn-row dialog-actions">
+          <button ref="confirmButton" type="button" class="btn btn-danger" @click="confirmCall">
+            {{ confirmation.confirmLabel }}
+          </button>
+          <button type="button" class="btn btn-quiet" @click="closeCallDialog">取消</button>
+        </div>
+      </section>
+    </div>
   </main>
 </template>
 
@@ -85,10 +149,30 @@ async function speakImportant(): Promise<void> {
   animation: sos-pulse 2.6s var(--ease) infinite;
 }
 .emergency-btn:hover { filter: brightness(1.08); }
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(15, 24, 20, 0.62);
+}
+.confirm-dialog {
+  width: min(100%, 480px);
+  margin: 0;
+  display: grid;
+  gap: 14px;
+}
+.confirm-dialog h2 { margin: 0; }
+.confirm-dialog p { margin: 0; line-height: 1.55; }
+.dialog-actions { margin-top: 4px; }
 html[data-contrast='high'] .emergency-btn {
   background: var(--c-danger);
   box-shadow: none;
   border: 2px solid #000;
   animation: none;
 }
+html[data-contrast='high'] .dialog-backdrop { background: rgba(0, 0, 0, 0.72); }
+html[data-contrast='high'] .confirm-dialog { border: 2px solid #000; box-shadow: none; }
 </style>
