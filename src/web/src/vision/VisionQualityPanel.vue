@@ -4,6 +4,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ApiClientError, apiClient } from '../api/client'
 import type { VisionQualityResponse, VisionTask } from '../api/types'
 import AppIcon from '../components/AppIcon.vue'
+import captureExampleUrl from '../assets/vision-capture-example.png'
 import {
   canCreateVisionTask,
   formatMetricValue,
@@ -226,11 +227,15 @@ watch(() => [props.actorId, props.memberId, props.accessPurpose], () => {
       <label class="capture-zone" :class="{ checking: state === 'checking' }" :aria-disabled="isBusy">
         <img v-if="previewUrl" :src="previewUrl" alt="当前待检查药盒图片的本地预览" />
         <template v-else>
-          <AppIcon name="scan" :size="36" />
-          <span class="capture-hint">
-            把药盒正面放入画面，避免反光和裁切。<br />
-            点击此处拍照或选择 JPEG / PNG 图片
-          </span>
+          <div class="capture-guide" aria-label="拍照示例">
+            <img :src="captureExampleUrl" alt="拍照示例：药盒正面朝向镜头，画面中只有完整药盒" />
+            <span class="capture-guide-copy">
+              <strong>拍照示例</strong>
+              <span>正对药盒，完整放入画面</span>
+              <span>不要出现其他杂物</span>
+            </span>
+          </div>
+          <span class="capture-hint">点击此处拍照或选择 JPEG / PNG 图片</span>
         </template>
         <input
           type="file"

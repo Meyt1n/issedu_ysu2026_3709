@@ -930,6 +930,35 @@ button:focus-visible, a:focus-visible {
   max-width: 100%;
 }
 
+.capture-guide {
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  width: min(100%, 340px);
+}
+
+.capture-guide img {
+  background: var(--glass-card-strong);
+  border: 1px solid var(--glass-border);
+  height: 150px;
+  object-fit: cover;
+  width: 100%;
+}
+
+.capture-guide-copy {
+  color: var(--ink-soft);
+  display: grid;
+  font-size: 12px;
+  gap: 1px;
+  line-height: 1.45;
+  text-align: center;
+}
+
+.capture-guide-copy strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
 .capture-zone .capture-hint { color: var(--ink-soft); font-size: 13.5px; line-height: 1.6; }
 .capture-zone .app-icon { color: var(--clay); }
 
