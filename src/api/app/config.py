@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -48,7 +49,16 @@ class Settings(BaseSettings):
     ollama_timeout_seconds: float = 30.0
     weather_adapter: str = "disabled"
     weather_api_url: str = ""
-    weather_api_timeout_seconds: float = 3.0
+    weather_api_timeout_seconds: float = Field(default=3.0, gt=0, le=10)
+    weather_default_city_code: str = ""
+    weather_default_district_code: str = ""
+    weather_location_whitelist: str = ""
+    weather_cache_ttl_seconds: float = Field(default=600.0, ge=0, le=86400)
+    weather_stale_ttl_seconds: float = Field(default=21600.0, ge=0, le=604800)
+    weather_min_request_interval_seconds: float = Field(default=1.0, ge=0, le=60)
+    weather_retry_attempts: int = Field(default=2, ge=1, le=3)
+    weather_retry_backoff_seconds: float = Field(default=0.1, ge=0, le=2)
+    weather_ruleset_version: str = "weather-actions-v1"
     egress_default_deny: bool = True
     egress_weather_whitelist: str = ""
     log_mask_enabled: bool = True
@@ -74,6 +84,12 @@ class Settings(BaseSettings):
     @property
     def vision_adapter_allowlist_set(self) -> set[str]:
         return {item.strip() for item in self.vision_adapter_allowlist.split(",") if item.strip()}
+
+    @property
+    def weather_location_whitelist_set(self) -> set[str]:
+        return {
+            item.strip() for item in self.weather_location_whitelist.split(",") if item.strip()
+        }
 
     def vision_quality_thresholds(self):
         from ai.vision.quality_gate import QualityThresholds

@@ -32,6 +32,16 @@ class TestEgressGuardWhitelist:
 
         assert is_egress_allowed("https://weather.example.com/api/v1") is True
 
+    def test_plain_http_is_rejected_even_for_whitelisted_host(self, monkeypatch):
+        """Weather egress requires TLS even when the host is allowlisted."""
+        from app.config import get_settings
+
+        settings = get_settings()
+        monkeypatch.setattr(settings, "egress_default_deny", True)
+        monkeypatch.setattr(settings, "egress_weather_whitelist", "weather.example.com")
+
+        assert is_egress_allowed("http://weather.example.com/api/v1") is False
+
     def test_non_whitelisted_host_blocked(self, monkeypatch):
         """Host NOT in whitelist is blocked."""
         from app.config import get_settings
@@ -116,9 +126,14 @@ class TestValidateEgressPayload:
 
 
 class TestWeatherPayload:
-    def test_only_location_fields_allowed(self):
-        ok, reason = allowed_weather_payload({"city_code": "110000", "lat": 39.9, "lon": 116.4})
+    def test_only_coarse_location_codes_allowed(self):
+        ok, reason = allowed_weather_payload({"city_code": "110000", "district_code": "110108"})
         assert ok is True
+
+    def test_precise_coordinates_rejected(self):
+        ok, reason = allowed_weather_payload({"city_code": "110000", "lat": 39.9, "lon": 116.4})
+        assert ok is False
+        assert "lat" in reason
 
     def test_health_field_in_weather_rejected(self):
         ok, reason = allowed_weather_payload({"city_code": "110000", "allergy": "penicillin"})

@@ -74,7 +74,25 @@ async function installSyntheticApi(page: Page): Promise<void> {
       return respond([])
     }
     if (request.method() === 'GET' && path.startsWith('/api/v1/weather/')) {
-      return respond({ status: 'unavailable', action_cards: [], reason: 'synthetic' })
+      return respond({
+        status: 'ok',
+        cache_status: 'miss',
+        location_scope: 'city',
+        ruleset_version: 'weather-actions-v1',
+        source_observed_at: '2026-08-18T01:00:00Z',
+        fetched_at: '2026-08-18T01:01:00Z',
+        disclaimer: '环境行动建议仅供日常生活安排参考，不构成诊断或用药建议。',
+        temperature: 37,
+        humidity: 62,
+        condition: 'sunny',
+        wind: '2级',
+        aqi: 80,
+        action_cards: [{
+          rule_id: 'heat-high',
+          level: 'warning',
+          message: '高温提醒：建议减少长时间户外活动，及时补充饮水并留意室内通风。',
+        }],
+      })
     }
     if (request.method() === 'POST' && path.endsWith('/authorizations')) {
       hasAuthorization = true
@@ -105,6 +123,27 @@ async function enterFamilySpace(page: Page): Promise<void> {
   await expect(page.locator('.app-frame')).toBeVisible({ timeout: 20_000 })
   await expect(navItem(page, '授权管理')).toBeVisible()
 }
+
+test('家庭总览显著展示带来源、范围和规则版本的环境行动卡', async ({ page }) => {
+  await installSyntheticApi(page)
+  await enterFamilySpace(page)
+
+  const panel = page.getByRole('region', { name: '今日环境与可执行提醒' })
+  await expect(panel).toBeVisible()
+  await expect(panel.getByText('37°')).toBeVisible()
+  await expect(panel.getByText(/高温提醒：建议减少长时间户外活动/)).toBeVisible()
+  await expect(panel.getByText('城市级范围，不发送精确住址或成员健康信息')).toBeVisible()
+  await expect(panel.getByText(/来源时间 08月18日 09:00/)).toBeVisible()
+  await expect(panel.getByText('规则 weather-actions-v1')).toBeVisible()
+  await expect(panel.getByText(/不构成诊断或用药建议/)).toBeVisible()
+
+  const refreshed = page.waitForResponse(response =>
+    response.url().includes('/api/v1/weather/action-cards'),
+  )
+  await panel.getByRole('button', { name: '刷新天气' }).click()
+  await refreshed
+  await expect(panel.getByText('天气已更新')).toBeVisible()
+})
 
 test('管理员创建授权后撤回，照护者可见范围立即清空', async ({ page }) => {
   await installSyntheticApi(page)

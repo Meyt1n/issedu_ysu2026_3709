@@ -480,12 +480,20 @@ export interface SkipReviewInput {
 }
 
 export interface WeatherActionCard {
+  rule_id?: string
   level: string
   message: string
 }
 
 export interface WeatherResponse {
   status: string
+  cache_status?: string
+  location_scope?: 'city' | 'district' | null
+  ruleset_version?: string
+  source_observed_at?: string | null
+  fetched_at?: string | null
+  disclaimer?: string
+  degraded_reason?: string
   temperature?: number | null
   humidity?: number | null
   condition?: string | null

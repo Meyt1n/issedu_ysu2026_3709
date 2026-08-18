@@ -169,7 +169,7 @@ from app.vision_tasks import (
     list_vision_tasks,
     transition_status,
 )
-from app.weather_adapter import fetch_weather
+from app.weather_adapter import WeatherActionCardsResponse, fetch_weather
 
 logger = logging.getLogger(__name__)
 
@@ -991,10 +991,10 @@ def dispatch_household_outbox(
     )
 
 
-@router.get("/weather/action-cards", response_model=dict)
+@router.get("/weather/action-cards", response_model=WeatherActionCardsResponse)
 async def weather_action_cards(
-    city_code: str | None = None,
-    district_code: str | None = None,
+    city_code: str | None = Query(default=None, pattern=r"^\d{6}$"),
+    district_code: str | None = Query(default=None, pattern=r"^\d{6}$"),
 ) -> dict:
     """Fetch weather action cards for the given coarse location.
 
