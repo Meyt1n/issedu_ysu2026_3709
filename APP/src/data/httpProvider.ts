@@ -1,4 +1,4 @@
-import { ApiClient } from '@/api/client'
+import { ApiClient, ApiClientError } from '@/api/client'
 import type { HealthEvent, Member, RequestOptions } from '@/api/types'
 import type {
   CareTask,
@@ -207,9 +207,21 @@ export class HttpDataProvider implements DataProvider {
 
   private async resolveHouseholdId(): Promise<string> {
     if (this.householdId) return this.householdId
+    const { actorId, accessPurpose } = this.context()
+    if (!actorId.trim() || !accessPurpose.trim()) {
+      throw new ApiClientError('联机模式需要身份和访问目的', {
+        status: 401,
+        code: 'SESSION_NOT_CONFIGURED',
+      })
+    }
     const households = await this.client.listHouseholds(this.options())
     const first = households[0]
-    if (!first) throw new Error('当前身份看不到任何家庭，请先在网页端创建家庭或检查授权')
+    if (!first) {
+      throw new ApiClientError('当前身份没有可访问的家庭', {
+        status: 404,
+        code: 'NO_HOUSEHOLD',
+      })
+    }
     this.householdId = first.id
     return first.id
   }
@@ -336,6 +348,12 @@ export class HttpDataProvider implements DataProvider {
     const householdId = await this.resolveHouseholdId()
     if (!memberId) {
       const members = await this.client.listMembers(householdId, this.options())
+      if (members.length === 0) {
+        throw new ApiClientError('当前家庭暂无可用成员', {
+          status: 404,
+          code: 'NO_MEMBERS',
+        })
+      }
       this.memberCache = new Map(members.map(m => [m.id, m]))
       const all = await Promise.all(members.map(m => this.listRisks(m.id).catch(() => [] as RiskCard[])))
       return all

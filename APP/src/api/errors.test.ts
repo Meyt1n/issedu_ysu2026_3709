@@ -33,6 +33,15 @@ describe('移动端 API 错误用户文案', () => {
     expect(errorMessage(new ApiClientError('raw', { status: 400, code: 'MODEL_UNAVAILABLE' }))).toContain('不会因此自动入库')
   })
 
+  it('联机会话未配置或没有家庭时引导回设置', () => {
+    expect(errorMessage(new ApiClientError('raw', { status: 401, code: 'SESSION_NOT_CONFIGURED' }))).toContain('身份或访问目的')
+    expect(presentApiError(new ApiClientError('raw', { status: 404, code: 'NO_HOUSEHOLD' }))).toEqual({
+      message: '当前身份尚未关联可访问的家庭，请到“我的”检查身份，或联系家庭管理员。',
+      action: 'settings',
+      actionLabel: '检查设置',
+    })
+  })
+
   it('保留本地业务校验提示，未知异常使用兜底文案', () => {
     expect(errorMessage(new Error('跳过前请填写原因'))).toBe('跳过前请填写原因')
     expect(errorMessage({ unexpected: true })).toBe('请求未能完成，页面不会显示未经授权的健康数据。')

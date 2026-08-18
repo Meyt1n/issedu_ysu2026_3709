@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 
 import AppIcon from '@/components/AppIcon.vue'
 import ErrorNotice from '@/components/ErrorNotice.vue'
@@ -11,25 +11,34 @@ import { memberRoleLabel } from '@/data/labels'
 import type { MemberSummary } from '@/data/types'
 import { avatarHue, formatDay } from '@/utils/format'
 import { presentApiError, type ErrorPresentation } from '@/api/errors'
+import { sessionContextKey, useSession } from '@/stores/session'
 
 const members = ref<MemberSummary[]>([])
 const loading = ref(true)
 const error = ref<ErrorPresentation | null>(null)
+const { session } = useSession()
+let reloadGeneration = 0
 
 async function reload(): Promise<void> {
+  const generation = ++reloadGeneration
+  const expectedKey = sessionContextKey(session)
   loading.value = true
   error.value = null
   members.value = []
   try {
-    members.value = await activeProvider().listMembers()
+    const nextMembers = await activeProvider().listMembers()
+    if (generation !== reloadGeneration || expectedKey !== sessionContextKey(session)) return
+    members.value = nextMembers
   } catch (cause) {
+    if (generation !== reloadGeneration || expectedKey !== sessionContextKey(session)) return
     error.value = presentApiError(cause)
   } finally {
-    loading.value = false
+    if (generation === reloadGeneration) loading.value = false
   }
 }
 
 onMounted(reload)
+watch(() => sessionContextKey(session), () => void reload())
 </script>
 
 <template>
@@ -42,7 +51,8 @@ onMounted(reload)
     </header>
 
     <ErrorNotice v-if="error" :error="error" @retry="reload" />
-    <div v-if="loading" class="plain-list" aria-label="正在加载" aria-live="polite">
+    <div v-if="loading" class="plain-list" aria-label="正在加载家庭成员" aria-live="polite">
+      <p class="meta-line">正在加载家庭成员…</p>
       <SkeletonCard />
       <SkeletonCard />
       <SkeletonCard />
@@ -52,8 +62,8 @@ onMounted(reload)
       <EmptyState
         v-if="members.length === 0 && !error"
         icon="family"
-        title="当前身份看不到任何成员"
-        hint="请在网页端检查家庭与授权设置"
+        title="当前身份没有可用家庭成员"
+        hint="请到“我的”检查联机身份、家庭和授权设置。"
       />
       <RouterLink
         v-for="member in members"
