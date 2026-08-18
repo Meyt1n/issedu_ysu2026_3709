@@ -73,11 +73,13 @@ jobs:
           jq -r '"模式=" + .mode, "内部起点=" + .cloud_sha, "GitHub目标=" + .github_sha, "第一父节点数=" + (.first_parent_count|tostring), "按提交身份动作数=" + (.action_count|tostring), "", (.actions[] | [.kind, .sha[0:12], .github_login, (.pr_number // "-")] | @tsv)' "${RUNNER_TEMP}/cloud-history-plan.json"
 
       - name: 保存 dry-run 计划
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: cloud-history-sync-dry-run-${{ github.run_id }}
           path: ${{ runner.temp }}/cloud-history-plan.json
-          if-no-files-found: error
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: 明确禁止推送
         shell: bash

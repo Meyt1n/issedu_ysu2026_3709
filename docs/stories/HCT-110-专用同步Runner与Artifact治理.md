@@ -1,0 +1,76 @@
+# HCT-110：专用同步 Runner 与 Artifact 治理
+
+- GitHub Issue：[ #196](https://github.com/Meyt1n/issedu_ysu2026_3709/issues/196)
+- 关联需求：NFR-01、NFR-03、NFR-04、NFR-06
+- 阶段：治理增量（不改变既有 P0-W1 至 P0-W8 业务基线）
+- 主责：项目负责人
+- 复核：维护者合并前复核；本仓库不要求额外第二人 approval
+- 风险等级：R2（Runner 具有内部仓库写权限，公开仓库误用会扩大执行风险）
+- 前置：HCT-105 双仓库成员身份映射与同步
+
+## 目标
+
+让 GitHub `master` 到内部云端的连续快进同步只在一台专用、带唯一标签
+`hct-sync` 的 Linux self-hosted Runner 上执行，同时让 CI 的诊断制品上传成为
+best-effort，不再因为 artifact 配额、网络或存储故障阻塞测试结论。
+
+## 范围
+
+1. `.github/workflows/sync-original-cloud.yml` 使用
+   `self-hosted`、`linux`、`hct-sync` 三个标签，并只接受 `master` push 或
+   `master` 上的手动运行。
+2. 保留原有成员 Token 映射、全部同步前预检、快进边界、每次 push 后 SHA 核对和
+   历史分叉拒绝逻辑。
+3. `ci.yml` 中已有的 API/Browser artifact 上传继续保持非阻塞；历史同步执行计划
+   和 dry-run 计划也改为非阻塞、缺失文件告警、保留 7 天。
+4. 文档说明 Billing、Runner 注册、权限隔离、公开仓库风险、故障恢复和回滚方式。
+
+## Given / When / Then
+
+- Given 一个合并到 GitHub `master` 的 PR，When `sync-original-cloud.yml` 被触发，Then
+  只有带有 `self-hosted`、`linux`、`hct-sync` 的 Runner 可以领取同步作业。
+- Given 通过 `workflow_dispatch` 选择了非 `master` 分支，When 工作流启动，Then job 被
+  跳过，不读取同步 Secrets，也不向内部云端写入。
+- Given 任意 artifact 上传失败，When 其测试或审计步骤已完成，Then 上传步骤标记为
+  非阻塞，工作流不因 artifact 失败改变测试/同步结论。
+- Given Runner 离线、Billing 仍受限、Secret 缺失或内部历史分叉，When 同步触发，Then
+  不伪造成功、不选择其他成员 Token，并保留明确的失败原因供维护者处理。
+
+## Runner 上线操作（不写入仓库）
+
+1. 仓库 Owner 打开 GitHub `Settings → Actions → Runners → New self-hosted runner`，
+   选择 Linux x64，并在专用机器上安装 Runner。
+2. 注册时增加自定义标签 `hct-sync`；Runner 必须保持在线，且能访问 GitHub 和内部
+   云端 Git URL。
+3. 使用专用、低权限操作系统账号和独立 Runner 目录；不要把注册令牌、内部 Token 或
+   URL 凭据写入仓库、Issue、日志或聊天记录。
+4. 该 Runner 只允许运行本工作流。公开仓库不要把 PR/fork 工作流调度到此 Runner；
+   当前工作流只在 `master` 上执行同步。
+5. Runner 上线后先执行一次 `workflow_dispatch`（分支选择 `master`），确认日志显示
+   Runner 标签和完整 SHA 校验，再依赖后续 master push 自动触发。
+
+## Billing 与恢复边界
+
+账户 Billing 不是仓库文件，不能由 PR 修复。仓库 Owner 需要在 GitHub
+`Settings → Billing & licensing` 检查支付方式、预算/额度和付款失败提示。self-hosted
+Runner 可以减少 GitHub-hosted runner 与 artifact 存储依赖，但不能替代账户级付款限制处理。
+Billing 恢复且 Runner 在线后，重新运行最近一次失败的同步；只有 Actions 日志显示最终
+`GitHub master SHA = cloud/master SHA` 才能宣布恢复。
+
+## 回滚
+
+- 若专用 Runner 异常，维护者将 `runs-on` 恢复到上一版本前必须先确认账户 Billing 可用；
+  不能在没有权限和成本确认的情况下临时使用未知 Runner。
+- 若 Runner 发现安全问题，立即在 GitHub Runner 设置中停止/删除该 Runner，保留 GitHub
+  `master` 和内部 `master` SHA 证据，不强推、不重写历史。
+- artifact 上传策略可以单独回滚，不影响同步身份映射和内部仓库历史。
+
+## 验收证据
+
+- YAML 静态检查：同步 job 的 Runner 标签、master 条件和 artifact 非阻塞属性。
+- `tests/workflows` 中的同步工作流结构回归测试。
+- `git diff --check`。
+- 合并后的 master Actions：Runner 在线、同步前预检通过、每次 push 后 SHA 核对通过。
+
+本 PR 不把 Billing 未恢复、Runner 未注册或未实际成功同步伪造为完成；在这些外部条件
+满足前，HCT-110 保持“待上线验收”。

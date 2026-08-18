@@ -17,7 +17,10 @@ concurrency:
 jobs:
   sync:
     name: 按登记成员身份快进同步到原云端
-    runs-on: ubuntu-latest
+    # This job handles repository secrets and writes to the internal mirror.
+    # Keep it off hosted/fork runners and require the dedicated runner label.
+    if: github.ref == 'refs/heads/master'
+    runs-on: [self-hosted, linux, hct-sync]
     timeout-minutes: 10
     env:
       CLOUD_REPO_URL: http://119.3.217.118:30181/29092881243490627/issedu_ysu2026_3709.git
