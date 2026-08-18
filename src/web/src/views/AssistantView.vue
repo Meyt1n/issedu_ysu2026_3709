@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
 
 import { apiClient } from '../api/client'
+import { normalizeSuggestedQuestions } from '../assistant/followUp'
 import AppIcon from '../components/AppIcon.vue'
 import {
   formatError,
@@ -20,6 +21,7 @@ interface ChatEntry {
   degraded?: boolean
   degradeReason?: string | null
   escalate?: boolean
+  suggestedQuestions?: string[]
 }
 
 const history = ref<ChatEntry[]>([])
@@ -117,6 +119,7 @@ async function send(text?: string): Promise<void> {
       degraded: reply.degraded,
       degradeReason: reply.degrade_reason,
       escalate: reply.escalate,
+      suggestedQuestions: normalizeSuggestedQuestions(reply.suggested_questions),
     }
     history.value.push(entry)
     streamReveal(history.value[history.value.length - 1]!)
@@ -243,6 +246,23 @@ onBeforeUnmount(() => {
                 依据：{{ source }}
               </span>
             </template>
+          </div>
+          <div
+            v-if="entry.role === 'assistant' && !isStreaming(entry) && (entry.suggestedQuestions?.length ?? 0) > 0"
+            class="chat-follow-ups"
+            aria-label="相关追问"
+          >
+            <span class="chat-follow-ups-label">你还可以问：</span>
+            <button
+              v-for="question in entry.suggestedQuestions"
+              :key="question"
+              type="button"
+              class="btn btn-ghost btn-small chat-follow-up"
+              :disabled="sending"
+              @click="send(question)"
+            >
+              {{ question }}
+            </button>
           </div>
         </div>
       </div>

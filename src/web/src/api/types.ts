@@ -520,6 +520,7 @@ export interface AssistantResponse {
   answer: string
   sources: string[]
   citations?: AssistantCitation[]
+  suggested_questions?: string[]
   confidence: string
   escalate: boolean
   degraded: boolean

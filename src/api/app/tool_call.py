@@ -381,6 +381,119 @@ def _contains_external_links(output_text: str) -> bool:
     return bool(url_pattern.search(output_text))
 
 
+# ── HCT-411: Controlled follow-up questions ──────────────────────────
+
+
+_FOLLOW_UP_MAX_COUNT = 3
+_FOLLOW_UP_MAX_LENGTH = 80
+_FOLLOW_UP_RISK_TERMS = (
+    "剂量", "吃多少", "多少吃", "怎么吃", "一次吃", "一天吃", "应该吃", "几粒", "几片",
+    "漏服", "补服", "补双倍", "同服", "一起吃", "相互作用", "停药", "换药", "过量", "误服",
+    "诊断", "处方",
+)
+_FOLLOW_UP_MEDICATION_TERMS = (
+    "药", "用药", "服用", "吃什么", "吃哪", "阿莫西林", "布洛芬", "处方",
+)
+_FOLLOW_UP_SYMPTOM_TERMS = (
+    "症状", "感冒", "发烧", "发热", "咳嗽", "腹泻", "头晕", "乏力", "疼", "不舒服",
+)
+_FOLLOW_UP_EVIDENCE_TERMS = (
+    "记录", "事件", "证据", "引用", "依据", "规则", "提醒", "成员", "药品清单",
+)
+
+
+def _latest_user_query(messages: list[dict[str, Any]]) -> str:
+    for message in reversed(messages):
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+    return ""
+
+
+def _sanitize_follow_up_questions(candidates: list[str]) -> list[str]:
+    """Keep follow-ups short, local, non-commercial, and non-prescriptive."""
+    sanitized: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        question = re.sub(r"\s+", " ", candidate).strip()
+        key = question.casefold()
+        if (
+            not question
+            or len(question) > _FOLLOW_UP_MAX_LENGTH
+            or key in seen
+            or _contains_external_links(question)
+            or _check_medical_boundary(question)
+        ):
+            continue
+        seen.add(key)
+        sanitized.append(question)
+        if len(sanitized) >= _FOLLOW_UP_MAX_COUNT:
+            break
+    return sanitized
+
+
+def suggest_follow_up_questions(
+    messages: list[dict[str, Any]],
+    *,
+    degraded: bool = False,
+    escalate: bool = False,
+) -> list[str]:
+    """Generate safe, deterministic follow-ups from the latest user query.
+
+    Suggestions are interaction prompts, not model facts or medical advice.
+    They intentionally do not inspect private facts, tool results, or the
+    model's hidden reasoning, so an unknown query cannot disclose household
+    data. Degraded responses return no suggestions because their evidence
+    context is already incomplete.
+    """
+    if degraded:
+        return []
+    query = _latest_user_query(messages)
+    if not query:
+        return []
+    normalized = query.casefold()
+
+    if escalate or any(term in normalized for term in _FOLLOW_UP_RISK_TERMS):
+        candidates = [
+            "这条用药信息需要医生或药师确认哪些内容？",
+            "当前药品记录的来源和确认状态是什么？",
+            "如何查看这条信息对应的本地规则？",
+        ]
+    elif any(term in normalized for term in _FOLLOW_UP_MEDICATION_TERMS):
+        candidates = [
+            "这条回答依据了哪些已确认的药品记录？",
+            "当前药品的规格、有效期或批号是否已核对？",
+            "这条信息还缺少哪些证据需要人工确认？",
+        ]
+    elif any(term in normalized for term in _FOLLOW_UP_SYMPTOM_TERMS):
+        candidates = [
+            "我还需要补充哪些症状和发生时间？",
+            "哪些情况需要尽快联系医生或药师？",
+            "当前回答引用了哪些已确认记录或本地规则？",
+        ]
+    elif any(term in normalized for term in _FOLLOW_UP_EVIDENCE_TERMS):
+        candidates = [
+            "这条信息的来源和确认状态是什么？",
+            "是否还有缺失字段需要人工补充？",
+            "如何查看或更正这条本地记录？",
+        ]
+    elif normalized in {"你好", "您好", "hello", "hi", "在吗", "你能做什么"}:
+        candidates = [
+            "你能查看哪些已确认的健康记录？",
+            "当前回答会引用哪些本地依据？",
+            "如何确认或修正一条识别结果？",
+        ]
+    else:
+        candidates = [
+            "这条回答依据了哪些已确认记录？",
+            "我还需要补充哪些信息才能继续核对？",
+            "如何查看相关的本地规则或文档？",
+        ]
+    return _sanitize_follow_up_questions(candidates)
+
+
 # ── Structured degrade ────────────────────────────────────────────────
 
 
@@ -746,7 +859,7 @@ def run_assistant(
 
     Returns a dict with:
         answer, sources, citations, confidence, escalate, degraded,
-        degrade_reason, model, route
+        degrade_reason, model, route, suggested_questions
     """
     from app.config import get_settings
 
@@ -861,6 +974,10 @@ def run_assistant(
         "answer": parsed.answer,
         "sources": [item["chunk_id"] for item in matched_citations] + fact_sources,
         "citations": matched_citations,
+        "suggested_questions": suggest_follow_up_questions(
+            messages,
+            escalate=parsed.escalate,
+        ),
         "confidence": parsed.confidence,
         "escalate": parsed.escalate,
         "degraded": False,
