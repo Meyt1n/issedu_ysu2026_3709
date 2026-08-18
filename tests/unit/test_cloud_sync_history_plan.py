@@ -73,6 +73,7 @@ def direct_commit_metadata(sha: str, login: str, name: str, email: str) -> dict:
         "sha": sha,
         "author": {"login": login},
         "committer": {"login": login},
+        "parents": [{"sha": "parent"}],
         "commit": {
             "author": {"name": name, "email": email},
             "committer": {"name": name, "email": email},

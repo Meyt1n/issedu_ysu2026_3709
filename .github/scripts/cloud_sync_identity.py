@@ -64,6 +64,7 @@ IDENTITIES: dict[str, dict[str, Any]] = {
 # Keep this allowlist deliberately narrow: meeting and project documentation are
 # maintenance artifacts, while source/configuration changes must still go via PR.
 DIRECT_MAINTENANCE_PATH_PREFIXES = ("doc/", "docs/")
+DIRECT_MAINTENANCE_FILE_STATUSES = {"added", "modified"}
 
 
 def _text(value: object) -> str:
@@ -169,7 +170,7 @@ def resolve_direct_maintenance_identity(commit: dict[str, Any]) -> dict[str, Any
             "直接维护提交只能归属一个已登记成员"
         )
     parents = commit.get("parents")
-    if parents is not None and (not isinstance(parents, list) or len(parents) != 1):
+    if not isinstance(parents, list) or len(parents) != 1:
         raise IdentityError(
             f"提交 {_commit_label(commit)} 不是普通单父提交；"
             "直接维护提交不得使用合并或无父拓扑"
@@ -178,25 +179,35 @@ def resolve_direct_maintenance_identity(commit: dict[str, Any]) -> dict[str, Any
     identity = _identity_for_login(author_login)
     files = _load_direct_commit_files(commit)
     invalid_paths: list[str] = []
-    deleted_paths: list[str] = []
+    invalid_statuses: list[str] = []
+    renamed_paths: list[str] = []
     for file_info in files:
-        path = _text(file_info.get("filename")).replace("\\", "/")
+        raw_filename = file_info.get("filename")
+        path = _text(raw_filename).replace("\\", "/")
         status = _text(file_info.get("status")).casefold()
         if not path or not path.startswith(DIRECT_MAINTENANCE_PATH_PREFIXES):
             invalid_paths.append(path or "<missing-path>")
-        if status == "removed":
-            deleted_paths.append(path or "<missing-path>")
+        if status not in DIRECT_MAINTENANCE_FILE_STATUSES:
+            invalid_statuses.append(f"{path or '<missing-path>'} ({status or 'missing-status'})")
+        if _text(file_info.get("previous_filename")):
+            renamed_paths.append(path or "<missing-path>")
     if invalid_paths:
         details = ", ".join(invalid_paths[:5])
         raise IdentityError(
             f"提交 {_commit_label(commit)} 含非维护文档路径：{details}；"
             "直接 master 提交只允许 doc/ 或 docs/"
         )
-    if deleted_paths:
-        details = ", ".join(deleted_paths[:5])
+    if renamed_paths:
+        details = ", ".join(renamed_paths[:5])
         raise IdentityError(
-            f"提交 {_commit_label(commit)} 删除维护文档：{details}；"
-            "删除操作必须通过 PR 进行审查"
+            f"提交 {_commit_label(commit)} 含 rename/copy 文件：{details}；"
+            "直接维护提交不得携带 previous_filename"
+        )
+    if invalid_statuses:
+        details = ", ".join(invalid_statuses[:5])
+        raise IdentityError(
+            f"提交 {_commit_label(commit)} 含不允许的文件状态：{details}；"
+            "直接维护提交只允许 added 或 modified"
         )
 
     return {

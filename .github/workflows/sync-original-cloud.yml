@@ -104,6 +104,10 @@ jobs:
           declare -a sync_plan=()
           plan_previous_sha="${cloud_sha}"
           for sync_sha in "${sync_shas[@]}"; do
+            pr_meta="$(gh api \
+              "repos/${GITHUB_REPOSITORY}/commits/${sync_sha}/pulls" \
+              --header 'Accept: application/vnd.github+json' \
+              --jq 'map(select(.base.ref == "master" and .merged_at != null)) | if length == 1 then .[0] | [.number, .user.login] | @tsv else "" end')"
             parent_line="$(git rev-list --parents -n 1 "${sync_sha}")"
             read -ra parent_fields <<< "${parent_line}"
             parent_count=$((${#parent_fields[@]} - 1))
@@ -114,7 +118,7 @@ jobs:
             pr_login=""
             commit_count=""
             introduced_count=""
-            if [[ "${parent_count}" -eq 1 ]]; then
+            if [[ "${parent_count}" -eq 1 && -z "${pr_meta}" ]]; then
               if [[ "$(git rev-parse "${sync_sha}^")" != "${plan_previous_sha}" ]]; then
                 echo "::error::直接维护提交 ${sync_sha} 的父提交不是当前同步点；拒绝跳过历史"
                 exit 1
@@ -136,13 +140,9 @@ jobs:
               reference="direct"
               commit_count="$(jq -r '.commit_count' <<< "${identity_json}")"
               introduced_count="1"
-            elif [[ "${parent_count}" -eq 2 ]]; then
-              pr_meta="$(gh api \
-                "repos/${GITHUB_REPOSITORY}/commits/${sync_sha}/pulls" \
-                --header 'Accept: application/vnd.github+json' \
-                --jq 'map(select(.base.ref == "master" and .merged_at != null)) | if length == 1 then .[0] | [.number, .user.login] | @tsv else "" end')"
+            elif [[ "${parent_count}" -eq 1 || "${parent_count}" -eq 2 ]]; then
               if [[ -z "${pr_meta}" ]]; then
-                echo "::error::提交 ${sync_sha} 未关联唯一的已合并 master PR；禁止使用其他成员 Token"
+                echo "::error::提交 ${sync_sha} 的拓扑需要唯一已合并 master PR，但 GitHub API 未返回唯一关联；禁止使用其他成员 Token"
                 exit 1
               fi
 

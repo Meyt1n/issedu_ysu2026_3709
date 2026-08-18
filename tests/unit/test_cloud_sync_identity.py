@@ -39,6 +39,7 @@ def direct_maintenance_commit(
         "sha": "abcdef0123456789",
         "author": {"login": author_login},
         "committer": {"login": committer_login},
+        "parents": [{"sha": "parent"}],
         "commit": {
             "author": {"name": "Wind", "email": "z85963541@qq.com"},
             "committer": {"name": "Wind", "email": "z85963541@qq.com"},
@@ -214,7 +215,23 @@ def test_rejects_direct_commit_outside_document_directories() -> None:
 
 
 def test_rejects_direct_document_deletion() -> None:
-    with pytest.raises(IDENTITY.IdentityError, match="删除维护文档"):
+    with pytest.raises(IDENTITY.IdentityError, match="不允许的文件状态"):
         IDENTITY.resolve_direct_maintenance_identity(
-            direct_maintenance_commit(status="removed")
+            direct_maintenance_commit(status="deleted")
         )
+
+
+def test_rejects_direct_rename_with_previous_filename() -> None:
+    commit_metadata = direct_maintenance_commit(status="renamed")
+    commit_metadata["files"][0]["previous_filename"] = "src/api/app/main.py"
+
+    with pytest.raises(IDENTITY.IdentityError, match="rename/copy"):
+        IDENTITY.resolve_direct_maintenance_identity(commit_metadata)
+
+
+def test_rejects_direct_metadata_without_parents() -> None:
+    commit_metadata = direct_maintenance_commit()
+    del commit_metadata["parents"]
+
+    with pytest.raises(IDENTITY.IdentityError, match="不是普通单父提交"):
+        IDENTITY.resolve_direct_maintenance_identity(commit_metadata)
