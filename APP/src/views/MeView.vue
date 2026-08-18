@@ -166,7 +166,7 @@ function restoreDemoData(): void {
           <small>健康数据默认不出网：请填写家庭局域网内的地址。</small>
         </label>
         <label class="field">
-          开发身份（X-Actor-Id）
+          开发期身份（仅本地联调）
           <input v-model="session.actorId" type="text" placeholder="Actor ID" @change="persistConnectionSession" />
         </label>
         <label class="field">
@@ -196,6 +196,22 @@ function restoreDemoData(): void {
           {{ connectionMessage }}
         </p>
         <ErrorNotice v-if="connectionError" :error="connectionError" @retry="testConnection" />
+
+        <section class="auth-design-note" aria-labelledby="auth-design-title">
+          <div class="h-icon-row">
+            <span class="row-icon" data-tone="calm" aria-hidden="true"><AppIcon name="shield" :size="16" /></span>
+            <h3 id="auth-design-title">正式鉴权（适配设计）</h3>
+          </div>
+          <p class="meta-line">当前仍使用开发期身份头，不代表正式登录已经接入。</p>
+          <ul class="divided-list">
+            <li>账号密码登录后使用短生命周期会话，登出或撤销后立即清理。</li>
+            <li>高风险授权、删除等动作由主仓库要求 PIN/二维码一次性二次确认。</li>
+            <li>正式会话只在内存传给 API Client，不写入本机存储或 URL。</li>
+          </ul>
+          <p class="notice" data-tone="warn" role="status">
+            HCT-107 接口尚未提供联调版本；当前不会显示伪造的登录成功或二次确认结果。
+          </p>
+        </section>
       </template>
 
       <template v-else>
@@ -268,4 +284,13 @@ function restoreDemoData(): void {
 html[data-contrast='high'] .mode-option { border-color: #000; background: #fff; }
 .mode-option input { width: 20px; height: 20px; margin-top: 3px; flex: 0 0 auto; }
 .mode-option > span { display: grid; gap: 2px; }
+.auth-design-note {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+.auth-design-note h3 { margin: 0; font-size: 1rem; }
+.auth-design-note .divided-list { margin: 0; }
 </style>

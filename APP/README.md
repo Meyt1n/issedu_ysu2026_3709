@@ -107,7 +107,7 @@ npm run dev
 - 风险"我已知晓"回写暂无对应服务端接口，界面会如实提示而不是伪装成功；
 - 照护者视角的可见范围按"服务端已过滤"标注（授权明细仅 owner 可读，到期时间不显示）；
 - "近 7 天完成情况"由计划事实与 `plan_confirmed` 事件推导，为近似统计；
-- 登录 / PIN 二次确认沿用主仓库开发期的 `X-Actor-Id` 头约定，正式鉴权跟随主仓库 HCT-107 交付；
+- 登录 / PIN 二次确认尚未接入主仓库正式接口；当前仅保留明确标注的开发期 `X-Actor-Id` 联调路径。移动端适配契约、Bearer/Cookie 传输边界和内存测试桩见 [MOB-115 Story](../docs/stories/MOB-115-正式鉴权适配设计.md)，正式鉴权仍跟随主仓库 HCT-107 交付；
 - 联调发现的主仓库缺口：投影丢弃药品 `expiry_date/stock/ingredient` 导致过期/低库存/重复成分规则无法触发——
   已提交修复（[Issue #140](https://github.com/Meyt1n/issedu_ysu2026_3709/issues/140)、
   [PR #141](https://github.com/Meyt1n/issedu_ysu2026_3709/pull/141)，含"事件→投影→规则"回归测试，待维护者复核合并）。
@@ -147,7 +147,7 @@ android/             Capacitor 生成的原生安卓工程（构建产物与 loc
 public/              PWA manifest、图标、AI 生成氛围底图（bg/）与离线 Service Worker（sw.js）
 scripts/             联调造数脚本（虚构数据）与一键 APK 构建脚本
 src/
-  api/               与主仓库对齐的 API 契约与客户端（X-Actor-Id 等请求头一致）
+  api/               与主仓库对齐的 API 契约、鉴权适配和客户端（开发期 X-Actor-Id 等请求头一致）
   components/        TabBar、任务卡、等级标签、开关等基础组件
   composables/       语音播报（Web Speech API）
   data/              DataProvider 接口 + 演示数据 + 联机适配器 + 文案映射

@@ -42,6 +42,24 @@ describe('移动端 API 错误用户文案', () => {
     })
   })
 
+  it('正式鉴权失败、会话失效和二次确认状态使用安全文案', () => {
+    expect(errorMessage(new ApiClientError('raw', { status: 401, code: 'AUTH_FAILED' }))).toBe(
+      '登录信息不正确或暂时无法验证，请稍后重试。',
+    )
+    expect(errorMessage(new ApiClientError('raw', { status: 503, code: 'AUTH_UNAVAILABLE' }))).toBe(
+      '家庭服务器暂时无法验证身份，请稍后重试。',
+    )
+    expect(errorMessage(new ApiClientError('raw', { status: 401, code: 'SESSION_EXPIRED' }))).toBe(
+      '登录会话已失效，请重新登录后重试。',
+    )
+    expect(errorMessage(new ApiClientError('raw', { status: 409, code: 'STEP_UP_REPLAY' }))).toBe(
+      '二次确认已过期或已经使用，请重新发起该操作。',
+    )
+    expect(errorMessage(new ApiClientError('raw', { status: 403, code: 'STEP_UP_REQUIRED' }))).toBe(
+      '该操作需要 PIN 或二维码二次确认，请完成确认后重试。',
+    )
+  })
+
   it('保留本地业务校验提示，未知异常使用兜底文案', () => {
     expect(errorMessage(new Error('跳过前请填写原因'))).toBe('跳过前请填写原因')
     expect(errorMessage({ unexpected: true })).toBe('请求未能完成，页面不会显示未经授权的健康数据。')
