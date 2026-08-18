@@ -1,9 +1,15 @@
 <script setup lang="ts">
 import AppTabBar from '@/components/AppTabBar.vue'
 import ToastHost from '@/components/ToastHost.vue'
-import { useSpeakingIndicator, useSpeech } from '@/composables/useSpeech'
+import {
+  clearSpeechGuidance,
+  useSpeakingIndicator,
+  useSpeech,
+  useSpeechGuidance,
+} from '@/composables/useSpeech'
 
 const speakingText = useSpeakingIndicator()
+const speechGuidance = useSpeechGuidance()
 const speech = useSpeech()
 </script>
 
@@ -37,6 +43,11 @@ const speech = useSpeech()
   </RouterView>
   <ToastHost />
 
+  <div v-if="speechGuidance" class="speech-guidance" role="status">
+    <span>{{ speechGuidance }}</span>
+    <button type="button" aria-label="关闭语音播报提示" @click="clearSpeechGuidance">知道了</button>
+  </div>
+
   <!-- 语音播报可视指示：让听不清/关静音的用户也知道正在播报，可一键停止 -->
   <Transition name="speaking">
     <button
@@ -55,6 +66,38 @@ const speech = useSpeech()
 </template>
 
 <style scoped>
+.speech-guidance {
+  position: fixed;
+  left: 16px;
+  right: 16px;
+  bottom: calc(92px + env(safe-area-inset-bottom));
+  z-index: 31;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  color: var(--c-ink);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-float);
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+.speech-guidance span { flex: 1; }
+.speech-guidance button {
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 0 10px;
+  color: var(--c-brand);
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 10px;
+  font: inherit;
+  font-weight: 700;
+}
+html[data-elder='on'] .speech-guidance button { min-height: 58px; }
+html[data-contrast='high'] .speech-guidance { background: #fff; border: 2px solid #000; box-shadow: none; }
 .speaking-pill {
   position: fixed;
   left: 50%;
@@ -90,7 +133,39 @@ const speech = useSpeech()
   from { transform: scaleY(0.45); }
   to { transform: scaleY(1); }
 }
-html[data-contrast='high'] .speaking-pill { background: #fff; border: 2px solid #000; box-shadow: none; }
+html[data-contrast='high'] .speech-guidance {
+  position: fixed;
+  left: 16px;
+  right: 16px;
+  bottom: calc(92px + env(safe-area-inset-bottom));
+  z-index: 31;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  color: var(--c-ink);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-float);
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+.speech-guidance span { flex: 1; }
+.speech-guidance button {
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 0 10px;
+  color: var(--c-brand);
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 10px;
+  font: inherit;
+  font-weight: 700;
+}
+html[data-elder='on'] .speech-guidance button { min-height: 58px; }
+html[data-contrast='high'] .speech-guidance { background: #fff; border: 2px solid #000; box-shadow: none; }
+.speaking-pill { background: #fff; border: 2px solid #000; box-shadow: none; }
 
 .speaking-enter-active,
 .speaking-leave-active { transition: opacity 0.25s ease, transform 0.25s ease; }
