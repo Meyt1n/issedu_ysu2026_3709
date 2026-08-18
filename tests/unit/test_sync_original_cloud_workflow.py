@@ -99,7 +99,7 @@ def test_sync_job_is_master_only_on_the_dedicated_runner() -> None:
     assert job["if"] == "github.ref == 'refs/heads/master'"
 
 
-def test_every_artifact_upload_is_best_effort() -> None:
+def test_artifact_uploads_are_disabled() -> None:
     workflow_paths = [
         WORKFLOW_ROOT / "ci.yml",
         WORKFLOW_ROOT / "execute-cloud-history-sync.yml",
@@ -114,8 +114,7 @@ def test_every_artifact_upload_is_best_effort() -> None:
                 if step.get("uses", "").startswith("actions/upload-artifact@"):
                     upload_steps.append(step)
 
-    assert upload_steps
-    assert all(step.get("continue-on-error") is True for step in upload_steps)
+    assert upload_steps == []
 
 
 def test_workflow_uses_full_history_and_preflights_before_push() -> None:

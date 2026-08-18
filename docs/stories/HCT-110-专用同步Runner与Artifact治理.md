@@ -11,8 +11,8 @@
 ## 目标
 
 让 GitHub `master` 到内部云端的连续快进同步只在一台专用、带唯一标签
-`hct-sync` 的 Linux self-hosted Runner 上执行，同时让 CI 的诊断制品上传成为
-best-effort，不再因为 artifact 配额、网络或存储故障阻塞测试结论。
+`hct-sync` 的 Linux self-hosted Runner 上执行，同时关闭 CI 的 Artifact 上传，避免
+Artifact 存储配额和计费影响工作流。
 
 ## 范围
 
@@ -21,8 +21,8 @@ best-effort，不再因为 artifact 配额、网络或存储故障阻塞测试�
    `master` 上的手动运行。
 2. 保留原有成员 Token 映射、全部同步前预检、快进边界、每次 push 后 SHA 核对和
    历史分叉拒绝逻辑。
-3. `ci.yml` 中已有的 API/Browser artifact 上传继续保持非阻塞；历史同步执行计划
-   和 dry-run 计划也改为非阻塞、缺失文件告警、保留 7 天。
+3. `ci.yml`、历史同步执行和 dry-run workflow 不再调用 `actions/upload-artifact`；测试、
+   同步前预检和 SHA 日志仍然保留在工作流日志中。
 4. 文档说明 Billing、Runner 注册、权限隔离、公开仓库风险、故障恢复和回滚方式。
 
 ## Given / When / Then
@@ -31,8 +31,8 @@ best-effort，不再因为 artifact 配额、网络或存储故障阻塞测试�
   只有带有 `self-hosted`、`linux`、`hct-sync` 的 Runner 可以领取同步作业。
 - Given 通过 `workflow_dispatch` 选择了非 `master` 分支，When 工作流启动，Then job 被
   跳过，不读取同步 Secrets，也不向内部云端写入。
-- Given 任意 artifact 上传失败，When 其测试或审计步骤已完成，Then 上传步骤标记为
-  非阻塞，工作流不因 artifact 失败改变测试/同步结论。
+- Given 任意测试或审计步骤已完成，When 工作流运行结束，Then 不上传 Artifact，工作流
+  不因 Artifact 配额、存储或上传服务改变测试/同步结论。
 - Given Runner 离线、Billing 仍受限、Secret 缺失或内部历史分叉，When 同步触发，Then
   不伪造成功、不选择其他成员 Token，并保留明确的失败原因供维护者处理。
 
@@ -53,7 +53,8 @@ best-effort，不再因为 artifact 配额、网络或存储故障阻塞测试�
 
 账户 Billing 不是仓库文件，不能由 PR 修复。仓库 Owner 需要在 GitHub
 `Settings → Billing & licensing` 检查支付方式、预算/额度和付款失败提示。self-hosted
-Runner 可以减少 GitHub-hosted runner 与 artifact 存储依赖，但不能替代账户级付款限制处理。
+Runner 可以减少 GitHub-hosted runner 依赖，关闭 Artifact 可以避免新增 Artifact 存储，
+但不能替代账户级付款限制处理。
 Billing 恢复且 Runner 在线后，重新运行最近一次失败的同步；只有 Actions 日志显示最终
 `GitHub master SHA = cloud/master SHA` 才能宣布恢复。
 
@@ -63,11 +64,12 @@ Billing 恢复且 Runner 在线后，重新运行最近一次失败的同步；�
   不能在没有权限和成本确认的情况下临时使用未知 Runner。
 - 若 Runner 发现安全问题，立即在 GitHub Runner 设置中停止/删除该 Runner，保留 GitHub
   `master` 和内部 `master` SHA 证据，不强推、不重写历史。
-- artifact 上传策略可以单独回滚，不影响同步身份映射和内部仓库历史。
+- Artifact 上传可以按需单独恢复，不影响同步身份映射和内部仓库历史；恢复前应确认
+  存储额度和付款状态。
 
 ## 验收证据
 
-- YAML 静态检查：同步 job 的 Runner 标签、master 条件和 artifact 非阻塞属性。
+- YAML 静态检查：同步 job 的 Runner 标签、master 条件以及所有 Artifact 上传步骤均已关闭。
 - `tests/workflows` 中的同步工作流结构回归测试。
 - `git diff --check`。
 - 合并后的 master Actions：Runner 在线、同步前预检通过、每次 push 后 SHA 核对通过。
