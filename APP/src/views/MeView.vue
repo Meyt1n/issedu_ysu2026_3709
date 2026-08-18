@@ -9,16 +9,27 @@ import { ApiClient } from '@/api/client'
 import { presentApiError, type ErrorPresentation } from '@/api/errors'
 import { resetDemoData } from '@/data/demoProvider'
 import { useA11y } from '@/stores/accessibility'
+import {
+  capabilityDescription,
+  capabilityLabel,
+  useCapabilities,
+} from '@/stores/capabilities'
 import { useSession } from '@/stores/session'
 import { tapFeedback } from '@/utils/haptics'
 
 const { settings, setElderMode } = useA11y()
 const { session, updateSession } = useSession()
+const {
+  capabilities: capabilityState,
+  setCapabilities,
+  clearCapabilities,
+} = useCapabilities()
 const feedbackSpeaker = createSpeaker(() => true)
 
 const connectionState = ref<'idle' | 'testing' | 'ok' | 'failed'>('idle')
 const connectionMessage = ref('')
 const connectionError = ref<ErrorPresentation | null>(null)
+const capabilityProbeError = ref<ErrorPresentation | null>(null)
 const demoResetMessage = ref('')
 
 function onElderModeChange(enabled: boolean): void {
@@ -39,6 +50,8 @@ function persistConnectionSession(): void {
   connectionState.value = 'idle'
   connectionMessage.value = ''
   connectionError.value = null
+  capabilityProbeError.value = null
+  clearCapabilities()
 }
 
 function onModeChange(mode: 'demo' | 'live'): void {
@@ -46,26 +59,35 @@ function onModeChange(mode: 'demo' | 'live'): void {
   connectionState.value = 'idle'
   connectionMessage.value = ''
   connectionError.value = null
+  capabilityProbeError.value = null
+  clearCapabilities()
 }
 
 async function testConnection(): Promise<void> {
   connectionState.value = 'testing'
   connectionMessage.value = ''
   connectionError.value = null
+  capabilityProbeError.value = null
+  clearCapabilities()
   const client = new ApiClient({ baseUrl: session.serverBaseUrl })
   try {
     const health = await client.getHealth({
       actorId: session.actorId || undefined,
       accessPurpose: session.accessPurpose || undefined,
     })
-    const capabilities = await client
-      .getCapabilities({ actorId: session.actorId || undefined })
-      .catch(() => null)
+    let probe: ReturnType<typeof setCapabilities> | null = null
+    try {
+      probe = setCapabilities(await client.getCapabilities({ actorId: session.actorId || undefined }))
+    } catch (cause) {
+      clearCapabilities()
+      capabilityProbeError.value = presentApiError(cause)
+    }
     connectionState.value = 'ok'
     connectionMessage.value = `已连接：${health.service} ${health.version}${
-      capabilities ? `，本地能力 ${capabilities.available.length} 项` : ''
+      probe ? `，已探测 ${probe.available.length} 项可用能力` : '；能力探测未完成'
     }`
   } catch (cause) {
+    clearCapabilities()
     connectionState.value = 'failed'
     connectionError.value = presentApiError(cause)
   }
@@ -195,7 +217,52 @@ function restoreDemoData(): void {
         >
           {{ connectionMessage }}
         </p>
+        <p v-if="capabilityProbeError" class="notice" data-tone="warn" role="status">
+          能力限制暂时无法读取：{{ capabilityProbeError.message }} 未声明的能力均按不可用处理，请先不要使用相关入口。
+        </p>
         <ErrorNotice v-if="connectionError" :error="connectionError" @retry="testConnection" />
+
+        <section
+          v-if="capabilityState.snapshot"
+          class="capability-panel"
+          aria-labelledby="capability-title"
+          aria-live="polite"
+        >
+          <div class="h-icon-row">
+            <span class="row-icon" data-tone="info" aria-hidden="true"><AppIcon name="shield" :size="16" /></span>
+            <h3 id="capability-title">服务能力与限制</h3>
+          </div>
+          <p class="meta-line">能力阶段：{{ capabilityState.snapshot.phase }}</p>
+          <div class="capability-group">
+            <strong>已提供（{{ capabilityState.snapshot.available.length }}）</strong>
+            <ul v-if="capabilityState.snapshot.available.length" class="capability-list">
+              <li v-for="id in capabilityState.snapshot.available" :key="`available-${id}`">
+                <span class="tag" data-tone="calm">可用</span>
+                <span>
+                  <strong>{{ capabilityLabel(id) }}</strong>
+                  <span class="meta-line">{{ capabilityDescription(id) }}</span>
+                </span>
+              </li>
+            </ul>
+            <p v-else class="meta-line">服务没有声明可用能力。</p>
+          </div>
+          <div class="capability-group">
+            <strong>未提供或未启用（{{ capabilityState.snapshot.unavailable.length }}）</strong>
+            <ul v-if="capabilityState.snapshot.unavailable.length" class="capability-list">
+              <li v-for="id in capabilityState.snapshot.unavailable" :key="`unavailable-${id}`">
+                <span class="tag" data-tone="warn">不可用</span>
+                <span>
+                  <strong>{{ capabilityLabel(id) }}</strong>
+                  <span class="meta-line">{{ capabilityDescription(id) }} 相关入口会保持禁用。</span>
+                </span>
+              </li>
+            </ul>
+            <p v-else class="meta-line">服务没有声明未提供能力。</p>
+          </div>
+          <p class="notice" data-tone="warn" role="status">
+            未列出的能力也按不可用处理；移动端不会把接口缺失包装成可用功能。
+          </p>
+        </section>
 
         <section class="auth-design-note" aria-labelledby="auth-design-title">
           <div class="h-icon-row">
@@ -293,4 +360,25 @@ html[data-contrast='high'] .mode-option { border-color: #000; background: #fff; 
 }
 .auth-design-note h3 { margin: 0; font-size: 1rem; }
 .auth-design-note .divided-list { margin: 0; }
+.capability-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+.capability-panel h3 { margin: 0; font-size: 1rem; }
+.capability-group { display: grid; gap: 8px; }
+.capability-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.capability-list li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--r-btn);
+  background: var(--well-bg);
+}
+.capability-list li > span:last-child { display: grid; gap: 2px; }
+.capability-list .tag { margin-top: 1px; }
 </style>

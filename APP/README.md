@@ -105,6 +105,7 @@ npm run dev
 
 - 药盒识别链路只到"创建视觉任务"，候选确认仍需回网页端人工复核中心；
 - 风险"我已知晓"回写暂无对应服务端接口，界面会如实提示而不是伪装成功；
+- 联机入口会探测 `/api/v1/meta/capabilities` 并列出服务阶段、可用和未提供能力；能力探测失败或服务端未声明的能力按不可用处理，相关入口会禁用并标注限制；
 - 照护者视角的可见范围按"服务端已过滤"标注（授权明细仅 owner 可读，到期时间不显示）；
 - "近 7 天完成情况"由计划事实与 `plan_confirmed` 事件推导，为近似统计；
 - 登录 / PIN 二次确认尚未接入主仓库正式接口；当前仅保留明确标注的开发期 `X-Actor-Id` 联调路径。移动端适配契约、Bearer/Cookie 传输边界和内存测试桩见 [MOB-115 Story](../docs/stories/MOB-115-正式鉴权适配设计.md)，正式鉴权仍跟随主仓库 HCT-107 交付；
@@ -152,7 +153,7 @@ src/
   composables/       语音播报（Web Speech API）
   data/              DataProvider 接口 + 演示数据 + 联机适配器 + 文案映射
   router/            页面路由
-  stores/            无障碍设置、会话设置（localStorage 持久化）
+  stores/            无障碍设置、会话设置（localStorage 持久化）、运行时能力探测状态
   utils/             时间格式化等
   views/             9 个页面
 docs/                无障碍模式设计说明
