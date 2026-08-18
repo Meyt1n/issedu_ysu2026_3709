@@ -71,7 +71,11 @@ jobs:
           export CLOUD_SELECTED_USERNAME="${CLOUD_REPO_USERNAME}"
           export CLOUD_SELECTED_PASSWORD="${CLOUD_REPO_PASSWORD}"
 
-          git remote add original-cloud "${CLOUD_REPO_URL}"
+          if git remote get-url original-cloud >/dev/null 2>&1; then
+            git remote set-url original-cloud "${CLOUD_REPO_URL}"
+          else
+            git remote add original-cloud "${CLOUD_REPO_URL}"
+          fi
           git fetch original-cloud master
 
           github_sha="$(git rev-parse "${GITHUB_SHA}")"
