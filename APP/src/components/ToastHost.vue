@@ -63,6 +63,7 @@ const ICONS: Record<ToastTone, IconName> = {
   box-shadow: var(--shadow-float), inset 0 1px 0 var(--hilite);
   cursor: pointer;
   text-align: left;
+  min-height: var(--tap);
 }
 
 .toast-icon {

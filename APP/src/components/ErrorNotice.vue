@@ -57,7 +57,7 @@ const emit = defineEmits<{
 
 .error-action {
   flex: 0 0 auto;
-  min-height: 42px;
+  min-height: var(--tap);
   padding-inline: 12px;
   font-size: 0.85rem;
 }

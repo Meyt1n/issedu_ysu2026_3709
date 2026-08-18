@@ -381,8 +381,10 @@ html[data-contrast='high'] :focus-visible { outline-width: 4px; }
   margin: 0 auto;
   padding: 20px 18px calc(116px + env(safe-area-inset-bottom));
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 18px;
   align-content: start;
+  min-width: 0;
 }
 
 .page-enter-active {
@@ -430,6 +432,9 @@ html[data-theme='dark'] .eyebrow { color: var(--c-brand-deep); }
   font-weight: 800;
   text-decoration: none;
   white-space: nowrap;
+  min-height: var(--tap);
+  display: inline-flex;
+  align-items: center;
   padding: 4px 2px;
 }
 html[data-theme='dark'] .section-link { color: var(--c-brand-deep); }
@@ -446,6 +451,7 @@ html[data-theme='dark'] .section-link { color: var(--c-brand-deep); }
 /* ---- 玻璃卡片 ---- */
 
 .card {
+  min-width: 0;
   background: var(--c-surface);
   -webkit-backdrop-filter: var(--glass-blur);
   backdrop-filter: var(--glass-blur);
@@ -488,7 +494,9 @@ a.card:active { transform: scale(0.97); box-shadow: var(--shadow-press); }
   padding: 11px 0;
   display: grid;
   gap: 4px;
+  min-width: 0;
 }
+.divided-list > li > * { min-width: 0; overflow-wrap: anywhere; }
 .divided-list > li:first-child { border-top: 0; padding-top: 0; }
 .divided-list > li:last-child { padding-bottom: 0; }
 
@@ -603,8 +611,18 @@ html[data-contrast='high'] .btn-danger { color: var(--c-danger-deep); }
 .btn-block { width: 100%; }
 .btn-lg { min-height: calc(var(--tap) * 1.22); font-size: 1.1rem; border-radius: calc(var(--r-btn) + 4px); }
 
-.btn-row { display: flex; gap: 10px; flex-wrap: wrap; }
-.btn-row > .btn { flex: 1; min-width: 30%; }
+.btn-row {
+  min-width: 0;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.btn-row > .btn {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
 
 /* ---- 表单 ---- */
 
@@ -734,7 +752,8 @@ html[data-contrast='high'] .row-icon { border: 2px solid #000; box-shadow: none;
   position: relative;
   flex: 0 0 auto;
   width: 56px;
-  height: 33px;
+  min-height: var(--tap);
+  height: var(--tap);
   border: 0;
   border-radius: var(--r-pill);
   background: var(--c-line-strong);
@@ -746,7 +765,7 @@ html[data-contrast='high'] .row-icon { border: 2px solid #000; box-shadow: none;
 .switch::after {
   content: '';
   position: absolute;
-  top: 3.5px;
+  top: calc(50% - 13px);
   left: 4px;
   width: 26px;
   height: 26px;
@@ -762,8 +781,12 @@ html[data-contrast='high'] .row-icon { border: 2px solid #000; box-shadow: none;
 .switch[aria-checked='true']::after { left: calc(100% - 30px); }
 html[data-contrast='high'] .switch { border: 2px solid #000; background: #fff; box-shadow: none; }
 html[data-contrast='high'] .switch[aria-checked='true'] { background: var(--c-brand); }
-html[data-elder='on'] .switch { width: 66px; height: 39px; }
-html[data-elder='on'] .switch::after { width: 31px; height: 31px; }
+html[data-elder='on'] .switch { width: 66px; min-height: 58px; height: 58px; }
+html[data-elder='on'] .switch::after {
+  top: calc(50% - 15.5px);
+  width: 31px;
+  height: 31px;
+}
 html[data-elder='on'] .switch[aria-checked='true']::after { left: calc(100% - 35px); }
 
 /* ---- 分段选择 ---- */
@@ -779,7 +802,7 @@ html[data-elder='on'] .switch[aria-checked='true']::after { left: calc(100% - 35
   box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.06);
 }
 .segmented button {
-  min-height: calc(var(--tap) - 8px);
+  min-height: var(--tap);
   border: 0;
   border-radius: calc(var(--r-btn) - 5px);
   background: transparent;
