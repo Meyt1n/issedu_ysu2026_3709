@@ -3,6 +3,15 @@ import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
 
 import { apiClient } from '../api/client'
 import { normalizeSuggestedQuestions } from '../assistant/followUp'
+import {
+  createSpeechRecognition,
+  isSpeechInputSupported,
+  isSpeechOutputSupported,
+  speakText,
+  stopSpeaking,
+  transcriptFromEvent,
+  type SpeechRecognitionLike,
+} from '../assistant/voice'
 import AppIcon from '../components/AppIcon.vue'
 import {
   formatError,
@@ -28,6 +37,9 @@ const history = ref<ChatEntry[]>([])
 const draft = ref('')
 const sending = ref(false)
 const sendError = ref('')
+const voiceError = ref('')
+const listening = ref(false)
+const speakingIndex = ref<number | null>(null)
 const thinkingPhase = ref(0)
 const chatWindow = ref<HTMLElement | null>(null)
 // Demo-facing product label stays stable while the local runtime model can be
@@ -36,6 +48,11 @@ const modelLabel = 'hct402-qlora-v5'
 
 let streamTimer: ReturnType<typeof setInterval> | null = null
 let phaseTimer: ReturnType<typeof setInterval> | null = null
+let recognition: SpeechRecognitionLike | null = null
+let voiceDraftPrefix = ''
+
+const speechInputSupported = isSpeechInputSupported()
+const speechOutputSupported = isSpeechOutputSupported()
 
 const canSend = computed(() => draft.value.trim().length > 0 && !sending.value)
 
@@ -67,6 +84,65 @@ function isStreaming(entry: ChatEntry): boolean {
   return entry.role === 'assistant' && entry.revealed < entry.content.length
 }
 
+function toggleVoiceInput(): void {
+  if (listening.value) {
+    recognition?.stop()
+    return
+  }
+  voiceError.value = ''
+  const nextRecognition = createSpeechRecognition()
+  if (!nextRecognition) {
+    voiceError.value = '当前浏览器不支持语音输入，请改用文字输入。'
+    return
+  }
+
+  voiceDraftPrefix = draft.value.trim() ? `${draft.value.trim()} ` : ''
+  nextRecognition.onstart = () => {
+    listening.value = true
+    voiceError.value = ''
+  }
+  nextRecognition.onresult = event => {
+    const transcript = transcriptFromEvent(event)
+    if (transcript) draft.value = `${voiceDraftPrefix}${transcript}`.trimStart()
+  }
+  nextRecognition.onerror = event => {
+    listening.value = false
+    const reason = event.error === 'not-allowed' || event.error === 'service-not-allowed'
+      ? '麦克风权限未开启，请允许浏览器使用麦克风，或改用文字输入。'
+      : '语音识别暂时失败，请重试或改用文字输入。'
+    voiceError.value = reason
+  }
+  nextRecognition.onend = () => {
+    listening.value = false
+    recognition = null
+  }
+  recognition = nextRecognition
+  try {
+    nextRecognition.start()
+  } catch {
+    listening.value = false
+    recognition = null
+    voiceError.value = '语音输入未能启动，请稍后重试或改用文字输入。'
+  }
+}
+
+function toggleSpeech(index: number, content: string): void {
+  if (speakingIndex.value === index) {
+    stopSpeaking()
+    speakingIndex.value = null
+    return
+  }
+  voiceError.value = ''
+  const started = speakText(content, () => {
+    if (speakingIndex.value === index) speakingIndex.value = null
+  })
+  if (!started) {
+    voiceError.value = '当前浏览器不支持语音回复，请阅读文字回答。'
+    return
+  }
+  speakingIndex.value = index
+}
+
 /** 打字机式逐字呈现：对已完整返回的回答做流式展示。 */
 function streamReveal(entry: ChatEntry): void {
   if (reduceMotion()) {
@@ -89,6 +165,11 @@ async function send(text?: string): Promise<void> {
   const content = (text ?? draft.value).trim()
   if (!content || sending.value) return
 
+  if (listening.value) recognition?.stop()
+  if (speakingIndex.value !== null) {
+    stopSpeaking()
+    speakingIndex.value = null
+  }
   history.value.push({ role: 'user', content, revealed: content.length })
   draft.value = ''
   sending.value = true
@@ -150,6 +231,8 @@ function onMemberChange(event: Event): void {
 onBeforeUnmount(() => {
   if (streamTimer) clearInterval(streamTimer)
   if (phaseTimer) clearInterval(phaseTimer)
+  recognition?.abort()
+  stopSpeaking()
 })
 </script>
 
@@ -264,6 +347,18 @@ onBeforeUnmount(() => {
               {{ question }}
             </button>
           </div>
+          <div v-if="entry.role === 'assistant' && !isStreaming(entry) && speechOutputSupported" class="chat-voice-actions">
+            <button
+              type="button"
+              class="btn btn-ghost btn-small"
+              :aria-label="speakingIndex === index ? '停止朗读回答' : '朗读回答'"
+              :aria-pressed="speakingIndex === index"
+              @click="toggleSpeech(index, entry.content)"
+            >
+              <AppIcon :name="speakingIndex === index ? 'close' : 'volume'" :size="14" />
+              {{ speakingIndex === index ? '停止朗读' : '朗读回答' }}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -292,12 +387,29 @@ onBeforeUnmount(() => {
         placeholder="例如：最近的用药提醒是依据什么？（回答仅供参考，不构成医疗建议）"
         @keydown.enter.exact.prevent="send()"
       />
+      <button
+        type="button"
+        class="btn btn-ghost btn-small voice-input-button"
+        :class="{ listening }"
+        :disabled="sending || !speechInputSupported"
+        :aria-label="listening ? '停止语音输入' : '开始语音输入'"
+        :aria-pressed="listening"
+        :title="speechInputSupported ? '语音只会填入输入框，点击发送后才提交' : '当前浏览器不支持语音输入'"
+        @click="toggleVoiceInput"
+      >
+        <AppIcon name="microphone" :size="15" />
+        {{ listening ? '停止录音' : '语音输入' }}
+      </button>
       <button type="submit" class="btn btn-primary" :disabled="!canSend" style="align-self: flex-end">
         {{ sending ? '发送中' : '发送' }}
       </button>
     </form>
+    <p v-if="voiceError" class="notice error" role="alert" style="margin-top: 10px">
+      <AppIcon name="alert" :size="16" />
+      {{ voiceError }}
+    </p>
     <p class="text-faint" style="font-size: 12px; line-height: 1.6; margin: 10px 0 0">
-      当前资料不足时，系统不会替你做用药判断。危险用药问题会进入受控拒答，并建议联系专业人员。
+      语音输入只写入草稿，发送前可修改；语音回复由浏览器本地朗读。当前资料不足时，系统不会替你做用药判断。
     </p>
   </section>
 </template>

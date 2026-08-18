@@ -1089,6 +1089,24 @@ button:focus-visible, a:focus-visible {
   text-align: left;
 }
 
+.chat-voice-actions {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 8px;
+}
+
+.chat-voice-actions .app-icon,
+.voice-input-button .app-icon {
+  margin-right: 5px;
+  vertical-align: -2px;
+}
+
+.voice-input-button.listening {
+  background: var(--rose-tint);
+  border-color: var(--rose);
+  color: var(--rose-ink);
+}
+
 .stream-caret {
   animation: caret-blink 0.9s steps(2) infinite;
   background: var(--clay);
@@ -1172,6 +1190,13 @@ button:focus-visible, a:focus-visible {
 
 .chat-compose { display: flex; gap: 10px; }
 .chat-compose textarea { flex: 1; min-height: 52px; }
+
+@media (max-width: 640px) {
+  .chat-compose { flex-wrap: wrap; }
+  .chat-compose textarea { flex-basis: 100%; }
+  .chat-compose .voice-input-button,
+  .chat-compose > button[type="submit"] { flex: 1; }
+}
 
 /* ---------- 杂项 ---------- */
 
