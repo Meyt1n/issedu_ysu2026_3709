@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 
 import AppIcon from '@/components/AppIcon.vue'
 import ErrorNotice from '@/components/ErrorNotice.vue'
@@ -13,6 +13,7 @@ import { riskLevelLabel, riskLevelTone } from '@/data/labels'
 import type { RiskCard } from '@/data/types'
 import { formatDateTime } from '@/utils/format'
 import { presentApiError, type ErrorPresentation } from '@/api/errors'
+import { sessionContextKey, useSession } from '@/stores/session'
 
 const LEVEL_FILTERS = [
   { value: 'ALL', label: '全部' },
@@ -29,6 +30,8 @@ const loading = ref(true)
 const error = ref<ErrorPresentation | null>(null)
 const levelFilter = ref<LevelFilter>('ALL')
 const manualSpeaker = createSpeaker(() => true)
+const { session } = useSession()
+let reloadGeneration = 0
 
 const filtered = computed(() =>
   levelFilter.value === 'ALL' ? risks.value : risks.value.filter(r => r.level === levelFilter.value),
@@ -57,15 +60,20 @@ const distributionLabel = computed(() =>
 )
 
 async function reload(): Promise<void> {
+  const generation = ++reloadGeneration
+  const expectedKey = sessionContextKey(session)
   loading.value = true
   error.value = null
   risks.value = []
   try {
-    risks.value = await activeProvider().listRisks()
+    const nextRisks = await activeProvider().listRisks()
+    if (generation !== reloadGeneration || expectedKey !== sessionContextKey(session)) return
+    risks.value = nextRisks
   } catch (cause) {
+    if (generation !== reloadGeneration || expectedKey !== sessionContextKey(session)) return
     error.value = presentApiError(cause)
   } finally {
-    loading.value = false
+    if (generation === reloadGeneration) loading.value = false
   }
 }
 
@@ -82,6 +90,7 @@ function speakImportant(): void {
 }
 
 onMounted(reload)
+watch(() => sessionContextKey(session), () => void reload())
 </script>
 
 <template>
@@ -140,7 +149,8 @@ onMounted(reload)
     </p>
     <ErrorNotice v-if="error" :error="error" @retry="reload" />
 
-    <div v-if="loading" class="plain-list" aria-label="正在加载" aria-live="polite">
+    <div v-if="loading" class="plain-list" aria-label="正在加载风险提醒" aria-live="polite">
+      <p class="meta-line">正在加载风险提醒…</p>
       <SkeletonCard />
       <SkeletonCard />
     </div>

@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
+import { ApiClient } from '@/api/client'
 import type { HealthEvent } from '@/api/types'
 
-import { deriveTasksFromEvents, deriveWeeklyTrendFromEvents } from './httpProvider'
+import { deriveTasksFromEvents, deriveWeeklyTrendFromEvents, HttpDataProvider } from './httpProvider'
 
 let sequence = 0
 
@@ -101,6 +102,23 @@ describe('联机模式任务推导（与主仓库事件语义对齐）', () => {
       makeEvent({ id: 'e2', event_type: 'allergy_added', payload: { allergy: '青霉素' } }),
     ]
     expect(deriveTasksFromEvents(events, 'm1', '王秀兰')).toHaveLength(0)
+  })
+})
+
+describe('联机会话初始化边界', () => {
+  it('身份或访问目的缺失时不请求家庭，也不进入空数据状态', async () => {
+    const client = { listHouseholds: vi.fn() } as unknown as ApiClient
+    const provider = new HttpDataProvider(client, () => ({ actorId: '', accessPurpose: '' }))
+
+    await expect(provider.listMembers()).rejects.toMatchObject({ code: 'SESSION_NOT_CONFIGURED', status: 401 })
+    expect(client.listHouseholds).not.toHaveBeenCalled()
+  })
+
+  it('身份没有家庭时返回可被设置页识别的错误码', async () => {
+    const client = { listHouseholds: vi.fn().mockResolvedValue([]) } as unknown as ApiClient
+    const provider = new HttpDataProvider(client, () => ({ actorId: 'actor-a', accessPurpose: 'family-care' }))
+
+    await expect(provider.listMembers()).rejects.toMatchObject({ code: 'NO_HOUSEHOLD', status: 404 })
   })
 })
 

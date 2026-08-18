@@ -33,6 +33,18 @@ export function presentApiError(cause: unknown): ErrorPresentation {
   }
 
   const code = cause.code.toUpperCase()
+  if (code === 'SESSION_NOT_CONFIGURED') {
+    return settings('联机模式还没有配置身份或访问目的，请到“我的”补充后重试。')
+  }
+
+  if (code === 'NO_HOUSEHOLD') {
+    return settings('当前身份尚未关联可访问的家庭，请到“我的”检查身份，或联系家庭管理员。')
+  }
+
+  if (code === 'NO_MEMBERS') {
+    return settings('当前家庭暂无可用成员，请检查家庭设置和授权范围。')
+  }
+
   if (code === 'DEPENDENCY_UNAVAILABLE' || cause.status === 0) {
     return retry('家庭服务器暂时无法访问，请检查网络或服务器状态后重试。')
   }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import AppIcon from '@/components/AppIcon.vue'
 import ErrorNotice from '@/components/ErrorNotice.vue'
@@ -9,15 +9,17 @@ import { useSpeech } from '@/composables/useSpeech'
 import { activeProvider } from '@/data'
 import { recognitionStatusLabel } from '@/data/labels'
 import type { MemberSummary, QualityCheckResult, RecognitionCandidate } from '@/data/types'
-import { useSession } from '@/stores/session'
+import { sessionContextKey, useSession } from '@/stores/session'
 import { presentApiError, type ErrorPresentation } from '@/api/errors'
 
 type Stage = 'idle' | 'checking' | 'quality' | 'recognizing' | 'result'
 
 const { session } = useSession()
 const speech = useSpeech()
+let memberLoadGeneration = 0
 
 const members = ref<MemberSummary[]>([])
+const membersLoading = ref(true)
 const memberId = ref('')
 const stage = ref<Stage>('idle')
 const file = ref<File | null>(null)
@@ -77,10 +79,13 @@ async function onFilePicked(event: Event): Promise<void> {
 }
 
 async function checkQuality(picked: File): Promise<void> {
+  const expectedKey = sessionContextKey(session)
   error.value = null
   stage.value = 'checking'
   try {
-    quality.value = await activeProvider().checkImageQuality(picked)
+    const nextQuality = await activeProvider().checkImageQuality(picked)
+    if (expectedKey !== sessionContextKey(session)) return
+    quality.value = nextQuality
     stage.value = 'quality'
     if (quality.value.decision === 'PASS') {
       speech.speak('照片质量合格，可以开始识别。')
@@ -88,6 +93,7 @@ async function checkQuality(picked: File): Promise<void> {
       speech.speak(`照片需要重拍。${quality.value.retakePrompts.join('，')}`)
     }
   } catch (cause) {
+    if (expectedKey !== sessionContextKey(session)) return
     error.value = presentApiError(cause)
     stage.value = 'idle'
   }
@@ -95,25 +101,39 @@ async function checkQuality(picked: File): Promise<void> {
 
 async function recognize(): Promise<void> {
   if (!file.value || !memberId.value) return
+  const expectedKey = sessionContextKey(session)
   stage.value = 'recognizing'
   error.value = null
   try {
-    candidate.value = await activeProvider().recognizeMedicine(file.value, memberId.value)
+    const nextCandidate = await activeProvider().recognizeMedicine(file.value, memberId.value)
+    if (expectedKey !== sessionContextKey(session)) return
+    candidate.value = nextCandidate
     stage.value = 'result'
     speech.speak(`识别结果：${recognitionStatusLabel(candidate.value.status)}。${candidate.value.notice}`)
   } catch (cause) {
+    if (expectedKey !== sessionContextKey(session)) return
     error.value = presentApiError(cause)
     stage.value = 'quality'
   }
 }
 
 async function loadMembers(): Promise<void> {
+  const generation = ++memberLoadGeneration
+  const expectedKey = sessionContextKey(session)
+  membersLoading.value = true
   error.value = null
+  members.value = []
+  memberId.value = ''
   try {
-    members.value = await activeProvider().listMembers()
-    memberId.value = session.currentMemberId || members.value[0]?.id || ''
+    const nextMembers = await activeProvider().listMembers()
+    if (generation !== memberLoadGeneration || expectedKey !== sessionContextKey(session)) return
+    members.value = nextMembers
+    memberId.value = session.currentMemberId || nextMembers[0]?.id || ''
   } catch (cause) {
+    if (generation !== memberLoadGeneration || expectedKey !== sessionContextKey(session)) return
     error.value = presentApiError(cause)
+  } finally {
+    if (generation === memberLoadGeneration) membersLoading.value = false
   }
 }
 
@@ -130,6 +150,10 @@ async function retry(): Promise<void> {
 }
 
 onMounted(loadMembers)
+watch(() => sessionContextKey(session), () => {
+  reset()
+  void loadMembers()
+})
 
 onBeforeUnmount(releasePreview)
 </script>
@@ -154,9 +178,14 @@ onBeforeUnmount(releasePreview)
       </li>
     </ol>
 
+    <p v-if="membersLoading" class="notice" role="status">正在加载家庭和成员数据…</p>
+    <p v-else-if="members.length === 0 && !error" class="notice" data-tone="warn" role="status">
+      当前家庭暂无可用成员，请到“我的”检查联机身份、家庭和授权设置；没有成员时不能开始录入。
+    </p>
+
     <label class="field">
       为哪位成员录入
-      <select v-model="memberId">
+      <select v-model="memberId" :disabled="membersLoading || members.length === 0">
         <option v-for="member in members" :key="member.id" :value="member.id">
           {{ member.name }}（{{ member.relation }}）
         </option>
@@ -185,7 +214,10 @@ onBeforeUnmount(releasePreview)
         ></span>
       </div>
       <div class="btn-row">
-        <label class="btn btn-lg" :data-disabled="stage === 'checking' || stage === 'recognizing'">
+        <label
+          class="btn btn-lg"
+          :data-disabled="membersLoading || members.length === 0 || stage === 'checking' || stage === 'recognizing'"
+        >
           <AppIcon name="camera" :size="20" />
           {{ file ? '重新拍摄' : '拍摄药盒' }}
           <input
@@ -193,17 +225,20 @@ onBeforeUnmount(releasePreview)
             accept="image/*"
             capture="environment"
             class="visually-hidden-input"
-            :disabled="stage === 'checking' || stage === 'recognizing'"
+            :disabled="membersLoading || members.length === 0 || stage === 'checking' || stage === 'recognizing'"
             @change="onFilePicked"
           />
         </label>
-        <label class="btn btn-quiet btn-lg">
+        <label
+          class="btn btn-quiet btn-lg"
+          :data-disabled="membersLoading || members.length === 0"
+        >
           从相册选择
           <input
             type="file"
             accept="image/*"
             class="visually-hidden-input"
-            :disabled="stage === 'checking' || stage === 'recognizing'"
+            :disabled="membersLoading || members.length === 0 || stage === 'checking' || stage === 'recognizing'"
             @change="onFilePicked"
           />
         </label>

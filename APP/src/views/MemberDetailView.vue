@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import AppIcon from '@/components/AppIcon.vue'
@@ -10,29 +10,38 @@ import { eventStatusLabel, memberRoleLabel } from '@/data/labels'
 import type { MemberDetail } from '@/data/types'
 import { avatarHue, formatDateTime, formatDay } from '@/utils/format'
 import { presentApiError, type ErrorPresentation } from '@/api/errors'
+import { sessionContextKey, useSession } from '@/stores/session'
 
 const route = useRoute()
 const router = useRouter()
+const { session } = useSession()
 
 const detail = ref<MemberDetail | null>(null)
 const loading = ref(true)
 const error = ref<ErrorPresentation | null>(null)
+let loadGeneration = 0
 
 async function load(): Promise<void> {
+  const generation = ++loadGeneration
+  const expectedKey = sessionContextKey(session)
   loading.value = true
   error.value = null
   detail.value = null
   const memberId = String(route.params.memberId ?? '')
   try {
-    detail.value = await activeProvider().getMemberDetail(memberId)
+    const nextDetail = await activeProvider().getMemberDetail(memberId)
+    if (generation !== loadGeneration || expectedKey !== sessionContextKey(session)) return
+    detail.value = nextDetail
   } catch (cause) {
+    if (generation !== loadGeneration || expectedKey !== sessionContextKey(session)) return
     error.value = presentApiError(cause)
   } finally {
-    loading.value = false
+    if (generation === loadGeneration) loading.value = false
   }
 }
 
 onMounted(load)
+watch(() => sessionContextKey(session), () => void load())
 </script>
 
 <template>

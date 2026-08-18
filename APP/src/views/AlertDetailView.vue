@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import AppIcon from '@/components/AppIcon.vue'
@@ -9,7 +9,7 @@ import { useSpeech } from '@/composables/useSpeech'
 import { activeProvider } from '@/data'
 import { eventStatusLabel, riskLevelLabel } from '@/data/labels'
 import type { RiskCard } from '@/data/types'
-import { useSession } from '@/stores/session'
+import { sessionContextKey, useSession } from '@/stores/session'
 import { formatDateTime } from '@/utils/format'
 import { presentApiError, type ErrorPresentation } from '@/api/errors'
 
@@ -25,28 +25,35 @@ const actionMessage = ref('')
 const actionError = ref<ErrorPresentation | null>(null)
 const acknowledging = ref(false)
 const supportsAcknowledgement = computed(() => session.dataMode === 'demo')
+let loadGeneration = 0
 
 const phoneHref = computed(() =>
   session.caregiverPhone ? `tel:${session.caregiverPhone.replace(/\s+/g, '')}` : '',
 )
 
 async function load(): Promise<void> {
+  const generation = ++loadGeneration
+  const expectedKey = sessionContextKey(session)
   loading.value = true
   error.value = null
   risk.value = null
   const memberId = String(route.params.memberId ?? '')
   const ruleId = decodeURIComponent(String(route.params.ruleId ?? ''))
   try {
-    risk.value = await activeProvider().getRiskDetail(memberId, ruleId)
+    const nextRisk = await activeProvider().getRiskDetail(memberId, ruleId)
+    if (generation !== loadGeneration || expectedKey !== sessionContextKey(session)) return
+    risk.value = nextRisk
     speech.speak(`${riskLevelLabel(risk.value.level)}风险：${risk.value.message}。${risk.value.suggestion}`)
   } catch (cause) {
+    if (generation !== loadGeneration || expectedKey !== sessionContextKey(session)) return
     error.value = presentApiError(cause)
   } finally {
-    loading.value = false
+    if (generation === loadGeneration) loading.value = false
   }
 }
 
 onMounted(load)
+watch(() => sessionContextKey(session), () => void load())
 
 async function acknowledge(): Promise<void> {
   if (!risk.value || !supportsAcknowledgement.value) return

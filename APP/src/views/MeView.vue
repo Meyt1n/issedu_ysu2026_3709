@@ -33,8 +33,16 @@ function persistSession(): void {
   updateSession({})
 }
 
+function persistConnectionSession(): void {
+  // 身份、访问目的或服务器变化后，下一页不得继续展示旧家庭/成员状态。
+  updateSession({ currentMemberId: '' })
+  connectionState.value = 'idle'
+  connectionMessage.value = ''
+  connectionError.value = null
+}
+
 function onModeChange(mode: 'demo' | 'live'): void {
-  updateSession({ dataMode: mode })
+  updateSession({ dataMode: mode, currentMemberId: '' })
   connectionState.value = 'idle'
   connectionMessage.value = ''
   connectionError.value = null
@@ -153,19 +161,30 @@ function restoreDemoData(): void {
             v-model="session.serverBaseUrl"
             type="url"
             placeholder="例如 http://192.168.1.10:8000（留空表示同源）"
-            @change="persistSession"
+            @change="persistConnectionSession"
           />
           <small>健康数据默认不出网：请填写家庭局域网内的地址。</small>
         </label>
         <label class="field">
           开发身份（X-Actor-Id）
-          <input v-model="session.actorId" type="text" placeholder="Actor ID" @change="persistSession" />
+          <input v-model="session.actorId" type="text" placeholder="Actor ID" @change="persistConnectionSession" />
         </label>
         <label class="field">
           访问目的代码（X-Access-Purpose）
-          <input v-model="session.accessPurpose" type="text" placeholder="family-care" @change="persistSession" />
+          <input v-model="session.accessPurpose" type="text" placeholder="family-care" @change="persistConnectionSession" />
         </label>
-        <button type="button" class="btn btn-block" :disabled="connectionState === 'testing'" @click="testConnection">
+        <p v-if="!session.actorId.trim()" class="notice" data-tone="warn" role="status">
+          请先填写开发身份；未配置身份时不会加载任何家庭或健康数据。
+        </p>
+        <p v-else-if="!session.accessPurpose.trim()" class="notice" data-tone="warn" role="status">
+          请先填写访问目的代码；访问目的为空时不会加载任何家庭或健康数据。
+        </p>
+        <button
+          type="button"
+          class="btn btn-block"
+          :disabled="connectionState === 'testing' || !session.actorId.trim() || !session.accessPurpose.trim()"
+          @click="testConnection"
+        >
           {{ connectionState === 'testing' ? '正在测试…' : '测试连接' }}
         </button>
         <p
