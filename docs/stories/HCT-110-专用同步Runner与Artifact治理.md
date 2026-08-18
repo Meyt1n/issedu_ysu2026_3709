@@ -14,6 +14,9 @@
 `hct-sync` 的 Linux self-hosted Runner 上执行，同时关闭 CI 的 Artifact 上传，避免
 Artifact 存储配额和计费影响工作流。
 
+根据项目负责人 2026-08-18 的明确决定，自动 CI 和 Relay Review Bot 也全局停用，
+仅保留手动触发入口；`sync-original-cloud.yml` 不停用。
+
 ## 范围
 
 1. `.github/workflows/sync-original-cloud.yml` 使用
@@ -23,6 +26,8 @@ Artifact 存储配额和计费影响工作流。
    历史分叉拒绝逻辑。
 3. `ci.yml`、历史同步执行和 dry-run workflow 不再调用 `actions/upload-artifact`；测试、
    同步前预检和 SHA 日志仍然保留在工作流日志中。
+4. `ci.yml` 与 `relay-review-bot.yml` 只保留 `workflow_dispatch`，不再自动触发或作为
+   Required Check；合并人承担本地检查和人工风险复核。
 4. 文档说明 Billing、Runner 注册、权限隔离、公开仓库风险、故障恢复和回滚方式。
 
 ## Given / When / Then
@@ -69,7 +74,8 @@ Billing 恢复且 Runner 在线后，重新运行最近一次失败的同步；�
 
 ## 验收证据
 
-- YAML 静态检查：同步 job 的 Runner 标签、master 条件以及所有 Artifact 上传步骤均已关闭。
+- YAML 静态检查：同步 job 的 Runner 标签、master 条件、CI/Review 手动触发条件以及所有
+  Artifact 上传步骤均已关闭。
 - `tests/workflows` 中的同步工作流结构回归测试。
 - `git diff --check`。
 - 合并后的 master Actions：Runner 在线、同步前预检通过、每次 push 后 SHA 核对通过。

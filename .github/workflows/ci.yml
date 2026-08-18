@@ -1,13 +1,10 @@
 name: HomeCare Twin CI
 
+# Automatic CI is intentionally disabled by project-owner decision on 2026-08-18.
+# Keep the workflow file for rollback/manual diagnostics only. The dual-repository
+# sync workflow is separate and remains enabled.
 on:
-  pull_request:
-    branches:
-      - master
-  push:
-    branches:
-      - master
-      - "codex/**"
+  workflow_dispatch:
 
 permissions:
   contents: read

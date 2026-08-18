@@ -117,6 +117,15 @@ def test_artifact_uploads_are_disabled() -> None:
     assert upload_steps == []
 
 
+def test_ci_and_relay_review_are_manual_only() -> None:
+    for workflow_name in ("ci.yml", "relay-review-bot.yml"):
+        document = yaml.safe_load(
+            (WORKFLOW_ROOT / workflow_name).read_text(encoding="utf-8")
+        )
+        events = document.get("on", document.get(True))
+        assert events == {"workflow_dispatch": None}
+
+
 def test_workflow_uses_full_history_and_preflights_before_push() -> None:
     run_script = workflow_run_script()
 

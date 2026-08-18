@@ -1,16 +1,9 @@
 name: Relay Review Bot
 
+# Automatic Relay Review Bot execution is intentionally disabled by project-owner
+# decision on 2026-08-18. Keep a manual trigger for rollback/diagnostics only.
 on:
-  # 只在可信的默认分支脚本上运行；不 checkout 或执行 PR 分支代码。
-  pull_request_target:
-    branches:
-      - master
-    types:
-      - opened
-      - synchronize
-      - reopened
-      - ready_for_review
-      - edited
+  workflow_dispatch:
 
 permissions:
   contents: read

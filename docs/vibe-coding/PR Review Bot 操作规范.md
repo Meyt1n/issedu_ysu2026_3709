@@ -2,6 +2,10 @@
 
 > HomeCare Twin 团队每一次 Vibe Coding、每一个 PR 和每一次合并都按本规范执行。
 
+> **当前状态（2026-08-18）**：Relay Review Bot 与自动 CI 已全局停用，不再自动触发或
+> 作为 Required Check。本文件保留为历史流程、人工复核清单和回滚参考；当前合并由维护者
+> 按本文件人工核对，合并后的双仓库同步仍按独立工作流执行。
+
 ## 1. 目标与边界
 
 本规范把“任务是否完成、有哪些缺口、是否存在风险”变成可重复的 PR 流程。Relay Review Bot 是配置在 GitHub Actions 中的中转 AI 审查器，不是官方 OpenAI Codex Review，也不是 GitHub Copilot Review。
