@@ -17,7 +17,7 @@ import {
 import { useSession } from '@/stores/session'
 import { tapFeedback } from '@/utils/haptics'
 import { normalizePhoneNumber } from '@/utils/phone'
-import { validateServerBaseUrl } from '@/utils/serverUrl'
+import { DEFAULT_SERVER_URL_POLICY, validateServerBaseUrl } from '@/utils/serverUrl'
 
 const { settings, setElderMode } = useA11y()
 const { session, updateSession } = useSession()
@@ -39,6 +39,12 @@ const contactError = ref('')
 const contactCallMessage = ref('')
 const serverBaseUrlDraft = ref(session.serverBaseUrl)
 const serverAddressError = ref('')
+const serverAddressPlaceholder = DEFAULT_SERVER_URL_POLICY.allowPrivateHttp
+  ? '例如 http://192.168.1.10:8000（受控 Debug 联调）'
+  : '例如 https://family.example.test（发布构建仅 HTTPS）'
+const serverAddressHelp = DEFAULT_SERVER_URL_POLICY.allowPrivateHttp
+  ? '当前为开发/Android Debug 构建：明文 HTTP 仅允许家庭局域网或本机地址，公网仍须使用 HTTPS。'
+  : '当前为发布构建：服务器必须使用 HTTPS；家庭局域网 HTTP 仅在受控 Debug 联调包开放。'
 
 function onElderModeChange(enabled: boolean): void {
   setElderMode(enabled)
@@ -270,12 +276,12 @@ function restoreDemoData(): void {
           <input
             v-model="serverBaseUrlDraft"
             type="url"
-            placeholder="例如 http://192.168.1.10:8000（留空表示同源）"
+            :placeholder="serverAddressPlaceholder"
             :aria-invalid="Boolean(serverAddressError)"
             :aria-describedby="serverAddressError ? 'server-address-help server-address-error' : 'server-address-help'"
             @change="persistServerAddress"
           />
-          <small id="server-address-help">健康数据默认不出网：明文 HTTP 仅允许家庭局域网或本机地址，公网请使用 HTTPS。</small>
+          <small id="server-address-help">{{ serverAddressHelp }}留空表示同源。</small>
         </label>
         <p v-if="serverAddressError" id="server-address-error" class="notice" data-tone="error" role="alert">{{ serverAddressError }}</p>
         <label class="field">
