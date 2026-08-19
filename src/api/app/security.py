@@ -5,13 +5,23 @@ from fastapi import Header, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.auth import validate_session
 from app.config import get_settings
 from app.models import AccessAudit, CareAuthorization, Household, Member
 
 PURPOSE_CODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
 
 
-def get_actor_id(x_actor_id: str | None = Header(default=None)) -> str:
+def get_actor_id(
+    x_actor_id: str | None = Header(default=None),
+    authorization: str | None = Header(default=None),
+) -> str:
+    if authorization is not None:
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() != "bearer" or not token.strip():
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="AUTH_REQUIRED")
+        return validate_session(token.strip())
+
     settings = get_settings()
     if settings.app_env == "production" or not settings.allow_dev_actor_header:
         raise HTTPException(

@@ -233,11 +233,18 @@ export interface RiskDetailResponse {
 
 export interface RequestOptions {
   actorId?: string
+  sessionToken?: string
   accessPurpose?: string
   idempotencyKey?: string
   signal?: AbortSignal
   /** 单次请求超时（毫秒）。超时视为本地 API 不可用，写请求可凭幂等键安全重试。 */
   timeoutMs?: number
+}
+
+export interface AuthSession {
+  actor_id: string
+  session_token: string
+  expires_at: number
 }
 
 export interface VisionQualityMetric {

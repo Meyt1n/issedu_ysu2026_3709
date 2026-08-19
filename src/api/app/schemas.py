@@ -13,6 +13,21 @@ class HealthResponse(BaseModel):
     version: str
 
 
+class AuthCredentials(BaseModel):
+    actor_id: str = Field(min_length=1, max_length=120)
+    password: str = Field(min_length=8, max_length=256)
+
+
+class AuthSessionRequest(BaseModel):
+    session_token: str = Field(min_length=32, max_length=256)
+
+
+class AuthSessionRead(BaseModel):
+    actor_id: str
+    session_token: str
+    expires_at: float
+
+
 class CapabilityResponse(BaseModel):
     phase: str
     available: list[str]
