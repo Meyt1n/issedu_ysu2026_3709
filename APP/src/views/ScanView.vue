@@ -9,6 +9,7 @@ import { useSpeech } from '@/composables/useSpeech'
 import { activeProvider } from '@/data'
 import { recognitionStatusLabel } from '@/data/labels'
 import type { MemberSummary, QualityCheckResult, RecognitionCandidate } from '@/data/types'
+import { imageInputUnavailableMessage, validateMedicineImage } from '@/utils/uploadInput'
 import { CAPABILITY_IDS, useCapabilities } from '@/stores/capabilities'
 import { sessionContextKey, useSession } from '@/stores/session'
 import { presentApiError, type ErrorPresentation } from '@/api/errors'
@@ -29,9 +30,15 @@ const previewUrl = ref('')
 const quality = ref<QualityCheckResult | null>(null)
 const candidate = ref<RecognitionCandidate | null>(null)
 const error = ref<ErrorPresentation | null>(null)
+const inputNotice = ref('')
 const visionTaskAvailable = computed(() =>
   session.dataMode === 'demo' || hasCapability(CAPABILITY_IDS.visionTask),
 )
+const isBusy = computed(() => stage.value === 'checking' || stage.value === 'recognizing')
+const cameraAvailable = computed(() => {
+  if (typeof navigator === 'undefined') return false
+  return Boolean(navigator.mediaDevices?.getUserMedia)
+})
 const handoff = computed(() => candidate.value?.handoff ?? {
   taskId: 'demo-review-pending',
   taskStatus: 'PENDING_REVIEW',
@@ -67,20 +74,40 @@ function reset(): void {
   candidate.value = null
   error.value = null
   stage.value = 'idle'
+  inputNotice.value = ''
+}
+
+function clearSelection(): void {
+  if (isBusy.value) return
+  releasePreview()
+  file.value = null
+  quality.value = null
+  candidate.value = null
+  error.value = null
+  stage.value = 'idle'
+  inputNotice.value = '已取消本次本地图片选择；未发起上传，也未创建视觉任务。'
 }
 
 async function onFilePicked(event: Event): Promise<void> {
-  if (!visionTaskAvailable.value || stage.value === 'checking' || stage.value === 'recognizing') return
+  if (!visionTaskAvailable.value || isBusy.value) return
   const input = event.target as HTMLInputElement
   const picked = input.files?.[0]
   input.value = ''
   if (!picked) return
+
+  const validation = validateMedicineImage(picked)
+  if (!validation.ok) {
+    inputNotice.value = validation.message
+    error.value = null
+    return
+  }
 
   releasePreview()
   file.value = picked
   previewUrl.value = URL.createObjectURL(picked)
   quality.value = null
   candidate.value = null
+  inputNotice.value = ''
   await checkQuality(picked)
 }
 
@@ -126,6 +153,7 @@ async function recognize(): Promise<void> {
     if (expectedKey !== sessionContextKey(session)) return
     error.value = presentApiError(cause)
     stage.value = 'quality'
+    inputNotice.value = '本次识别未确认创建视觉任务。保留已通过质量检查的图片，可点击“开始识别”重试；请勿重复选择图片。'
   }
 }
 
@@ -211,6 +239,9 @@ onBeforeUnmount(releasePreview)
       当前家庭服务器未提供视觉任务，拍摄和相册入口已禁用；不会把未提供的识别接口包装成可用功能。
     </p>
 
+    <p v-if="!cameraAvailable" class="notice" data-tone="warn" role="status">
+      {{ imageInputUnavailableMessage() }}
+    </p>
     <label class="field">
       为哪位成员录入
       <select v-model="memberId" :disabled="membersLoading || members.length === 0">
@@ -273,8 +304,17 @@ onBeforeUnmount(releasePreview)
           />
         </label>
       </div>
+      <button
+        v-if="file && !isBusy"
+        type="button"
+        class="btn btn-quiet btn-block"
+        @click="clearSelection"
+      >
+        取消本次选择
+      </button>
     </div>
 
+    <p v-if="inputNotice" class="notice" data-tone="warn" role="status">{{ inputNotice }}</p>
     <ErrorNotice v-if="error" :error="error" @retry="retry" />
     <p v-if="stage === 'checking'" class="notice" role="status">正在进行图片质量检查…</p>
     <p v-if="stage === 'recognizing'" class="notice" role="status">正在提取 OCR、条码与包装特征证据…</p>
