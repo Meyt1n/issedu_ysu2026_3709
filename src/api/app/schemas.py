@@ -444,6 +444,9 @@ class AssistantCitation(BaseModel):
     document_id: str
     version: str
     chunk_id: str
+    document_title: str | None = None
+    text: str | None = None
+    locator: str | None = None
 
 
 class AssistantRequest(BaseModel):

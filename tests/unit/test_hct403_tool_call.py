@@ -432,13 +432,14 @@ def test_run_assistant_requires_live_tool_citations(
     )
     assert result["degraded"] is False
     assert result["sources"] == [chunk.id]
-    assert result["citations"] == [
-        {
-            "document_id": document.id,
-            "version": "e2e-v1",
-            "chunk_id": chunk.id,
-        }
-    ]
+    assert len(result["citations"]) == 1
+    citation = result["citations"][0]
+    assert citation["document_id"] == document.id
+    assert citation["version"] == "e2e-v1"
+    assert citation["chunk_id"] == chunk.id
+    assert citation["document_title"] == "Synthetic care evidence"
+    assert citation["text"] == chunk.text
+    assert citation["locator"] == chunk.locator
     assert result["route"] == "EVIDENCE_REQUIRED"
 
 
@@ -470,3 +471,4 @@ def test_run_assistant_rejects_fabricated_sources(
     assert result["degrade_reason"] == "CITATION_NOT_FOUND"
     assert result["citations"] == []
     assert result["route"] == "EVIDENCE_REQUIRED"
+

@@ -514,6 +514,9 @@ export interface AssistantCitation {
   document_id: string
   version: string
   chunk_id: string
+  document_title?: string | null
+  text?: string | null
+  locator?: string | null
 }
 
 export interface AssistantResponse {
@@ -683,3 +686,4 @@ export interface CorrectionDiff {
   version: number
   created_at: string
 }
+

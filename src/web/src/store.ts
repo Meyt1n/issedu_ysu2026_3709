@@ -1,6 +1,7 @@
 import { computed, reactive, readonly } from 'vue'
 
 import { ApiClientError, apiClient } from './api/client'
+import { clearChatSessionsForActor } from './assistant/chatSession'
 import type {
   CapabilityResponse,
   Household,
@@ -123,6 +124,7 @@ export function setIdentityDraft(actorId: string, accessPurpose: string): void {
 }
 
 export function signOut(): void {
+  clearChatSessionsForActor(state.actorId)
   state.actorId = ''
   state.status = 'signed-out'
   state.error = ''
@@ -265,3 +267,4 @@ export function rememberedVisionTasks(): string[] {
     return []
   }
 }
+
