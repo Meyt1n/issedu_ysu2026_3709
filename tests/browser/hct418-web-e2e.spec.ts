@@ -174,7 +174,14 @@ async function installSyntheticApi(page: Page, qualityDecision: 'PASS' | 'RETAKE
       return respond({
         answer: '根据本地合成证据，当前仅能确认需要人工核对。',
         sources: ['Synthetic care guide · 2026.08 · chunk-1'],
-        citations: [{ document_id: document.id, version: document.version, chunk_id: 'chunk-1' }],
+        citations: [{
+          document_id: document.id,
+          version: document.version,
+          chunk_id: 'chunk-1',
+          document_title: document.title,
+          text: 'Synthetic evidence fragment',
+          locator: 'p1',
+        }],
         suggested_questions: ['这条证据来自哪个版本？'], confidence: 'medium', escalate: false,
         degraded: false, degrade_reason: null, model: 'synthetic-model-v1', route: 'local',
       })
@@ -265,7 +272,10 @@ test('助手和知识文档链路显示本地依据，并保留受控检索结�
   await page.locator('textarea[placeholder^="例如：最近的用药提醒"]').fill('这条证据依据什么？')
   await page.getByRole('button', { name: '发送' }).click()
   await expect(page.getByText('根据本地合成证据')).toBeVisible({ timeout: 15_000 })
-  await expect(page.getByText(/依据：Synthetic care guide/)).toBeVisible()
+  const citation = page.locator('details.chat-citation').filter({ hasText: 'Synthetic care guide' })
+  await expect(citation).toBeVisible()
+  await citation.locator('summary').click()
+  await expect(citation).toContainText('Synthetic evidence fragment')
   await expect(page.getByRole('button', { name: '这条证据来自哪个版本？' })).toBeVisible()
 })
 

@@ -339,6 +339,7 @@ class VisionTaskRead(BaseModel):
     status: str
     error_code: str | None = None
     error_message: str | None = None
+    error_detail: dict[str, Any] | None = None
     result: dict[str, Any] | None = None
     preprocess_version: str | None = None
     model_version: str | None = None
@@ -351,6 +352,27 @@ class VisionTaskRead(BaseModel):
     finished_at: datetime | None = None
     created_by: str
     created_at: datetime
+
+    @model_validator(mode="after")
+    def derive_error_detail(self) -> "VisionTaskRead":
+        if not self.error_code:
+            self.error_detail = None
+            return self
+        actions = {
+            "PREPROCESS_FAILED": "请检查图片格式、清晰度和文件是否完整后重新处理。",
+            "MODEL_NOT_FOUND": "本地视觉模型不可用，请启动视觉 worker 或检查模型配置。",
+            "MODEL_INFERENCE_ERROR": "视觉模型处理失败，请查看本地 worker 状态后重新处理。",
+            "TIMEOUT": "任务超过本地处理时限，请确认 worker 正常运行后重新处理。",
+            "UNKNOWN": "本地识别发生未知错误，请保留任务编号并重新处理。",
+        }
+        retryable = self.status in {"failed", "timeout"}
+        self.error_detail = {
+            "code": self.error_code,
+            "message": self.error_message or "未提供错误详情。",
+            "retryable": retryable,
+            "next_action": actions.get(self.error_code, "请刷新任务状态并联系项目维护者。"),
+        }
+        return self
 
 
 class VisionFusionRead(CandidateFusionResult):
@@ -444,6 +466,9 @@ class AssistantCitation(BaseModel):
     document_id: str
     version: str
     chunk_id: str
+    document_title: str | None = None
+    text: str | None = None
+    locator: str | None = None
 
 
 class AssistantRequest(BaseModel):
