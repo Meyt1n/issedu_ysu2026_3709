@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { ApiClient } from '@/api/client'
 import type { HealthEvent } from '@/api/types'
+import type { CareTask } from './types'
 
 import { deriveTasksFromEvents, deriveWeeklyTrendFromEvents, HttpDataProvider } from './httpProvider'
 
@@ -119,6 +120,88 @@ describe('联机会话初始化边界', () => {
     const provider = new HttpDataProvider(client, () => ({ actorId: 'actor-a', accessPurpose: 'family-care' }))
 
     await expect(provider.listMembers()).rejects.toMatchObject({ code: 'NO_HOUSEHOLD', status: 404 })
+  })
+})
+
+describe('联机写请求的幂等与重试', () => {
+  it('计划动作重试复用 action + plan_event_id 幂等键', async () => {
+    const confirmCarePlan = vi.fn().mockResolvedValue({})
+    const client = {
+      listHouseholds: vi.fn().mockResolvedValue([{ id: 'h1' }]),
+      confirmCarePlan,
+    } as unknown as ApiClient
+    const provider = new HttpDataProvider(client, () => ({ actorId: 'actor-1', accessPurpose: 'family-care' }))
+    const task: CareTask = {
+      id: 'task-1',
+      memberId: 'm1',
+      memberName: '演示成员',
+      title: '演示计划',
+      detail: '演示',
+      level: 'INFO',
+      dueAt: '2026-08-19T08:00:00Z',
+      status: 'PENDING',
+      planEventId: 'plan-1',
+    }
+    ;(provider as unknown as { taskCache: Map<string, CareTask> }).taskCache.set(task.id, task)
+
+    await provider.submitTaskAction(task.id, 'confirm')
+    await provider.submitTaskAction(task.id, 'confirm')
+
+    expect(confirmCarePlan).toHaveBeenCalledTimes(2)
+    expect(confirmCarePlan.mock.calls[0]?.[3]).toMatchObject({ idempotencyKey: 'confirm:plan-1' })
+    expect(confirmCarePlan.mock.calls[1]?.[3]).toMatchObject({ idempotencyKey: 'confirm:plan-1' })
+  })
+
+  it('视觉任务创建失败后重试不重复上传并复用任务幂等键', async () => {
+    const createVisionTask = vi.fn()
+      .mockRejectedValueOnce(new Error('网络中断'))
+      .mockResolvedValue({
+        id: 'vision-1',
+        household_id: 'h1',
+        member_id: 'm1',
+        file_id: 'stored.jpg',
+        task_type: 'ocr',
+        status: 'QUEUED',
+        error_code: null,
+        error_message: null,
+        result: null,
+        model_version: null,
+        created_by: 'actor-1',
+        created_at: '2026-08-19T08:00:00Z',
+      })
+    const uploadFile = vi.fn().mockResolvedValue({
+      original_name: 'medicine.jpg',
+      storage_key: 'stored.jpg',
+      size_bytes: 42,
+      hash_algo: 'sha256',
+      hash: 'hash',
+      extension: '.jpg',
+    })
+    const client = {
+      checkVisionQuality: vi.fn().mockResolvedValue({
+        decision: 'PASS',
+        reasons: [],
+        retake_prompts: [],
+        metrics: {},
+        quality_receipt: 'receipt',
+      }),
+      uploadFile,
+      createVisionTask,
+    } as unknown as ApiClient
+    const provider = new HttpDataProvider(client, () => ({ actorId: 'actor-1', accessPurpose: 'family-care' }))
+    const file = new File(['safe demo image'], 'medicine.jpg', { type: 'image/jpeg' })
+
+    await expect(provider.recognizeMedicine(file, 'm1')).rejects.toThrow('网络中断')
+    const result = await provider.recognizeMedicine(file, 'm1')
+
+    expect(result.handoff?.taskId).toBe('vision-1')
+    expect(uploadFile).toHaveBeenCalledTimes(1)
+    expect(createVisionTask).toHaveBeenCalledTimes(2)
+    const first = createVisionTask.mock.calls[0]
+    const second = createVisionTask.mock.calls[1]
+    expect(first?.[0].idempotency_key).toBeTruthy()
+    expect(second?.[0].idempotency_key).toBe(first?.[0].idempotency_key)
+    expect(second?.[1]).toMatchObject({ idempotencyKey: first?.[0].idempotency_key })
   })
 })
 

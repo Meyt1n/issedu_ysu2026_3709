@@ -1,5 +1,5 @@
 import { ApiClient, ApiClientError } from '@/api/client'
-import type { HealthEvent, Member, RequestOptions } from '@/api/types'
+import type { HealthEvent, Member, RequestOptions, UploadedFile, VisionTask } from '@/api/types'
 import type {
   CareTask,
   DataProvider,
@@ -33,6 +33,11 @@ import type {
 interface SessionContext {
   actorId: string
   accessPurpose: string
+}
+
+interface VisionDraft {
+  idempotencyKey: string
+  task?: VisionTask
 }
 
 function createIdempotencyKey(): string {
@@ -190,6 +195,10 @@ export class HttpDataProvider implements DataProvider {
   private householdId: string | null = null
   private memberCache = new Map<string, Member>()
   private taskCache = new Map<string, CareTask>()
+  /** 同一 File 的上传请求在当前运行时共享，避免重试或重复点击产生多个文件。 */
+  private fileUploads = new WeakMap<File, Promise<UploadedFile>>()
+  /** 视觉任务按 File + 成员保存幂等键；创建失败后重试仍复用同一上传和任务键。 */
+  private visionDrafts = new WeakMap<File, Map<string, VisionDraft>>()
 
   constructor(client: ApiClient, context: () => SessionContext) {
     this.client = client
@@ -203,6 +212,31 @@ export class HttpDataProvider implements DataProvider {
       accessPurpose: accessPurpose || undefined,
       ...extra,
     }
+  }
+
+  private uploadFileOnce(file: File): Promise<UploadedFile> {
+    const existing = this.fileUploads.get(file)
+    if (existing) return existing
+    const upload = this.client.uploadFile(file, this.options())
+    this.fileUploads.set(file, upload)
+    upload.catch(() => {
+      if (this.fileUploads.get(file) === upload) this.fileUploads.delete(file)
+    })
+    return upload
+  }
+
+  private visionDraft(file: File, memberId: string): VisionDraft {
+    let drafts = this.visionDrafts.get(file)
+    if (!drafts) {
+      drafts = new Map<string, VisionDraft>()
+      this.visionDrafts.set(file, drafts)
+    }
+    let draft = drafts.get(memberId)
+    if (!draft) {
+      draft = { idempotencyKey: `vision:${createIdempotencyKey()}` }
+      drafts.set(memberId, draft)
+    }
+    return draft
   }
 
   private async resolveHouseholdId(): Promise<string> {
@@ -419,7 +453,9 @@ export class HttpDataProvider implements DataProvider {
     const householdId = await this.resolveHouseholdId()
     const task = this.taskCache.get(taskId)
     if (!task?.planEventId) throw new Error('任务已过期，请刷新后重试')
-    const options = this.options({ idempotencyKey: createIdempotencyKey() })
+    // 主仓库计划动作以 action + plan_event_id 作为幂等键；保持稳定才能让
+    // 网络回执丢失后的重试返回原事件，而不是追加第二条健康事件。
+    const options = this.options({ idempotencyKey: `${action}:${task.planEventId}` })
 
     if (action === 'confirm') {
       await this.client.confirmCarePlan(householdId, task.memberId, task.planEventId, options)
@@ -466,33 +502,40 @@ export class HttpDataProvider implements DataProvider {
     if (quality.decision !== 'PASS' || !quality.qualityReceipt) {
       throw new Error('图片未通过质量门控，请按提示重拍')
     }
-    const uploaded = await this.client.uploadFile(file, this.options())
+    const draft = this.visionDraft(file, memberId)
+    if (draft.task) return recognitionCandidateFromTask(draft.task)
+    const uploaded = await this.uploadFileOnce(file)
     const task = await this.client.createVisionTask(
       {
         file_id: uploaded.storage_key,
         member_id: memberId,
         quality_receipt: quality.qualityReceipt,
-        idempotency_key: createIdempotencyKey(),
+        idempotency_key: draft.idempotencyKey,
       },
-      this.options(),
+      this.options({ idempotencyKey: draft.idempotencyKey }),
     )
-    return {
-      status: 'REVIEW',
-      fields: [
-        { label: '视觉任务', value: task.id, source: '主数据', confidence: 1 },
-        { label: '任务状态', value: task.status, source: '主数据', confidence: 1 },
-      ],
-      conflicts: [],
-      versions: { 服务端: task.model_version ?? '等待家庭服务器处理' },
-      requiresHumanConfirmation: true,
-      handoff: {
-        taskId: task.id,
-        taskStatus: task.status,
-        source: 'FAMILY_SERVER',
-        nextStep: '请在网页端人工复核中心查看证据并确认识别候选；移动端不会自动写入健康档案。',
-      },
-      notice:
-        '照片已通过质量门控并创建视觉识别任务。识别与多证据融合在家庭服务器上执行，完成后请在网页端“人工复核中心”确认候选。',
-    }
+    draft.task = task
+    return recognitionCandidateFromTask(task)
+  }
+}
+
+function recognitionCandidateFromTask(task: VisionTask): RecognitionCandidate {
+  return {
+    status: 'REVIEW',
+    fields: [
+      { label: '视觉任务', value: task.id, source: '主数据', confidence: 1 },
+      { label: '任务状态', value: task.status, source: '主数据', confidence: 1 },
+    ],
+    conflicts: [],
+    versions: { 服务端: task.model_version ?? '等待家庭服务器处理' },
+    requiresHumanConfirmation: true,
+    handoff: {
+      taskId: task.id,
+      taskStatus: task.status,
+      source: 'FAMILY_SERVER',
+      nextStep: '请在网页端人工复核中心查看证据并确认识别候选；移动端不会自动写入健康档案。',
+    },
+    notice:
+      '照片已通过质量门控并创建视觉识别任务。识别与多证据融合在家庭服务器上执行，完成后请在网页端“人工复核中心”确认候选。',
   }
 }

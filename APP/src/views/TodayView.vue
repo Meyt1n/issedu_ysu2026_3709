@@ -18,7 +18,7 @@ import { showToast } from '@/composables/useToast'
 import { presentApiError, type ErrorPresentation } from '@/api/errors'
 import { activeProvider } from '@/data'
 import { eventStatusLabel, riskLevelLabel, riskLevelTone, taskLevelLabel } from '@/data/labels'
-import type { MemberSummary, TaskAction, TaskActionPayload, TodaySnapshot, TrendPoint } from '@/data/types'
+import type { CareTask, MemberSummary, TaskAction, TaskActionPayload, TodaySnapshot, TrendPoint } from '@/data/types'
 import { useA11y } from '@/stores/accessibility'
 import { sessionContextKey, useSession } from '@/stores/session'
 import { tapFeedback } from '@/utils/haptics'
@@ -118,21 +118,23 @@ async function loadSnapshot(expectedKey = sessionKey.value, generation = reloadG
   return true
 }
 
-async function reload(): Promise<void> {
+async function reload(options: { preserveSnapshot?: boolean } = {}): Promise<void> {
   const generation = ++reloadGeneration
   const expectedKey = sessionKey.value
   loading.value = true
   error.value = null
-  members.value = []
-  snapshot.value = null
-  trend.value = []
+  if (!options.preserveSnapshot) {
+    members.value = []
+    snapshot.value = null
+    trend.value = []
+  }
   try {
     if (!(await loadMembers(expectedKey, generation))) return
     await loadSnapshot(expectedKey, generation)
   } catch (cause) {
     if (expectedKey !== sessionKey.value || generation !== reloadGeneration) return
     error.value = presentApiError(cause)
-    snapshot.value = null
+    if (!options.preserveSnapshot) snapshot.value = null
   } finally {
     if (generation === reloadGeneration) loading.value = false
   }
@@ -143,6 +145,7 @@ async function onMemberChange(): Promise<void> {
   loading.value = true
   error.value = null
   actionError.value = null
+  failedAction.value = null
   snapshot.value = null
   trend.value = []
   const generation = ++reloadGeneration
@@ -157,28 +160,51 @@ async function onMemberChange(): Promise<void> {
 }
 
 async function onTaskAction(taskId: string, action: TaskAction, payload: TaskActionPayload): Promise<void> {
+  // 同一轮只能有一个写操作；按钮的 disabled 负责视觉反馈，这个守卫负责
+  // 覆盖同一事件循环内的重复 click/键盘触发。
+  if (busyTaskId.value) return
+  const expectedKey = sessionKey.value
+  const expectedMemberId = session.currentMemberId
   busyTaskId.value = taskId
   actionError.value = null
   failedAction.value = null
   const hadPending = pendingTasks.value.length
+  let task: CareTask
   try {
-    const task = await activeProvider().submitTaskAction(taskId, action, payload)
-    const label = action === 'confirm' ? '已确认' : action === 'defer' ? '已延期' : '已记录跳过'
-    tapFeedback(action === 'confirm' ? [12, 60, 18] : 12)
-    showToast(`${label}：${task.title}`, 'success')
-    speech.speak(`${label}：${task.title}`)
-    await loadSnapshot()
-    // 最后一项任务处理完：彩带庆祝 + 语音鼓励。
-    if (hadPending === 1 && pendingTasks.value.length === 0 && doneTasks.value.length > 0) {
-      confetti.value?.fire()
-      speech.speak('今日照护任务全部完成，辛苦了！')
-    }
+    task = await activeProvider().submitTaskAction(taskId, action, payload)
   } catch (cause) {
     actionError.value = presentApiError(cause)
     failedAction.value = { taskId, action, payload }
-  } finally {
     busyTaskId.value = ''
+    return
   }
+
+  // 会话或当前成员已切换时，丢弃旧上下文的回执，避免把旧家庭结果写进新页面。
+  if (expectedKey !== sessionKey.value || expectedMemberId !== session.currentMemberId) {
+    busyTaskId.value = ''
+    return
+  }
+
+  const label = action === 'confirm' ? '已确认' : action === 'defer' ? '已延期' : '已记录跳过'
+  tapFeedback(action === 'confirm' ? [12, 60, 18] : 12)
+  showToast(`${label}：${task.title}`, 'success')
+  speech.speak(`${label}：${task.title}`)
+
+  // 先应用服务端回执，随后做统一整页刷新。刷新失败不再重提写操作，
+  // 页面保留已收到的回执并只提供刷新重试。
+  if (snapshot.value?.memberId === task.memberId) {
+    snapshot.value = {
+      ...snapshot.value,
+      tasks: snapshot.value.tasks.map(item => item.id === task.id ? task : item),
+    }
+  }
+  await reload({ preserveSnapshot: true })
+  // 最后一项任务处理完：彩带庆祝 + 语音鼓励。
+  if (hadPending === 1 && pendingTasks.value.length === 0 && doneTasks.value.length > 0) {
+    confetti.value?.fire()
+    speech.speak('今日照护任务全部完成，辛苦了！')
+  }
+  busyTaskId.value = ''
 }
 
 async function retryTaskAction(): Promise<void> {
@@ -195,6 +221,8 @@ watch(
   () => sessionKey.value,
   () => {
     announced.value = true
+    actionError.value = null
+    failedAction.value = null
     void reload()
   },
 )
@@ -295,7 +323,7 @@ onMounted(reload)
             v-for="task in pendingTasks"
             :key="task.id"
             :task="task"
-            :busy="busyTaskId === task.id"
+            :busy="Boolean(busyTaskId)"
             @action="(action, payload) => onTaskAction(task.id, action, payload)"
           />
         </div>
