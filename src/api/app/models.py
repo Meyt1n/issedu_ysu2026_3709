@@ -82,6 +82,7 @@ class AccessAudit(Base):
     purpose: Mapped[str | None] = mapped_column(String(64), nullable=True)
     outcome: Mapped[str] = mapped_column(String(16), nullable=False)
     reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    request_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     before_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     after_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -224,6 +225,7 @@ Index("ix_auth_grantor_actor_id", CareAuthorization.grantor_actor_id)
 Index("ix_auth_grantee_actor_id", CareAuthorization.grantee_actor_id)
 Index("ix_audit_household_time", AccessAudit.household_id, AccessAudit.created_at)
 Index("ix_audit_authorization", AccessAudit.authorization_id)
+Index("ix_audit_request_id", AccessAudit.request_id)
 
 
 # ── HCT-204: Vision task ───────────────────────────────────────────────
@@ -277,3 +279,45 @@ class VisionTask(Base):
         server_default=func.now(),
         onupdate=lambda: datetime.now(UTC),
     )
+
+
+class RiskAcknowledgement(Base):
+    """Minimal receipt for acknowledging one current rule result."""
+
+    __tablename__ = "risk_acknowledgement"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    household_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("household.id", ondelete="CASCADE"), nullable=False
+    )
+    member_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("member.id", ondelete="CASCADE"), nullable=False
+    )
+    rule_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    rule_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    risk_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    acknowledged_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), server_default=func.now()
+    )
+
+
+Index(
+    "uq_risk_ack_household_idempotency",
+    RiskAcknowledgement.household_id,
+    RiskAcknowledgement.idempotency_key,
+    unique=True,
+)
+Index(
+    "uq_risk_ack_current_signal",
+    RiskAcknowledgement.household_id,
+    RiskAcknowledgement.member_id,
+    RiskAcknowledgement.rule_id,
+    RiskAcknowledgement.risk_fingerprint,
+    unique=True,
+)

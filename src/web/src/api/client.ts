@@ -39,6 +39,7 @@ import type {
   ReviewTask,
   SkipReviewInput,
   RiskAlert,
+  RiskAcknowledgement,
   RiskDetailResponse,
   RiskListResponse,
   EvidencePipelineResult,
@@ -536,6 +537,20 @@ export class ApiClient {
     return this.request(
       `/api/v1/households/${householdId}/members/${memberId}/risks/${encodeURIComponent(ruleId)}`,
       undefined,
+      options,
+    )
+  }
+
+  acknowledgeRisk(
+    householdId: string,
+    memberId: string,
+    ruleId: string,
+    input: { rule_version: string; risk_fingerprint: string },
+    options?: RequestOptions,
+  ): Promise<RiskAcknowledgement> {
+    return this.request(
+      `/api/v1/households/${householdId}/members/${memberId}/risks/${encodeURIComponent(ruleId)}/acknowledge`,
+      { method: 'POST', body: JSON.stringify(input) },
       options,
     )
   }

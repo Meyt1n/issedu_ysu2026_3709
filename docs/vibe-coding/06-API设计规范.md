@@ -167,3 +167,5 @@ MATCHED/CONFLICT/UNKNOWN/REVIEW -> CONFIRMED | CORRECTED | REJECTED
 
 OpenAPI 是接口事实源。破坏性变化必须新版本或迁移期；Schema、SDK、Mock、契约测试和本文同时更新。Mock 只用于开发，不得作为功能完成证据。
 
+风险“已知晓”回写必须使用服务端重新计算的规则版本和风险指纹；`POST /households/{household_id}/members/{member_id}/risks/{rule_id}/acknowledge` 必须携带 `Idempotency-Key`。接口只返回最小回执（操作者、服务端时间、规则版本和指纹），不得写入风险消息、健康正文、证据正文或图片。授权撤回、过期、目的不匹配、风险失效和版本变化必须拒绝或隐藏，重复幂等键只能返回原回执。
+

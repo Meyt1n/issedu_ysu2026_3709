@@ -769,6 +769,19 @@ button:focus-visible, a:focus-visible {
 
 .risk-message { flex: 1 1 260px; font-size: 14.5px; font-weight: 650; line-height: 1.5; }
 
+.risk-actions {
+  align-items: center;
+  border-top: 1px dashed var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 18px;
+  padding: 10px 0;
+}
+
+.risk-ack-hint { color: var(--ink-faint); font-size: 12px; }
+.risk-ack-hint.success { color: var(--sage-deep); }
+
 .risk-toggle .risk-expand { color: var(--ink-faint); font-size: 12.5px; }
 
 .risk-detail {
