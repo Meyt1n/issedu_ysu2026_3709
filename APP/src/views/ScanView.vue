@@ -70,7 +70,7 @@ function reset(): void {
 }
 
 async function onFilePicked(event: Event): Promise<void> {
-  if (!visionTaskAvailable.value) return
+  if (!visionTaskAvailable.value || stage.value === 'checking' || stage.value === 'recognizing') return
   const input = event.target as HTMLInputElement
   const picked = input.files?.[0]
   input.value = ''
@@ -106,7 +106,13 @@ async function checkQuality(picked: File): Promise<void> {
 }
 
 async function recognize(): Promise<void> {
-  if (!file.value || !memberId.value || !visionTaskAvailable.value) return
+  if (
+    !file.value
+    || !memberId.value
+    || !visionTaskAvailable.value
+    || stage.value === 'checking'
+    || stage.value === 'recognizing'
+  ) return
   const expectedKey = sessionContextKey(session)
   stage.value = 'recognizing'
   error.value = null
