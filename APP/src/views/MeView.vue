@@ -16,6 +16,8 @@ import {
 } from '@/stores/capabilities'
 import { useSession } from '@/stores/session'
 import { tapFeedback } from '@/utils/haptics'
+import { normalizePhoneNumber } from '@/utils/phone'
+import { validateServerBaseUrl } from '@/utils/serverUrl'
 
 const { settings, setElderMode } = useA11y()
 const { session, updateSession } = useSession()
@@ -31,6 +33,12 @@ const connectionMessage = ref('')
 const connectionError = ref<ErrorPresentation | null>(null)
 const capabilityProbeError = ref<ErrorPresentation | null>(null)
 const demoResetMessage = ref('')
+const caregiverNameDraft = ref(session.caregiverName)
+const caregiverPhoneDraft = ref(session.caregiverPhone)
+const contactError = ref('')
+const contactCallMessage = ref('')
+const serverBaseUrlDraft = ref(session.serverBaseUrl)
+const serverAddressError = ref('')
 
 function onElderModeChange(enabled: boolean): void {
   setElderMode(enabled)
@@ -40,13 +48,67 @@ function onElderModeChange(enabled: boolean): void {
   )
 }
 
-function persistSession(): void {
-  updateSession({})
+function persistContact(): void {
+  const name = caregiverNameDraft.value.trim()
+  if (name.length > 80) {
+    contactError.value = '联系人称呼不能超过 80 个字符。'
+    return
+  }
+  if (/[\u0000-\u001f\u007f]/.test(name)) {
+    contactError.value = '联系人称呼不能包含控制字符。'
+    return
+  }
+
+  const phone = normalizePhoneNumber(caregiverPhoneDraft.value)
+  if (phone === null) {
+    contactError.value = '请输入 7–15 位数字的电话号码，可带国际区号；不会拨打未通过校验的号码。'
+    return
+  }
+
+  contactError.value = ''
+  contactCallMessage.value = ''
+  caregiverNameDraft.value = name
+  caregiverPhoneDraft.value = phone
+  updateSession({ caregiverName: name, caregiverPhone: phone })
+}
+
+function testContactCall(): void {
+  const phone = normalizePhoneNumber(caregiverPhoneDraft.value)
+  if (!phone) {
+    contactError.value = '请先保存一个有效的联系人号码。'
+    return
+  }
+  contactError.value = ''
+  const confirmed = typeof window.confirm !== 'function'
+    || window.confirm(`将打开手机拨号界面：${phone}。确认继续吗？`)
+  if (confirmed) {
+    contactCallMessage.value = '已请求系统拨号界面；如果设备或 PWA 未打开电话应用，请复制号码后手动拨打。'
+    window.location.href = `tel:${phone}`
+  }
 }
 
 function persistConnectionSession(): void {
   // 身份、访问目的或服务器变化后，下一页不得继续展示旧家庭/成员状态。
   updateSession({ currentMemberId: '' })
+  connectionState.value = 'idle'
+  connectionMessage.value = ''
+  connectionError.value = null
+  capabilityProbeError.value = null
+  clearCapabilities()
+}
+
+function persistServerAddress(): void {
+  const result = validateServerBaseUrl(serverBaseUrlDraft.value)
+  if (!result.ok) {
+    serverAddressError.value = result.message
+    connectionState.value = 'idle'
+    clearCapabilities()
+    return
+  }
+
+  serverAddressError.value = ''
+  serverBaseUrlDraft.value = result.value
+  updateSession({ serverBaseUrl: result.value, currentMemberId: '' })
   connectionState.value = 'idle'
   connectionMessage.value = ''
   connectionError.value = null
@@ -64,6 +126,14 @@ function onModeChange(mode: 'demo' | 'live'): void {
 }
 
 async function testConnection(): Promise<void> {
+  const serverAddress = validateServerBaseUrl(serverBaseUrlDraft.value)
+  if (!serverAddress.ok) {
+    serverAddressError.value = serverAddress.message
+    return
+  }
+  if (serverAddress.value !== session.serverBaseUrl) persistServerAddress()
+  if (serverAddressError.value) return
+
   connectionState.value = 'testing'
   connectionMessage.value = ''
   connectionError.value = null
@@ -132,13 +202,31 @@ function restoreDemoData(): void {
       </div>
       <label class="field">
         称呼
-        <input v-model="session.caregiverName" type="text" placeholder="例如：女儿 王芳" @change="persistSession" />
+        <input v-model="caregiverNameDraft" type="text" placeholder="例如：女儿 王芳" @change="persistContact" />
       </label>
       <label class="field">
         电话
-        <input v-model="session.caregiverPhone" type="tel" placeholder="用于「求助」页一键拨号" @change="persistSession" />
+        <input
+          v-model="caregiverPhoneDraft"
+          type="tel"
+          inputmode="tel"
+          placeholder="用于「求助」页一键拨号"
+          :aria-invalid="Boolean(contactError)"
+          :aria-describedby="contactError ? 'contact-help contact-error' : 'contact-help'"
+          @change="persistContact"
+        />
       </label>
-      <p class="meta-line">仅保存在本机，用于求助页和风险卡的“联系家人”按钮，不会上传。</p>
+      <p id="contact-help" class="meta-line">仅保存在本机，用于求助页和风险卡的“联系家人”按钮，不会上传。</p>
+      <p v-if="contactError" id="contact-error" class="notice" data-tone="error" role="alert">{{ contactError }}</p>
+      <p v-if="contactCallMessage" class="notice" data-tone="info" role="status">{{ contactCallMessage }}</p>
+      <button
+        v-if="normalizePhoneNumber(caregiverPhoneDraft)"
+        type="button"
+        class="btn btn-quiet btn-block"
+        @click="testContactCall"
+      >
+        测试拨号（需再次确认）
+      </button>
     </section>
 
     <section class="card" aria-labelledby="source-title">
@@ -180,13 +268,16 @@ function restoreDemoData(): void {
         <label class="field">
           服务器地址
           <input
-            v-model="session.serverBaseUrl"
+            v-model="serverBaseUrlDraft"
             type="url"
             placeholder="例如 http://192.168.1.10:8000（留空表示同源）"
-            @change="persistConnectionSession"
+            :aria-invalid="Boolean(serverAddressError)"
+            :aria-describedby="serverAddressError ? 'server-address-help server-address-error' : 'server-address-help'"
+            @change="persistServerAddress"
           />
-          <small>健康数据默认不出网：请填写家庭局域网内的地址。</small>
+          <small id="server-address-help">健康数据默认不出网：明文 HTTP 仅允许家庭局域网或本机地址，公网请使用 HTTPS。</small>
         </label>
+        <p v-if="serverAddressError" id="server-address-error" class="notice" data-tone="error" role="alert">{{ serverAddressError }}</p>
         <label class="field">
           开发期身份（仅本地联调）
           <input v-model="session.actorId" type="text" placeholder="Actor ID" @change="persistConnectionSession" />

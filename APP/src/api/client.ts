@@ -14,6 +14,7 @@ import type {
   VisionTask,
 } from './types'
 import type { AuthSession } from './auth'
+import { validateServerBaseUrl } from '@/utils/serverUrl'
 
 /** 与主仓库 web 端 ApiClient 相同的错误封装与请求头约定。 */
 export class ApiClientError extends Error {
@@ -52,7 +53,11 @@ export class ApiClient {
   private readonly authSessionProvider?: () => AuthSession | null
 
   constructor(options: ApiClientOptions = {}) {
-    this.baseUrl = (options.baseUrl ?? '').replace(/\/+$/, '')
+    const baseUrl = validateServerBaseUrl(options.baseUrl ?? '')
+    if (!baseUrl.ok) {
+      throw new ApiClientError(baseUrl.message, { status: 0, code: 'INVALID_SERVER_URL' })
+    }
+    this.baseUrl = baseUrl.value
     this.fetcher = options.fetcher ?? globalThis.fetch.bind(globalThis)
     this.authSessionProvider = options.authSessionProvider
   }

@@ -23,6 +23,15 @@ describe('会话设置规范化', () => {
     expect(session.caregiverPhone).toBe('13800000000')
   })
 
+  it('启动时清理不可信服务器地址和联系人号码', () => {
+    const session = normalizeSession({
+      serverBaseUrl: 'http://example.com:8000',
+      caregiverPhone: 'javascript:alert(1)',
+    })
+    expect(session.serverBaseUrl).toBe('')
+    expect(session.caregiverPhone).toBe('')
+  })
+
   it('身份、访问目的或服务器变化时会产生不同联机指纹', () => {
     const base = sessionContextKey({
       dataMode: 'live',

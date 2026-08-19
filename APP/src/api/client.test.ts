@@ -13,6 +13,10 @@ function response(): Response {
 }
 
 describe('ApiClient 鉴权传输适配', () => {
+  it('拒绝不受信任的明文公网地址', () => {
+    expect(() => new ApiClient({ baseUrl: 'http://example.com:8000' })).toThrow('明文 HTTP')
+  })
+
   it('正式 bearer 会话发送 Authorization，并停止发送开发期身份头', async () => {
     let request: RequestInit | undefined
     const session: AuthSession = {
