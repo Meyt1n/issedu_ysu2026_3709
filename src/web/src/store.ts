@@ -32,6 +32,9 @@ export interface Toast {
 
 interface SessionState {
   actorId: string
+  sessionToken: string
+  sessionExpiresAt: number | null
+  authMode: 'development' | 'session'
   accessPurpose: string
   status: SessionStatus
   error: string
@@ -48,6 +51,9 @@ interface SessionState {
 
 const state = reactive<SessionState>({
   actorId: '',
+  sessionToken: '',
+  sessionExpiresAt: null,
+  authMode: 'development',
   accessPurpose: 'family-care',
   status: 'signed-out',
   error: '',
@@ -67,7 +73,8 @@ let toastSeq = 0
 export const session = readonly(state)
 
 export const requestOptions = computed<RequestOptions>(() => ({
-  actorId: state.actorId.trim() || undefined,
+  actorId: state.sessionToken ? undefined : state.actorId.trim() || undefined,
+  sessionToken: state.sessionToken || undefined,
   accessPurpose: state.accessPurpose.trim() || undefined,
 }))
 
@@ -90,7 +97,11 @@ export function createIdempotencyKey(): string {
 export function formatError(cause: unknown): string {
   if (cause instanceof ApiClientError) {
     if (cause.code === 'DEPENDENCY_UNAVAILABLE') return '本地 API 服务不可用，本次没有改变任何数据。'
-    if (cause.status === 401) return '需要先填写开发身份才能继续这次请求。'
+    if (cause.status === 401) {
+      return state.authMode === 'session'
+        ? '账号、密码或会话无效，请重新登录。'
+        : '需要先填写开发身份才能继续这次请求。'
+    }
     if (cause.status === 404) return '当前身份无权访问该资源，或资源不存在。'
     if (cause.status === 409) return '数据已在其它位置被修改，请刷新后再试。'
     if (cause.status === 422) return `请求内容未通过校验：${cause.message}`
@@ -117,13 +128,25 @@ export function setView(view: ViewName): void {
   state.currentView = view
 }
 
+function sessionIsSignedOut(): boolean {
+  return state.status === 'signed-out'
+}
+
 export function setIdentityDraft(actorId: string, accessPurpose: string): void {
   state.actorId = actorId
   state.accessPurpose = accessPurpose
 }
 
 export function signOut(): void {
+  const token = state.sessionToken
+  if (token) void apiClient.logout(token).catch(() => undefined)
+  clearSessionContext()
+}
+
+function clearSessionContext(): void {
   state.actorId = ''
+  state.sessionToken = ''
+  state.sessionExpiresAt = null
   state.status = 'signed-out'
   state.error = ''
   state.currentView = 'overview'
@@ -135,9 +158,16 @@ export function signOut(): void {
   state.capabilities = null
 }
 
+export function expireSession(): void {
+  clearSessionContext()
+  state.error = '会话已过期或已被撤销，请重新登录。'
+}
+
 export async function connect(actorId: string, accessPurpose: string): Promise<void> {
+  clearSessionContext()
   state.actorId = actorId.trim()
   state.accessPurpose = accessPurpose.trim()
+  state.authMode = 'development'
   if (!state.actorId) {
     state.status = 'signed-out'
     state.error = '请先填写开发身份。'
@@ -159,9 +189,53 @@ export async function connect(actorId: string, accessPurpose: string): Promise<v
     }
     state.selectedHouseholdId = state.households[0]?.id ?? ''
     await loadHouseholdScope()
+    if (sessionIsSignedOut()) return
     state.status = 'ready'
   } catch (cause) {
     state.status = 'error'
+    state.error = formatError(cause)
+  }
+}
+
+export async function connectWithPassword(
+  actorId: string,
+  password: string,
+  accessPurpose: string,
+  register = false,
+): Promise<void> {
+  clearSessionContext()
+  state.authMode = 'session'
+  state.actorId = actorId.trim()
+  state.accessPurpose = accessPurpose.trim()
+  if (!state.actorId || !password) {
+    state.status = 'signed-out'
+    state.error = '请输入本地账号和密码。'
+    return
+  }
+
+  state.status = 'loading'
+  state.error = ''
+  try {
+    if (register) await apiClient.registerAccount(state.actorId, password)
+    const sessionResult = await apiClient.login(state.actorId, password)
+    state.sessionToken = sessionResult.session_token
+    state.sessionExpiresAt = sessionResult.expires_at
+    state.actorId = sessionResult.actor_id
+    state.households = await apiClient.listHouseholds(requestOptions.value)
+    if (state.households.length === 0) {
+      state.status = 'empty'
+      return
+    }
+    state.selectedHouseholdId = state.households[0]?.id ?? ''
+    await loadHouseholdScope()
+    if (sessionIsSignedOut()) return
+    state.status = 'ready'
+  } catch (cause) {
+    const sessionExpired = sessionIsSignedOut() && state.error.includes('会话已过期')
+    if (!sessionExpired) clearSessionContext()
+    state.authMode = 'session'
+    state.status = 'signed-out'
+    if (sessionExpired) return
     state.error = formatError(cause)
   }
 }
@@ -185,6 +259,7 @@ export async function createHouseholdAndEnter(
   state.households = await apiClient.listHouseholds(requestOptions.value)
   state.selectedHouseholdId = created.id
   await loadHouseholdScope()
+  if (sessionIsSignedOut()) return
   state.status = 'ready'
 }
 
@@ -229,7 +304,7 @@ export async function loadHouseholdScope(): Promise<void> {
     }
   } catch (cause) {
     state.members = []
-    state.error = formatError(cause)
+    if (!sessionIsSignedOut()) state.error = formatError(cause)
   } finally {
     state.loadingScope = false
   }
@@ -265,3 +340,7 @@ export function rememberedVisionTasks(): string[] {
     return []
   }
 }
+
+apiClient.setUnauthorizedHandler(() => {
+  if (state.sessionToken) expireSession()
+})

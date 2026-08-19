@@ -99,10 +99,13 @@ from app.schemas import (
     AccessAuditRead,
     AssistantRequest,
     AssistantResponse,
+    AuthCredentials,
     AuthorizationCreate,
     AuthorizationRead,
     AuthorizationRevoke,
     AuthorizationUpdate,
+    AuthSessionRead,
+    AuthSessionRequest,
     CapabilityResponse,
     CorrectionDiffCreate,
     CorrectionDiffRead,
@@ -1057,26 +1060,24 @@ def delete_file(
 # ── HCT-107: Local auth ────────────────────────────────────────────
 
 
-@router.post("/auth/register", status_code=status.HTTP_201_CREATED)
+@router.post("/auth/register", response_model=dict, status_code=status.HTTP_201_CREATED)
 def auth_register(
-    actor_id: str,
-    password: str,
+    payload: AuthCredentials,
 ) -> dict:
-    register_account(actor_id, password)
-    return {"status": "registered", "actor_id": actor_id}
+    register_account(payload.actor_id, payload.password)
+    return {"status": "registered", "actor_id": payload.actor_id}
 
 
-@router.post("/auth/login")
+@router.post("/auth/login", response_model=AuthSessionRead)
 def auth_login(
-    actor_id: str,
-    password: str,
+    payload: AuthCredentials,
 ) -> dict:
-    return authenticate(actor_id, password)
+    return {"actor_id": payload.actor_id, **authenticate(payload.actor_id, payload.password)}
 
 
 @router.post("/auth/logout")
-def auth_logout(session_token: str) -> dict:
-    logout(session_token)
+def auth_logout(payload: AuthSessionRequest) -> dict:
+    logout(payload.session_token)
     return {"status": "logged_out"}
 
 

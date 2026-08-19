@@ -1,6 +1,7 @@
 import type {
   AccessAudit,
   ActiveModelVersion,
+  AuthSession,
   ApiErrorCode,
   ApiErrorEnvelope,
   AssistantChatInput,
@@ -110,10 +111,15 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 15_000
 export class ApiClient {
   private readonly baseUrl: string
   private readonly fetcher: typeof fetch
+  private unauthorizedHandler: (() => void) | null = null
 
   constructor(options: ApiClientOptions = {}) {
     this.baseUrl = options.baseUrl ?? ''
     this.fetcher = options.fetcher ?? globalThis.fetch.bind(globalThis)
+  }
+
+  setUnauthorizedHandler(handler: (() => void) | null): void {
+    this.unauthorizedHandler = handler
   }
 
   private async request<T>(
@@ -126,7 +132,8 @@ export class ApiClient {
     if (init.body !== undefined && !(init.body instanceof FormData)) {
       headers.set('Content-Type', 'application/json')
     }
-    if (options.actorId) headers.set('X-Actor-Id', options.actorId)
+    if (options.sessionToken) headers.set('Authorization', `Bearer ${options.sessionToken}`)
+    else if (options.actorId) headers.set('X-Actor-Id', options.actorId)
     if (options.accessPurpose) headers.set('X-Access-Purpose', options.accessPurpose)
     if (options.idempotencyKey) headers.set('Idempotency-Key', options.idempotencyKey)
 
@@ -169,8 +176,32 @@ export class ApiClient {
       }
     }
 
-    if (!response.ok) throw parseErrorBody(body, response.status, requestId)
+    if (!response.ok) {
+      if (response.status === 401) this.unauthorizedHandler?.()
+      throw parseErrorBody(body, response.status, requestId)
+    }
     return body as T
+  }
+
+  registerAccount(actorId: string, password: string): Promise<{ status: string; actor_id: string }> {
+    return this.request('/api/v1/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ actor_id: actorId, password }),
+    })
+  }
+
+  login(actorId: string, password: string): Promise<AuthSession> {
+    return this.request('/api/v1/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ actor_id: actorId, password }),
+    })
+  }
+
+  logout(sessionToken: string): Promise<{ status: string }> {
+    return this.request('/api/v1/auth/logout', {
+      method: 'POST',
+      body: JSON.stringify({ session_token: sessionToken }),
+    })
   }
 
   getHealth(options?: RequestOptions): Promise<HealthResponse> {
@@ -520,7 +551,8 @@ export class ApiClient {
   /** 携带开发身份头下载文件字节（<img> 无法带请求头，需转 blob URL）。 */
   async fetchFileBlob(storageKey: string, options: RequestOptions = {}): Promise<Blob> {
     const headers = new Headers()
-    if (options.actorId) headers.set('X-Actor-Id', options.actorId)
+    if (options.sessionToken) headers.set('Authorization', `Bearer ${options.sessionToken}`)
+    else if (options.actorId) headers.set('X-Actor-Id', options.actorId)
     if (options.accessPurpose) headers.set('X-Access-Purpose', options.accessPurpose)
     let response: Response
     try {

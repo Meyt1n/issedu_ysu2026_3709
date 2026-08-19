@@ -5,6 +5,7 @@ import welcomeHero from '../assets/welcome-hero.jpg'
 import AppIcon from '../components/AppIcon.vue'
 import {
   connect,
+  connectWithPassword,
   createHouseholdAndEnter,
   formatError,
   pushToast,
@@ -29,6 +30,9 @@ function onStageLeave(): void {
 
 const actorId = ref(session.actorId)
 const accessPurpose = ref(session.accessPurpose || 'family-care')
+const password = ref('')
+const authMode = ref<'development' | 'session'>(session.authMode)
+const registerMode = ref(false)
 const connecting = ref(false)
 const creating = ref(false)
 const createError = ref('')
@@ -56,6 +60,24 @@ async function submitConnect(): Promise<void> {
   try {
     await connect(actorId.value, accessPurpose.value)
     if (session.status === 'ready') pushToast('success', '已进入家庭健康空间。')
+  } finally {
+    connecting.value = false
+  }
+}
+
+async function submitSession(): Promise<void> {
+  connecting.value = true
+  try {
+    await connectWithPassword(
+      actorId.value,
+      password.value,
+      accessPurpose.value,
+      registerMode.value,
+    )
+    if (session.status === 'ready') {
+      password.value = ''
+      pushToast('success', registerMode.value ? '本地账号已注册并登录。' : '已建立本地安全会话。')
+    }
   } finally {
     connecting.value = false
   }
@@ -115,8 +137,13 @@ async function submitCreate(): Promise<void> {
 
       <section v-if="!showCreateForm" class="welcome-form-card">
         <h2>进入家庭空间</h2>
-        <p class="form-sub">当前为开发演示环境，使用开发身份标识进入。生产环境将使用本地账号认证。</p>
-        <form class="section-stack" @submit.prevent="submitConnect">
+        <div class="segmented-control" role="group" aria-label="选择登录方式">
+          <button type="button" :class="{ active: authMode === 'development' }" @click="authMode = 'development'">开发演示</button>
+          <button type="button" :class="{ active: authMode === 'session' }" @click="authMode = 'session'">正式账号登录</button>
+        </div>
+        <p v-if="authMode === 'development'" class="form-sub">仅用于非生产本地演示，使用开发身份标识；不会建立正式会话。</p>
+        <p v-else class="form-sub">使用本地账号建立短期会话。令牌只保存在当前页面内存，不写入浏览器持久缓存。</p>
+        <form v-if="authMode === 'development'" class="section-stack" @submit.prevent="submitConnect">
           <label class="field">
             开发身份标识
             <input v-model="actorId" autocomplete="off" placeholder="例如 parent-1" required />
@@ -140,6 +167,31 @@ async function submitCreate(): Promise<void> {
           <button type="submit" class="btn btn-primary" :disabled="!canConnect">
             {{ connecting ? '正在进入' : '进入家庭空间' }}
             <AppIcon v-if="!connecting" name="arrow-right" :size="17" />
+          </button>
+        </form>
+        <form v-else class="section-stack" @submit.prevent="submitSession">
+          <label class="field">
+            本地账号
+            <input v-model="actorId" autocomplete="username" placeholder="例如 parent-1" required />
+          </label>
+          <label class="field">
+            密码
+            <input v-model="password" type="password" autocomplete="current-password" minlength="8" required />
+          </label>
+          <label class="field">
+            访问用途代码
+            <input v-model="accessPurpose" autocomplete="off" placeholder="family-care" aria-label="访问用途代码" />
+          </label>
+          <p v-if="session.error" class="notice error" role="alert">
+            <AppIcon name="alert" :size="16" />
+            {{ session.error }}
+          </p>
+          <button type="submit" class="btn btn-primary" :disabled="!actorId.trim() || password.length < 8 || connecting">
+            {{ connecting ? '正在建立会话' : registerMode ? '注册并登录' : '登录' }}
+            <AppIcon v-if="!connecting" name="arrow-right" :size="17" />
+          </button>
+          <button type="button" class="btn btn-ghost btn-small" @click="registerMode = !registerMode">
+            {{ registerMode ? '已有账号？返回登录' : '首次使用？注册本地账号' }}
           </button>
         </form>
         <p class="welcome-disclaimer">

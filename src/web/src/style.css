@@ -3607,3 +3607,29 @@ button:focus-visible, a:focus-visible {
   .view-container { padding: 20px 18px 40px; }
   .chat-bubble { max-width: 92%; }
 }
+
+.segmented-control {
+  background: var(--glass-card-strong);
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+}
+
+.segmented-control button {
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  flex: 1;
+  font: inherit;
+  padding: 8px 10px;
+}
+
+.segmented-control button.active {
+  background: var(--pine);
+  color: white;
+  font-weight: 700;
+}
