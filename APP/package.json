@@ -12,7 +12,8 @@
     "test": "vitest run",
     "android:sync": "npm run build && cap sync android",
     "seed:live": "node scripts/seed-live-demo.mjs",
-    "verify:linkage": "node scripts/verify-web-linkage.mjs"
+    "verify:linkage": "node scripts/verify-web-linkage.mjs",
+    "audit:pwa": "npm run build && node scripts/audit-pwa.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.0",
