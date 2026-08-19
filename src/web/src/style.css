@@ -987,6 +987,35 @@ button:focus-visible, a:focus-visible {
 .quality-metrics dd[data-passed="false"] { color: var(--rose); }
 .quality-metrics dd[data-passed="true"] { color: var(--pine-deep); }
 
+.evidence-chain-list {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.evidence-chain-list li {
+  align-items: center;
+  background: var(--glass-card-strong);
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  display: flex;
+  font-size: 12px;
+  gap: 8px;
+  justify-content: space-between;
+  padding: 7px 9px;
+}
+
+.evidence-chain-list li span { color: var(--ink-soft); }
+
+.vision-task-error {
+  align-items: flex-start;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
 .step-rail { display: flex; flex-wrap: wrap; gap: 8px; }
 
 .step-chip {

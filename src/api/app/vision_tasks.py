@@ -179,6 +179,48 @@ def transition_status(
     return task
 
 
+def retry_vision_task(session: Session, task: VisionTask) -> VisionTask:  # noqa: F821
+    """Requeue one terminal failure without creating a second task record.
+
+    A retry is deliberately limited to failed/timeout tasks.  Keeping the
+    same task ID preserves the original file/member scope and makes repeated
+    UI clicks safe: after the first update the conditional update no longer
+    matches and the caller receives a conflict instead of another job.
+    """
+    if task.status not in {VisionTaskStatus.FAILED, VisionTaskStatus.TIMEOUT}:
+        raise HTTPException(
+            status_code=http_status.HTTP_409_CONFLICT,
+            detail=f"VISION_TASK_NOT_RETRYABLE_{task.status.upper()}",
+        )
+
+    now = _now()
+    stmt = (
+        update(VisionTask)
+        .where(
+            VisionTask.id == task.id,
+            VisionTask.status.in_([VisionTaskStatus.FAILED, VisionTaskStatus.TIMEOUT]),
+        )
+        .values(
+            status=VisionTaskStatus.QUEUED,
+            error_code=None,
+            error_message=None,
+            result=None,
+            started_at=None,
+            finished_at=None,
+            updated_at=now,
+        )
+    )
+    updated = session.execute(stmt)
+    if updated.rowcount != 1:
+        raise HTTPException(
+            status_code=http_status.HTTP_409_CONFLICT,
+            detail="VISION_TASK_RETRY_CONFLICT",
+        )
+    session.refresh(task)
+    logger.info("VISION_TASK_REQUEUED task=%s", task.id)
+    return task
+
+
 # ── CRUD ───────────────────────────────────────────────────────────────
 
 

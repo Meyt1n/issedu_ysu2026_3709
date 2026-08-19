@@ -214,4 +214,22 @@ describe('ApiClient authorization contract', () => {
     expect(requests[1]?.url).toBe('http://local.test/api/v1/files/folder%2Fname.png')
     expect(requests[1]?.init.method).toBe('DELETE')
   })
+
+  it('requeues a failed vision task in place', async () => {
+    const requests: Array<{ url: string; method: string | undefined }> = []
+    const client = new ApiClient({
+      baseUrl: 'http://local.test',
+      fetcher: async (input, init) => {
+        requests.push({ url: String(input), method: init?.method })
+        return new Response(JSON.stringify({ status: 'queued' }), { status: 200 })
+      },
+    })
+
+    await client.retryVisionTask('task/failed', { actorId: 'owner' })
+
+    expect(requests).toEqual([{
+      url: 'http://local.test/api/v1/vision-tasks/task%2Ffailed/retry',
+      method: 'POST',
+    }])
+  })
 })

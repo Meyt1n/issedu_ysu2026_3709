@@ -25,6 +25,8 @@ export type ViewName =
 
 export type SessionStatus = 'signed-out' | 'loading' | 'ready' | 'empty' | 'error'
 
+export const HEALTH_DATA_REFRESH_EVENT = 'hct:health-data-refresh'
+
 export interface Toast {
   id: number
   kind: 'success' | 'error' | 'info'
@@ -116,6 +118,16 @@ export function dismissToast(id: number): void {
 
 export function setView(view: ViewName): void {
   state.currentView = view
+}
+
+export function requestHealthDataRefresh(): void {
+  globalThis.dispatchEvent?.(new Event(HEALTH_DATA_REFRESH_EVENT))
+}
+
+export function onHealthDataRefresh(listener: () => void): () => void {
+  const handler = () => listener()
+  globalThis.addEventListener?.(HEALTH_DATA_REFRESH_EVENT, handler)
+  return () => globalThis.removeEventListener?.(HEALTH_DATA_REFRESH_EVENT, handler)
 }
 
 export function setIdentityDraft(actorId: string, accessPurpose: string): void {

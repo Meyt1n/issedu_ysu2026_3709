@@ -9,6 +9,7 @@ import {
   createIdempotencyKey,
   formatError,
   pushToast,
+  requestHealthDataRefresh,
   requestOptions,
   selectMember,
   session,
@@ -189,6 +190,7 @@ async function submitPanel(task: ReviewTask): Promise<void> {
     }
     panel.taskId = ''
     await loadTasks()
+    requestHealthDataRefresh()
   } catch (cause) {
     pushToast('error', formatError(cause))
   } finally {

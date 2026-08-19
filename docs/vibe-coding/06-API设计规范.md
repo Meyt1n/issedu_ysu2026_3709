@@ -79,6 +79,7 @@ HCT-103 事件写入支持最长 128 位 `Idempotency-Key`。家庭、key、操�
 | POST | `/vision-tasks/{id}/evidence` | 保存本地适配器签名的 OCR-first 证据 |
 | POST | `/vision-tasks/{id}/fusion` | 融合批准主数据候选并创建唯一待复核任务 |
 | GET | `/vision-tasks/{id}` | 查询任务、版本和证据结果 |
+| POST | `/vision-tasks/{id}/retry` | 失败/超时任务原地重新排队，不创建第二个任务 |
 | GET | `/households/{household_id}/members/{member_id}/review-tasks` | 查询有权限成员的待复核任务 |
 | GET | `/households/{household_id}/review-tasks/{id}` | 查询单个复核任务和版本 |
 | POST | `/households/{household_id}/review-tasks/{id}/confirm` | 确认候选并追加健康事件 |

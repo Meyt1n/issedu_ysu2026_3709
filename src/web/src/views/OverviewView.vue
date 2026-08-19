@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import { apiClient } from '../api/client'
 import type {
@@ -17,6 +17,7 @@ import WeatherActionPanel from '../components/WeatherActionPanel.vue'
 import { vTilt } from '../ui/tilt'
 import {
   formatError,
+  onHealthDataRefresh,
   requestOptions,
   selectMember,
   selectedMember,
@@ -40,6 +41,7 @@ const weather = ref<WeatherResponse | null>(null)
 const weatherLoading = ref(false)
 const loading = ref(false)
 const loadError = ref('')
+let removeHealthRefreshListener: (() => void) | null = null
 
 const greeting = computed(() => greetingByHour())
 const recentEvents = computed(() => [...timeline.value].reverse().slice(0, 6))
@@ -111,7 +113,10 @@ watch(
 onMounted(() => {
   void loadOverview()
   void loadWeather()
+  removeHealthRefreshListener = onHealthDataRefresh(() => void loadOverview())
 })
+
+onBeforeUnmount(() => removeHealthRefreshListener?.())
 </script>
 
 <template>

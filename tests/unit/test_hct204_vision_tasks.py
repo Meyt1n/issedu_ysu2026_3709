@@ -15,6 +15,7 @@ from app.vision_tasks import (
     create_vision_task,
     get_vision_task,
     list_vision_tasks,
+    retry_vision_task,
     transition_status,
 )
 
@@ -97,6 +98,46 @@ class TestStateMachine:
                           error_code="TIMEOUT")
         session.commit()
         assert task.status == VisionTaskStatus.TIMEOUT
+
+    @pytest.mark.parametrize("terminal", [VisionTaskStatus.FAILED, VisionTaskStatus.TIMEOUT])
+    def test_retry_requeues_same_task_without_duplicate(self, session, terminal):
+        task = _make_task(session, status=VisionTaskStatus.RUNNING)
+        task.result = {"partial": True}
+        session.commit()
+        error_code = "TIMEOUT" if terminal == VisionTaskStatus.TIMEOUT else "MODEL_INFERENCE_ERROR"
+        transition_status(session, task, terminal, error_code=error_code)
+        session.commit()
+        task_id = task.id
+
+        retried = retry_vision_task(session, task)
+        session.commit()
+
+        assert retried.id == task_id
+        assert retried.status == VisionTaskStatus.QUEUED
+        assert retried.result is None
+        assert retried.error_code is None
+        assert retried.error_message is None
+        assert session.query(VisionTask).count() == 1
+
+    def test_retry_rejects_success_and_second_click(self, session):
+        task = _make_task(session, status=VisionTaskStatus.RUNNING)
+        session.commit()
+        transition_status(session, task, VisionTaskStatus.SUCCEEDED, result={"ok": True})
+        session.commit()
+
+        with pytest.raises(HTTPException) as success_exc:
+            retry_vision_task(session, task)
+        assert success_exc.value.detail == "VISION_TASK_NOT_RETRYABLE_SUCCEEDED"
+
+        failed = _make_task(session, status=VisionTaskStatus.RUNNING)
+        session.commit()
+        transition_status(session, failed, VisionTaskStatus.FAILED, error_code="UNKNOWN")
+        session.commit()
+        retry_vision_task(session, failed)
+        session.commit()
+        with pytest.raises(HTTPException) as second_exc:
+            retry_vision_task(session, failed)
+        assert second_exc.value.detail == "VISION_TASK_NOT_RETRYABLE_QUEUED"
 
     @pytest.mark.parametrize(
         "current,illegal",
