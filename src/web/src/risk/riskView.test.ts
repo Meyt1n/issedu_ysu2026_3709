@@ -30,4 +30,3 @@ describe('risk card view model', () => {
     expect(riskLevelLabel('future-level')).toBe('未分级')
   })
 })
-

@@ -79,6 +79,7 @@ HCT-103 事件写入支持最长 128 位 `Idempotency-Key`。家庭、key、操�
 | POST | `/vision-tasks/{id}/evidence` | 保存本地适配器签名的 OCR-first 证据 |
 | POST | `/vision-tasks/{id}/fusion` | 融合批准主数据候选并创建唯一待复核任务 |
 | GET | `/vision-tasks/{id}` | 查询任务、版本和证据结果 |
+| POST | `/vision-tasks/{id}/retry` | 失败/超时任务原地重新排队，不创建第二个任务 |
 | GET | `/households/{household_id}/members/{member_id}/review-tasks` | 查询有权限成员的待复核任务 |
 | GET | `/households/{household_id}/review-tasks/{id}` | 查询单个复核任务和版本 |
 | POST | `/households/{household_id}/review-tasks/{id}/confirm` | 确认候选并追加健康事件 |
@@ -143,6 +144,8 @@ MATCHED/CONFLICT/UNKNOWN/REVIEW -> CONFIRMED | CORRECTED | REJECTED
 
 `POST /assistant/chat` 只执行白名单只读工具。`retrieve_knowledge` 必须使用请求中的 `household_id`/`member_id`，模型不得改写范围。最终 `citations` 只能引用本次工具返回的 `document_id`/`version`/`chunk_id`；伪造来源返回 `CITATION_NOT_FOUND`，无授权文档返回 `NO_AUTHORISED_DOCUMENTS`。降级响应的 `sources` 和 `citations` 必须为空。
 
+助手响应中的引用展示字段（标题、片段正文、定位）只能从同一轮已授权检索结果透传，不能由模型生成或由前端补猜；它们用于解释展示，不改变引用的身份校验。前端只在当前标签页保存按身份/家庭/成员隔离的临时会话，不新增服务端会话存储。
+
 语音输入不新增 API：浏览器只把用户主动授权后的识别文字写入聊天草稿，用户发送后沿用本接口；服务端不接收或保存音频。语音回复由客户端浏览器本地 `speechSynthesis` 按用户操作播放，不改变回答、引用、权限或审计契约。
 
 正常回答可返回 `suggested_questions`（最多 3 条）作为交互提示。该字段只由最新用户问题的受控意图模板生成，不是事实、规则、健康事件或模型思考链；建议必须去重、限长、无外链/广告/问诊导流/医疗指令。模型不可用、无证据降级、引用校验失败或请求失败时返回空数组，客户端不得把建议写入健康事实。
@@ -160,3 +163,4 @@ MATCHED/CONFLICT/UNKNOWN/REVIEW -> CONFIRMED | CORRECTED | REJECTED
 OpenAPI 是接口事实源。破坏性变化必须新版本或迁移期；Schema、SDK、Mock、契约测试和本文同时更新。Mock 只用于开发，不得作为功能完成证据。
 
 风险“已知晓”回写必须使用服务端重新计算的规则版本和风险指纹；`POST /households/{household_id}/members/{member_id}/risks/{rule_id}/acknowledge` 必须携带 `Idempotency-Key`。接口只返回最小回执（操作者、服务端时间、规则版本和指纹），不得写入风险消息、健康正文、证据正文或图片。授权撤回、过期、目的不匹配、风险失效和版本变化必须拒绝或隐藏，重复幂等键只能返回原回执。
+

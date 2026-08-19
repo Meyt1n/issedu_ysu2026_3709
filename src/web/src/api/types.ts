@@ -309,6 +309,7 @@ export interface VisionTask {
   status: string
   error_code: string | null
   error_message: string | null
+  error_detail: VisionTaskErrorDetail | null
   result: EvidencePipelineResult | null
   model_version: string | null
   model_threshold: number | null
@@ -319,6 +320,13 @@ export interface VisionTask {
   input_digest: string | null
   created_by: string
   created_at: string
+}
+
+export interface VisionTaskErrorDetail {
+  code: string
+  message: string
+  retryable: boolean
+  next_action: string
 }
 
 export type EvidenceFieldName =
@@ -529,6 +537,9 @@ export interface AssistantCitation {
   document_id: string
   version: string
   chunk_id: string
+  document_title?: string | null
+  text?: string | null
+  locator?: string | null
 }
 
 export interface AssistantResponse {

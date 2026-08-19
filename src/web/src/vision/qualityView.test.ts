@@ -187,6 +187,7 @@ function queueApi(uploadOverrides = {}) {
       status: 'queued',
       error_code: null,
       error_message: null,
+      error_detail: null,
       preprocess_version: 'opencv-quality-demo-v1',
       input_digest: 'a'.repeat(64),
       created_by: 'owner-a',

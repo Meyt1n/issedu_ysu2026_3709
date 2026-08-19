@@ -1,8 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
-import { apiClient } from '../api/client'
-import { ApiClientError } from '../api/client'
+import { ApiClientError, apiClient } from '../api/client'
 import type { RiskAlert, RiskDetailResponse, RiskListResponse } from '../api/types'
 import AppIcon from '../components/AppIcon.vue'
 import SkeletonList from '../components/SkeletonList.vue'
@@ -10,6 +9,7 @@ import { riskLevelLabel } from '../risk/riskView'
 import {
   createIdempotencyKey,
   formatError,
+  onHealthDataRefresh,
   pushToast,
   requestOptions,
   selectMember,
@@ -25,6 +25,7 @@ const loading = ref(false)
 const evaluating = ref(false)
 const loadError = ref('')
 const acknowledgementStatus = ref<Record<string, 'idle' | 'saving' | 'success' | 'offline' | 'unauthorized' | 'conflict' | 'error'>>({})
+let removeHealthRefreshListener: (() => void) | null = null
 
 const levelTone: Record<string, string> = {
   SEVERE: 'rose',
@@ -177,7 +178,12 @@ watch(
   () => void loadRisks(),
 )
 
-onMounted(() => void loadRisks())
+onMounted(() => {
+  void loadRisks()
+  removeHealthRefreshListener = onHealthDataRefresh(() => void loadRisks())
+})
+
+onBeforeUnmount(() => removeHealthRefreshListener?.())
 </script>
 
 <template>
@@ -291,4 +297,3 @@ onMounted(() => void loadRisks())
     </div>
   </section>
 </template>
-

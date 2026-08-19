@@ -566,6 +566,14 @@ export class ApiClient {
     )
   }
 
+  retryVisionTask(taskId: string, options?: RequestOptions): Promise<VisionTask> {
+    return this.request(
+      `/api/v1/vision-tasks/${encodeURIComponent(taskId)}/retry`,
+      { method: 'POST' },
+      options,
+    )
+  }
+
   listReviewTasks(
     householdId: string,
     memberId: string,
@@ -858,4 +866,3 @@ export class ApiClient {
 }
 
 export const apiClient = new ApiClient()
-

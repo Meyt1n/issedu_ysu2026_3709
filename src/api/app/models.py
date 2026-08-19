@@ -321,4 +321,3 @@ Index(
     RiskAcknowledgement.risk_fingerprint,
     unique=True,
 )
-

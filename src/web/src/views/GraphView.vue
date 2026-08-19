@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import { apiClient } from '../api/client'
 import type { HealthEvent } from '../api/types'
 import AppIcon from '../components/AppIcon.vue'
 import {
   formatError,
+  onHealthDataRefresh,
   requestOptions,
   selectMember,
   selectedMember,
@@ -40,6 +41,7 @@ const timeline = ref<HealthEvent[]>([])
 const loading = ref(false)
 const loadError = ref('')
 const selectedNodeId = ref<string | null>(null)
+let removeHealthRefreshListener: (() => void) | null = null
 
 const facts = computed(() => buildFactsFromTimeline(timeline.value))
 
@@ -138,7 +140,12 @@ watch(
   () => void loadGraph(),
 )
 
-onMounted(() => void loadGraph())
+onMounted(() => {
+  void loadGraph()
+  removeHealthRefreshListener = onHealthDataRefresh(() => void loadGraph())
+})
+
+onBeforeUnmount(() => removeHealthRefreshListener?.())
 </script>
 
 <template>

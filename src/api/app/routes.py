@@ -176,6 +176,7 @@ from app.vision_tasks import (
     create_vision_task,
     get_vision_task,
     list_vision_tasks,
+    retry_vision_task,
     transition_status,
 )
 from app.weather_adapter import WeatherActionCardsResponse, fetch_weather
@@ -2311,6 +2312,31 @@ def cancel_vision_task_endpoint(
     return updated
 
 
+@router.post("/vision-tasks/{task_id}/retry", response_model=VisionTaskRead)
+def retry_vision_task_endpoint(
+    task_id: str,
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> VisionTask:
+    """Requeue one failed/timeout task in place.
+
+    The original file, member scope and task ID are retained.  This prevents
+    a retry button from creating a second candidate or a second health fact.
+    """
+    task = _require_vision_task_access(
+        session,
+        task_id,
+        actor_id=actor_id,
+        action="WRITE_EVENTS",
+        access_purpose=access_purpose,
+    )
+    updated = retry_vision_task(session, task)
+    session.commit()
+    session.refresh(updated)
+    return updated
+
+
 # ── HCT-207: Manual review API ────────────────────────────────────────
 
 
@@ -3459,4 +3485,3 @@ def active_model_version_endpoint(
         "active_model_version": version or settings.vision_model_version,
         "source": "binding" if version else "config",
     }
-
