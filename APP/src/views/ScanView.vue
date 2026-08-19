@@ -9,12 +9,14 @@ import { useSpeech } from '@/composables/useSpeech'
 import { activeProvider } from '@/data'
 import { recognitionStatusLabel } from '@/data/labels'
 import type { MemberSummary, QualityCheckResult, RecognitionCandidate } from '@/data/types'
+import { CAPABILITY_IDS, useCapabilities } from '@/stores/capabilities'
 import { sessionContextKey, useSession } from '@/stores/session'
 import { presentApiError, type ErrorPresentation } from '@/api/errors'
 
 type Stage = 'idle' | 'checking' | 'quality' | 'recognizing' | 'result'
 
 const { session } = useSession()
+const { capabilities, hasCapability } = useCapabilities()
 const speech = useSpeech()
 let memberLoadGeneration = 0
 
@@ -27,6 +29,9 @@ const previewUrl = ref('')
 const quality = ref<QualityCheckResult | null>(null)
 const candidate = ref<RecognitionCandidate | null>(null)
 const error = ref<ErrorPresentation | null>(null)
+const visionTaskAvailable = computed(() =>
+  session.dataMode === 'demo' || hasCapability(CAPABILITY_IDS.visionTask),
+)
 const handoff = computed(() => candidate.value?.handoff ?? {
   taskId: 'demo-review-pending',
   taskStatus: 'PENDING_REVIEW',
@@ -65,6 +70,7 @@ function reset(): void {
 }
 
 async function onFilePicked(event: Event): Promise<void> {
+  if (!visionTaskAvailable.value) return
   const input = event.target as HTMLInputElement
   const picked = input.files?.[0]
   input.value = ''
@@ -100,7 +106,7 @@ async function checkQuality(picked: File): Promise<void> {
 }
 
 async function recognize(): Promise<void> {
-  if (!file.value || !memberId.value) return
+  if (!file.value || !memberId.value || !visionTaskAvailable.value) return
   const expectedKey = sessionContextKey(session)
   stage.value = 'recognizing'
   error.value = null
@@ -182,6 +188,22 @@ onBeforeUnmount(releasePreview)
     <p v-else-if="members.length === 0 && !error" class="notice" data-tone="warn" role="status">
       当前家庭暂无可用成员，请到“我的”检查联机身份、家庭和授权设置；没有成员时不能开始录入。
     </p>
+    <p
+      v-if="session.dataMode === 'live' && !capabilities.snapshot"
+      class="notice"
+      data-tone="warn"
+      role="status"
+    >
+      尚未完成后端能力探测；请先到“我的”测试连接。未确认提供视觉任务前，拍摄和相册入口保持禁用。
+    </p>
+    <p
+      v-else-if="session.dataMode === 'live' && !visionTaskAvailable"
+      class="notice"
+      data-tone="warn"
+      role="status"
+    >
+      当前家庭服务器未提供视觉任务，拍摄和相册入口已禁用；不会把未提供的识别接口包装成可用功能。
+    </p>
 
     <label class="field">
       为哪位成员录入
@@ -216,7 +238,8 @@ onBeforeUnmount(releasePreview)
       <div class="btn-row">
         <label
           class="btn btn-lg"
-          :data-disabled="membersLoading || members.length === 0 || stage === 'checking' || stage === 'recognizing'"
+          :data-disabled="!visionTaskAvailable || membersLoading || members.length === 0 || stage === 'checking' || stage === 'recognizing'"
+          :aria-disabled="!visionTaskAvailable || membersLoading || members.length === 0 || stage === 'checking' || stage === 'recognizing'"
         >
           <AppIcon name="camera" :size="20" />
           {{ file ? '重新拍摄' : '拍摄药盒' }}
@@ -225,20 +248,21 @@ onBeforeUnmount(releasePreview)
             accept="image/*"
             capture="environment"
             class="visually-hidden-input"
-            :disabled="membersLoading || members.length === 0 || stage === 'checking' || stage === 'recognizing'"
+            :disabled="!visionTaskAvailable || membersLoading || members.length === 0 || stage === 'checking' || stage === 'recognizing'"
             @change="onFilePicked"
           />
         </label>
         <label
           class="btn btn-quiet btn-lg"
-          :data-disabled="membersLoading || members.length === 0"
+          :data-disabled="!visionTaskAvailable || membersLoading || members.length === 0"
+          :aria-disabled="!visionTaskAvailable || members.length === 0"
         >
           从相册选择
           <input
             type="file"
             accept="image/*"
             class="visually-hidden-input"
-            :disabled="membersLoading || members.length === 0 || stage === 'checking' || stage === 'recognizing'"
+            :disabled="!visionTaskAvailable || membersLoading || members.length === 0 || stage === 'checking' || stage === 'recognizing'"
             @change="onFilePicked"
           />
         </label>
@@ -272,7 +296,7 @@ onBeforeUnmount(releasePreview)
         v-if="quality.decision === 'PASS' && stage === 'quality'"
         type="button"
         class="btn btn-block btn-lg"
-        :disabled="!memberId"
+        :disabled="!memberId || !visionTaskAvailable"
         @click="recognize"
       >
         开始识别

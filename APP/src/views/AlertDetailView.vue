@@ -9,6 +9,7 @@ import { useSpeech } from '@/composables/useSpeech'
 import { activeProvider } from '@/data'
 import { eventStatusLabel, riskLevelLabel } from '@/data/labels'
 import type { RiskCard } from '@/data/types'
+import { CAPABILITY_IDS, useCapabilities } from '@/stores/capabilities'
 import { sessionContextKey, useSession } from '@/stores/session'
 import { formatDateTime } from '@/utils/format'
 import { presentApiError, type ErrorPresentation } from '@/api/errors'
@@ -16,6 +17,7 @@ import { presentApiError, type ErrorPresentation } from '@/api/errors'
 const route = useRoute()
 const router = useRouter()
 const { session } = useSession()
+const { capabilities, hasCapability } = useCapabilities()
 const speech = useSpeech()
 
 const risk = ref<RiskCard | null>(null)
@@ -24,7 +26,14 @@ const error = ref<ErrorPresentation | null>(null)
 const actionMessage = ref('')
 const actionError = ref<ErrorPresentation | null>(null)
 const acknowledging = ref(false)
-const supportsAcknowledgement = computed(() => session.dataMode === 'demo')
+const supportsAcknowledgement = computed(() =>
+  session.dataMode === 'demo' || hasCapability(CAPABILITY_IDS.riskAcknowledgement),
+)
+const acknowledgementStatusMessage = computed(() => {
+  if (session.dataMode === 'demo') return ''
+  if (!capabilities.snapshot) return '能力探测尚未完成；请先到“我的”测试连接，本按钮会按不可用处理。'
+  return '家庭服务器暂不支持回写“已知晓”状态；本页不会将其标记为已记录。'
+})
 let loadGeneration = 0
 
 const phoneHref = computed(() =>
@@ -121,7 +130,7 @@ async function acknowledge(): Promise<void> {
       <section class="card" aria-labelledby="suggestion-title">
         <h2 id="suggestion-title">建议处理</h2>
         <p>{{ risk.suggestion }}</p>
-        <p v-if="!supportsAcknowledgement" class="notice" data-tone="warn" role="status">家庭服务器暂不支持回写“已知晓”状态；本页不会将其标记为已记录。</p>
+        <p v-if="!supportsAcknowledgement" class="notice" data-tone="warn" role="status">{{ acknowledgementStatusMessage }}</p>
         <ErrorNotice v-if="actionError" :error="actionError" @retry="acknowledge" />
         <p v-else-if="actionMessage" class="notice" data-tone="success" role="status">{{ actionMessage }}</p>
         <div class="btn-row">
