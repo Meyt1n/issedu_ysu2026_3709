@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 
 import { apiClient } from '../api/client'
 import type { HealthEvent } from '../api/types'
@@ -7,6 +7,7 @@ import AppIcon from '../components/AppIcon.vue'
 import {
   createIdempotencyKey,
   formatError,
+  onHealthDataRefresh,
   pushToast,
   requestOptions,
   selectMember,
@@ -27,6 +28,7 @@ const loading = ref(false)
 const loadError = ref('')
 const busyPlanId = ref<string | null>(null)
 const celebratingPlanId = ref<string | null>(null)
+let removeHealthRefreshListener: (() => void) | null = null
 
 const actionDraft = reactive({
   planEventId: '',
@@ -138,7 +140,12 @@ watch(
   () => void loadPlans(),
 )
 
-onMounted(() => void loadPlans())
+onMounted(() => {
+  void loadPlans()
+  removeHealthRefreshListener = onHealthDataRefresh(() => void loadPlans())
+})
+
+onBeforeUnmount(() => removeHealthRefreshListener?.())
 </script>
 
 <template>

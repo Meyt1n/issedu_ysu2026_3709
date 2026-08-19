@@ -22,7 +22,9 @@ import { setView } from '../store'
 const tasks = ref<VisionTask[]>([])
 const loadingTasks = ref(false)
 const cancellingId = ref<string | null>(null)
+const retryingId = ref<string | null>(null)
 let pollTimer: ReturnType<typeof setInterval> | null = null
+const previousStatuses = new Map<string, string>()
 
 /* ── 识别详情查看器 ── */
 
@@ -82,9 +84,22 @@ async function refreshTasks(showSpinner = false): Promise<void> {
     const results = await Promise.allSettled(
       ids.map(id => apiClient.getVisionTask(id, requestOptions.value)),
     )
-    tasks.value = results
+    const nextTasks = results
       .filter((result): result is PromiseFulfilledResult<VisionTask> => result.status === 'fulfilled')
       .map(result => result.value)
+    for (const task of nextTasks) {
+      const previous = previousStatuses.get(task.id)
+      if (
+        previous &&
+        (previous === 'queued' || previous === 'running') &&
+        task.status === 'succeeded'
+      ) {
+        pushToast('success', '识别完成，已生成待人工复核候选。正在打开复核中心。')
+        setView('review')
+      }
+      previousStatuses.set(task.id, task.status)
+    }
+    tasks.value = nextTasks
   } finally {
     loadingTasks.value = false
   }
@@ -113,6 +128,21 @@ async function cancelTask(task: VisionTask): Promise<void> {
     pushToast('error', formatError(cause))
   } finally {
     cancellingId.value = null
+  }
+}
+
+async function retryTask(task: VisionTask): Promise<void> {
+  if (retryingId.value) return
+  retryingId.value = task.id
+  try {
+    await apiClient.retryVisionTask(task.id, requestOptions.value)
+    previousStatuses.set(task.id, 'queued')
+    pushToast('info', '任务已重新排队，仍会在完成后进入人工复核。')
+    await refreshTasks()
+  } catch (cause) {
+    pushToast('error', formatError(cause))
+  } finally {
+    retryingId.value = null
   }
 }
 
@@ -221,9 +251,24 @@ onBeforeUnmount(() => {
         <p v-if="task.status === 'running'" class="row-meta" style="margin: 0">
           本地 OCR 正在处理图片，完成后会自动生成待人工复核的候选结果。
         </p>
-        <p v-if="task.error_message" class="notice error" style="margin: 0">
+        <div v-if="task.error_detail" class="notice error vision-task-error" style="margin: 0">
           <AppIcon name="alert" :size="15" />
-          {{ task.error_code }}：{{ task.error_message }}
+          <div>
+            <strong>{{ task.error_detail.code }}</strong>：{{ task.error_detail.message }}
+            <p class="row-meta" style="margin: 3px 0 0">下一步：{{ task.error_detail.next_action }}</p>
+          </div>
+          <button
+            v-if="task.error_detail.retryable"
+            type="button"
+            class="btn btn-danger btn-small"
+            :disabled="retryingId === task.id"
+            @click="retryTask(task)"
+          >
+            {{ retryingId === task.id ? '正在重新处理' : '重新处理' }}
+          </button>
+        </div>
+        <p v-else-if="task.status === 'failed' || task.status === 'timeout'" class="notice error" style="margin: 0">
+          任务失败但服务端未返回结构化原因，请保留任务编号 {{ task.id.slice(0, 8) }}… 并联系维护者。
         </p>
         <template v-if="task.status === 'succeeded' && task.result">
           <div class="capability-chips">

@@ -1,6 +1,7 @@
 import { computed, reactive, readonly } from 'vue'
 
 import { ApiClientError, apiClient } from './api/client'
+import { clearChatSessionsForActor } from './assistant/chatSession'
 import type {
   CapabilityResponse,
   Household,
@@ -23,6 +24,8 @@ export type ViewName =
   | 'modellab'
 
 export type SessionStatus = 'signed-out' | 'loading' | 'ready' | 'empty' | 'error'
+
+export const HEALTH_DATA_REFRESH_EVENT = 'hct:health-data-refresh'
 
 export interface Toast {
   id: number
@@ -132,6 +135,16 @@ function sessionIsSignedOut(): boolean {
   return state.status === 'signed-out'
 }
 
+export function requestHealthDataRefresh(): void {
+  globalThis.dispatchEvent?.(new Event(HEALTH_DATA_REFRESH_EVENT))
+}
+
+export function onHealthDataRefresh(listener: () => void): () => void {
+  const handler = () => listener()
+  globalThis.addEventListener?.(HEALTH_DATA_REFRESH_EVENT, handler)
+  return () => globalThis.removeEventListener?.(HEALTH_DATA_REFRESH_EVENT, handler)
+}
+
 export function setIdentityDraft(actorId: string, accessPurpose: string): void {
   state.actorId = actorId
   state.accessPurpose = accessPurpose
@@ -144,6 +157,7 @@ export function signOut(): void {
 }
 
 function clearSessionContext(): void {
+  clearChatSessionsForActor(state.actorId)
   state.actorId = ''
   state.sessionToken = ''
   state.sessionExpiresAt = null
@@ -344,3 +358,4 @@ export function rememberedVisionTasks(): string[] {
 apiClient.setUnauthorizedHandler(() => {
   if (state.sessionToken) expireSession()
 })
+

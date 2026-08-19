@@ -1,7 +1,15 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 
 import { apiClient } from '../api/client'
+import type { AssistantCitation } from '../api/types'
+import {
+  clearChatSession,
+  loadChatSession,
+  saveChatSession,
+  sessionEntryToStored,
+  type StoredChatEntry,
+} from '../assistant/chatSession'
 import { normalizeSuggestedQuestions } from '../assistant/followUp'
 import {
   createSpeechRecognition,
@@ -26,11 +34,13 @@ interface ChatEntry {
   content: string
   revealed: number
   sources?: string[]
+  citations?: AssistantCitation[]
   confidence?: string
   degraded?: boolean
   degradeReason?: string | null
   escalate?: boolean
   suggestedQuestions?: string[]
+  route?: string | null
 }
 
 const history = ref<ChatEntry[]>([])
@@ -42,6 +52,7 @@ const listening = ref(false)
 const speakingIndex = ref<number | null>(null)
 const thinkingPhase = ref(0)
 const chatWindow = ref<HTMLElement | null>(null)
+const draftInput = ref<HTMLTextAreaElement | null>(null)
 // Demo-facing product label stays stable while the local runtime model can be
 // switched independently through OLLAMA_MODEL.
 const modelLabel = 'hct402-qlora-v5'
@@ -83,6 +94,87 @@ function scrollToEnd(): void {
 function isStreaming(entry: ChatEntry): boolean {
   return entry.role === 'assistant' && entry.revealed < entry.content.length
 }
+
+function restoreChatSession(entries: StoredChatEntry[]): void {
+  history.value = entries.map(entry => ({ ...entry, revealed: entry.content.length }))
+  scrollToEnd()
+}
+
+function persistChatSession(): void {
+  saveChatSession(
+    session.actorId,
+    session.selectedHouseholdId,
+    session.selectedMemberId,
+    history.value.map(entry => sessionEntryToStored(entry)),
+  )
+}
+
+function clearConversation(): void {
+  if (listening.value) recognition?.stop()
+  if (speakingIndex.value !== null) {
+    stopSpeaking()
+    speakingIndex.value = null
+  }
+  if (streamTimer) {
+    clearInterval(streamTimer)
+    streamTimer = null
+  }
+  if (phaseTimer) {
+    clearInterval(phaseTimer)
+    phaseTimer = null
+  }
+  clearChatSession(session.actorId, session.selectedHouseholdId, session.selectedMemberId)
+  history.value = []
+  draft.value = ''
+  sendError.value = ''
+  voiceError.value = ''
+}
+
+function useSuggestedQuestion(question: string): void {
+  draft.value = question
+  sendError.value = ''
+  void nextTick(() => draftInput.value?.focus())
+}
+
+function degradeReasonLabel(reason?: string | null): string {
+  const labels: Record<string, string> = {
+    REQUEST_FAILED: '本地 API 请求失败',
+    MODEL_UNAVAILABLE: '本地模型不可用',
+    OLLAMA_UNAVAILABLE: '本地模型服务不可用',
+    KNOWLEDGE_UNAVAILABLE: '本地知识库不可用',
+    NO_AUTHORISED_DOCUMENTS: '当前范围没有可用知识文档',
+    EVIDENCE_REQUIRED: '没有足够的本地证据',
+    CITATION_NOT_FOUND: '引用未通过服务端校验',
+    TOOL_SCOPE_DENIED: '工具调用超出当前授权范围',
+    EXTERNAL_LINK_DETECTED: '回答包含被禁止的外部链接',
+  }
+  return labels[reason ?? ''] ?? reason ?? '受控降级'
+}
+
+function evidenceSummary(entry: ChatEntry): string {
+  const citationCount = entry.citations?.length ?? 0
+  const sourceCount = entry.sources?.length ?? 0
+  if (citationCount > 0) return `已返回 ${citationCount} 条可核验知识引用`
+  if (sourceCount > 0) return `已返回 ${sourceCount} 个依据标识，未提供可展开的知识片段`
+  if (entry.degraded) return '本次未使用模型生成内容'
+  return '本次响应没有返回可展开的知识文档引用，仍需人工确认'
+}
+
+function citationTitle(citation: AssistantCitation): string {
+  return citation.document_title?.trim() || citation.document_id
+}
+
+watch(
+  () => [session.actorId, session.selectedHouseholdId, session.selectedMemberId] as const,
+  ([actorId, householdId, memberId]) => {
+    if (streamTimer) {
+      clearInterval(streamTimer)
+      streamTimer = null
+    }
+    restoreChatSession(loadChatSession(actorId, householdId, memberId))
+  },
+  { immediate: true },
+)
 
 function toggleVoiceInput(): void {
   if (listening.value) {
@@ -171,6 +263,7 @@ async function send(text?: string): Promise<void> {
     speakingIndex.value = null
   }
   history.value.push({ role: 'user', content, revealed: content.length })
+  persistChatSession()
   draft.value = ''
   sending.value = true
   sendError.value = ''
@@ -196,13 +289,16 @@ async function send(text?: string): Promise<void> {
       content: reply.answer,
       revealed: 0,
       sources: reply.sources,
+      citations: reply.citations,
       confidence: reply.confidence,
       degraded: reply.degraded,
       degradeReason: reply.degrade_reason,
       escalate: reply.escalate,
       suggestedQuestions: normalizeSuggestedQuestions(reply.suggested_questions),
+      route: reply.route,
     }
     history.value.push(entry)
+    persistChatSession()
     streamReveal(history.value[history.value.length - 1]!)
   } catch (cause) {
     sendError.value = formatError(cause)
@@ -214,6 +310,7 @@ async function send(text?: string): Promise<void> {
       degradeReason: 'REQUEST_FAILED',
     }
     history.value.push(entry)
+    persistChatSession()
     streamReveal(history.value[history.value.length - 1]!)
   } finally {
     sending.value = false
@@ -253,6 +350,12 @@ onBeforeUnmount(() => {
           </option>
         </select>
       </label>
+      <div v-if="history.length > 0" class="row-actions">
+        <span class="text-faint" style="font-size: 12px">仅保存在当前标签页</span>
+        <button type="button" class="btn btn-ghost btn-small" :disabled="sending" @click="clearConversation">
+          清空会话
+        </button>
+      </div>
     </div>
   </section>
 
@@ -298,7 +401,7 @@ onBeforeUnmount(() => {
             :key="suggestion"
             type="button"
             class="btn btn-ghost btn-small"
-            @click="send(suggestion)"
+            @click="useSuggestedQuestion(suggestion)"
           >
             {{ suggestion }}
           </button>
@@ -317,18 +420,35 @@ onBeforeUnmount(() => {
             class="chat-sources"
           >
             <span v-if="entry.degraded" style="color: var(--gold)">
-              ⚠ 本地模型已降级{{ entry.degradeReason ? `（${entry.degradeReason}）` : '' }}，以上为受控回复，不含模型生成的医疗判断。
+              ⚠ {{ degradeReasonLabel(entry.degradeReason) }}，以上为受控回复，不含模型生成的医疗判断。
             </span>
             <span v-if="entry.escalate" style="color: var(--rose)">
               此问题超出系统边界，请联系医生或药师进一步确认。
             </span>
             <span v-if="entry.confidence && !entry.degraded">回答把握程度：{{ entry.confidence }}（仍需人工确认）</span>
+            <span v-if="!entry.degraded" class="chat-evidence-summary">
+              <AppIcon name="compass" :size="12" style="vertical-align: -1px" />
+              依据状态：{{ evidenceSummary(entry) }}
+            </span>
             <template v-if="(entry.sources?.length ?? 0) > 0">
               <span v-for="source in entry.sources" :key="source">
                 <AppIcon name="compass" :size="12" style="vertical-align: -1px" />
-                依据：{{ source }}
+                依据标识：{{ source }}
               </span>
             </template>
+            <details
+              v-for="citation in entry.citations ?? []"
+              :key="`${citation.document_id}:${citation.chunk_id}`"
+              class="chat-citation"
+            >
+              <summary>
+                <span>{{ citationTitle(citation) }}</span>
+                <span class="text-faint">版本 {{ citation.version || '未提供' }} · 片段 {{ citation.chunk_id }}</span>
+              </summary>
+              <p v-if="citation.text" class="chat-citation-text">{{ citation.text }}</p>
+              <p v-else class="text-faint">本次响应未返回片段正文，仅保留服务端核验过的引用标识。</p>
+              <p v-if="citation.locator" class="text-faint">定位：{{ citation.locator }}</p>
+            </details>
           </div>
           <div
             v-if="entry.role === 'assistant' && !isStreaming(entry) && (entry.suggestedQuestions?.length ?? 0) > 0"
@@ -342,7 +462,7 @@ onBeforeUnmount(() => {
               type="button"
               class="btn btn-ghost btn-small chat-follow-up"
               :disabled="sending"
-              @click="send(question)"
+              @click="useSuggestedQuestion(question)"
             >
               {{ question }}
             </button>
@@ -382,6 +502,7 @@ onBeforeUnmount(() => {
 
     <form class="chat-compose" style="margin-top: 16px" @submit.prevent="send()">
       <textarea
+        ref="draftInput"
         v-model="draft"
         rows="2"
         placeholder="例如：最近的用药提醒是依据什么？（回答仅供参考，不构成医疗建议）"
@@ -413,3 +534,4 @@ onBeforeUnmount(() => {
     </p>
   </section>
 </template>
+

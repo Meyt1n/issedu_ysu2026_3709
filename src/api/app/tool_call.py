@@ -637,6 +637,9 @@ def _citation_from_chunk(chunk: dict[str, Any]) -> dict[str, str]:
         "document_id": str(chunk["document_id"]),
         "version": str(chunk.get("version") or ""),
         "chunk_id": str(chunk["chunk_id"]),
+        "document_title": str(chunk.get("document_title") or chunk.get("title") or ""),
+        "text": str(chunk.get("text") or ""),
+        "locator": str(chunk.get("locator") or ""),
     }
 
 
@@ -1088,3 +1091,4 @@ def _parse_loose_output(text: str) -> HealthAssistantOutput:
         confidence=confidence if confidence in ("high", "medium", "low") else "low",
         escalate=escalate,
     )
+
