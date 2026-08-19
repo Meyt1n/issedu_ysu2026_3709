@@ -41,4 +41,3 @@ describe('capability probe state', () => {
     expect(capabilityDescription('future-capability')).toContain('不会据此推断')
   })
 })
-
