@@ -1,3 +1,5 @@
+import { normalizePhoneNumber } from './phone'
+
 export type HelpCallTarget = 'emergency' | 'caregiver'
 
 export interface HelpCallConfirmation {
@@ -21,7 +23,7 @@ export function getHelpCallConfirmation(
     }
   }
 
-  const phone = caregiverPhone.replace(/\s+/g, '')
+  const phone = normalizePhoneNumber(caregiverPhone) ?? ''
   return {
     href: `tel:${phone}`,
     title: '确认联系家人',

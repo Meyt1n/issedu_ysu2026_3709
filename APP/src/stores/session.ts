@@ -1,5 +1,8 @@
 import { reactive } from 'vue'
 
+import { normalizePhoneNumber } from '@/utils/phone'
+import { validateServerBaseUrl } from '@/utils/serverUrl'
+
 export type DataMode = 'demo' | 'live'
 
 export interface SessionSettings {
@@ -38,13 +41,18 @@ export function normalizeSession(raw: unknown): SessionSettings {
   const record = raw as Record<string, unknown>
   const text = (value: unknown, fallback: string): string =>
     typeof value === 'string' ? value : fallback
+  const serverBaseUrl = text(record.serverBaseUrl, '')
+  const validatedServerBaseUrl = validateServerBaseUrl(serverBaseUrl)
+  const caregiverPhone = normalizePhoneNumber(text(record.caregiverPhone, ''))
   return {
     dataMode: record.dataMode === 'live' ? 'live' : 'demo',
-    serverBaseUrl: text(record.serverBaseUrl, ''),
+    serverBaseUrl: validatedServerBaseUrl.ok
+      ? validatedServerBaseUrl.value
+      : '',
     actorId: text(record.actorId, ''),
     accessPurpose: text(record.accessPurpose, 'family-care') || 'family-care',
     caregiverName: text(record.caregiverName, ''),
-    caregiverPhone: text(record.caregiverPhone, ''),
+    caregiverPhone: caregiverPhone ?? '',
     currentMemberId: text(record.currentMemberId, ''),
   }
 }

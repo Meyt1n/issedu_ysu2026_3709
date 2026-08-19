@@ -8,6 +8,7 @@ import { riskLevelLabel } from '@/data/labels'
 import { useSession } from '@/stores/session'
 import { tapFeedback } from '@/utils/haptics'
 import { getHelpCallConfirmation, type HelpCallTarget } from '@/utils/help'
+import { normalizePhoneNumber } from '@/utils/phone'
 
 const { session } = useSession()
 const manualSpeaker = createSpeaker(() => true)
@@ -17,9 +18,10 @@ const confirmButton = ref<HTMLButtonElement | null>(null)
 const emergencyTrigger = ref<HTMLButtonElement | null>(null)
 const caregiverTrigger = ref<HTMLButtonElement | null>(null)
 
-const phoneHref = computed(() =>
-  session.caregiverPhone ? `tel:${session.caregiverPhone.replace(/\s+/g, '')}` : '',
-)
+const phoneHref = computed(() => {
+  const phone = normalizePhoneNumber(session.caregiverPhone)
+  return phone ? `tel:${phone}` : ''
+})
 const confirmation = computed(() =>
   pendingCall.value
     ? getHelpCallConfirmation(pendingCall.value, session.caregiverPhone, session.caregiverName)

@@ -12,6 +12,7 @@ import type { RiskCard } from '@/data/types'
 import { CAPABILITY_IDS, useCapabilities } from '@/stores/capabilities'
 import { sessionContextKey, useSession } from '@/stores/session'
 import { formatDateTime } from '@/utils/format'
+import { normalizePhoneNumber } from '@/utils/phone'
 import { presentApiError, type ErrorPresentation } from '@/api/errors'
 
 const route = useRoute()
@@ -36,9 +37,10 @@ const acknowledgementStatusMessage = computed(() => {
 })
 let loadGeneration = 0
 
-const phoneHref = computed(() =>
-  session.caregiverPhone ? `tel:${session.caregiverPhone.replace(/\s+/g, '')}` : '',
-)
+const phoneHref = computed(() => {
+  const phone = normalizePhoneNumber(session.caregiverPhone)
+  return phone ? `tel:${phone}` : ''
+})
 
 async function load(): Promise<void> {
   const generation = ++loadGeneration
