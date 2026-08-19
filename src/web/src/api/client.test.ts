@@ -76,6 +76,41 @@ describe('ApiClient authorization contract', () => {
     ])
   })
 
+  it('writes a risk acknowledgement with the idempotency header', async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = []
+    const client = new ApiClient({
+      baseUrl: 'http://local.test',
+      fetcher: async (input, init) => {
+        requests.push({ url: String(input), init: init ?? {} })
+        return new Response(JSON.stringify({
+          receipt_id: 'receipt-1',
+          household_id: 'household-1',
+          member_id: 'member-1',
+          rule_id: 'expiry_check',
+          rule_version: 'rules-v0',
+          risk_fingerprint: 'a'.repeat(64),
+          actor_id: 'owner',
+          acknowledged_at: '2026-08-19T00:00:00Z',
+          replayed: false,
+        }), { status: 200 })
+      },
+    })
+
+    await client.acknowledgeRisk(
+      'household-1',
+      'member-1',
+      'expiry/check',
+      { rule_version: 'rules-v0', risk_fingerprint: 'a'.repeat(64) },
+      { actorId: 'owner', idempotencyKey: 'ack-1' },
+    )
+
+    expect(requests[0]?.url).toBe(
+      'http://local.test/api/v1/households/household-1/members/member-1/risks/expiry%2Fcheck/acknowledge',
+    )
+    expect(requests[0]?.init.method).toBe('POST')
+    expect(new Headers(requests[0]?.init.headers).get('Idempotency-Key')).toBe('ack-1')
+  })
+
   it('loads the authorized member timeline through the API boundary', async () => {
     const fetcher: typeof fetch = async () => new Response(JSON.stringify([]), { status: 200 })
     const client = new ApiClient({ baseUrl: 'http://local.test', fetcher })
@@ -215,3 +250,4 @@ describe('ApiClient authorization contract', () => {
     expect(requests[1]?.init.method).toBe('DELETE')
   })
 })
+

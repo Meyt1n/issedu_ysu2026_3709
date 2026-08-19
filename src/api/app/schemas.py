@@ -53,7 +53,7 @@ class AuthorizationCreate(BaseModel):
     member_id: str
     grantee_actor_id: str = Field(min_length=1, max_length=120)
     data_fields: list[str] = Field(min_length=1)
-    actions: list[Literal["READ_EVENTS", "WRITE_EVENTS"]] = Field(min_length=1)
+    actions: list[Literal["READ_EVENTS", "WRITE_EVENTS", "ACK_RISK"]] = Field(min_length=1)
     purpose: str = Field(pattern=PURPOSE_PATTERN)
     valid_until: datetime
 
@@ -61,7 +61,7 @@ class AuthorizationCreate(BaseModel):
 class AuthorizationUpdate(BaseModel):
     expected_version: int = Field(ge=1)
     data_fields: list[str] | None = Field(default=None, min_length=1)
-    actions: list[Literal["READ_EVENTS", "WRITE_EVENTS"]] | None = Field(
+    actions: list[Literal["READ_EVENTS", "WRITE_EVENTS", "ACK_RISK"]] | None = Field(
         default=None,
         min_length=1,
     )
@@ -114,6 +114,7 @@ class AccessAuditRead(BaseModel):
     purpose: str | None
     outcome: str
     reason: str | None
+    request_id: str | None
     before_version: int | None
     after_version: int | None
     created_at: datetime
@@ -237,6 +238,23 @@ class OutboxDispatchRead(BaseModel):
 # ── HCT-307: Risk evidence schemas ──────────────────────────────────
 
 
+class RiskAcknowledgementCreate(BaseModel):
+    rule_version: str = Field(min_length=1, max_length=64)
+    risk_fingerprint: str = Field(min_length=64, max_length=64)
+
+
+class RiskAcknowledgementRead(BaseModel):
+    receipt_id: str
+    household_id: str
+    member_id: str
+    rule_id: str
+    rule_version: str
+    risk_fingerprint: str
+    actor_id: str
+    acknowledged_at: datetime
+    replayed: bool = False
+
+
 class RiskAlertRead(BaseModel):
     """Risk alert as returned by the rules engine. Evidence is desensitized."""
 
@@ -245,6 +263,9 @@ class RiskAlertRead(BaseModel):
     message: str
     source_event_ids: list[str] = Field(default_factory=list)
     created_at: datetime | None = None
+    rule_version: str
+    risk_fingerprint: str
+    acknowledgement: RiskAcknowledgementRead | None = None
 
 
 class RiskListResponse(BaseModel):

@@ -2,7 +2,7 @@ export type ApiErrorCode = string
 
 export type MemberRole = 'SELF' | 'DEPENDENT' | 'CAREGIVER'
 
-export type AuthorizationAction = 'READ_EVENTS' | 'WRITE_EVENTS'
+export type AuthorizationAction = 'READ_EVENTS' | 'WRITE_EVENTS' | 'ACK_RISK'
 
 export interface ApiErrorEnvelope {
   error?: {
@@ -209,6 +209,21 @@ export interface RiskAlert {
   message: string
   source_event_ids: string[]
   created_at: string | null
+  rule_version: string
+  risk_fingerprint: string
+  acknowledgement: RiskAcknowledgement | null
+}
+
+export interface RiskAcknowledgement {
+  receipt_id: string
+  household_id: string
+  member_id: string
+  rule_id: string
+  rule_version: string
+  risk_fingerprint: string
+  actor_id: string
+  acknowledged_at: string
+  replayed: boolean
 }
 
 export interface RiskListResponse {
@@ -683,3 +698,4 @@ export interface CorrectionDiff {
   version: number
   created_at: string
 }
+

@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 
 import { apiClient } from '../api/client'
+import { ApiClientError } from '../api/client'
 import type { RiskAlert, RiskDetailResponse, RiskListResponse } from '../api/types'
 import AppIcon from '../components/AppIcon.vue'
 import SkeletonList from '../components/SkeletonList.vue'
@@ -23,6 +24,7 @@ const expandedRuleKey = ref<string | null>(null)
 const loading = ref(false)
 const evaluating = ref(false)
 const loadError = ref('')
+const acknowledgementStatus = ref<Record<string, 'idle' | 'saving' | 'success' | 'offline' | 'unauthorized' | 'conflict' | 'error'>>({})
 
 const levelTone: Record<string, string> = {
   SEVERE: 'rose',
@@ -42,6 +44,33 @@ const groupedAlerts = computed(() => {
 
 function alertKey(alert: RiskAlert, index: number): string {
   return `${alert.rule_id}:${index}`
+}
+
+function acknowledgementKey(alert: RiskAlert): string {
+  return `${alert.rule_id}:${alert.risk_fingerprint}`
+}
+
+function acknowledgementLabel(alert: RiskAlert): string {
+  const status = acknowledgementStatus.value[acknowledgementKey(alert)]
+  if (alert.acknowledgement || status === 'success') return '已知晓'
+  if (status === 'saving') return '正在回写…'
+  if (status === 'offline') return '离线，未回写'
+  if (status === 'unauthorized') return '未授权，未回写'
+  if (status === 'conflict') return '风险已变化，请刷新'
+  if (status === 'error') return '回写失败，可重试'
+  return '我已知晓'
+}
+
+function acknowledgementHint(alert: RiskAlert): string {
+  if (alert.acknowledgement) {
+    return `${alert.acknowledgement.actor_id} · ${formatDateTime(alert.acknowledgement.acknowledged_at)}`
+  }
+  const status = acknowledgementStatus.value[acknowledgementKey(alert)]
+  if (status === 'offline') return '本地 API 不可用，页面没有把本地状态冒充为成功。'
+  if (status === 'unauthorized') return '当前身份没有确认该成员风险的授权。'
+  if (status === 'conflict') return '规则版本或风险指纹已变化，请刷新后重新查看。'
+  if (status === 'error') return '服务端没有确认这次回写，请稍后重试。'
+  return '服务端会记录操作者、时间、规则版本和风险指纹。'
 }
 
 async function loadRisks(): Promise<void> {
@@ -104,6 +133,38 @@ async function toggleDetail(alert: RiskAlert, index: number): Promise<void> {
   } catch (cause) {
     expandedRuleKey.value = null
     pushToast('error', formatError(cause))
+  }
+}
+
+async function acknowledge(alert: RiskAlert): Promise<void> {
+  if (alert.acknowledgement) return
+  const key = acknowledgementKey(alert)
+  acknowledgementStatus.value = { ...acknowledgementStatus.value, [key]: 'saving' }
+  try {
+    const receipt = await apiClient.acknowledgeRisk(
+      session.selectedHouseholdId,
+      session.selectedMemberId,
+      alert.rule_id,
+      { rule_version: alert.rule_version, risk_fingerprint: alert.risk_fingerprint },
+      { ...requestOptions.value, idempotencyKey: createIdempotencyKey() },
+    )
+    const update = (item: RiskAlert): RiskAlert => (
+      item.rule_id === alert.rule_id && item.risk_fingerprint === alert.risk_fingerprint
+        ? { ...item, acknowledgement: receipt }
+        : item
+    )
+    if (riskList.value) riskList.value = { ...riskList.value, alerts: riskList.value.alerts.map(update) }
+    for (const [ruleId, detail] of Object.entries(riskDetails.value)) {
+      riskDetails.value[ruleId] = { ...detail, alert: update(detail.alert) }
+    }
+    acknowledgementStatus.value = { ...acknowledgementStatus.value, [key]: 'success' }
+  } catch (cause) {
+    let status: 'offline' | 'unauthorized' | 'conflict' | 'error' = 'error'
+    if (cause instanceof ApiClientError && cause.code === 'DEPENDENCY_UNAVAILABLE') status = 'offline'
+    else if (cause instanceof ApiClientError && cause.status === 404) status = 'unauthorized'
+    else if (cause instanceof ApiClientError && cause.status === 409) status = 'conflict'
+    acknowledgementStatus.value = { ...acknowledgementStatus.value, [key]: status }
+    pushToast('error', acknowledgementHint({ ...alert, acknowledgement: null }))
   }
 }
 
@@ -198,6 +259,20 @@ onMounted(() => void loadRisks())
             {{ expandedRuleKey === alertKey(alert, index) ? '收起' : '查看依据' }}
           </span>
         </button>
+        <div class="risk-actions">
+          <button
+            type="button"
+            class="btn btn-ghost btn-small"
+            :disabled="Boolean(alert.acknowledgement) || acknowledgementStatus[acknowledgementKey(alert)] === 'saving'"
+            @click="acknowledge(alert)"
+          >
+            <AppIcon name="check" :size="14" />
+            {{ acknowledgementLabel(alert) }}
+          </button>
+          <span class="risk-ack-hint" :class="{ success: Boolean(alert.acknowledgement) }">
+            {{ acknowledgementHint(alert) }}
+          </span>
+        </div>
         <div v-if="expandedRuleKey === alertKey(alert, index)" class="risk-detail">
           <p class="card-note" style="margin: 0">
             证据仅展示 API 的脱敏摘要，规则 {{ alert.rule_id }}。发现已知资料，需要进一步确认；请勿据此自行停药或改量。
@@ -216,3 +291,4 @@ onMounted(() => void loadRisks())
     </div>
   </section>
 </template>
+

@@ -9,6 +9,9 @@ const alert: RiskAlert = {
   message: 'A confirmed fact matches an expiry rule.',
   source_event_ids: ['event-1', 'event-2'],
   created_at: '2026-08-08T08:00:00Z',
+  rule_version: 'rules-v0',
+  risk_fingerprint: 'a'.repeat(64),
+  acknowledgement: null,
 }
 
 describe('risk card view model', () => {
@@ -27,3 +30,4 @@ describe('risk card view model', () => {
     expect(riskLevelLabel('future-level')).toBe('未分级')
   })
 })
+

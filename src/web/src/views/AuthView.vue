@@ -27,11 +27,13 @@ import { formatDateTime, memberRoleLabel } from '../ui/labels'
 
 const FIELD_OPTIONS = [
   { value: 'health_events', label: '已确认健康事件' },
+  { value: 'risk_alerts', label: '风险确认回执' },
 ] as const
 
 const ACTION_OPTIONS: Array<{ value: AuthorizationAction; label: string }> = [
   { value: 'READ_EVENTS', label: '查看已确认事件' },
   { value: 'WRITE_EVENTS', label: '追加已确认事件' },
+  { value: 'ACK_RISK', label: '确认风险已知晓' },
 ]
 
 const purposePattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/
@@ -508,3 +510,4 @@ onMounted(() => {
     </div>
   </template>
 </template>
+
