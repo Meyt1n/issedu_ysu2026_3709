@@ -6,6 +6,15 @@ export type ServerUrlValidation = {
   message: string
 }
 
+export interface ServerUrlPolicy {
+  /** Only development/PWA-local and Android debug builds may opt into private-LAN HTTP. */
+  allowPrivateHttp: boolean
+}
+
+export const DEFAULT_SERVER_URL_POLICY: ServerUrlPolicy = {
+  allowPrivateHttp: import.meta.env.DEV || import.meta.env.MODE === 'android-debug',
+}
+
 function isPrivateIpv4(hostname: string): boolean {
   const parts = hostname.split('.').map(Number)
   if (parts.length !== 4 || parts.some(part => !Number.isInteger(part) || part < 0 || part > 255)) return false
@@ -39,7 +48,10 @@ function isLocalHost(hostname: string): boolean {
  * Same-origin (empty) is valid. Plain HTTP is intentionally restricted to
  * loopback/family-LAN names; production public endpoints must use HTTPS.
  */
-export function validateServerBaseUrl(value: string): ServerUrlValidation {
+export function validateServerBaseUrl(
+  value: string,
+  policy: ServerUrlPolicy = DEFAULT_SERVER_URL_POLICY,
+): ServerUrlValidation {
   const trimmed = value.trim()
   if (!trimmed) return { ok: true, value: '' }
 
@@ -61,6 +73,9 @@ export function validateServerBaseUrl(value: string): ServerUrlValidation {
   }
   if (parsed.protocol === 'http:' && !isLocalHost(parsed.hostname)) {
     return { ok: false, message: '明文 HTTP 只允许家庭局域网或本机地址；公网地址请使用 HTTPS。' }
+  }
+  if (parsed.protocol === 'http:' && !policy.allowPrivateHttp) {
+    return { ok: false, message: '当前发布构建只允许 HTTPS；家庭局域网 HTTP 仅用于受控开发或 Android Debug 联调。' }
   }
 
   return { ok: true, value: parsed.toString().replace(/\/$/, '') }

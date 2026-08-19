@@ -105,7 +105,7 @@ npm run dev
 
 ### 联机模式的已知限制（如实记录，不冒充完成）
 
-- 服务器地址由移动端统一校验：只允许 HTTP(S)，明文 HTTP 仅接受 localhost、`.local`、家庭私网/本机地址，公网正式地址必须使用 HTTPS；地址变更或旧值非法会清理当前成员、能力快照和连接状态并要求重新测试；
+- 服务器地址由移动端统一校验：发布构建只允许 HTTPS；开发/PWA 本地和 Android Debug 构建可显式开放家庭私网/本机 HTTP，但仍拒绝公网 HTTP；地址变更或旧值非法会清理当前成员、能力快照和连接状态并要求重新测试；
 - 紧急联系人号码仅保存在本机设置，保存时会去除常见分隔符并拒绝 URL scheme、控制字符和异常长度；求助、风险详情和测试拨号都读取最新规范化值，拨号前仍需确认；
 - 药盒识别链路只到"创建视觉任务"，候选确认仍需回网页端人工复核中心；
 - 风险"我已知晓"回写暂无对应服务端接口，界面会如实提示而不是伪装成功；
@@ -120,7 +120,13 @@ npm run dev
 
 ## 安卓应用（Capacitor）
 
-同一套代码通过 Capacitor 打包为原生 Android 应用，WebView 内置打包产物，联机数据走"我的 → 数据来源"里配置的家庭服务器地址。Android 工程保留家庭局域网明文 HTTP 的联调能力，但运行时仍执行上述地址边界校验；生产公网地址必须使用 HTTPS。
+同一套代码通过 Capacitor 打包为原生 Android 应用，WebView 内置打包产物，联机数据走"我的 → 数据来源"里配置的家庭服务器地址。Release/Main Manifest 和网络安全配置拒绝全部明文流量；Android Debug 通过独立 Manifest 保留家庭局域网 HTTP 联调能力，并继续由 APP 地址校验拒绝公网 HTTP。
+
+Android 平台安全基线：
+
+- `allowBackup=false`，Android 11 及以下 full-backup 与 Android 12+ cloud-backup/device-transfer 规则均排除应用全部私有域；联系人、开发身份、服务器地址和本地偏好不得进入系统云备份或设备迁移；
+- 主 Manifest 只声明 `INTERNET`；相机/文件由用户主动触发的系统文件选择器处理，`tel:` 只打开拨号界面，当前未申请 `CAMERA`、`CALL_PHONE`、通知或存储权限；
+- 可运行 `npm run audit:android-security` 静态核对备份、网络和最小权限配置。
 
 ### 真机无障碍签收
 
@@ -143,9 +149,9 @@ powershell -ExecutionPolicy Bypass -File scripts/build-apk.ps1
 手动步骤（等价）：
 
 ```powershell
-npm run android:sync                 # 构建 Web 产物并同步到 android/ 工程
+npm run android:sync:debug           # Debug：允许经 APP 校验的家庭局域网 HTTP
 cd android
-$env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"   # 或任何 JDK 21+
+$env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"   # Gradle 8.14.3 需要 JDK 21-24
 $env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk"
 .\gradlew.bat assembleDebug
 ```
@@ -156,6 +162,7 @@ $env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk"
 - 仓库路径含中文目录时依赖 `android.overridePathCheck=true`（已配置），个别环境仍失败时可把仓库放到纯 ASCII 路径构建；
 - 把 `app-debug.apk` 传到手机安装（需允许安装未知来源应用），或连接手机后 `npx cap run android`；
 - 手机与家庭服务器需在同一局域网，服务器地址填电脑的局域网 IP，例如 `http://192.168.1.10:8000`。
+- `npm run android:sync` 使用生产模式 Web 产物，私网 HTTP 会在 APP 层被拒绝；Release/Main Android 网络策略也只允许 HTTPS。
 
 ## 目录结构
 
