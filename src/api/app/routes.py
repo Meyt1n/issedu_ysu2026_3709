@@ -51,6 +51,7 @@ from app.erasure import (
     find_erasure_task,
     request_household_erasure,
 )
+from app.event_pagination import decode_event_cursor, encode_event_cursor
 from app.event_service import (
     CheckpointInvalidError,
     EventAlreadySupersededError,
@@ -126,6 +127,7 @@ from app.schemas import (
     HardSampleUpdate,
     HealthEventCompensationCreate,
     HealthEventCreate,
+    HealthEventPageRead,
     HealthEventRead,
     HealthResponse,
     HouseholdCreate,
@@ -847,25 +849,9 @@ def list_health_events(
     household = session.get(Household, household_id)
     if _is_erased(household):
         _raise_resource_not_found()
-    members = session.scalars(
-        select(Member).where(
-            Member.household_id == household.id,
-            Member.deleted_at.is_(None),
-        )
-    ).all()
-    allowed_member_ids = {
-        member.id
-        for member in members
-        if has_authorized_action(
-            session,
-            household,
-            member.id,
-            actor_id,
-            "READ_EVENTS",
-            "health_events",
-            access_purpose,
-        )
-    }
+    allowed_member_ids = _authorized_event_member_ids(
+        session, household, actor_id, access_purpose
+    )
     if member_id is not None and member_id not in allowed_member_ids:
         _raise_resource_not_found()
     if not allowed_member_ids:
@@ -879,6 +865,134 @@ def list_health_events(
     if member_id is not None:
         query = query.where(HealthEvent.member_id == member_id)
     return list(session.scalars(query.order_by(HealthEvent.sequence_no)).all())
+
+
+def _authorized_event_member_ids(
+    session: Session,
+    household: Household,
+    actor_id: str,
+    access_purpose: str | None,
+) -> set[str]:
+    members = session.scalars(
+        select(Member).where(
+            Member.household_id == household.id,
+            Member.deleted_at.is_(None),
+        )
+    ).all()
+    return {
+        member.id
+        for member in members
+        if has_authorized_action(
+            session,
+            household,
+            member.id,
+            actor_id,
+            "READ_EVENTS",
+            "health_events",
+            access_purpose,
+        )
+    }
+
+
+@router.get(
+    "/households/{household_id}/events/page",
+    response_model=HealthEventPageRead,
+)
+def page_health_events(
+    household_id: str,
+    member_id: str | None = None,
+    cursor: str | None = None,
+    limit: int = Query(default=50, ge=1, le=100),
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> HealthEventPageRead:
+    """Return an authorization-scoped page without exposing event payload in the cursor."""
+    household = session.get(Household, household_id)
+    if _is_erased(household):
+        _raise_resource_not_found()
+    allowed_member_ids = _authorized_event_member_ids(
+        session, household, actor_id, access_purpose
+    )
+    if member_id is not None and member_id not in allowed_member_ids:
+        _raise_resource_not_found()
+    if not allowed_member_ids:
+        if household.created_by == actor_id:
+            return HealthEventPageRead(items=[])
+        _raise_resource_not_found()
+
+    try:
+        decoded_cursor = (
+            decode_event_cursor(cursor, secret=settings.cursor_signing_key)
+            if cursor
+            else None
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    if decoded_cursor is not None and (
+        decoded_cursor.household_id != household.id or decoded_cursor.member_id != member_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="EVENT_CURSOR_INVALID",
+        )
+
+    cursor_anchor: HealthEvent | None = None
+    if decoded_cursor is not None:
+        cursor_anchor = session.get(HealthEvent, decoded_cursor.event_id)
+        if (
+            cursor_anchor is None
+            or cursor_anchor.household_id != household.id
+            or (
+                member_id is not None
+                and cursor_anchor.member_id != member_id
+            )
+            or (
+                member_id is None
+                and cursor_anchor.member_id not in allowed_member_ids
+            )
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="EVENT_CURSOR_INVALID",
+            )
+
+    query = select(HealthEvent).where(
+        HealthEvent.household_id == household.id,
+        HealthEvent.member_id.in_(allowed_member_ids),
+    )
+    if member_id is not None:
+        query = query.where(HealthEvent.member_id == member_id)
+    if decoded_cursor is not None:
+        query = query.where(
+            (HealthEvent.sequence_no > decoded_cursor.sequence_no)
+            | (
+                (HealthEvent.sequence_no == decoded_cursor.sequence_no)
+                & (HealthEvent.id > decoded_cursor.event_id)
+            )
+        )
+    rows = list(
+        session.scalars(
+            query.order_by(HealthEvent.sequence_no, HealthEvent.id).limit(limit + 1)
+        ).all()
+    )
+    has_more = len(rows) > limit
+    items = rows[:limit]
+    next_cursor = None
+    if has_more and items:
+        last = items[-1]
+        next_cursor = encode_event_cursor(
+            household_id=household.id,
+            member_id=member_id,
+            created_at=last.created_at,
+            sequence_no=last.sequence_no,
+            event_id=last.id,
+            secret=settings.cursor_signing_key,
+        )
+    return HealthEventPageRead(items=items, next_cursor=next_cursor, has_more=has_more)
 
 
 @router.get(
