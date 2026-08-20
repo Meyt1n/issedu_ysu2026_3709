@@ -122,6 +122,22 @@ def test_artifact_uploads_are_disabled() -> None:
     assert upload_steps == []
 
 
+def test_history_replay_uses_dedicated_runner_backup_and_exact_lease() -> None:
+    path = WORKFLOW_ROOT / "execute-cloud-history-sync.yml"
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    job = document["jobs"]["execute"]
+    scripts = "\n".join(step.get("run", "") for step in job["steps"])
+
+    assert job["runs-on"] == ["self-hosted", "hct-sync"]
+    assert "replay_from_sha" in document[True]["workflow_dispatch"]["inputs"]
+    assert "hct-sync-backup-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" in scripts
+    assert '"--force-with-lease=refs/heads/master:${cloud_sha}"' in scripts
+    assert '"${replay_from_sha}:refs/heads/master"' in scripts
+    assert "-c credential.helper=" in scripts
+    assert "cloud_git push original-cloud" in scripts
+    assert "action=\"${action//$'\\r'/}\"" in scripts
+
+
 def test_ci_and_relay_review_are_manual_only() -> None:
     for workflow_name in ("ci.yml", "relay-review-bot.yml"):
         document = yaml.safe_load(
