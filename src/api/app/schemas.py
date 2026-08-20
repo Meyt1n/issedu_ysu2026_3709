@@ -353,6 +353,9 @@ class RiskListResponse(BaseModel):
     total: int
     severe_count: int
     warning_count: int
+    ruleset_version: str
+    non_severe_budget: int
+    suppressed_count: int
 
 
 class RiskDetailResponse(BaseModel):

@@ -2988,7 +2988,7 @@ def list_risks(
     ):
         _raise_resource_not_found()
     from app.projection import build_relationship_graph, get_timeline
-    from app.rules import apply_daily_budget, dedup_alerts, run_rules
+    from app.rules import DEFAULT_DAILY_BUDGET, apply_daily_budget, dedup_alerts, run_rules
 
     events = get_timeline(session, member_id)
     facts = build_relationship_graph(events)
@@ -3011,6 +3011,9 @@ def list_risks(
         total=len(alerts),
         severe_count=sum(1 for a in alerts if a.level == "SEVERE"),
         warning_count=sum(1 for a in alerts if a.level == "WARNING"),
+        ruleset_version=settings.ruleset_version,
+        non_severe_budget=DEFAULT_DAILY_BUDGET,
+        suppressed_count=max(len(deduped) - len(budgeted), 0),
     )
 
 

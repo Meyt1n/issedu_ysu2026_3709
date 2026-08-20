@@ -224,6 +224,11 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
     </div>
   </section>
 
+  <p v-if="riskList && (riskList.suppressed_count ?? 0) > 0" class="notice info" role="status">
+    <AppIcon name="shield" :size="15" />
+    当前规则 {{ riskList.ruleset_version ?? '未知' }}：已展示 {{ riskList.total }} 条信号；{{ riskList.suppressed_count }} 条普通信号受每日预算 {{ riskList.non_severe_budget ?? 10 }} 条限制，严重信号不受压制。
+  </p>
+
   <section aria-label="风险信号与依据">
     <div class="sec-head">
       <span class="sec-no">01</span>
