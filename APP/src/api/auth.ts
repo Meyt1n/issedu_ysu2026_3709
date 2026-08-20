@@ -323,13 +323,16 @@ function mapAuthError(operation: AuthOperation, status: number, body: unknown): 
 /**
  * 对接 HCT-107 的正式鉴权适配器。
  *
- * 契约要求（见 docs/stories/MOB-133-正式鉴权与会话生命周期联调.md）：
+ * 契约（见 docs/stories/MOB-133-正式鉴权与会话生命周期联调.md）：
  * - 凭据只走 POST JSON body，绝不进 query string，避免落进访问日志与浏览器历史；
- * - `POST {prefix}/login` → `{ session_token?, expires_at, actor_id? }`；
- * - `POST {prefix}/session` → 当前会话续验，401 表示已过期或已撤销；
- * - `POST {prefix}/logout` → 服务端销毁会话，移动端无论成败都清空本地会话；
+ * - `POST {prefix}/login` → `{ actor_id, session_token, expires_at }`（HCT-423 起已是 JSON body）；
+ * - `POST {prefix}/logout` → body `{ session_token }`，服务端销毁会话；移动端无论成败都清空本地会话；
+ * - `POST {prefix}/session` → 会话续验，401 表示已过期或已撤销（**服务端尚未提供**）；
  * - `POST {prefix}/pin-challenge` → `{ challenge_id, action, expires_at }`，**不得回显 PIN**；
  * - `POST {prefix}/pin-verify` → `{ status: "confirmed" }`。
+ *
+ * 尚未提供或形态不符的端点会返回 `AUTH_UNAVAILABLE`，页面如实提示契约不一致，
+ * 不伪造登录成功或二次确认成功。
  */
 export function createHttpAuthAdapter(options: HttpAuthAdapterOptions = {}): AuthAdapter {
   const validated = validateServerBaseUrl(options.baseUrl ?? '')

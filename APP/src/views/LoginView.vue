@@ -27,8 +27,12 @@ const REASON_NOTICE: Record<string, string> = {
 
 const reasonNotice = computed(() => REASON_NOTICE[auth.reason] ?? '')
 const serverLabel = computed(() => session.serverBaseUrl || '同源（与页面相同的地址）')
+/** 与 HCT-107 `AuthCredentials` 的 `password: min_length=8` 对齐，避免把长度问题报成契约不一致。 */
+const PASSWORD_MIN_LENGTH = 8
 const canSubmit = computed(
-  () => Boolean(account.value.trim()) && Boolean(password.value) && !submitting.value,
+  () => Boolean(account.value.trim())
+    && password.value.length >= PASSWORD_MIN_LENGTH
+    && !submitting.value,
 )
 
 async function submit(): Promise<void> {
@@ -100,7 +104,7 @@ function useDemoMode(): void {
           />
         </label>
         <p id="login-help" class="meta-line">
-          密码只用于本次登录请求，不会保存在本机、不会写入日志，也不会出现在地址栏。
+          密码至少 {{ PASSWORD_MIN_LENGTH }} 位，只用于本次登录请求，不会保存在本机、不会写入日志，也不会出现在地址栏。
         </p>
         <p v-if="errorMessage" id="login-error" class="notice" data-tone="error" role="alert">
           {{ errorMessage }}

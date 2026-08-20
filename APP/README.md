@@ -112,7 +112,7 @@ npm run dev
 - 联机入口会探测 `/api/v1/meta/capabilities` 并列出服务阶段、可用和未提供能力；能力探测失败或服务端未声明的能力按不可用处理，相关入口会禁用并标注限制；
 - 照护者视角的可见范围按"服务端已过滤"标注（授权明细仅 owner 可读，到期时间不显示）；
 - "近 7 天完成情况"由计划事实与 `plan_confirmed` 事件推导，为近似统计；
-- 正式登录、会话生命周期和 PIN 二次确认已在移动端接入（登录页、路由守卫、内存会话、401/过期/撤权 fail-closed、登出清理），但**主仓库 HCT-107 契约不足，尚未完成真实后端联调**：业务端点仍只认 `X-Actor-Id`，`/auth/login` 等把凭据放在 query 参数，`/auth/pin-challenge` 回显 PIN 且不绑定登录会话，也缺少会话续验端点。移动端在这些情况下如实报"鉴权接口与契约不一致"，不显示伪造的登录成功或二次确认成功。缺口清单与所需契约见 [MOB-133 Story](../docs/stories/MOB-133-正式鉴权与会话生命周期联调.md)，适配设计背景见 [MOB-115 Story](../docs/stories/MOB-115-正式鉴权适配设计.md)；
+- 正式登录、会话生命周期和 PIN 二次确认已在移动端接入（登录页、路由守卫、内存会话、401/过期/撤权 fail-closed、登出清理）。随主仓库 HCT-423 合并，**登录主链路已与后端对齐**：`/api/v1/auth/login`、`/api/v1/auth/logout` 使用 JSON 请求体，业务端点接受 `Authorization: Bearer`。但**真实后端联调证据尚未取得**，且后端仍有两处缺口：`/auth/pin-verify` 用 query 参数传 PIN 与会话 token，`/auth/pin-challenge` 回显 PIN 且不绑定登录会话，另外缺少会话续验端点。移动端遇到这些情况如实报"鉴权接口与契约不一致"，不显示伪造的登录成功或二次确认成功。缺口清单与所需契约见 [MOB-133 Story](../docs/stories/MOB-133-正式鉴权与会话生命周期联调.md)，适配设计背景见 [MOB-115 Story](../docs/stories/MOB-115-正式鉴权适配设计.md)；
 - 会话凭据（token / sessionId）只保存在内存：不写 `localStorage`、不进 URL、不进日志或通知；密码提交后立即从输入框清除，PIN 用完即弃。Android 真机/WebView 与 PWA 上的"登录、过期、退出、撤权后重新进入"四条路径尚未执行；
 - 联调发现的主仓库缺口：投影丢弃药品 `expiry_date/stock/ingredient` 导致过期/低库存/重复成分规则无法触发——
   已提交修复（[Issue #140](https://github.com/Meyt1n/issedu_ysu2026_3709/issues/140)、
