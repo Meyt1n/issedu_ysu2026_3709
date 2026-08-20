@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     ollama_model: str = "unavailable"
     ollama_timeout_seconds: float = 30.0
     weather_adapter: str = "disabled"
+    weather_provider: str = "generic"
     weather_api_url: str = ""
     weather_api_timeout_seconds: float = Field(default=3.0, gt=0, le=10)
     weather_default_city_code: str = ""
