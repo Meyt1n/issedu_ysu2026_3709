@@ -147,11 +147,18 @@ def test_workflow_uses_full_history_and_preflights_before_push() -> None:
     assert "cygpath" in setup_script
     assert "${sync_sha//$'\\r'/}" in run_script
     assert "${pr_meta//$'\\r'/}" in run_script
+    assert "cloud_git()" in run_script
+    assert "-c credential.helper=" in run_script
+    assert "-c credential.useHttpPath=true" in run_script
+    assert '-c "credential.username=${CLOUD_SELECTED_USERNAME}"' in run_script
+    assert "cloud_git fetch original-cloud master" in run_script
+    assert 'cloud_git push original-cloud "${sync_sha}:refs/heads/master"' in run_script
+    assert "cloud_git ls-remote original-cloud" in run_script
 
     preflight_loop = run_script.index('for sync_sha in "${sync_shas[@]}"')
     plan_append = run_script.index("sync_plan+=(", preflight_loop)
     push_loop = run_script.index('for plan_row in "${sync_plan[@]}"')
-    push_command = run_script.index("git push original-cloud", push_loop)
+    push_command = run_script.index("cloud_git push original-cloud", push_loop)
     assert preflight_loop < plan_append < push_loop < push_command
 
 
