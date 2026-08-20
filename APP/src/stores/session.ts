@@ -1,5 +1,7 @@
 import { reactive } from 'vue'
 
+import { ApiClientError } from '@/api/client'
+
 import { normalizePhoneNumber } from '@/utils/phone'
 import { validateServerBaseUrl } from '@/utils/serverUrl'
 
@@ -31,9 +33,46 @@ export const DEFAULT_SESSION: SessionSettings = {
   currentMemberId: '',
 }
 
+export type AuthorizationBoundaryStatus = 'active' | 'reverification-required'
+
+/** Memory-only fail-closed state; authorization is never restored from a local snapshot. */
+const authorizationBoundary = reactive<{
+  status: AuthorizationBoundaryStatus
+  generation: number
+}>({ status: 'active', generation: 0 })
+
+export function isAuthorizationRejection(cause: unknown): cause is ApiClientError {
+  if (!(cause instanceof ApiClientError)) return false
+  const code = cause.code.toUpperCase()
+  return cause.status === 401
+    || cause.status === 403
+    || cause.status === 404
+    || code === 'CONSENT_REVOKED'
+    || code === 'AUTHORIZATION_EXPIRED'
+    || code === 'AUTH_REVOKED'
+    || code === 'RESOURCE_NOT_FOUND'
+}
+
+/** Clear local member selection and block further data requests until re-verification. */
+export function requireAuthorizationReverification(): void {
+  authorizationBoundary.status = 'reverification-required'
+  authorizationBoundary.generation += 1
+  state.currentMemberId = ''
+  persist()
+}
+
+/** Only an explicit settings or re-authentication action may reopen the boundary. */
+export function resumeAuthorizationBoundary(): void {
+  authorizationBoundary.status = 'active'
+  authorizationBoundary.generation += 1
+}
+
+export function useAuthorizationBoundary() {
+  return { authorizationBoundary, requireAuthorizationReverification, resumeAuthorizationBoundary }
+}
 /** 影响联机数据边界的会话指纹；身份、目的或家庭服务器变化都必须丢弃旧 Provider 缓存。 */
 export function sessionContextKey(source: Pick<SessionSettings, 'dataMode' | 'serverBaseUrl' | 'actorId' | 'accessPurpose'>): string {
-  return [source.dataMode, source.serverBaseUrl.trim(), source.actorId.trim(), source.accessPurpose.trim()].join('\u001f')
+  return [source.dataMode, source.serverBaseUrl.trim(), source.actorId.trim(), source.accessPurpose.trim(), String(authorizationBoundary.generation)].join('\u001f')
 }
 
 export function normalizeSession(raw: unknown): SessionSettings {
