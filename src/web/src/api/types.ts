@@ -287,6 +287,9 @@ export interface RiskListResponse {
   total: number
   severe_count: number
   warning_count: number
+  ruleset_version?: string
+  non_severe_budget?: number
+  suppressed_count?: number
 }
 
 export interface RiskSourceEvent {

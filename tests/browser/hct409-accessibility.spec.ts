@@ -65,6 +65,9 @@ async function installSyntheticApi(page: Page): Promise<void> {
         total: 1,
         severe_count: 0,
         warning_count: 1,
+        ruleset_version: 'rules-v0',
+        non_severe_budget: 10,
+        suppressed_count: 2,
       })
     }
     if (request.method() === 'GET' && path.includes('/risks/')) {
@@ -104,6 +107,15 @@ test.describe('axe automated WCAG 2.1 AA scans', () => {
     await loadOwnerView(page)
     const results = await axeScan(page)
     expect(results.violations).toEqual([])
+  })
+
+  test('risk view explains budget suppression from the server summary', async ({ page }) => {
+    await installSyntheticApi(page)
+    await page.goto('/')
+    await loadOwnerView(page)
+    await page.getByRole('button', { name: '用药安全', exact: true }).click()
+    await expect(page.getByText(/2 条普通信号受每日预算 10 条限制/)).toBeVisible()
+    await expect(page.getByText(/规则 rules-v0/)).toBeVisible()
   })
 
   test('offline error state has no violations', async ({ page }) => {
