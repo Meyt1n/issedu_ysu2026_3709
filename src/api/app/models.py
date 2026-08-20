@@ -248,6 +248,9 @@ class VisionTask(Base):
     )
     member_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     file_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    media_type: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="image", server_default="image", index=True
+    )
     task_type: Mapped[str] = mapped_column(String(40), nullable=False, default="ocr")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)

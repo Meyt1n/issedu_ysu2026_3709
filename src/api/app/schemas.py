@@ -357,6 +357,7 @@ class ReviewTaskRead(BaseModel):
 
 class VisionTaskCreate(BaseModel):
     file_id: str = Field(min_length=1, description="Reference to an uploaded file")
+    media_type: Literal["image", "video"] = Field(default="image")
     member_id: str | None = Field(default=None)
     task_type: str = Field(default="ocr", min_length=1, max_length=40)
     idempotency_key: str | None = Field(default=None, max_length=128)
@@ -371,6 +372,7 @@ class VisionTaskRead(BaseModel):
     household_id: str
     member_id: str | None
     file_id: str
+    media_type: Literal["image", "video"]
     task_type: str
     status: str
     error_code: str | None = None

@@ -174,6 +174,7 @@ from app.tool_call import (
     run_assistant,
 )
 from app.vision_tasks import (
+    VISION_MEDIA_TYPES,
     VisionTaskStatus,
     _file_digest,
     create_vision_task,
@@ -1702,6 +1703,7 @@ async def check_vision_quality(
             actor_id=actor_id,
             input_digest=input_digest,
             config_version=result["config_version"],
+            media_type=media_type,
         )
         if result["allow_downstream"]
         else None
@@ -1814,6 +1816,21 @@ def create_vision_task_endpoint(
             detail="FILE_NOT_FOUND",
         )
 
+    extension = target.suffix.lower()
+    media_type_by_extension = {
+        ".jpg": "image",
+        ".jpeg": "image",
+        ".png": "image",
+        ".mp4": "video",
+        ".mov": "video",
+    }
+    actual_media_type = media_type_by_extension.get(extension)
+    if actual_media_type not in VISION_MEDIA_TYPES or actual_media_type != payload.media_type:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="MEDIA_TYPE_MISMATCH",
+        )
+
     # Compute input digest for integrity tracking.
     try:
         input_digest = _file_digest(str(target))
@@ -1833,6 +1850,7 @@ def create_vision_task_endpoint(
             actor_id=actor_id,
             input_digest=input_digest,
             config_version=settings.vision_quality_config_version,
+            media_type=payload.media_type,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -1845,6 +1863,7 @@ def create_vision_task_endpoint(
         household_id=household_id,
         created_by=actor_id,
         file_id=payload.file_id,
+        media_type=payload.media_type,
         member_id=payload.member_id,
         task_type=payload.task_type,
         idempotency_key=payload.idempotency_key,
