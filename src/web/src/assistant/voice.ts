@@ -26,6 +26,7 @@ export interface SpeechRecognitionLike {
   lang: string
   continuous: boolean
   interimResults: boolean
+  maxAlternatives: number
   onstart: (() => void) | null
   onresult: ((event: SpeechRecognitionEventLike) => void) | null
   onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null
@@ -36,6 +37,12 @@ export interface SpeechRecognitionLike {
 }
 
 type SpeechRecognitionConstructor = new () => SpeechRecognitionLike
+
+export interface SpeechRecognitionOptions {
+  continuous?: boolean
+  interimResults?: boolean
+  maxAlternatives?: number
+}
 
 interface SpeechWindow extends Window {
   SpeechRecognition?: SpeechRecognitionConstructor
@@ -51,15 +58,19 @@ export function isSpeechInputSupported(): boolean {
   return Boolean(currentWindow?.SpeechRecognition || currentWindow?.webkitSpeechRecognition)
 }
 
-export function createSpeechRecognition(lang = 'zh-CN'): SpeechRecognitionLike | null {
+export function createSpeechRecognition(
+  lang = 'zh-CN',
+  options: SpeechRecognitionOptions = {},
+): SpeechRecognitionLike | null {
   const currentWindow = speechWindow()
   const Constructor = currentWindow?.SpeechRecognition ?? currentWindow?.webkitSpeechRecognition
   if (!Constructor) return null
 
   const recognition = new Constructor()
   recognition.lang = lang
-  recognition.continuous = false
-  recognition.interimResults = true
+  recognition.continuous = options.continuous ?? false
+  recognition.interimResults = options.interimResults ?? true
+  recognition.maxAlternatives = options.maxAlternatives ?? 1
   return recognition
 }
 
@@ -71,6 +82,41 @@ export function transcriptFromEvent(event: SpeechRecognitionEventLike): string {
     if (typeof transcript === 'string' && transcript.trim()) parts.push(transcript.trim())
   }
   return parts.join(' ')
+}
+
+/** Normalize only for wake-phrase matching; the original transcript stays untouched. */
+export function normalizeVoiceText(text: string): string {
+  return text
+    .normalize('NFKC')
+    .toLocaleLowerCase()
+    .replace(/[\s，。！？；：、,.!?;:'"“”‘’（）()[\]{}<>《》]/g, '')
+}
+
+function wakePhrasePattern(phrase: string): RegExp | null {
+  const normalizedPhrase = phrase.normalize('NFKC').trim()
+  if (!normalizedPhrase) return null
+  const chars = [...normalizedPhrase]
+    .map(char => char.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('[\\s，。！？；：、,.!?;:\'"“”‘’（）()[\\]{}<>《》]*')
+  return new RegExp(chars, 'iu')
+}
+
+/** Match "小燕打开" while tolerating punctuation inserted by browser ASR. */
+export function containsWakePhrase(text: string, phrase = '小燕打开'): boolean {
+  const pattern = wakePhrasePattern(phrase)
+  return Boolean(pattern?.test(text))
+}
+
+/** Remove the wake phrase and return the spoken content that follows it. */
+export function transcriptAfterWakePhrase(text: string, phrase = '小燕打开'): string {
+  const pattern = wakePhrasePattern(phrase)
+  if (!pattern) return text.trim()
+  const match = pattern.exec(text)
+  if (!match || match.index === undefined) return ''
+  return text
+    .slice(match.index + match[0].length)
+    .replace(/^[\s，。！？；：、,.!?;:'"“”‘’（）()[\]{}<>《》]+/, '')
+    .trim()
 }
 
 export function isSpeechOutputSupported(): boolean {
