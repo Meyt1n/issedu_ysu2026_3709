@@ -86,7 +86,12 @@ def simulate_preflight_then_push(nodes: list[Node], start_sha: str) -> list[str]
 
 def workflow_run_script() -> str:
     document = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
-    run_script = document["jobs"]["sync"]["steps"][1]["run"]
+    run_step = next(
+        step
+        for step in document["jobs"]["sync"]["steps"]
+        if step.get("name") == "预检身份并按成员 Token 逐个同步"
+    )
+    run_script = run_step["run"]
     assert isinstance(run_script, str)
     return run_script
 
@@ -95,7 +100,7 @@ def test_sync_job_is_master_only_on_the_dedicated_runner() -> None:
     document = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
     job = document["jobs"]["sync"]
 
-    assert job["runs-on"] == ["self-hosted", "linux", "hct-sync"]
+    assert job["runs-on"] == ["self-hosted", "hct-sync"]
     assert job["if"] == "github.ref == 'refs/heads/master'"
 
 
@@ -135,6 +140,11 @@ def test_workflow_uses_full_history_and_preflights_before_push() -> None:
     assert "--commit-sha" in run_script
     assert "--parent-sha" in run_script
     assert "完整 Git diff" in run_script
+
+    setup_script = workflow["jobs"]["sync"]["steps"][1]["run"]
+    assert "HCT_SYNC_RUNNER_BIN" in setup_script
+    assert "RUNNER_OS" in setup_script
+    assert "cygpath" in setup_script
 
     preflight_loop = run_script.index('for sync_sha in "${sync_shas[@]}"')
     plan_append = run_script.index("sync_plan+=(", preflight_loop)
