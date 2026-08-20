@@ -271,6 +271,7 @@ class TestIdempotency:
     @pytest.mark.parametrize(
         ("field", "changed_value"),
         [
+            ("media_type", "video"),
             ("model_version", "model-v2"),
             ("schema_version", "schema-v2"),
             ("code_version", "code-v2"),
@@ -304,6 +305,12 @@ class TestIdempotency:
                 **{**request, field: changed_value},
             )
         assert exc_info.value.detail == "IDEMPOTENCY_KEY_CONFLICT"
+
+    def test_invalid_media_type_is_rejected(self, session):
+        with pytest.raises(HTTPException) as exc_info:
+            _make_task(session, media_type="document")
+        assert exc_info.value.status_code == 422
+        assert exc_info.value.detail == "MEDIA_TYPE_INVALID"
 
     def test_same_key_returns_matching_terminal_task(self, session):
         key = f"idem-{uuid.uuid4().hex[:16]}"

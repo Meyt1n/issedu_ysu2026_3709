@@ -33,6 +33,7 @@ def test_receipt_is_bound_to_actor_digest_and_config() -> None:
         now=101,
     )
     assert payload["decision"] == "PASS"
+    assert payload["media_type"] == "image"
 
     with pytest.raises(ValueError, match="QUALITY_RECEIPT_MISMATCH"):
         verify_quality_receipt(
@@ -40,6 +41,36 @@ def test_receipt_is_bound_to_actor_digest_and_config() -> None:
             actor_id="owner-b",
             input_digest="a" * 64,
             config_version="quality-v1",
+            now=101,
+        )
+
+
+def test_video_receipt_cannot_be_replayed_as_image() -> None:
+    receipt = issue_quality_receipt(
+        actor_id="owner-a",
+        input_digest="b" * 64,
+        config_version="quality-v1",
+        media_type="video",
+        now=100,
+    )
+
+    payload = verify_quality_receipt(
+        receipt,
+        actor_id="owner-a",
+        input_digest="b" * 64,
+        config_version="quality-v1",
+        media_type="video",
+        now=101,
+    )
+    assert payload["media_type"] == "video"
+
+    with pytest.raises(ValueError, match="QUALITY_RECEIPT_MISMATCH"):
+        verify_quality_receipt(
+            receipt,
+            actor_id="owner-a",
+            input_digest="b" * 64,
+            config_version="quality-v1",
+            media_type="image",
             now=101,
         )
 
