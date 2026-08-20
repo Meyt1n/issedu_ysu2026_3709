@@ -55,7 +55,10 @@
 5. Linux Runner 的工具目录固定为 `/data1/ytm/hct-sync-runner/bin`；Windows Runner
    必须在 Runner 环境中配置 `HCT_SYNC_RUNNER_BIN`，其目录至少提供 `python3` 和 `jq`，
    并使用 Git for Windows 的 Bash。Python 版本使用 3.11。
-6. Runner 上线后先执行一次 `workflow_dispatch`（分支选择 `master`），确认日志显示
+6. Windows Git Bash 可能保留 Python、`jq` 或 `gh` 输出中的 CRLF；工作流在构造
+   GitHub API URL、提交引用和云端同步计划前必须剥离 `\r`，否则会出现
+   `net/url: invalid control character in URL`。
+7. Runner 上线后先执行一次 `workflow_dispatch`（分支选择 `master`），确认日志显示
    Runner 标签和完整 SHA 校验，再依赖后续 master push 自动触发。
 
 ## Billing 与恢复边界
