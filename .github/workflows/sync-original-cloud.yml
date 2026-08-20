@@ -97,12 +97,22 @@ jobs:
           export CLOUD_SELECTED_USERNAME="${CLOUD_REPO_USERNAME}"
           export CLOUD_SELECTED_PASSWORD="${CLOUD_REPO_PASSWORD}"
 
+          cloud_git() {
+            # Windows Git Credential Manager may otherwise reuse the Runner
+            # owner's cached credentials and silently bypass the selected token.
+            git \
+              -c credential.helper= \
+              -c credential.useHttpPath=true \
+              -c "credential.username=${CLOUD_SELECTED_USERNAME}" \
+              "$@"
+          }
+
           if git remote get-url original-cloud >/dev/null 2>&1; then
             git remote set-url original-cloud "${CLOUD_REPO_URL}"
           else
             git remote add original-cloud "${CLOUD_REPO_URL}"
           fi
-          git fetch original-cloud master
+          cloud_git fetch original-cloud master
 
           github_sha="$(git rev-parse "${GITHUB_SHA}")"
           cloud_sha="$(git rev-parse original-cloud/master)"
@@ -273,9 +283,9 @@ jobs:
             fi
 
             echo "同步 ${kind} ${reference}：${pr_login}，新增可达提交 ${introduced_count} 个，目标 ${sync_sha}"
-            git push original-cloud "${sync_sha}:refs/heads/master"
+            cloud_git push original-cloud "${sync_sha}:refs/heads/master"
 
-            verified_cloud_sha="$(git ls-remote original-cloud refs/heads/master | awk '{print $1}')"
+            verified_cloud_sha="$(cloud_git ls-remote original-cloud refs/heads/master | awk '{print $1}')"
             if [[ "${verified_cloud_sha}" != "${sync_sha}" ]]; then
               echo "::error::${kind} ${reference} 推送后校验失败：原云端=${verified_cloud_sha}，预期=${sync_sha}"
               exit 1

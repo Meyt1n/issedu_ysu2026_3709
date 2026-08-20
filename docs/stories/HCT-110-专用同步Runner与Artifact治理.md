@@ -58,7 +58,10 @@
 6. Windows Git Bash 可能保留 Python、`jq` 或 `gh` 输出中的 CRLF；工作流在构造
    GitHub API URL、提交引用和云端同步计划前必须剥离 `\r`，否则会出现
    `net/url: invalid control character in URL`。
-7. Runner 上线后先执行一次 `workflow_dispatch`（分支选择 `master`），确认日志显示
+7. Windows Git Credential Manager 可能复用 Runner 所有者缓存的内部仓库凭据，绕过
+   当前 PR 作者对应的 Token。所有内部仓库 `fetch`、`push` 和 `ls-remote` 必须显式
+   禁用 credential helper，并通过本次身份计划选中的用户名和 Token 完成认证。
+8. Runner 上线后先执行一次 `workflow_dispatch`（分支选择 `master`），确认日志显示
    Runner 标签和完整 SHA 校验，再依赖后续 master push 自动触发。
 
 ## Billing 与恢复边界
