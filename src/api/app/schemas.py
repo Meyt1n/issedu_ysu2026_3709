@@ -18,6 +18,17 @@ class AuthCredentials(BaseModel):
     password: str = Field(min_length=8, max_length=256)
 
 
+class PinLoginCredentials(BaseModel):
+    household_id: str = Field(min_length=1, max_length=120)
+    actor_id: str = Field(min_length=1, max_length=120)
+    pin: str = Field(pattern=r"^[0-9]{6}$")
+
+
+class PinSetRequest(BaseModel):
+    household_id: str = Field(min_length=1, max_length=120)
+    pin: str = Field(pattern=r"^[0-9]{6}$")
+
+
 class AuthSessionRequest(BaseModel):
     session_token: str = Field(min_length=32, max_length=256)
 
@@ -26,6 +37,7 @@ class AuthSessionRead(BaseModel):
     actor_id: str
     session_token: str
     expires_at: float
+    household_id: str | None = None
 
 
 class CapabilityResponse(BaseModel):

@@ -201,6 +201,20 @@ export class ApiClient {
     })
   }
 
+  loginWithPin(householdId: string, actorId: string, pin: string): Promise<AuthSession> {
+    return this.request('/api/v1/auth/pin-login', {
+      method: 'POST',
+      body: JSON.stringify({ household_id: householdId, actor_id: actorId, pin }),
+    })
+  }
+
+  setPin(householdId: string, pin: string, options?: RequestOptions): Promise<{ status: string; household_id: string }> {
+    return this.request('/api/v1/auth/pin', {
+      method: 'POST',
+      body: JSON.stringify({ household_id: householdId, pin }),
+    }, options)
+  }
+
   logout(sessionToken: string): Promise<{ status: string }> {
     return this.request('/api/v1/auth/logout', {
       method: 'POST',

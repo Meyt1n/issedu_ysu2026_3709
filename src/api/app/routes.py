@@ -39,9 +39,11 @@ from sqlalchemy.orm import Session
 
 from app.auth import (
     authenticate,
+    authenticate_with_pin,
     generate_pin_challenge,
     logout,
     register_account,
+    set_account_pin,
     verify_pin,
 )
 from app.config import get_settings
@@ -108,6 +110,8 @@ from app.schemas import (
     AssistantRequest,
     AssistantResponse,
     AuthCredentials,
+    PinLoginCredentials,
+    PinSetRequest,
     AuthorizationCreate,
     AuthorizationRead,
     AuthorizationRevoke,
@@ -208,6 +212,21 @@ def _is_erased(household: Household | None, member: Member | None = None) -> boo
     ):
         return True
     return False
+
+
+def _actor_belongs_to_household(session: Session, household_id: str, actor_id: str) -> bool:
+    household = session.get(Household, household_id)
+    if _is_erased(household):
+        return False
+    if household.created_by == actor_id:
+        return True
+    return session.scalar(
+        select(Member.id).where(
+            Member.household_id == household_id,
+            Member.actor_id == actor_id,
+            Member.deleted_at.is_(None),
+        )
+    ) is not None
 
 
 def _future_time(value: datetime) -> datetime:
@@ -1202,6 +1221,34 @@ def auth_login(
     payload: AuthCredentials,
 ) -> dict:
     return {"actor_id": payload.actor_id, **authenticate(payload.actor_id, payload.password)}
+
+
+@router.post("/auth/pin-login", response_model=AuthSessionRead)
+def auth_pin_login(
+    payload: PinLoginCredentials,
+    session: Session = Depends(get_session),
+) -> dict:
+    # Keep household and identity selection server-side: a client cannot use a
+    # valid PIN to enter a different household or impersonate another member.
+    if not _actor_belongs_to_household(session, payload.household_id, payload.actor_id):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="AUTH_FAILED")
+    return {
+        "actor_id": payload.actor_id,
+        "household_id": payload.household_id,
+        **authenticate_with_pin(payload.actor_id, payload.household_id, payload.pin),
+    }
+
+
+@router.post("/auth/pin", response_model=dict)
+def auth_set_pin(
+    payload: PinSetRequest,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> dict:
+    if not _actor_belongs_to_household(session, payload.household_id, actor_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RESOURCE_NOT_FOUND")
+    set_account_pin(actor_id, payload.household_id, payload.pin)
+    return {"status": "pin_configured", "household_id": payload.household_id}
 
 
 @router.post("/auth/logout")

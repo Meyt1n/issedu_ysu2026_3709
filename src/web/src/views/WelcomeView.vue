@@ -5,6 +5,7 @@ import welcomeHero from '../assets/welcome-hero.jpg'
 import AppIcon from '../components/AppIcon.vue'
 import {
   connect,
+  connectWithPin,
   connectWithPassword,
   createHouseholdAndEnter,
   formatError,
@@ -31,7 +32,10 @@ function onStageLeave(): void {
 const actorId = ref(session.actorId)
 const accessPurpose = ref(session.accessPurpose || 'family-care')
 const password = ref('')
+const householdId = ref('')
+const pin = ref('')
 const authMode = ref<'development' | 'session'>(session.authMode)
+const credentialMode = ref<'password' | 'pin'>('password')
 const registerMode = ref(false)
 const connecting = ref(false)
 const creating = ref(false)
@@ -68,14 +72,19 @@ async function submitConnect(): Promise<void> {
 async function submitSession(): Promise<void> {
   connecting.value = true
   try {
-    await connectWithPassword(
-      actorId.value,
-      password.value,
-      accessPurpose.value,
-      registerMode.value,
-    )
+    if (credentialMode.value === 'pin') {
+      await connectWithPin(actorId.value, householdId.value, pin.value, accessPurpose.value)
+    } else {
+      await connectWithPassword(
+        actorId.value,
+        password.value,
+        accessPurpose.value,
+        registerMode.value,
+      )
+    }
     if (session.status === 'ready') {
       password.value = ''
+      pin.value = ''
       pushToast('success', registerMode.value ? '本地账号已注册并登录。' : '已建立本地安全会话。')
     }
   } finally {
@@ -170,27 +179,44 @@ async function submitCreate(): Promise<void> {
           </button>
         </form>
         <form v-else class="section-stack" @submit.prevent="submitSession">
-          <label class="field">
+          <div class="segmented-control" role="group" aria-label="选择账号登录凭据">
+            <button type="button" :class="{ active: credentialMode === 'password' }" @click="credentialMode = 'password'">账号密码</button>
+            <button type="button" :class="{ active: credentialMode === 'pin' }" @click="credentialMode = 'pin'">家庭 PIN</button>
+          </div>
+          <label v-if="credentialMode === 'password'" class="field">
             本地账号
             <input v-model="actorId" autocomplete="username" placeholder="例如 parent-1" required />
           </label>
-          <label class="field">
+          <label v-else class="field">
+            家庭 ID
+            <input v-model="householdId" autocomplete="off" placeholder="例如 household-1" required />
+          </label>
+          <label v-if="credentialMode === 'pin'" class="field">
+            家庭成员身份
+            <input v-model="actorId" autocomplete="username" placeholder="例如 parent-1" required />
+          </label>
+          <label v-if="credentialMode === 'password'" class="field">
             密码
             <input v-model="password" type="password" autocomplete="current-password" minlength="8" required />
+          </label>
+          <label v-else class="field">
+            六位数字 PIN
+            <input v-model="pin" type="password" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required />
           </label>
           <label class="field">
             访问用途代码
             <input v-model="accessPurpose" autocomplete="off" placeholder="family-care" aria-label="访问用途代码" />
           </label>
+          <p v-if="credentialMode === 'pin'" class="form-sub">PIN 只用于当前家庭和所选身份，连续输错会暂时锁定。</p>
           <p v-if="session.error" class="notice error" role="alert">
             <AppIcon name="alert" :size="16" />
             {{ session.error }}
           </p>
-          <button type="submit" class="btn btn-primary" :disabled="!actorId.trim() || password.length < 8 || connecting">
-            {{ connecting ? '正在建立会话' : registerMode ? '注册并登录' : '登录' }}
+          <button type="submit" class="btn btn-primary" :disabled="!actorId.trim() || (credentialMode === 'password' ? password.length < 8 : !householdId.trim() || !/^\d{6}$/.test(pin)) || connecting">
+            {{ connecting ? '正在建立会话' : credentialMode === 'pin' ? '使用 PIN 登录' : registerMode ? '注册并登录' : '登录' }}
             <AppIcon v-if="!connecting" name="arrow-right" :size="17" />
           </button>
-          <button type="button" class="btn btn-ghost btn-small" @click="registerMode = !registerMode">
+          <button v-if="credentialMode === 'password'" type="button" class="btn btn-ghost btn-small" @click="registerMode = !registerMode">
             {{ registerMode ? '已有账号？返回登录' : '首次使用？注册本地账号' }}
           </button>
         </form>
