@@ -57,7 +57,7 @@ _DEGRADE_TEMPLATE = """当前助手服务暂时不可用。您可以：
 ASSISTANT_SYSTEM_PROMPT = (
     "/no_think\n"
     "你是「家健镜」家庭健康助手，运行在家庭本地设备上，服务于家庭照护的教学演示。"
-    "首要任务是直接、完整地回答用户问题，不是做意图分类。\n"
+    "首要任务是基于本轮已授权工具结果和已审核知识，直接、完整地回答用户问题。\n"
     "不要逐条复述或检查这些规则，不要展示分析草稿或内部推理；尽快只输出最终 JSON。\n"
     "回答要求：\n"
     "1. answer 必须是 1 至 6 句自然、完整的简体中文；绝不能只输出 hello、healthy、"
@@ -69,11 +69,12 @@ ASSISTANT_SYSTEM_PROMPT = (
     "药名和规格」。\n"
     "4. 用户问症状时，不诊断疾病；可复述用户描述、提示记录发生时间和伴随情况，并建议"
     "必要时联系医生。出现呼吸困难、意识异常、疑似中毒等紧急描述时 escalate=true。\n"
-    "5. 用户问药品能否同服、停药、换药或剂量时，不自行判断；只解释已命中的确定性规则"
-    "或授权文档。没有对应证据就明确无法判断，并建议咨询医生或药师。\n"
+    "5. 用户问药品能否同服、停药、换药或剂量时，必须先调用成员状态/用药记录工具，"
+    "再调用 retrieve_knowledge 查询已审核的本地药品文档；不自行判断，只解释已命中的确定性规则"
+    "或授权文档。没有对应知识片段就明确无法判断，并建议咨询医生或药师。\n"
     "6. 普通问候要用简短中文正常回应；不得把问候误识别为健康结论。\n"
-    "7. 需要更多事实时优先调用白名单工具。sources 只能填写本轮上下文或工具结果真实提供的"
-    "事件类型、规则编号或知识片段 ID；没有依据时使用空数组，禁止伪造引用。\n"
+    "7. 需要更多事实时优先调用白名单工具。sources 只能填写本轮工具结果真实提供的"
+    "事件 ID、规则编号或知识片段 ID；没有依据时使用空数组，禁止伪造引用。\n"
     "8. 绝不做诊断、开处方、决定用药剂量或建议停药换药；不提供购买链接、问诊导流或外部网址。\n"
     "9. 用温和、口语化的简体中文，先给依据再给解释，回答控制在 300 字以内。\n"
     "10. 输出必须是一个 JSON 对象，且只有 JSON，格式："
@@ -242,6 +243,11 @@ register_tool(
         "household_id": {"type": "string", "description": "Household UUID"},
         "member_id": {"type": "string", "description": "Member UUID"},
         "event_type": {"type": "string", "description": "Optional event type filter"},
+        "limit": {
+            "type": "integer",
+            "description": "Maximum confirmed events to return (1-20)",
+            "default": 20,
+        },
     },
 )
 
@@ -412,6 +418,67 @@ def _latest_user_query(messages: list[dict[str, Any]]) -> str:
     return ""
 
 
+_QUESTION_TYPES = {
+    "MEDICATION_SAFETY": "用药安全核对",
+    "MEDICATION_RECORD": "用药记录查询",
+    "FAMILY_RECORD": "家庭健康档案查询",
+    "RULE_EVIDENCE": "规则与证据查询",
+    "URGENT": "紧急情况分流",
+    "GENERAL": "一般健康信息",
+}
+
+
+def classify_question(query: str) -> str:
+    """Classify the latest question with a deterministic, local safety route.
+
+    This is a routing hint, not a medical conclusion.  High-risk medication
+    questions are intentionally routed to both member facts and approved
+    knowledge retrieval before Ollama is allowed to produce an answer.
+    """
+    normalized = re.sub(r"\s+", "", query.casefold())
+    if any(term in normalized for term in (
+        "呼吸困难", "意识异常", "疑似中毒", "昏迷", "抽搐", "严重过敏",
+    )):
+        return "URGENT"
+    if any(term in normalized for term in ("一起吃", "一同服用", "共同服用")) and any(
+        term in normalized for term in ("药", "阿莫西林", "布洛芬", "处方")
+    ):
+        return "MEDICATION_SAFETY"
+    if any(term in normalized for term in (
+        "能不能一起吃", "能否一起吃", "可以一起吃", "能不能同服", "能否同服",
+        "相互作用", "药物相互作用", "配伍", "停药", "换药", "调整剂量",
+        "一次吃多少", "一天吃几", "怎么服用", "吃多少", "同服",
+    )):
+        return "MEDICATION_SAFETY"
+    if any(term in normalized for term in (
+        "吃什么药", "正在用药", "在用药", "用药记录", "药品记录", "药品清单",
+        "扫描的药", "刚才扫描", "有哪些药", "药名", "用药",
+    )):
+        return "MEDICATION_RECORD"
+    if any(term in normalized for term in (
+        "家庭档案", "健康档案", "健康记录", "最近发生", "最近有哪些", "过敏史",
+        "疾病记录", "成员信息", "健康变化", "健康事件",
+    )):
+        return "FAMILY_RECORD"
+    if any(term in normalized for term in (
+        "规则", "提醒依据", "风险依据", "引用", "来源", "证据", "依据",
+    )):
+        return "RULE_EVIDENCE"
+    return "GENERAL"
+
+
+def question_type_label(query_type: str) -> str:
+    return _QUESTION_TYPES.get(query_type, _QUESTION_TYPES["GENERAL"])
+
+
+def risk_notice_for_question(query_type: str) -> str | None:
+    if query_type == "MEDICATION_SAFETY":
+        return "用药安全信息仅用于核对本地记录和已审核资料，请务必咨询医生或药师。"
+    if query_type == "URGENT":
+        return "如出现紧急症状，请及时联系医务人员；本助手不能替代紧急救治。"
+    return None
+
+
 def _sanitize_follow_up_questions(candidates: list[str]) -> list[str]:
     """Keep follow-ups short, local, non-commercial, and non-prescriptive."""
     sanitized: list[str] = []
@@ -506,10 +573,17 @@ class DegradedResponse:
     escalate: bool = False
 
 
-def degrade_result(degrade: DegradedResponse, model: str | None = None) -> dict[str, Any]:
+def degrade_result(
+    degrade: DegradedResponse,
+    model: str | None = None,
+    *,
+    query_type: str | None = None,
+) -> dict[str, Any]:
     """Map a DegradedResponse onto the assistant response contract."""
     payload = _degrade_payload(degrade)
     payload["model"] = model
+    payload["query_type"] = query_type
+    payload["risk_notice"] = risk_notice_for_question(query_type or "")
     return payload
 
 
@@ -632,6 +706,153 @@ def _bound_scope_value(
     return requested_text, None
 
 
+def _authorized_member_events(
+    session: Session,
+    *,
+    actor_id: str,
+    household_id: str | None,
+    member_id: str | None,
+    access_purpose: str | None,
+    event_type: str | None = None,
+    limit: int | None = None,
+) -> tuple[list[Any] | None, str | None]:
+    """Load only confirmed events after enforcing the API read boundary.
+
+    The model may propose tool arguments, but it never chooses the scope.  The
+    route-selected household/member pair is the authority, and the same
+    member/field/action/purpose check used by the ordinary timeline endpoint
+    is repeated immediately before tool data is read.
+    """
+    from app.models import Household, Member
+    from app.security import has_authorized_action
+
+    if not household_id or not member_id:
+        return None, "TOOL_SCOPE_DENIED"
+    household = session.get(Household, household_id)
+    member = session.get(Member, member_id)
+    if (
+        household is None
+        or member is None
+        or household.deleted_at is not None
+        or member.deleted_at is not None
+        or member.household_id != household_id
+    ):
+        return None, "TOOL_SCOPE_DENIED"
+    if not has_authorized_action(
+        session,
+        household,
+        member_id,
+        actor_id,
+        "READ_EVENTS",
+        "health_events",
+        access_purpose,
+    ):
+        return None, "TOOL_SCOPE_DENIED"
+
+    from app.projection import get_timeline
+
+    events = get_timeline(session, member_id)
+    if event_type:
+        events = [event for event in events if event.event_type == event_type]
+    if limit is not None:
+        events = events[-max(1, min(limit, 20)):]
+    return events, None
+
+
+_SAFE_EVENT_PAYLOAD_KEYS = (
+    "drug_name", "drug", "specification", "strength", "ingredient",
+    "expiry_date", "stock", "allergy", "disease", "plan", "schedule",
+    "symptom", "note", "status",
+)
+
+
+def _safe_event_fields(payload: dict[str, Any] | None) -> dict[str, str | int | float | bool]:
+    """Expose an allowlisted fact subset, never the raw event payload/evidence."""
+    if not isinstance(payload, dict):
+        return {}
+    fields: dict[str, str | int | float | bool] = {}
+    for key in _SAFE_EVENT_PAYLOAD_KEYS:
+        value = payload.get(key)
+        if isinstance(value, (str, int, float, bool)) and (
+            not isinstance(value, str) or value.strip()
+        ):
+            fields[key] = value.strip() if isinstance(value, str) else value
+    return fields
+
+
+def _public_health_event(event: Any) -> dict[str, Any]:
+    fields = _safe_event_fields(event.payload)
+    summary_parts = [f"{key}={value}" for key, value in fields.items()]
+    return {
+        "event_id": event.id,
+        "event_type": event.event_type,
+        "source": event.source,
+        "confirmation_status": "CONFIRMED",
+        "occurred_at": event.occurred_at.isoformat() if event.occurred_at else None,
+        "created_at": event.created_at.isoformat() if event.created_at else None,
+        "fields": fields,
+        "summary": "；".join(summary_parts),
+    }
+
+
+def _state_with_sources(facts: dict[str, Any]) -> dict[str, Any]:
+    """Serialize the projection with source event IDs and no raw payload."""
+    sources: list[str] = []
+
+    def source_id(item: dict[str, Any]) -> str | None:
+        value = item.get("added_by")
+        if isinstance(value, str) and value:
+            sources.append(value)
+            return value
+        return None
+
+    drugs = []
+    for item in facts.get("drugs", []):
+        item_source = source_id(item)
+        drugs.append({
+            "name": item.get("name"),
+            "ingredient": item.get("ingredient"),
+            "expiry_date": item.get("expiry_date"),
+            "stock": item.get("stock"),
+            "source_event_id": item_source,
+        })
+    allergies = []
+    for item in facts.get("allergies", []):
+        item_source = source_id(item)
+        allergies.append({"name": item.get("name"), "source_event_id": item_source})
+    diseases = []
+    for item in facts.get("diseases", []):
+        item_source = source_id(item)
+        diseases.append({"name": item.get("name"), "source_event_id": item_source})
+    plans = []
+    for item in facts.get("plans", []):
+        item_source = source_id(item)
+        plans.append({
+            "drug": item.get("drug"),
+            "schedule": item.get("schedule"),
+            "source_event_id": item_source,
+        })
+    return {
+        "drugs": drugs,
+        "allergies": allergies,
+        "diseases": diseases,
+        "plans": plans,
+        "caregivers": [item for item in facts.get("caregivers", []) if isinstance(item, str)],
+        "events_count": facts.get("events_count", 0),
+        "last_event_id": facts.get("last_event_id"),
+        "sources": list(dict.fromkeys(source for source in sources if source)),
+    }
+
+
+def _public_alert(alert: Any) -> dict[str, Any]:
+    return {
+        "rule_id": alert.rule_id,
+        "level": alert.level,
+        "message": alert.message,
+        "source_event_ids": list(dict.fromkeys(alert.source_event_ids)),
+    }
+
+
 def _citation_from_chunk(chunk: dict[str, Any]) -> dict[str, str]:
     return {
         "document_id": str(chunk["document_id"]),
@@ -699,6 +920,133 @@ def _unmatched_source_tokens(
     return unmatched
 
 
+def _execute_get_health_events(
+    session: Session,
+    *,
+    actor_id: str,
+    household_id: str | None,
+    member_id: str | None,
+    access_purpose: str | None,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    event_type = str(arguments.get("event_type") or "").strip() or None
+    try:
+        limit = int(arguments.get("limit") or 20)
+    except (TypeError, ValueError):
+        limit = 20
+    events, error = _authorized_member_events(
+        session,
+        actor_id=actor_id,
+        household_id=household_id,
+        member_id=member_id,
+        access_purpose=access_purpose,
+        event_type=event_type,
+        limit=limit,
+    )
+    if error:
+        return {"error": error, "events": [], "sources": [], "total": 0}
+    public_events = [_public_health_event(event) for event in (events or [])]
+    return {
+        "events": public_events,
+        "sources": [event["event_id"] for event in public_events],
+        "total": len(public_events),
+    }
+
+
+def _execute_get_member_state(
+    session: Session,
+    *,
+    actor_id: str,
+    household_id: str | None,
+    member_id: str | None,
+    access_purpose: str | None,
+) -> dict[str, Any]:
+    events, error = _authorized_member_events(
+        session,
+        actor_id=actor_id,
+        household_id=household_id,
+        member_id=member_id,
+        access_purpose=access_purpose,
+    )
+    if error:
+        return {"error": error, "state": {}, "sources": []}
+    from app.projection import build_relationship_graph
+
+    state = _state_with_sources(build_relationship_graph(events or []))
+    return {"state": state, "sources": state["sources"]}
+
+
+def _execute_get_applied_rules(
+    session: Session,
+    *,
+    actor_id: str,
+    household_id: str | None,
+    member_id: str | None,
+    access_purpose: str | None,
+) -> dict[str, Any]:
+    events, error = _authorized_member_events(
+        session,
+        actor_id=actor_id,
+        household_id=household_id,
+        member_id=member_id,
+        access_purpose=access_purpose,
+    )
+    if error:
+        return {"error": error, "rules": [], "sources": []}
+    from app.projection import build_relationship_graph
+    from app.rules import dedup_alerts, run_rules
+
+    alerts = dedup_alerts(run_rules(build_relationship_graph(events or [])))
+    rules = [
+        {
+            "rule_id": alert.rule_id,
+            "level": alert.level,
+            "source_event_ids": list(dict.fromkeys(alert.source_event_ids)),
+        }
+        for alert in alerts
+    ]
+    sources = list(dict.fromkeys(
+        [rule["rule_id"] for rule in rules]
+        + [event_id for rule in rules for event_id in rule["source_event_ids"]]
+    ))
+    return {"rules": rules, "sources": sources, "total": len(rules)}
+
+
+def _execute_get_risk_alerts(
+    session: Session,
+    *,
+    actor_id: str,
+    household_id: str | None,
+    member_id: str | None,
+    access_purpose: str | None,
+) -> dict[str, Any]:
+    events, error = _authorized_member_events(
+        session,
+        actor_id=actor_id,
+        household_id=household_id,
+        member_id=member_id,
+        access_purpose=access_purpose,
+    )
+    if error:
+        return {"error": error, "alerts": [], "sources": []}
+    from app.config import get_settings
+    from app.projection import build_relationship_graph
+    from app.rules import apply_daily_budget, dedup_alerts, run_rules
+
+    alerts = apply_daily_budget(dedup_alerts(run_rules(build_relationship_graph(events or []))))
+    public_alerts = [_public_alert(alert) for alert in alerts]
+    sources = list(dict.fromkeys(
+        [alert["rule_id"] for alert in public_alerts]
+        + [event_id for alert in public_alerts for event_id in alert["source_event_ids"]]
+    ))
+    return {
+        "alerts": public_alerts,
+        "sources": sources,
+        "ruleset_version": get_settings().ruleset_version,
+        "total": len(public_alerts),
+    }
+
+
 def _execute_retrieve_knowledge(
     session: Session,
     *,
@@ -709,6 +1057,13 @@ def _execute_retrieve_knowledge(
 ) -> dict[str, Any]:
     from app.knowledge import log_query, retrieve
 
+    # An unscoped route may still search actor-owned/global approved
+    # documents, but the model must not invent a household/member filter to
+    # make the server inspect another family's knowledge scope.
+    if household_id is None and arguments.get("household_id") not in (None, ""):
+        return {"error": "TOOL_SCOPE_DENIED", "results": [], "total": 0}
+    if member_id is None and arguments.get("member_id") not in (None, ""):
+        return {"error": "TOOL_SCOPE_DENIED", "results": [], "total": 0}
     bound_household, household_error = _bound_scope_value(
         arguments.get("household_id"), household_id
     )
@@ -805,6 +1160,7 @@ def execute_whitelisted_tool(
     actor_id: str,
     household_id: str | None,
     member_id: str | None,
+    access_purpose: str | None = None,
 ) -> dict[str, Any]:
     if not is_tool_allowed(name):
         return {"error": "TOOL_NOT_ALLOWED"}
@@ -815,6 +1171,22 @@ def execute_whitelisted_tool(
         return {"error": str(exc)}
     if session is None:
         return {"error": "TOOL_SESSION_REQUIRED"}
+    if name in {
+        "get_health_events",
+        "get_member_state",
+        "get_applied_rules",
+        "get_risk_alerts",
+    }:
+        if not household_id or not member_id:
+            return {"error": "TOOL_SCOPE_DENIED"}
+        _, household_error = _bound_scope_value(
+            validated.get("household_id"), household_id,
+        )
+        _, member_error = _bound_scope_value(
+            validated.get("member_id"), member_id,
+        )
+        if household_error or member_error:
+            return {"error": "TOOL_SCOPE_DENIED"}
     if name == "retrieve_knowledge":
         return _execute_retrieve_knowledge(
             session,
@@ -830,6 +1202,39 @@ def execute_whitelisted_tool(
             household_id=household_id,
             member_id=member_id,
             arguments=validated,
+        )
+    if name == "get_health_events":
+        return _execute_get_health_events(
+            session,
+            actor_id=actor_id,
+            household_id=household_id,
+            member_id=member_id,
+            access_purpose=access_purpose,
+            arguments=validated,
+        )
+    if name == "get_member_state":
+        return _execute_get_member_state(
+            session,
+            actor_id=actor_id,
+            household_id=household_id,
+            member_id=member_id,
+            access_purpose=access_purpose,
+        )
+    if name == "get_applied_rules":
+        return _execute_get_applied_rules(
+            session,
+            actor_id=actor_id,
+            household_id=household_id,
+            member_id=member_id,
+            access_purpose=access_purpose,
+        )
+    if name == "get_risk_alerts":
+        return _execute_get_risk_alerts(
+            session,
+            actor_id=actor_id,
+            household_id=household_id,
+            member_id=member_id,
+            access_purpose=access_purpose,
         )
     return {"error": "TOOL_NOT_BOUND"}
 
@@ -854,6 +1259,7 @@ def run_assistant(
     actor_id: str,
     household_id: str | None = None,
     member_id: str | None = None,
+    access_purpose: str | None = None,
     model: str | None = None,
     max_tokens: int = 512,
     temperature: float = 0.3,
@@ -862,7 +1268,7 @@ def run_assistant(
 
     Returns a dict with:
         answer, sources, citations, confidence, escalate, degraded,
-        degrade_reason, model, route, suggested_questions
+        degrade_reason, model, route, suggested_questions, query_type, risk_notice
     """
     from app.config import get_settings
 
@@ -870,11 +1276,39 @@ def run_assistant(
     model = model or settings.ollama_model
     timeout = settings.ollama_timeout_seconds
     client = OllamaClient(settings.ollama_base_url)
+    query_type = classify_question(_latest_user_query(messages))
+
+    def degraded(reason: str) -> dict[str, Any]:
+        return degrade_result(
+            build_degrade_response(reason),
+            model,
+            query_type=query_type,
+        )
 
     # Pin the output contract as the leading system message; caller-provided
     # system context (e.g. injected member facts) is merged after it so
     # grounding never displaces the JSON contract or the medical boundary.
-    system_parts = [ASSISTANT_SYSTEM_PROMPT] + [
+    routing_hint = (
+        f"【本轮问题类型：{question_type_label(query_type)}】"
+        "这是后端安全路由提示，不是需要复述给用户的内容。"
+    )
+    if query_type == "MEDICATION_SAFETY":
+        routing_hint += (
+            "必须先调用 get_member_state 或 get_health_events 获取已确认用药记录，"
+            "再调用 retrieve_knowledge 检索已审核药品文档；没有知识片段不得回答"
+            "能否同服、停药、换药或剂量。"
+        )
+    elif query_type in {"MEDICATION_RECORD", "FAMILY_RECORD"}:
+        routing_hint += (
+            "优先调用 get_member_state 或 get_health_events，并在 sources 中引用"
+            "工具返回的事件 ID。"
+        )
+    elif query_type == "RULE_EVIDENCE":
+        routing_hint += (
+            "优先调用 get_applied_rules 或 get_risk_alerts，并在 sources 中引用"
+            "工具返回的规则编号或事件 ID。"
+        )
+    system_parts = [ASSISTANT_SYSTEM_PROMPT, routing_hint] + [
         str(message.get("content", ""))
         for message in messages
         if message.get("role") == "system" and message.get("content")
@@ -892,6 +1326,7 @@ def run_assistant(
         max_tokens=max_tokens,
     )
     allowed_citations: list[dict[str, str]] = []
+    allowed_fact_sources: set[str] = set()
     tool_errors: list[str] = []
 
     parsed: HealthAssistantOutput | None = None
@@ -906,7 +1341,7 @@ def run_assistant(
                 timeout=timeout,
             )
         except RuntimeError:
-            return degrade_result(build_degrade_response("MODEL_UNAVAILABLE"), model)
+            return degraded("MODEL_UNAVAILABLE")
 
         tool_calls = extract_tool_calls(raw)
         raw_content = (raw.get("message") or {}).get("content") or ""
@@ -926,11 +1361,15 @@ def run_assistant(
                     actor_id=actor_id,
                     household_id=household_id,
                     member_id=member_id,
+                    access_purpose=access_purpose,
                 )
                 if result.get("error"):
                     tool_errors.append(str(result["error"]))
                 for chunk in result.get("results") or []:
                     allowed_citations.append(_citation_from_chunk(chunk))
+                for source in result.get("sources") or []:
+                    if isinstance(source, str) and source.strip():
+                        allowed_fact_sources.add(source.strip())
                 conversation.append(
                     {
                         "role": "tool",
@@ -942,51 +1381,57 @@ def run_assistant(
 
         parsed = _parse_assistant_output(raw_content)
         if parsed is None:
-            return degrade_result(
-                build_degrade_response("SCHEMA_VALIDATION_FAILED"), model
-            )
+            return degraded("SCHEMA_VALIDATION_FAILED")
         break
     else:
-        return degrade_result(build_degrade_response("SCHEMA_VALIDATION_FAILED"), model)
+        return degraded("SCHEMA_VALIDATION_FAILED")
 
     assert parsed is not None
     violations = _check_medical_boundary(parsed.answer)
     if violations:
         logger.warning("Medical boundary violation: %s", violations)
-        return degrade_result(build_degrade_response("MEDICAL_BOUNDARY_VIOLATION"), model)
+        return degraded("MEDICAL_BOUNDARY_VIOLATION")
     if _contains_external_links(parsed.answer):
         logger.warning("External link detected in assistant output")
-        return degrade_result(build_degrade_response("EXTERNAL_LINK_DETECTED"), model)
+        return degraded("EXTERNAL_LINK_DETECTED")
 
     if "TOOL_SCOPE_DENIED" in tool_errors:
-        return degrade_result(build_degrade_response("TOOL_SCOPE_DENIED"), model)
+        return degraded("TOOL_SCOPE_DENIED")
     if "NO_AUTHORISED_DOCUMENTS" in tool_errors and not allowed_citations:
-        return degrade_result(build_degrade_response("NO_AUTHORISED_DOCUMENTS"), model)
+        return degraded("NO_AUTHORISED_DOCUMENTS")
 
     matched_citations = filter_claimed_citations(parsed.sources, allowed_citations)
     unmatched = _unmatched_source_tokens(parsed.sources, matched_citations)
-    if any(_looks_like_knowledge_citation(token) for token in unmatched):
-        return degrade_result(build_degrade_response("CITATION_NOT_FOUND"), model)
+    unknown_sources = [token for token in unmatched if token not in allowed_fact_sources]
+    if any(_looks_like_knowledge_citation(token) for token in unknown_sources):
+        return degraded("CITATION_NOT_FOUND")
     if allowed_citations and not matched_citations:
-        return degrade_result(build_degrade_response("EVIDENCE_REQUIRED"), model)
+        return degraded("EVIDENCE_REQUIRED")
+    if query_type == "MEDICATION_SAFETY" and not matched_citations:
+        return degraded("EVIDENCE_REQUIRED")
+    if any(token not in allowed_fact_sources for token in unknown_sources):
+        return degraded("CITATION_NOT_FOUND")
 
     fact_sources = [
-        token for token in unmatched if not _looks_like_knowledge_citation(token)
+        token for token in unmatched if token in allowed_fact_sources
     ]
+    escalated = parsed.escalate or query_type == "URGENT"
     return {
         "answer": parsed.answer,
         "sources": [item["chunk_id"] for item in matched_citations] + fact_sources,
         "citations": matched_citations,
         "suggested_questions": suggest_follow_up_questions(
             messages,
-            escalate=parsed.escalate,
+            escalate=escalated,
         ),
         "confidence": parsed.confidence,
-        "escalate": parsed.escalate,
+        "escalate": escalated,
         "degraded": False,
         "degrade_reason": None,
         "model": model,
         "route": "EVIDENCE_REQUIRED" if matched_citations else None,
+        "query_type": query_type,
+        "risk_notice": risk_notice_for_question(query_type),
     }
 
 

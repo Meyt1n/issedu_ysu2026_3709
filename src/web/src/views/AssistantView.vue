@@ -43,6 +43,8 @@ interface ChatEntry {
   escalate?: boolean
   suggestedQuestions?: string[]
   route?: string | null
+  queryType?: string | null
+  riskNotice?: string | null
 }
 
 const history = ref<ChatEntry[]>([])
@@ -184,6 +186,18 @@ function evidenceSummary(entry: ChatEntry): string {
 
 function citationTitle(citation: AssistantCitation): string {
   return citation.document_title?.trim() || citation.document_id
+}
+
+function questionTypeLabel(queryType?: string | null): string {
+  const labels: Record<string, string> = {
+    MEDICATION_SAFETY: '用药安全核对',
+    MEDICATION_RECORD: '用药记录查询',
+    FAMILY_RECORD: '家庭健康档案查询',
+    RULE_EVIDENCE: '规则与证据查询',
+    URGENT: '紧急情况分流',
+    GENERAL: '一般健康信息',
+  }
+  return labels[queryType ?? ''] ?? '一般健康信息'
 }
 
 watch(
@@ -404,6 +418,8 @@ async function send(text?: string): Promise<void> {
       escalate: reply.escalate,
       suggestedQuestions: normalizeSuggestedQuestions(reply.suggested_questions),
       route: reply.route,
+      queryType: reply.query_type,
+      riskNotice: reply.risk_notice,
     }
     history.value.push(entry)
     persistChatSession()
@@ -524,14 +540,21 @@ onBeforeUnmount(() => {
           {{ entry.role === 'assistant' ? entry.content.slice(0, entry.revealed) : entry.content
           }}<span v-if="isStreaming(entry)" class="stream-caret" aria-hidden="true" />
           <div
-            v-if="entry.role === 'assistant' && !isStreaming(entry) && (entry.degraded || entry.escalate || (entry.sources?.length ?? 0) > 0 || entry.confidence)"
+            v-if="entry.role === 'assistant' && !isStreaming(entry) && (entry.degraded || entry.escalate || entry.riskNotice || entry.queryType || (entry.sources?.length ?? 0) > 0 || entry.confidence)"
             class="chat-sources"
           >
+            <span v-if="entry.queryType" class="chat-evidence-summary">
+              <AppIcon name="compass" :size="12" style="vertical-align: -1px" />
+              问题类型：{{ questionTypeLabel(entry.queryType) }}
+            </span>
             <span v-if="entry.degraded" style="color: var(--gold)">
               ⚠ {{ degradeReasonLabel(entry.degradeReason) }}，以上为受控回复，不含模型生成的医疗判断。
             </span>
             <span v-if="entry.escalate" style="color: var(--rose)">
               此问题超出系统边界，请联系医生或药师进一步确认。
+            </span>
+            <span v-if="entry.riskNotice" style="color: var(--rose)">
+              ⚠ {{ entry.riskNotice }}
             </span>
             <span v-if="entry.confidence && !entry.degraded">回答把握程度：{{ entry.confidence }}（仍需人工确认）</span>
             <span v-if="!entry.degraded" class="chat-evidence-summary">

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.knowledge import KnowledgeChunk, add_document
+from app.models import CareAuthorization, HealthEvent, Household, Member
 from app.tool_call import (
     HealthAssistantOutput,
     OllamaClient,
@@ -17,6 +19,7 @@ from app.tool_call import (
     _contains_external_links,
     _parse_loose_output,
     build_degrade_response,
+    classify_question,
     execute_whitelisted_tool,
     extract_tool_calls,
     filter_claimed_citations,
@@ -346,6 +349,17 @@ def test_retrieve_knowledge_tool_binds_request_scope_and_rejects_override(
     assert denied["error"] == "TOOL_SCOPE_DENIED"
     assert denied["results"] == []
 
+    unbound_override = execute_whitelisted_tool(
+        db_session,
+        name="retrieve_knowledge",
+        arguments={"query": "合成照护证据", "household_id": "house-a"},
+        actor_id="owner-a",
+        household_id=None,
+        member_id=None,
+    )
+    assert unbound_override["error"] == "TOOL_SCOPE_DENIED"
+    assert unbound_override["results"] == []
+
     retrieved = execute_whitelisted_tool(
         db_session,
         name="retrieve_knowledge",
@@ -471,4 +485,278 @@ def test_run_assistant_rejects_fabricated_sources(
     assert result["degrade_reason"] == "CITATION_NOT_FOUND"
     assert result["citations"] == []
     assert result["route"] == "EVIDENCE_REQUIRED"
+
+
+def _add_confirmed_medication_fixture(
+    db_session: Session,
+) -> tuple[Household, Member, list[HealthEvent]]:
+    household = Household(name="Assistant household", created_by="assistant-owner")
+    db_session.add(household)
+    db_session.flush()
+    member = Member(
+        household_id=household.id,
+        display_name="Synthetic member",
+        role="SELF",
+    )
+    db_session.add(member)
+    db_session.flush()
+    events = [
+        HealthEvent(
+            household_id=household.id,
+            member_id=member.id,
+            sequence_no=index,
+            event_type="medication_added",
+            source="VISION_REVIEW",
+            confirmation_status="CONFIRMED",
+            payload={"drug": drug, "ingredient": ingredient, "private": "must-not-leak"},
+            evidence={"raw": "must-not-leak"},
+            created_by="assistant-owner",
+            confirmed_by="assistant-owner",
+            correlation_id=f"assistant-{index}",
+            schema_version=1,
+        )
+        for index, (drug, ingredient) in enumerate(
+            (("阿莫西林", "阿莫西林"), ("布洛芬", "布洛芬")),
+            start=1,
+        )
+    ]
+    pending = HealthEvent(
+        household_id=household.id,
+        member_id=member.id,
+        sequence_no=3,
+        event_type="medication_added",
+        source="VISION_REVIEW",
+        confirmation_status="PENDING",
+        payload={"drug": "未确认药品"},
+        evidence={},
+        created_by="assistant-owner",
+        correlation_id="assistant-pending",
+        schema_version=1,
+    )
+    db_session.add_all([*events, pending])
+    db_session.commit()
+    return household, member, events
+
+
+def test_member_tools_return_confirmed_allowlisted_facts_and_rules(db_session: Session) -> None:
+    household, member, events = _add_confirmed_medication_fixture(db_session)
+    common = {
+        "session": db_session,
+        "actor_id": "assistant-owner",
+        "household_id": household.id,
+        "member_id": member.id,
+    }
+
+    event_result = execute_whitelisted_tool(
+        name="get_health_events",
+        arguments={},
+        **common,
+    )
+    assert event_result["total"] == 2
+    assert {item["event_id"] for item in event_result["events"]} == {event.id for event in events}
+    assert all("private" not in item["fields"] for item in event_result["events"])
+
+    state_result = execute_whitelisted_tool(
+        name="get_member_state",
+        arguments={},
+        **common,
+    )
+    assert {item["name"] for item in state_result["state"]["drugs"]} == {"阿莫西林", "布洛芬"}
+    assert set(state_result["sources"]) == {event.id for event in events}
+
+    rules_result = execute_whitelisted_tool(
+        name="get_applied_rules",
+        arguments={},
+        **common,
+    )
+    assert "interaction" in {item["rule_id"] for item in rules_result["rules"]}
+    assert "interaction" in rules_result["sources"]
+
+    risk_result = execute_whitelisted_tool(
+        name="get_risk_alerts",
+        arguments={},
+        **common,
+    )
+    assert risk_result["alerts"]
+    assert risk_result["ruleset_version"]
+
+
+def test_member_tools_reject_cross_member_scope(db_session: Session) -> None:
+    household, member, _events = _add_confirmed_medication_fixture(db_session)
+    other = Member(household_id=household.id, display_name="Other member", role="DEPENDENT")
+    db_session.add(other)
+    db_session.commit()
+
+    result = execute_whitelisted_tool(
+        db_session,
+        name="get_health_events",
+        arguments={"member_id": other.id},
+        actor_id="assistant-owner",
+        household_id=household.id,
+        member_id=member.id,
+    )
+    assert result["error"] == "TOOL_SCOPE_DENIED"
+    assert result.get("events", []) == []
+
+
+def test_member_tools_require_caregiver_purpose(db_session: Session) -> None:
+    household, member, _events = _add_confirmed_medication_fixture(db_session)
+    db_session.add(
+        CareAuthorization(
+            household_id=household.id,
+            member_id=member.id,
+            grantor_actor_id="assistant-owner",
+            grantee_actor_id="assistant-caregiver",
+            data_fields=["health_events"],
+            actions=["READ_EVENTS"],
+            purpose="family-care",
+            valid_from=datetime.now(UTC) - timedelta(minutes=1),
+            valid_until=datetime.now(UTC) + timedelta(hours=1),
+        )
+    )
+    db_session.commit()
+
+    denied = execute_whitelisted_tool(
+        db_session,
+        name="get_member_state",
+        arguments={},
+        actor_id="assistant-caregiver",
+        household_id=household.id,
+        member_id=member.id,
+    )
+    assert denied["error"] == "TOOL_SCOPE_DENIED"
+
+    allowed = execute_whitelisted_tool(
+        db_session,
+        name="get_member_state",
+        arguments={},
+        actor_id="assistant-caregiver",
+        household_id=household.id,
+        member_id=member.id,
+        access_purpose="family-care",
+    )
+    assert len(allowed["state"]["drugs"]) == 2
+
+
+def test_question_classifier_marks_medication_safety() -> None:
+    assert classify_question("阿莫西林能不能和刚才扫描的布洛芬一起吃？") == "MEDICATION_SAFETY"
+
+
+def test_medication_safety_requires_reviewed_knowledge_and_exposes_risk_notice(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    household, member, _events = _add_confirmed_medication_fixture(db_session)
+    document = add_document(
+        db_session,
+        title="Synthetic medication interaction card",
+        content="合成审核知识：阿莫西林与布洛芬的同服问题必须由医生或药师结合个体情况确认。",
+        source="hct403-synthetic-approved",
+        created_by="assistant-owner",
+        version="approved-v1",
+        permission_scope={"created_by": "assistant-owner"},
+    )
+    db_session.commit()
+    chunk = db_session.query(KnowledgeChunk).filter_by(document_id=document.id).one()
+
+    def scripted_chat(_self: OllamaClient, **kwargs: object) -> dict:
+        messages = kwargs["messages"]  # type: ignore[index]
+        tool_names = [
+            message.get("name")
+            for message in messages
+            if isinstance(message, dict) and message.get("role") == "tool"
+        ]
+        if "get_member_state" not in tool_names:
+            call = "get_member_state"
+            arguments = {}
+        elif "retrieve_knowledge" not in tool_names:
+            call = "retrieve_knowledge"
+            arguments = {"query": "阿莫西林 布洛芬 同服"}
+        else:
+            payload = json.loads(messages[-1]["content"])
+            cited = payload["results"][0]["chunk_id"]
+            return {
+                "message": {
+                    "content": json.dumps({
+                        "answer": "本地已审核资料要求结合个人情况核对，不能仅凭助手决定是否同服。",
+                        "sources": [cited],
+                        "confidence": "medium",
+                        "escalate": False,
+                    }, ensure_ascii=False),
+                },
+            }
+        return {
+            "message": {
+                "content": "",
+                "tool_calls": [{"function": {"name": call, "arguments": arguments}}],
+            },
+        }
+
+    monkeypatch.setattr(OllamaClient, "chat", scripted_chat)
+    result = run_assistant(
+        db_session,
+        messages=[{
+            "role": "user",
+            "content": "阿莫西林能不能和刚才扫描的布洛芬一起吃？",
+        }],
+        actor_id="assistant-owner",
+        household_id=household.id,
+        member_id=member.id,
+    )
+    assert result["degraded"] is False
+    assert result["query_type"] == "MEDICATION_SAFETY"
+    assert result["risk_notice"] and "医生或药师" in result["risk_notice"]
+    assert result["sources"] == [chunk.id]
+    assert result["citations"][0]["version"] == "approved-v1"
+
+
+def test_medication_safety_without_reviewed_knowledge_degrades(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    household, member, _events = _add_confirmed_medication_fixture(db_session)
+
+    def scripted_chat(_self: OllamaClient, **kwargs: object) -> dict:
+        messages = kwargs["messages"]  # type: ignore[index]
+        tool_names = [
+            message.get("name")
+            for message in messages
+            if isinstance(message, dict) and message.get("role") == "tool"
+        ]
+        if "get_member_state" not in tool_names:
+            call = "get_member_state"
+            arguments = {}
+        elif "retrieve_knowledge" not in tool_names:
+            call = "retrieve_knowledge"
+            arguments = {"query": "阿莫西林 布洛芬 同服"}
+        else:
+            return {
+                "message": {
+                    "content": json.dumps({
+                        "answer": "我无法判断这两种药品是否可以同服，请咨询医生或药师。",
+                        "sources": [],
+                        "confidence": "low",
+                        "escalate": True,
+                    }, ensure_ascii=False),
+                },
+            }
+        return {
+            "message": {
+                "content": "",
+                "tool_calls": [{"function": {"name": call, "arguments": arguments}}],
+            },
+        }
+
+    monkeypatch.setattr(OllamaClient, "chat", scripted_chat)
+    result = run_assistant(
+        db_session,
+        messages=[{"role": "user", "content": "阿莫西林和布洛芬能不能一起吃？"}],
+        actor_id="assistant-owner",
+        household_id=household.id,
+        member_id=member.id,
+    )
+    assert result["degraded"] is True
+    assert result["degrade_reason"] in {"NO_AUTHORISED_DOCUMENTS", "EVIDENCE_REQUIRED"}
+    assert result["query_type"] == "MEDICATION_SAFETY"
+    assert result["sources"] == []
 

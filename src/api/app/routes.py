@@ -1884,6 +1884,7 @@ def assistant_chat(
     actor_id: str = Depends(get_actor_id),
     household_id: str | None = None,
     member_id: str | None = None,
+    access_purpose: str | None = Depends(get_access_purpose),
     session: Session = Depends(get_session),
 ) -> AssistantResponse:
     """Run the local health assistant with Ollama tool calling.
@@ -1902,6 +1903,7 @@ def assistant_chat(
         actor_id=actor_id,
         household_id=household_id,
         member_id=member_id,
+        access_purpose=access_purpose,
         model=payload.model,
         max_tokens=payload.max_tokens,
         temperature=payload.temperature,

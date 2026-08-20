@@ -604,6 +604,8 @@ class AssistantResponse(BaseModel):
     degrade_reason: str | None = None
     model: str | None = None
     route: str | None = None
+    query_type: str | None = None
+    risk_notice: str | None = None
 
 
 # ── HCT-208: Correction diff schemas ──────────────────────────────────
