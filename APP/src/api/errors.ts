@@ -53,6 +53,9 @@ export function presentApiError(cause: unknown): ErrorPresentation {
     return retry('家庭服务器暂时无法验证身份，请稍后重试。')
   }
 
+  if (code === 'AUTHORIZATION_REVERIFICATION_REQUIRED' || code === 'AUTHORIZATION_EXPIRED' || code === 'CONSENT_REVOKED') {
+    return settings('授权可能已到期、被撤回或访问范围已变化。为保护隐私，已清除本地页面数据；请到“我的”重新验证身份与访问目的。')
+  }
   if (code === 'SESSION_EXPIRED' || code === 'AUTH_REVOKED') {
     return settings('登录会话已失效，请重新登录后重试。')
   }

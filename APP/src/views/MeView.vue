@@ -14,13 +14,14 @@ import {
   capabilityLabel,
   useCapabilities,
 } from '@/stores/capabilities'
-import { useSession } from '@/stores/session'
+import { useAuthorizationBoundary, useSession } from '@/stores/session'
 import { tapFeedback } from '@/utils/haptics'
 import { normalizePhoneNumber } from '@/utils/phone'
 import { validateServerBaseUrl } from '@/utils/serverUrl'
 
 const { settings, setElderMode } = useA11y()
 const { session, updateSession } = useSession()
+const { authorizationBoundary, resumeAuthorizationBoundary } = useAuthorizationBoundary()
 const {
   capabilities: capabilityState,
   setCapabilities,
@@ -152,6 +153,7 @@ async function testConnection(): Promise<void> {
       clearCapabilities()
       capabilityProbeError.value = presentApiError(cause)
     }
+    resumeAuthorizationBoundary()
     connectionState.value = 'ok'
     connectionMessage.value = `已连接：${health.service} ${health.version}${
       probe ? `，已探测 ${probe.available.length} 项可用能力` : '；能力探测未完成'
@@ -264,7 +266,10 @@ function restoreDemoData(): void {
         </label>
       </fieldset>
 
-      <template v-if="session.dataMode === 'live'">
+            <template v-if="session.dataMode === 'live'">
+        <p v-if="authorizationBoundary.status === 'reverification-required'" class="notice" data-tone="warn" role="alert">
+          授权边界已失效。为保护隐私，成员、任务、风险、事件和视觉候选不会从本地恢复；请重新测试连接后再加载数据。
+        </p>
         <label class="field">
           服务器地址
           <input
