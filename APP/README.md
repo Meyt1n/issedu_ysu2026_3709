@@ -99,7 +99,9 @@ npm run seed:live -- --base http://127.0.0.1:18800
 npm run dev
 ```
 
-应用内切到"我的 → 数据来源 → 家庭服务器"，身份填 `dev-wang`（owner）或 `dev-uncle`（仅被授权读王秀兰事件的照护者），目的代码保持 `family-care`。网页端（主仓库 `npm run dev:web`）连同一后端即可两端互通。
+应用内切到"我的 → 数据来源 → 家庭服务器"。`npm run dev` 属于开发配置，因此"身份来源"里可以选择"开发期身份（仅本地联调）"，身份填 `dev-wang`（owner）或 `dev-uncle`（仅被授权读王秀兰事件的照护者），目的代码保持 `family-care`。网页端（主仓库 `npm run dev:web`）连同一后端即可两端互通。
+
+默认身份来源是"正式登录"：会走 `POST /api/v1/auth/login` 建立服务端会话，后续请求使用 `Authorization: Bearer`，不再发送 `X-Actor-Id`。正式构建（`npm run build`，未设置 `VITE_ALLOW_DEV_ACTOR=true`）下开发期身份入口不会渲染，已保存的开发配置会在启动时回退成正式登录。会话生命周期、契约与当前缺口见 [MOB-133 Story](../docs/stories/MOB-133-正式鉴权与会话生命周期联调.md)。
 
 ### 联机模式的已知限制（如实记录，不冒充完成）
 
@@ -110,7 +112,8 @@ npm run dev
 - 联机入口会探测 `/api/v1/meta/capabilities` 并列出服务阶段、可用和未提供能力；能力探测失败或服务端未声明的能力按不可用处理，相关入口会禁用并标注限制；
 - 照护者视角的可见范围按"服务端已过滤"标注（授权明细仅 owner 可读，到期时间不显示）；
 - "近 7 天完成情况"由计划事实与 `plan_confirmed` 事件推导，为近似统计；
-- 登录 / PIN 二次确认尚未接入主仓库正式接口；当前仅保留明确标注的开发期 `X-Actor-Id` 联调路径。移动端适配契约、Bearer/Cookie 传输边界和内存测试桩见 [MOB-115 Story](../docs/stories/MOB-115-正式鉴权适配设计.md)，正式鉴权仍跟随主仓库 HCT-107 交付；
+- 正式登录、会话生命周期和 PIN 二次确认已在移动端接入（登录页、路由守卫、内存会话、401/过期/撤权 fail-closed、登出清理），但**主仓库 HCT-107 契约不足，尚未完成真实后端联调**：业务端点仍只认 `X-Actor-Id`，`/auth/login` 等把凭据放在 query 参数，`/auth/pin-challenge` 回显 PIN 且不绑定登录会话，也缺少会话续验端点。移动端在这些情况下如实报"鉴权接口与契约不一致"，不显示伪造的登录成功或二次确认成功。缺口清单与所需契约见 [MOB-133 Story](../docs/stories/MOB-133-正式鉴权与会话生命周期联调.md)，适配设计背景见 [MOB-115 Story](../docs/stories/MOB-115-正式鉴权适配设计.md)；
+- 会话凭据（token / sessionId）只保存在内存：不写 `localStorage`、不进 URL、不进日志或通知；密码提交后立即从输入框清除，PIN 用完即弃。Android 真机/WebView 与 PWA 上的"登录、过期、退出、撤权后重新进入"四条路径尚未执行；
 - 联调发现的主仓库缺口：投影丢弃药品 `expiry_date/stock/ingredient` 导致过期/低库存/重复成分规则无法触发——
   已提交修复（[Issue #140](https://github.com/Meyt1n/issedu_ysu2026_3709/issues/140)、
   [PR #141](https://github.com/Meyt1n/issedu_ysu2026_3709/pull/141)，含"事件→投影→规则"回归测试，待维护者复核合并）。
@@ -161,14 +164,14 @@ android/             Capacitor 生成的原生安卓工程（构建产物与 loc
 public/              PWA manifest、图标、AI 生成氛围底图（bg/）与离线 Service Worker（sw.js）
 scripts/             联调造数脚本（虚构数据）与一键 APK 构建脚本
 src/
-  api/               与主仓库对齐的 API 契约、鉴权适配和客户端（开发期 X-Actor-Id 等请求头一致）
+  api/               与主仓库对齐的 API 契约、正式鉴权适配（HTTP 适配器 + 测试桩）和客户端
   components/        TabBar、任务卡、等级标签、开关等基础组件
   composables/       语音播报（Web Speech API）
-  data/              DataProvider 接口 + 演示数据 + 联机适配器 + 文案映射
-  router/            页面路由
-  stores/            无障碍设置、会话设置（localStorage 持久化）、运行时能力探测状态
+  data/              DataProvider 接口 + 演示数据 + 联机适配器 + 鉴权适配器实例 + 文案映射
+  router/            页面路由（联机页面带正式会话守卫）
+  stores/            无障碍设置、会话设置（localStorage 持久化）、正式会话生命周期（仅内存）、运行时能力探测状态
   utils/             时间格式化等
-  views/             9 个页面
+  views/             10 个页面（含登录页）
 docs/                无障碍模式设计说明
 capacitor.config.ts  安卓壳配置（appId、webDir）
 ```

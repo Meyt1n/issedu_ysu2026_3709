@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 
 import AppIcon from '@/components/AppIcon.vue'
 import SwitchRow from '@/components/SwitchRow.vue'
@@ -8,19 +8,22 @@ import { createSpeaker } from '@/composables/useSpeech'
 import { ApiClient } from '@/api/client'
 import { presentApiError, type ErrorPresentation } from '@/api/errors'
 import { resetDemoData } from '@/data/demoProvider'
+import { currentAuthAdapter, familyAuthAdapter } from '@/data/authAdapter'
 import { useA11y } from '@/stores/accessibility'
 import {
   capabilityDescription,
   capabilityLabel,
   useCapabilities,
 } from '@/stores/capabilities'
-import { useAuthorizationBoundary, useSession } from '@/stores/session'
+import { getAuthSession, useAuth } from '@/stores/auth'
+import { isDevActorEnabled, useAuthorizationBoundary, useSession, type AuthMode } from '@/stores/session'
 import { tapFeedback } from '@/utils/haptics'
 import { normalizePhoneNumber } from '@/utils/phone'
 import { validateServerBaseUrl } from '@/utils/serverUrl'
 
 const { settings, setElderMode } = useA11y()
 const { session, updateSession } = useSession()
+const { auth, signOut, beginStepUp, confirmStepUp, cancelStepUp } = useAuth()
 const { authorizationBoundary, resumeAuthorizationBoundary } = useAuthorizationBoundary()
 const {
   capabilities: capabilityState,
@@ -29,6 +32,7 @@ const {
 } = useCapabilities()
 const feedbackSpeaker = createSpeaker(() => true)
 
+const devActorAllowed = isDevActorEnabled()
 const connectionState = ref<'idle' | 'testing' | 'ok' | 'failed'>('idle')
 const connectionMessage = ref('')
 const connectionError = ref<ErrorPresentation | null>(null)
@@ -40,6 +44,20 @@ const contactError = ref('')
 const contactCallMessage = ref('')
 const serverBaseUrlDraft = ref(session.serverBaseUrl)
 const serverAddressError = ref('')
+const actorIdDraft = ref(session.actorId)
+const accessPurposeDraft = ref(session.accessPurpose)
+const authBusy = ref(false)
+const authMessage = ref('')
+const authError = ref('')
+const stepUpCode = ref('')
+
+const usesRealAuth = computed(() => session.authMode === 'real')
+const signedIn = computed(() => auth.status === 'authenticated')
+const sessionExpiryLabel = computed(() => {
+  if (!auth.expiresAt) return ''
+  const time = Date.parse(auth.expiresAt)
+  return Number.isFinite(time) ? new Date(time).toLocaleString() : ''
+})
 
 function onElderModeChange(enabled: boolean): void {
   setElderMode(enabled)
@@ -90,12 +108,85 @@ function testContactCall(): void {
 
 function persistConnectionSession(): void {
   // 身份、访问目的或服务器变化后，下一页不得继续展示旧家庭/成员状态。
-  updateSession({ currentMemberId: '' })
+  updateSession({
+    actorId: actorIdDraft.value,
+    accessPurpose: accessPurposeDraft.value,
+    currentMemberId: '',
+  })
   connectionState.value = 'idle'
   connectionMessage.value = ''
   connectionError.value = null
   capabilityProbeError.value = null
   clearCapabilities()
+}
+
+function onAuthModeChange(mode: AuthMode): void {
+  if (mode === 'dev-actor' && !devActorAllowed) return
+  authMessage.value = ''
+  authError.value = ''
+  stepUpCode.value = ''
+  cancelStepUp()
+  // 切换身份来源等于换一套凭据；旧查询、上传和能力探测必须一起丢弃。
+  updateSession({ authMode: mode, actorId: mode === 'dev-actor' ? actorIdDraft.value : '', currentMemberId: '' })
+  connectionState.value = 'idle'
+  connectionMessage.value = ''
+  connectionError.value = null
+  capabilityProbeError.value = null
+  clearCapabilities()
+}
+
+async function submitSignOut(): Promise<void> {
+  authBusy.value = true
+  authError.value = ''
+  authMessage.value = ''
+  try {
+    // 本地会话先失效；随后通知服务端销毁会话。
+    await signOut(currentAuthAdapter())
+    authMessage.value = '已退出登录，本机不再保留该会话的查询、上传和能力探测结果。'
+    connectionState.value = 'idle'
+    connectionMessage.value = ''
+  } catch (cause) {
+    authError.value = presentApiError(cause).message
+  } finally {
+    authBusy.value = false
+  }
+}
+
+async function startStepUp(): Promise<void> {
+  authBusy.value = true
+  authError.value = ''
+  authMessage.value = ''
+  stepUpCode.value = ''
+  try {
+    const challenge = await beginStepUp(familyAuthAdapter(), {
+      action: 'confirm_high_risk',
+      method: 'pin',
+    })
+    authMessage.value = `已发起二次确认（${challenge.action}），请输入家庭服务器提供的一次性 PIN。`
+  } catch (cause) {
+    authError.value = presentApiError(cause).message
+  } finally {
+    authBusy.value = false
+  }
+}
+
+async function submitStepUp(): Promise<void> {
+  authBusy.value = true
+  authError.value = ''
+  try {
+    await confirmStepUp(familyAuthAdapter(), {
+      action: 'confirm_high_risk',
+      method: 'pin',
+      code: stepUpCode.value.trim(),
+    })
+    authMessage.value = '二次确认已通过；该确认只能使用一次。'
+  } catch (cause) {
+    authError.value = presentApiError(cause).message
+  } finally {
+    // PIN 用完即弃，不写入 store、存储或日志。
+    stepUpCode.value = ''
+    authBusy.value = false
+  }
 }
 
 function persistServerAddress(): void {
@@ -140,15 +231,19 @@ async function testConnection(): Promise<void> {
   connectionError.value = null
   capabilityProbeError.value = null
   clearCapabilities()
-  const client = new ApiClient({ baseUrl: session.serverBaseUrl })
+  const client = new ApiClient({
+    baseUrl: session.serverBaseUrl,
+    // 正式鉴权模式下只用内存会话，未登录时不回退开发期身份头。
+    ...(usesRealAuth.value ? { authSessionProvider: getAuthSession } : {}),
+  })
+  const probeOptions = usesRealAuth.value
+    ? { accessPurpose: session.accessPurpose || undefined }
+    : { actorId: session.actorId || undefined, accessPurpose: session.accessPurpose || undefined }
   try {
-    const health = await client.getHealth({
-      actorId: session.actorId || undefined,
-      accessPurpose: session.accessPurpose || undefined,
-    })
+    const health = await client.getHealth(probeOptions)
     let probe: ReturnType<typeof setCapabilities> | null = null
     try {
-      probe = setCapabilities(await client.getCapabilities({ actorId: session.actorId || undefined }))
+      probe = setCapabilities(await client.getCapabilities(probeOptions))
     } catch (cause) {
       clearCapabilities()
       capabilityProbeError.value = presentApiError(cause)
@@ -283,15 +378,49 @@ function restoreDemoData(): void {
           <small id="server-address-help">健康数据默认不出网：明文 HTTP 仅允许家庭局域网或本机地址，公网请使用 HTTPS。</small>
         </label>
         <p v-if="serverAddressError" id="server-address-error" class="notice" data-tone="error" role="alert">{{ serverAddressError }}</p>
-        <label class="field">
+
+        <fieldset v-if="devActorAllowed" class="mode-fieldset">
+          <legend class="meta-line">身份来源</legend>
+          <label class="mode-option">
+            <input
+              type="radio"
+              name="auth-mode"
+              value="real"
+              :checked="session.authMode === 'real'"
+              @change="onAuthModeChange('real')"
+            />
+            <span>
+              <strong>正式登录（默认）</strong>
+              <span class="meta-line">账号密码登录家庭服务器，使用短生命周期会话</span>
+            </span>
+          </label>
+          <label class="mode-option">
+            <input
+              type="radio"
+              name="auth-mode"
+              value="dev-actor"
+              :checked="session.authMode === 'dev-actor'"
+              @change="onAuthModeChange('dev-actor')"
+            />
+            <span>
+              <strong>开发期身份（仅本地联调）</strong>
+              <span class="meta-line">直接发送 X-Actor-Id；仅在开启开发配置的构建里可选，不能用于生产</span>
+            </span>
+          </label>
+        </fieldset>
+        <p v-else class="meta-line">
+          当前为正式构建：只能使用正式登录，开发期 X-Actor-Id 路径未启用。
+        </p>
+
+        <label v-if="session.authMode === 'dev-actor'" class="field">
           开发期身份（仅本地联调）
-          <input v-model="session.actorId" type="text" placeholder="Actor ID" @change="persistConnectionSession" />
+          <input v-model="actorIdDraft" type="text" placeholder="Actor ID" @change="persistConnectionSession" />
         </label>
         <label class="field">
           访问目的代码（X-Access-Purpose）
-          <input v-model="session.accessPurpose" type="text" placeholder="family-care" @change="persistConnectionSession" />
+          <input v-model="accessPurposeDraft" type="text" placeholder="family-care" @change="persistConnectionSession" />
         </label>
-        <p v-if="!session.actorId.trim()" class="notice" data-tone="warn" role="status">
+        <p v-if="session.authMode === 'dev-actor' && !session.actorId.trim()" class="notice" data-tone="warn" role="status">
           请先填写开发身份；未配置身份时不会加载任何家庭或健康数据。
         </p>
         <p v-else-if="!session.accessPurpose.trim()" class="notice" data-tone="warn" role="status">
@@ -300,7 +429,9 @@ function restoreDemoData(): void {
         <button
           type="button"
           class="btn btn-block"
-          :disabled="connectionState === 'testing' || !session.actorId.trim() || !session.accessPurpose.trim()"
+          :disabled="connectionState === 'testing'
+            || (session.authMode === 'dev-actor' && !session.actorId.trim())
+            || !session.accessPurpose.trim()"
           @click="testConnection"
         >
           {{ connectionState === 'testing' ? '正在测试…' : '测试连接' }}
@@ -360,19 +491,83 @@ function restoreDemoData(): void {
           </p>
         </section>
 
-        <section class="auth-design-note" aria-labelledby="auth-design-title">
+        <section v-if="usesRealAuth" class="auth-design-note" aria-labelledby="auth-session-title">
           <div class="h-icon-row">
             <span class="row-icon" data-tone="calm" aria-hidden="true"><AppIcon name="shield" :size="16" /></span>
-            <h3 id="auth-design-title">正式鉴权（适配设计）</h3>
+            <h3 id="auth-session-title">正式登录与会话</h3>
           </div>
-          <p class="meta-line">当前仍使用开发期身份头，不代表正式登录已经接入。</p>
+
+          <template v-if="signedIn">
+            <p class="meta-line">当前身份：{{ auth.actorId }}</p>
+            <p v-if="sessionExpiryLabel" class="meta-line">会话有效至：{{ sessionExpiryLabel }}</p>
+            <button
+              type="button"
+              class="btn btn-quiet btn-block"
+              :disabled="authBusy"
+              @click="submitSignOut"
+            >
+              {{ authBusy ? '处理中…' : '退出登录' }}
+            </button>
+
+            <h4 class="step-up-title">高风险动作二次确认（PIN）</h4>
+            <p class="meta-line">
+              授权变更、删除等高风险动作需要一次性 PIN。PIN 由家庭服务器下发到已确认的渠道，
+              不会显示在本页，也不会写入本机存储或日志。
+            </p>
+            <button
+              type="button"
+              class="btn btn-quiet btn-block"
+              :disabled="authBusy"
+              @click="startStepUp"
+            >
+              发起二次确认
+            </button>
+            <template v-if="auth.pendingStepUp">
+              <label class="field">
+                一次性 PIN
+                <input
+                  v-model="stepUpCode"
+                  type="text"
+                  inputmode="numeric"
+                  autocomplete="one-time-code"
+                  placeholder="家庭服务器下发的 PIN"
+                />
+              </label>
+              <button
+                type="button"
+                class="btn btn-block"
+                :disabled="authBusy || !stepUpCode.trim()"
+                @click="submitStepUp"
+              >
+                提交二次确认
+              </button>
+            </template>
+          </template>
+
+          <template v-else>
+            <p class="notice" data-tone="warn" role="status">
+              尚未登录家庭服务器。为保护隐私，未登录状态下不会加载成员、任务、风险和事件，也不允许提交写操作。
+            </p>
+            <RouterLink class="btn btn-block" to="/login">前往登录</RouterLink>
+          </template>
+
+          <p v-if="authMessage" class="notice" data-tone="success" role="status">{{ authMessage }}</p>
+          <p v-if="authError" class="notice" data-tone="error" role="alert">{{ authError }}</p>
           <ul class="divided-list">
-            <li>账号密码登录后使用短生命周期会话，登出或撤销后立即清理。</li>
-            <li>高风险授权、删除等动作由主仓库要求 PIN/二维码一次性二次确认。</li>
-            <li>正式会话只在内存传给 API Client，不写入本机存储或 URL。</li>
+            <li>会话凭据只保存在内存，不写 localStorage、URL、日志或通知。</li>
+            <li>会话过期、被撤销或返回 401 时立即清理本地会话并阻断写入。</li>
+            <li>退出登录或切换家庭/成员会清除查询结果、上传草稿和能力探测快照。</li>
           </ul>
+        </section>
+
+        <section v-else class="auth-design-note" aria-labelledby="auth-dev-title">
+          <div class="h-icon-row">
+            <span class="row-icon" data-tone="warn" aria-hidden="true"><AppIcon name="shield" :size="16" /></span>
+            <h3 id="auth-dev-title">开发期身份（未使用正式鉴权）</h3>
+          </div>
           <p class="notice" data-tone="warn" role="status">
-            HCT-107 接口尚未提供联调版本；当前不会显示伪造的登录成功或二次确认结果。
+            当前请求使用开发期 X-Actor-Id 头，仅供本地联调，不代表正式鉴权已接入；
+            服务端在 APP_ENV=production 或关闭 ALLOW_DEV_ACTOR_HEADER 时会直接拒绝。
           </p>
         </section>
       </template>
@@ -456,6 +651,7 @@ html[data-contrast='high'] .mode-option { border-color: #000; background: #fff; 
 }
 .auth-design-note h3 { margin: 0; font-size: 1rem; }
 .auth-design-note .divided-list { margin: 0; }
+.step-up-title { margin: 6px 0 0; font-size: 0.94rem; }
 .capability-panel {
   display: grid;
   gap: 12px;

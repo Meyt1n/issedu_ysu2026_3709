@@ -58,6 +58,15 @@ const daypart = computed(() => {
 })
 const currentMember = computed(() => members.value.find(m => m.id === session.currentMemberId) ?? null)
 
+/**
+ * 成员下拉必须经过 `updateSession` 写入，不能直接改 store 状态：
+ * 只有走 `updateSession` 才会触发会话上下文清理（丢弃上一位成员的查询、上传草稿和缓存）。
+ */
+const memberSelection = computed<string>({
+  get: () => session.currentMemberId,
+  set: value => updateSession({ currentMemberId: value }),
+})
+
 const pendingTasks = computed(
   () => snapshot.value?.tasks.filter(t => t.status === 'PENDING' || t.status === 'DEFERRED') ?? [],
 )
@@ -141,7 +150,7 @@ async function reload(options: { preserveSnapshot?: boolean } = {}): Promise<voi
 }
 
 async function onMemberChange(): Promise<void> {
-  updateSession({ currentMemberId: session.currentMemberId })
+  // 选中值已由 memberSelection 的 setter 经 updateSession 写入并触发上下文清理。
   loading.value = true
   error.value = null
   actionError.value = null
@@ -281,7 +290,7 @@ onMounted(reload)
 
     <label class="field">
       当前成员
-      <select v-model="session.currentMemberId" :disabled="loading" @change="onMemberChange">
+      <select v-model="memberSelection" :disabled="loading" @change="onMemberChange">
         <option v-for="member in members" :key="member.id" :value="member.id">
           {{ member.name }}（{{ member.relation }}）
         </option>

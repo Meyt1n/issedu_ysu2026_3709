@@ -2,28 +2,32 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 import { nextTick } from 'vue'
 
 import { useSpeech } from '@/composables/useSpeech'
+import { useAuth } from '@/stores/auth'
+import { useSession } from '@/stores/session'
 import { focusRouteMain } from '@/utils/accessibility'
 
 export const router = createRouter({
   history: createWebHashHistory(),
   routes: [
-    { path: '/', name: 'today', component: () => import('@/views/TodayView.vue'), meta: { title: '今日' } },
-    { path: '/scan', name: 'scan', component: () => import('@/views/ScanView.vue'), meta: { title: '拍药盒' } },
-    { path: '/family', name: 'family', component: () => import('@/views/FamilyView.vue'), meta: { title: '家人' } },
+    { path: '/', name: 'today', component: () => import('@/views/TodayView.vue'), meta: { title: '今日', requiresLiveAuth: true } },
+    { path: '/scan', name: 'scan', component: () => import('@/views/ScanView.vue'), meta: { title: '拍药盒', requiresLiveAuth: true } },
+    { path: '/family', name: 'family', component: () => import('@/views/FamilyView.vue'), meta: { title: '家人', requiresLiveAuth: true } },
     {
       path: '/family/:memberId',
       name: 'member-detail',
       component: () => import('@/views/MemberDetailView.vue'),
-      meta: { title: '成员档案' },
+      meta: { title: '成员档案', requiresLiveAuth: true },
     },
-    { path: '/alerts', name: 'alerts', component: () => import('@/views/AlertsView.vue'), meta: { title: '提醒' } },
+    { path: '/alerts', name: 'alerts', component: () => import('@/views/AlertsView.vue'), meta: { title: '提醒', requiresLiveAuth: true } },
     {
       path: '/alerts/:memberId/:ruleId',
       name: 'alert-detail',
       component: () => import('@/views/AlertDetailView.vue'),
-      meta: { title: '风险依据' },
+      meta: { title: '风险依据', requiresLiveAuth: true },
     },
+    // 求助页只用本机联系人，断网或未登录时仍必须可用。
     { path: '/help', name: 'help', component: () => import('@/views/HelpView.vue'), meta: { title: '紧急求助' } },
+    { path: '/login', name: 'login', component: () => import('@/views/LoginView.vue'), meta: { title: '登录' } },
     { path: '/me', name: 'me', component: () => import('@/views/MeView.vue'), meta: { title: '我的' } },
     {
       path: '/me/accessibility',
@@ -37,6 +41,20 @@ export const router = createRouter({
     return { top: 0 }
   },
 })
+
+/**
+ * 联机 + 正式鉴权模式下，未登录或会话失效的页面一律先去登录页。
+ * 「我的」「无障碍」「求助」保持可达：用户需要它们改设置、切回演示模式或紧急拨号。
+ */
+router.beforeEach(to => {
+  if (to.meta.requiresLiveAuth !== true) return true
+  const { session } = useSession()
+  if (session.dataMode !== 'live' || session.authMode !== 'real') return true
+  const { auth } = useAuth()
+  if (auth.status === 'authenticated') return true
+  return { name: 'login', query: { redirect: to.fullPath } }
+})
+
 
 router.afterEach(to => {
   const title = typeof to.meta.title === 'string' ? to.meta.title : ''

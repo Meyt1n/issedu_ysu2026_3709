@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+
 import AppTabBar from '@/components/AppTabBar.vue'
 import ToastHost from '@/components/ToastHost.vue'
 import {
@@ -7,10 +10,31 @@ import {
   useSpeech,
   useSpeechGuidance,
 } from '@/composables/useSpeech'
+import { useAuth } from '@/stores/auth'
+import { useSession } from '@/stores/session'
 
 const speakingText = useSpeakingIndicator()
 const speechGuidance = useSpeechGuidance()
 const speech = useSpeech()
+
+const route = useRoute()
+const router = useRouter()
+const { session } = useSession()
+const { auth } = useAuth()
+
+/**
+ * 会话在使用过程中过期或被撤销时，立刻把用户带到登录页。
+ * 只对需要联机数据的页面生效：设置、无障碍和求助页仍要可用。
+ */
+watch(
+  () => auth.status,
+  status => {
+    if (status !== 'reauth-required') return
+    if (session.dataMode !== 'live' || session.authMode !== 'real') return
+    if (route.meta.requiresLiveAuth !== true) return
+    void router.replace({ name: 'login', query: { redirect: route.fullPath } })
+  },
+)
 </script>
 
 <template>
