@@ -107,7 +107,11 @@ jobs:
               -c "credential.username=${CLOUD_SELECTED_USERNAME}" \
               "$@"
           }
-          git remote add original-cloud "${CLOUD_REPO_URL}"
+          if git remote get-url original-cloud >/dev/null 2>&1; then
+            git remote set-url original-cloud "${CLOUD_REPO_URL}"
+          else
+            git remote add original-cloud "${CLOUD_REPO_URL}"
+          fi
           remote_sha="$(cloud_git ls-remote original-cloud refs/heads/master | awk '{print $1}')"
           if [[ "${remote_sha}" != "${cloud_sha}" ]]; then
             echo "::error::内部 master 已变化：当前=${remote_sha}，预期=${cloud_sha}"

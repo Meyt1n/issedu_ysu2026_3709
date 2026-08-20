@@ -136,6 +136,8 @@ def test_history_replay_uses_dedicated_runner_backup_and_exact_lease() -> None:
     assert "-c credential.helper=" in scripts
     assert "cloud_git push original-cloud" in scripts
     assert "action=\"${action//$'\\r'/}\"" in scripts
+    assert "git remote get-url original-cloud" in scripts
+    assert "git remote set-url original-cloud" in scripts
 
 
 def test_ci_and_relay_review_are_manual_only() -> None:
