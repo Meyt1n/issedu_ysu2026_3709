@@ -63,6 +63,10 @@
    禁用 credential helper，并通过本次身份计划选中的用户名和 Token 完成认证。
 8. Runner 上线后先执行一次 `workflow_dispatch`（分支选择 `master`），确认日志显示
    Runner 标签和完整 SHA 校验，再依赖后续 master push 自动触发。
+9. 已明确授权的历史归属修复必须使用一次性历史同步工作流：输入当前内部 SHA、当前
+   GitHub SHA 和重放起点。工作流先创建 `hct-sync-backup-<run-id>-<attempt>` 内部标签，
+   再用精确旧 SHA 的 `--force-with-lease` 回退，并按登记成员 Token 逐节点恢复；禁止裸
+   `--force`。平台若按历史 push 事件累计，重放只能新增正确统计，不能删除旧统计。
 
 ## Billing 与恢复边界
 
