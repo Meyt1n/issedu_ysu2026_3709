@@ -6,7 +6,7 @@ import ErrorNotice from '@/components/ErrorNotice.vue'
 import LevelTag from '@/components/LevelTag.vue'
 import PrivacyBadge from '@/components/PrivacyBadge.vue'
 import { useSpeech } from '@/composables/useSpeech'
-import { activeProvider } from '@/data'
+import { activeProvider, canSubmitWrites } from '@/data'
 import { recognitionStatusLabel } from '@/data/labels'
 import type { MemberSummary, QualityCheckResult, RecognitionCandidate } from '@/data/types'
 import { imageInputUnavailableMessage, validateMedicineImage } from '@/utils/uploadInput'
@@ -34,6 +34,9 @@ const inputNotice = ref('')
 const visionTaskAvailable = computed(() =>
   session.dataMode === 'demo' || hasCapability(CAPABILITY_IDS.visionTask),
 )
+/** 正式会话失效时禁止上传与创建视觉任务：写操作在页面层就被拦住。 */
+const writesAllowed = computed(() => canSubmitWrites())
+const captureAllowed = computed(() => visionTaskAvailable.value && writesAllowed.value)
 const isBusy = computed(() => stage.value === 'checking' || stage.value === 'recognizing')
 const cameraAvailable = computed(() => {
   if (typeof navigator === 'undefined') return false
@@ -89,7 +92,7 @@ function clearSelection(): void {
 }
 
 async function onFilePicked(event: Event): Promise<void> {
-  if (!visionTaskAvailable.value || isBusy.value) return
+  if (!captureAllowed.value || isBusy.value) return
   const input = event.target as HTMLInputElement
   const picked = input.files?.[0]
   input.value = ''
@@ -136,7 +139,7 @@ async function recognize(): Promise<void> {
   if (
     !file.value
     || !memberId.value
-    || !visionTaskAvailable.value
+    || !captureAllowed.value
     || stage.value === 'checking'
     || stage.value === 'recognizing'
   ) return
@@ -238,6 +241,14 @@ onBeforeUnmount(releasePreview)
     >
       当前家庭服务器未提供视觉任务，拍摄和相册入口已禁用；不会把未提供的识别接口包装成可用功能。
     </p>
+    <p
+      v-else-if="session.dataMode === 'live' && !writesAllowed"
+      class="notice"
+      data-tone="warn"
+      role="status"
+    >
+      登录会话已失效或尚未登录，拍摄、上传和识别入口已禁用；请重新登录后再提交，避免重复创建任务。
+    </p>
 
     <p v-if="!cameraAvailable" class="notice" data-tone="warn" role="status">
       {{ imageInputUnavailableMessage() }}
@@ -275,8 +286,8 @@ onBeforeUnmount(releasePreview)
       <div class="btn-row">
         <label
           class="btn btn-lg"
-          :data-disabled="!visionTaskAvailable || membersLoading || members.length === 0 || stage === 'checking' || stage === 'recognizing'"
-          :aria-disabled="!visionTaskAvailable || membersLoading || members.length === 0 || stage === 'checking' || stage === 'recognizing'"
+          :data-disabled="!captureAllowed || membersLoading || members.length === 0 || stage === 'checking' || stage === 'recognizing'"
+          :aria-disabled="!captureAllowed || membersLoading || members.length === 0 || stage === 'checking' || stage === 'recognizing'"
         >
           <AppIcon name="camera" :size="20" />
           {{ file ? '重新拍摄' : '拍摄药盒' }}
@@ -285,21 +296,21 @@ onBeforeUnmount(releasePreview)
             accept="image/*"
             capture="environment"
             class="visually-hidden-input"
-            :disabled="!visionTaskAvailable || membersLoading || members.length === 0 || stage === 'checking' || stage === 'recognizing'"
+            :disabled="!captureAllowed || membersLoading || members.length === 0 || stage === 'checking' || stage === 'recognizing'"
             @change="onFilePicked"
           />
         </label>
         <label
           class="btn btn-quiet btn-lg"
-          :data-disabled="!visionTaskAvailable || membersLoading || members.length === 0"
-          :aria-disabled="!visionTaskAvailable || members.length === 0"
+          :data-disabled="!captureAllowed || membersLoading || members.length === 0"
+          :aria-disabled="!captureAllowed || members.length === 0"
         >
           从相册选择
           <input
             type="file"
             accept="image/*"
             class="visually-hidden-input"
-            :disabled="!visionTaskAvailable || membersLoading || members.length === 0 || stage === 'checking' || stage === 'recognizing'"
+            :disabled="!captureAllowed || membersLoading || members.length === 0 || stage === 'checking' || stage === 'recognizing'"
             @change="onFilePicked"
           />
         </label>
@@ -342,7 +353,7 @@ onBeforeUnmount(releasePreview)
         v-if="quality.decision === 'PASS' && stage === 'quality'"
         type="button"
         class="btn btn-block btn-lg"
-        :disabled="!memberId || !visionTaskAvailable"
+        :disabled="!memberId || !captureAllowed"
         @click="recognize"
       >
         开始识别
