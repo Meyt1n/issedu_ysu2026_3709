@@ -145,6 +145,8 @@ def test_workflow_uses_full_history_and_preflights_before_push() -> None:
     assert "HCT_SYNC_RUNNER_BIN" in setup_script
     assert "RUNNER_OS" in setup_script
     assert "cygpath" in setup_script
+    assert "${sync_sha//$'\\r'/}" in run_script
+    assert "${pr_meta//$'\\r'/}" in run_script
 
     preflight_loop = run_script.index('for sync_sha in "${sync_shas[@]}"')
     plan_append = run_script.index("sync_plan+=(", preflight_loop)
