@@ -197,6 +197,7 @@ describe('ApiClient authorization contract', () => {
     await client.confirmCarePlan('household-1', 'member-1', 'plan/1', options)
     await client.deferCarePlan('household-1', 'member-1', 'plan/1', 6, options)
     await client.skipCarePlan('household-1', 'member-1', 'plan/1', 'member declined', options)
+    await client.missCarePlan('household-1', 'member-1', 'plan/1', 'forgot', options)
 
     expect(requests.map(request => request.url)).toEqual([
       'http://local.test/api/v1/households/household-1/rules/run?member_id=member-1',
@@ -206,8 +207,9 @@ describe('ApiClient authorization contract', () => {
       'http://local.test/api/v1/households/household-1/members/member-1/plans/confirm?plan_event_id=plan%2F1',
       'http://local.test/api/v1/households/household-1/members/member-1/plans/defer?plan_event_id=plan%2F1&delay_hours=6',
       'http://local.test/api/v1/households/household-1/members/member-1/plans/skip?plan_event_id=plan%2F1&reason=member%20declined',
+      'http://local.test/api/v1/households/household-1/members/member-1/plans/missed?plan_event_id=plan%2F1&reason=forgot',
     ])
-    expect(requests.map(request => request.method)).toEqual(['POST', undefined, undefined, undefined, 'POST', 'POST', 'POST'])
+    expect(requests.map(request => request.method)).toEqual(['POST', undefined, undefined, undefined, 'POST', 'POST', 'POST', 'POST'])
     expect(requests.filter(request => request.method === 'POST').every(
       request => request.headers.get('Idempotency-Key') === 'e2e-plan-action-1',
     )).toBe(true)

@@ -69,6 +69,10 @@ const EVENT_TYPE_OPTIONS: EventTypeOption[] = [
     fields: [
       { key: 'drug', label: '药品名称', type: 'text', required: true },
       { key: 'schedule', label: '服药安排', type: 'text', required: true, placeholder: '例如 每日两次，早晚饭后' },
+      { key: 'dose', label: '每次用量', type: 'text', placeholder: '例如 1 粒' },
+      { key: 'times', label: '服用时间', type: 'text', placeholder: '例如 08:00, 20:00' },
+      { key: 'start_date', label: '开始日期', type: 'date' },
+      { key: 'end_date', label: '疗程结束日期', type: 'date' },
     ],
   },
   {
@@ -149,7 +153,14 @@ async function submitEntry(): Promise<void> {
   for (const field of currentOption.value.fields) {
     const raw = (entryDraft.values[field.key] ?? '').trim()
     if (!raw) continue
-    payload[field.key] = field.type === 'number' ? Number(raw) : raw
+    if (field.key === 'times') {
+      payload[field.key] = raw
+        .split(/[，,]/)
+        .map(value => value.trim())
+        .filter(Boolean)
+    } else {
+      payload[field.key] = field.type === 'number' ? Number(raw) : raw
+    }
   }
 
   submitting.value = true

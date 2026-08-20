@@ -18,6 +18,17 @@ def _write_snapshot(root, *, version: str = "demo-master-v1", tamper: bool = Fal
                 "record_id": "demo-record-1",
                 "product_barcode": "4006381333931",
                 "name_aliases": ["Demo Medicine"],
+                "active_ingredients": ["demo-ingredient"],
+                "indications": ["demo indication"],
+                "cautions": ["demo caution"],
+                "contraindications": ["demo contraindication"],
+            }
+        ],
+        "interactions": [
+            {
+                "record_ids": ["demo-record-1", "demo-record-2"],
+                "level": "WARNING",
+                "message": "demo interaction",
             }
         ],
     }
@@ -48,6 +59,8 @@ def test_loads_versioned_snapshot_with_integrity_check(tmp_path) -> None:
     assert snapshot.available is True
     assert snapshot.version == "demo-master-v1"
     assert snapshot.records[0].record_id == "demo-record-1"
+    assert snapshot.records[0].active_ingredients == ["demo-ingredient"]
+    assert snapshot.interactions[0].message == "demo interaction"
 
 
 def test_rejects_tampered_snapshot_and_path_like_version(tmp_path) -> None:

@@ -55,10 +55,15 @@ def test_plan_workbench_returns_server_authoritative_due_status(client: TestClie
             "plan_event_id": plan["id"],
             "drug": "Synthetic medicine",
             "schedule": "每日一次",
+            "dose": None,
+            "times": [],
+            "start_date": None,
+            "end_date": None,
             "status": "REMINDER",
             "next_action_at": body["plans"][0]["next_action_at"],
             "last_action": None,
-            "allowed_actions": ["CONFIRM", "DEFER", "SKIP"],
+            "action_history": [],
+            "allowed_actions": ["CONFIRM", "DEFER", "SKIP", "MISS"],
         }
     ]
 
@@ -122,3 +127,26 @@ def test_plan_workbench_uses_latest_deferral_for_next_action(client: TestClient)
     assert item["last_action"]["action"] == "DEFER"
     next_action_at = datetime.fromisoformat(item["next_action_at"])
     assert timedelta(hours=5) < next_action_at - datetime.now(UTC) < timedelta(hours=7)
+
+
+def test_plan_workbench_records_missed_dose_separately(client: TestClient) -> None:
+    household_id, member_id = _create_household_and_member(client)
+    plan = _append_plan(client, household_id, member_id)
+    missed = client.post(
+        f"/api/v1/households/{household_id}/members/{member_id}/plans/missed",
+        headers=OWNER_HEADERS,
+        params={"plan_event_id": plan["id"], "reason": "忘记服用"},
+    )
+
+    assert missed.status_code == 201, missed.text
+    assert missed.json()["event_type"] == "plan_missed"
+    response = client.get(
+        f"/api/v1/households/{household_id}/members/{member_id}/plan-workbench",
+        headers=OWNER_HEADERS,
+    )
+
+    assert response.status_code == 200, response.text
+    item = response.json()["plans"][0]
+    assert item["last_action"]["action"] == "MISS"
+    assert item["last_action"]["reason"] == "忘记服用"
+    assert item["action_history"][-1]["action"] == "MISS"

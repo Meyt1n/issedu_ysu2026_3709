@@ -547,6 +547,20 @@ export class ApiClient {
     )
   }
 
+  missCarePlan(
+    householdId: string,
+    memberId: string,
+    planEventId: string,
+    reason: string,
+    options?: RequestOptions,
+  ): Promise<HealthEvent> {
+    return this.request(
+      `/api/v1/households/${householdId}/members/${memberId}/plans/missed?plan_event_id=${encodeURIComponent(planEventId)}&reason=${encodeURIComponent(reason)}`,
+      { method: 'POST' },
+      options,
+    )
+  }
+
   listMemberRisks(
     householdId: string,
     memberId: string,

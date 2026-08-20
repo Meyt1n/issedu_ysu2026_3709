@@ -86,6 +86,11 @@ def _install_master_snapshot(tmp_path, monkeypatch) -> None:
                 "product_barcode": "4006381333931",
                 "name_aliases": ["阿莫西林胶囊", "Amoxicillin Capsules"],
                 "specification": "0.25g×24粒",
+                "manufacturer": "Synthetic Labs",
+                "active_ingredients": ["阿莫西林"],
+                "indications": ["演示用途"],
+                "cautions": ["演示注意事项"],
+                "contraindications": ["演示禁忌核对"],
             }
         ],
     }
@@ -178,6 +183,9 @@ def test_evidence_submission_bridges_into_review_center(
     assert review["candidates"], "fused master candidates must reach the reviewer"
     assert review["candidates"][0]["drug_name"] == "阿莫西林胶囊"
     assert 0 <= review["candidates"][0]["confidence"] <= 1
+    assert review["candidates"][0]["active_ingredients"] == ["阿莫西林"]
+    assert review["candidates"][0]["indications"] == ["演示用途"]
+    assert review["candidates"][0]["contraindications"] == ["演示禁忌核对"]
 
     confirm = client.post(
         f"/api/v1/households/{household_id}/review-tasks/{review['id']}/confirm",

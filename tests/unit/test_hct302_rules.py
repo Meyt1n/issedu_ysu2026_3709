@@ -48,6 +48,16 @@ def test_duplicate_ingredient():
     assert len(alerts) == 1
     assert len(alerts[0].source_event_ids) == 2
 
+
+def test_duplicate_active_ingredient_from_approved_metadata():
+    facts = {"drugs": [
+        {"name": "a", "active_ingredients": ["成分甲"], "added_by": "e1"},
+        {"name": "b", "active_ingredients": ["成分甲"], "added_by": "e2"},
+    ]}
+    alerts = duplicate_ingredient(facts)
+    assert len(alerts) == 1
+    assert alerts[0].rule_id == "duplicate_ingredient"
+
 def test_allergy_conflict():
     facts = {
         "allergies": [{"name": "penicillin"}],
@@ -63,6 +73,36 @@ def test_no_allergy_conflict():
         "drugs": [{"name": "aspirin", "ingredient": "asa", "added_by": "e1"}],
     }
     assert allergy_conflict(facts) == []
+
+
+def test_interaction_requires_approved_pair_warning():
+    facts = {
+        "drugs": [
+            {
+                "name": "a",
+                "candidate_id": "rec-a",
+                "interaction_warnings": [
+                    {"with_record_id": "rec-b", "level": "WARNING", "message": "核对组合"}
+                ],
+                "added_by": "e1",
+            },
+            {"name": "b", "candidate_id": "rec-b", "added_by": "e2"},
+        ]
+    }
+    alerts = run_rules(facts, rule_ids=["interaction"])
+    assert len(alerts) == 1
+    assert alerts[0].level == "WARNING"
+    assert alerts[0].message == "核对组合"
+
+
+def test_interaction_does_not_warn_for_unknown_pair():
+    facts = {
+        "drugs": [
+            {"name": "a", "candidate_id": "rec-a", "added_by": "e1"},
+            {"name": "b", "candidate_id": "rec-b", "added_by": "e2"},
+        ]
+    }
+    assert run_rules(facts, rule_ids=["interaction"]) == []
 
 def test_full_engine():
     facts = {

@@ -7,7 +7,7 @@ import json
 import re
 from pathlib import Path
 
-from .evidence_pipeline import LocalMasterData, MasterDataRecord
+from .evidence_pipeline import LocalMasterData, MasterDataInteraction, MasterDataRecord
 
 SNAPSHOT_SCHEMA = "hct-master-data/v1"
 _VERSION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -69,6 +69,15 @@ def load_master_data_snapshot(
         if not isinstance(raw_records, list):
             return _unavailable(version)
         records = [MasterDataRecord.model_validate(record) for record in raw_records]
+        raw_interactions = document.get("interactions", [])
+        if not isinstance(raw_interactions, list):
+            return _unavailable(version)
+        interactions = [MasterDataInteraction.model_validate(item) for item in raw_interactions]
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return _unavailable(version)
-    return LocalMasterData(version=version, available=True, records=records)
+    return LocalMasterData(
+        version=version,
+        available=True,
+        records=records,
+        interactions=interactions,
+    )
