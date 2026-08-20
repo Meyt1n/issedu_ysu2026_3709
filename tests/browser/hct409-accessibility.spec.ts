@@ -29,6 +29,25 @@ const riskAlert = {
   created_at: '2026-08-12T00:00:00Z',
 }
 
+const reviewTask = {
+  id: 'review-1',
+  vision_task_id: 'vision-1',
+  household_id: household.id,
+  member_id: member.id,
+  status: 'PENDING_REVIEW',
+  fusion_status: 'READY_FOR_FUSION',
+  candidates: [{ drug_name: 'Synthetic medicine', confidence: 0.96, evidence: ['OCR'] }],
+  selected_candidate: null,
+  manual_payload: null,
+  model_version: 'demo-model',
+  rule_version: 'rules-v0',
+  version: 1,
+  confirmed_by: null,
+  confirmed_at: null,
+  created_at: '2026-08-12T02:00:00Z',
+  updated_at: '2026-08-12T02:00:00Z',
+}
+
 async function installSyntheticApi(page: Page): Promise<void> {
   await page.route('**/api/v1/**', async route => {
     const request = route.request()
@@ -43,6 +62,22 @@ async function installSyntheticApi(page: Page): Promise<void> {
     if (request.method() === 'GET' && path.endsWith('/members')) return respond([member])
     if (request.method() === 'GET' && path.endsWith('/authorizations')) return respond([])
     if (request.method() === 'GET' && path.endsWith('/timeline')) return respond([])
+    if (request.method() === 'GET' && path.endsWith('/plan-workbench')) {
+      return respond({
+        member_id: member.id,
+        generated_at: '2026-08-12T02:00:00Z',
+        plans: [{
+          plan_event_id: 'plan-1',
+          drug: 'Synthetic medicine',
+          schedule: '每日一次',
+          status: 'REMINDER',
+          next_action_at: '2026-08-12T03:00:00Z',
+          last_action: null,
+          allowed_actions: ['CONFIRM', 'DEFER', 'SKIP'],
+        }],
+      })
+    }
+    if (request.method() === 'GET' && path.endsWith('/review-tasks')) return respond([reviewTask])
     if (request.method() === 'GET' && path.endsWith('/state')) {
       return respond({
         member_id: member.id,
@@ -107,6 +142,20 @@ test.describe('axe automated WCAG 2.1 AA scans', () => {
     await loadOwnerView(page)
     const results = await axeScan(page)
     expect(results.violations).toEqual([])
+  })
+
+  test('家庭健康首页汇总天气、用药、待确认事项和成员状态', async ({ page }) => {
+    await installSyntheticApi(page)
+    await page.goto('/')
+    await loadOwnerView(page)
+
+    await expect(page.getByRole('heading', { name: '今日用药' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: '待确认事项' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: '最近识别的药品' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: '家庭成员状态' })).toBeVisible()
+    await expect(page.getByText('Synthetic medicine', { exact: true })).toHaveCount(2)
+    await expect(page.getByText('识别候选，不是健康事实')).toBeVisible()
+    await expect(page.locator('.home-dashboard-member strong')).toHaveText('Synthetic member')
   })
 
   test('risk view explains budget suppression from the server summary', async ({ page }) => {
