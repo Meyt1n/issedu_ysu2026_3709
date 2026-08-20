@@ -40,6 +40,51 @@ class AuthSessionRead(BaseModel):
     household_id: str | None = None
 
 
+# ── HCT-427: step-up confirmation and session revalidation ─────────
+
+# Action codes stay ASCII and short so they can be logged and compared safely.
+STEP_UP_ACTION_PATTERN = r"^[a-z][a-z0-9_]{0,63}$"
+
+
+class SessionIntrospectRead(BaseModel):
+    """Live session behind the caller's Bearer token; no credential is returned."""
+
+    actor_id: str
+    expires_at: float
+
+
+class StepUpChallengeRequest(BaseModel):
+    action: str = Field(pattern=STEP_UP_ACTION_PATTERN)
+    # Optional: resolved server-side when the actor has a PIN in exactly one household.
+    household_id: str | None = Field(default=None, min_length=1, max_length=120)
+    method: Literal["pin"] = "pin"
+
+
+class StepUpChallengeRead(BaseModel):
+    """Deliberately carries no PIN: the caller re-enters its own household PIN."""
+
+    challenge_id: str
+    action: str
+    household_id: str
+    expires_at: float
+
+
+class StepUpVerifyRequest(BaseModel):
+    challenge_id: str = Field(min_length=1, max_length=128)
+    action: str = Field(pattern=STEP_UP_ACTION_PATTERN)
+    code: str = Field(pattern=r"^[0-9]{6}$")
+    method: Literal["pin"] = "pin"
+
+
+class StepUpGrantRead(BaseModel):
+    # `status` is kept so the already shipped mobile adapter (MOB-133) can assert
+    # a confirmed grant without another release.
+    status: Literal["confirmed"] = "confirmed"
+    challenge_id: str
+    action: str
+    confirmed_at: float
+
+
 class CapabilityResponse(BaseModel):
     phase: str
     available: list[str]

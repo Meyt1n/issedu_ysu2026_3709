@@ -41,10 +41,11 @@ from app.auth import (
     authenticate,
     authenticate_with_pin,
     generate_pin_challenge,
+    introspect_session,
     logout,
     register_account,
     set_account_pin,
-    verify_pin,
+    verify_pin_challenge,
 )
 from app.config import get_settings
 from app.db import get_session
@@ -110,8 +111,6 @@ from app.schemas import (
     AssistantRequest,
     AssistantResponse,
     AuthCredentials,
-    PinLoginCredentials,
-    PinSetRequest,
     AuthorizationCreate,
     AuthorizationRead,
     AuthorizationRevoke,
@@ -150,6 +149,8 @@ from app.schemas import (
     OutboxDispatchRead,
     OutboxDispatchRequest,
     OutboxRead,
+    PinLoginCredentials,
+    PinSetRequest,
     PlanWorkbenchRead,
     ProjectionCheckpointRead,
     ProjectionReplayRead,
@@ -164,6 +165,11 @@ from app.schemas import (
     RiskAlertRead,
     RiskDetailResponse,
     RiskListResponse,
+    SessionIntrospectRead,
+    StepUpChallengeRead,
+    StepUpChallengeRequest,
+    StepUpGrantRead,
+    StepUpVerifyRequest,
     TrainingConsentCreate,
     TrainingConsentRead,
     TrainingConsentRevoke,
@@ -177,6 +183,7 @@ from app.security import (
     get_actor_id,
     has_authorized_action,
     require_household_owner,
+    require_session_token,
 )
 from app.tool_call import (
     get_approved_tools,
@@ -1257,24 +1264,46 @@ def auth_logout(payload: AuthSessionRequest) -> dict:
     return {"status": "logged_out"}
 
 
-@router.post("/auth/pin-challenge")
+@router.post("/auth/session", response_model=SessionIntrospectRead)
+def auth_session(session_token: str = Depends(require_session_token)) -> dict:
+    """Revalidate the caller's session so a client can drop a stale one early."""
+    return introspect_session(session_token)
+
+
+@router.post("/auth/pin-challenge", response_model=StepUpChallengeRead)
 def auth_pin_challenge(
+    payload: StepUpChallengeRequest,
     actor_id: str = Depends(get_actor_id),
+    session_token: str = Depends(require_session_token),
+    session: Session = Depends(get_session),
 ) -> dict:
-    session_token = secrets.token_hex(16)
-    return generate_pin_challenge(actor_id, "confirm_high_risk", session_token)
+    # Household selection stays server-side: an explicit household_id is only
+    # honoured when this actor really belongs to it.
+    if payload.household_id is not None and not _actor_belongs_to_household(
+        session, payload.household_id, actor_id
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RESOURCE_NOT_FOUND")
+    return generate_pin_challenge(
+        actor_id,
+        payload.action,
+        session_token,
+        payload.household_id,
+    )
 
 
-@router.post("/auth/pin-verify")
+@router.post("/auth/pin-verify", response_model=StepUpGrantRead)
 def auth_pin_verify(
-    pin: str,
-    action: str = "confirm_high_risk",
-    session_token: str = "",
+    payload: StepUpVerifyRequest,
+    session_token: str = Depends(require_session_token),
 ) -> dict:
-    ok = verify_pin(pin, action, session_token)
-    if not ok:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="PIN_INVALID")
-    return {"status": "confirmed"}
+    # The one-time code travels in the request body only; it must never reach a
+    # query string, where reverse proxies and APM tools would log it.
+    return verify_pin_challenge(
+        payload.challenge_id,
+        payload.action,
+        session_token,
+        payload.code,
+    )
 
 
 # ── HCT-301: Event timeline & projection ───────────────────────────
