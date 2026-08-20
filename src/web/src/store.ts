@@ -72,6 +72,7 @@ const state = reactive<SessionState>({
 })
 
 let toastSeq = 0
+let sessionExpiryTimer: ReturnType<typeof setTimeout> | null = null
 
 export const session = readonly(state)
 
@@ -157,6 +158,10 @@ export function signOut(): void {
 }
 
 function clearSessionContext(): void {
+  if (sessionExpiryTimer !== null) {
+    clearTimeout(sessionExpiryTimer)
+    sessionExpiryTimer = null
+  }
   clearChatSessionsForActor(state.actorId)
   state.actorId = ''
   state.sessionToken = ''
@@ -170,6 +175,16 @@ function clearSessionContext(): void {
   state.selectedMemberId = ''
   state.isOwnerView = false
   state.capabilities = null
+}
+
+function scheduleSessionExpiry(sessionToken: string, expiresAt: number): void {
+  if (sessionExpiryTimer !== null) clearTimeout(sessionExpiryTimer)
+
+  const delayMs = Math.max(0, expiresAt * 1000 - Date.now())
+  sessionExpiryTimer = setTimeout(() => {
+    sessionExpiryTimer = null
+    if (state.sessionToken === sessionToken) expireSession()
+  }, delayMs)
 }
 
 export function expireSession(): void {
@@ -234,6 +249,7 @@ export async function connectWithPassword(
     const sessionResult = await apiClient.login(state.actorId, password)
     state.sessionToken = sessionResult.session_token
     state.sessionExpiresAt = sessionResult.expires_at
+    scheduleSessionExpiry(state.sessionToken, state.sessionExpiresAt)
     state.actorId = sessionResult.actor_id
     state.households = await apiClient.listHouseholds(requestOptions.value)
     if (state.households.length === 0) {
