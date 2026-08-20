@@ -11,6 +11,8 @@ export interface StoredChatEntry {
   escalate?: boolean
   suggestedQuestions?: string[]
   route?: string | null
+  queryType?: string | null
+  riskNotice?: string | null
 }
 
 const MAX_ENTRIES = 24
@@ -106,6 +108,8 @@ export function sessionEntryToStored(entry: {
   escalate?: boolean
   suggestedQuestions?: string[]
   route?: string | null
+  queryType?: string | null
+  riskNotice?: string | null
 }): StoredChatEntry {
   return {
     role: entry.role,
@@ -118,5 +122,7 @@ export function sessionEntryToStored(entry: {
     escalate: entry.escalate,
     suggestedQuestions: entry.suggestedQuestions,
     route: entry.route,
+    queryType: entry.queryType,
+    riskNotice: entry.riskNotice,
   }
 }

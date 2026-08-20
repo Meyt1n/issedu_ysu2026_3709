@@ -619,6 +619,8 @@ export interface AssistantResponse {
   degrade_reason: string | null
   model?: string | null
   route?: string | null
+  query_type?: string | null
+  risk_notice?: string | null
 }
 
 export interface AssistantTool {
