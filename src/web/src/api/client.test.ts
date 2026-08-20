@@ -171,7 +171,7 @@ describe('ApiClient authorization contract', () => {
     ])
   })
 
-  it('routes desktop workbenches, care-plan actions and rule run through the authorized API boundary', async () => {
+  it('routes desktop workbenches, graph projection, care-plan actions and rule run through the authorized API boundary', async () => {
     const requests: Array<{ url: string; method: string | undefined; headers: Headers }> = []
     const client = new ApiClient({
       baseUrl: 'http://local.test',
@@ -191,6 +191,7 @@ describe('ApiClient authorization contract', () => {
     }
 
     await client.runMemberRules('household-1', 'member-1', options)
+    await client.getRelationshipGraph('household-1', 'member-1', options)
     await client.getPlanWorkbench('household-1', 'member-1', options)
     await client.getDashboardSummary('household-1', options)
     await client.confirmCarePlan('household-1', 'member-1', 'plan/1', options)
@@ -199,13 +200,14 @@ describe('ApiClient authorization contract', () => {
 
     expect(requests.map(request => request.url)).toEqual([
       'http://local.test/api/v1/households/household-1/rules/run?member_id=member-1',
+      'http://local.test/api/v1/households/household-1/members/member-1/relationship-graph',
       'http://local.test/api/v1/households/household-1/members/member-1/plan-workbench',
       'http://local.test/api/v1/households/household-1/dashboard-summary',
       'http://local.test/api/v1/households/household-1/members/member-1/plans/confirm?plan_event_id=plan%2F1',
       'http://local.test/api/v1/households/household-1/members/member-1/plans/defer?plan_event_id=plan%2F1&delay_hours=6',
       'http://local.test/api/v1/households/household-1/members/member-1/plans/skip?plan_event_id=plan%2F1&reason=member%20declined',
     ])
-    expect(requests.map(request => request.method)).toEqual(['POST', undefined, undefined, 'POST', 'POST', 'POST'])
+    expect(requests.map(request => request.method)).toEqual(['POST', undefined, undefined, undefined, 'POST', 'POST', 'POST'])
     expect(requests.filter(request => request.method === 'POST').every(
       request => request.headers.get('Idempotency-Key') === 'e2e-plan-action-1',
     )).toBe(true)

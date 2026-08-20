@@ -51,6 +51,22 @@ async function installSyntheticApi(page: Page): Promise<void> {
       return respond(hasAuthorization && !authorization.revoked_at ? [authorization] : [])
     }
     if (request.method() === 'GET' && path.endsWith('/audits')) return respond([])
+    if (request.method() === 'GET' && path.endsWith('/relationship-graph')) {
+      return respond({
+        member_id: member.id,
+        generated_at: '2026-08-20T02:00:00Z',
+        events_count: 1,
+        last_event_id: 'event-1',
+        nodes: [{
+          id: 'drug:event-1',
+          category: 'drug',
+          label: '合成药品',
+          source_event_id: 'event-1',
+          source_recorded_at: '2026-08-20T01:00:00Z',
+          source_created_by: 'owner-1',
+        }],
+      })
+    }
     if (request.method() === 'GET' && path.endsWith('/timeline')) return respond([])
     if (request.method() === 'GET' && path.endsWith('/plan-workbench')) {
       return respond({
@@ -238,6 +254,18 @@ test('健康计划页只展示服务端返回的照护待办', async ({ page }) 
   await expect(page.getByText('合成药品')).toBeVisible()
   await expect(page.getByText('待提醒')).toBeVisible()
   await expect(page.getByText(/下次处理/)).toBeVisible()
+})
+
+test('家庭健康图谱只消费服务端脱敏关系投影', async ({ page }) => {
+  await installSyntheticApi(page)
+  await enterFamilySpace(page)
+
+  const graph = page.waitForResponse(response => response.url().includes('/relationship-graph'))
+  await navItem(page, '健康图谱').click()
+  await graph
+  await expect(viewHeading(page)).toHaveText('家庭健康图谱')
+  await expect(page.getByRole('img', { name: 'Synthetic member的健康关系图谱' })).toBeVisible()
+  await expect(page.getByText('合成药品')).toBeVisible()
 })
 
 test('家庭大屏使用脱敏聚合接口而非成员逐项汇总', async ({ page }) => {
