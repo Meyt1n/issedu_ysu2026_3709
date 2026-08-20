@@ -16,7 +16,11 @@ const member = {
   created_at: '2026-08-19T00:00:00Z',
 }
 
-async function installSessionApi(page: Page, expireDuringScope = false): Promise<string[]> {
+async function installSessionApi(
+  page: Page,
+  expireDuringScope = false,
+  expiresInMs = 1_800_000_000_000,
+): Promise<string[]> {
   const requests: string[] = []
   let scopeRequestCount = 0
 
@@ -36,7 +40,7 @@ async function installSessionApi(page: Page, expireDuringScope = false): Promise
       return respond({
         actor_id: 'session-owner',
         session_token: 's'.repeat(48),
-        expires_at: 1_800_000_000,
+        expires_at: (Date.now() + expiresInMs) / 1000,
       })
     }
     if (request.method() === 'POST' && path === '/api/v1/auth/logout') return respond({ status: 'logged_out' })
@@ -108,4 +112,13 @@ test('受保护请求返回 401 时清除会话和成员上下文', async ({ pag
   await expect(page.locator('.app-frame')).toHaveCount(0)
   await expect(page.getByRole('alert')).toContainText('会话已过期或已被撤销，请重新登录。')
   await expect(page.getByText('Synthetic session member')).toHaveCount(0)
+})
+
+test('姝ｅ紡浼氳瘽鍒版湡鍚庣綉椤佃嚜鍔ㄦ竻闄ゅ搴笂涓嬫枃', async ({ page }) => {
+  await installSessionApi(page, false, 1200)
+  await chooseFormalLogin(page)
+
+  await expect(page.locator('.app-frame')).toBeVisible()
+  await expect(page.getByRole('alert')).toContainText('\u4f1a\u8bdd\u5df2\u8fc7\u671f\u6216\u5df2\u88ab\u64a4\u9500')
+  await expect(page.locator('.app-frame')).toHaveCount(0)
 })
