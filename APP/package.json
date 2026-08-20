@@ -11,6 +11,7 @@
     "check": "vue-tsc --noEmit",
     "test": "vitest run",
     "android:sync": "npm run build && cap sync android",
+    "verify:android-a11y-evidence": "node scripts/verify-android-a11y-evidence.mjs",
     "seed:live": "node scripts/seed-live-demo.mjs",
     "verify:linkage": "node scripts/verify-web-linkage.mjs",
     "audit:pwa": "npm run build && node scripts/audit-pwa.mjs"

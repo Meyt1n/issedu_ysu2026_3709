@@ -119,6 +119,17 @@ npm run dev
 
 同一套代码通过 Capacitor 打包为原生 Android 应用，WebView 内置打包产物，联机数据走"我的 → 数据来源"里配置的家庭服务器地址。Android 工程保留家庭局域网明文 HTTP 的联调能力，但运行时仍执行上述地址边界校验；生产公网地址必须使用 HTTPS。
 
+### 真机无障碍签收
+
+`npm run check`、`npm run test`、`npm run build` 和 `npm run android:sync` 不能代替 Android 真机签收。TalkBack、中文 TTS、系统字号、高对比、减少动效、触觉以及系统拨号确认必须使用同一 APK 在真机验证，并按 [MOB-141 验收记录](../docs/testing/MOB-141-Android真机无障碍验收记录.md) 填写设备与版本、APK SHA-256、每条用例结果和脱敏证据。
+
+记录所有项目通过后执行以下门禁；默认模板会故意失败，防止空记录被当作签收结果：
+
+```powershell
+npm run verify:android-a11y-evidence -- ../docs/testing/MOB-141-Android真机无障碍验收记录.md
+```
+
+浏览器截图、模拟器结果和自动化测试不得替代真机证据。未完成真机记录时，发布状态必须保持“待验收”。
 一键构建（推荐）：
 
 ```powershell
