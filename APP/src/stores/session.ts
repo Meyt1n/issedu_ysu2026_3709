@@ -1,5 +1,8 @@
 import { reactive } from 'vue'
 
+import { normalizePhoneNumber } from '@/utils/phone'
+import { validateServerBaseUrl } from '@/utils/serverUrl'
+
 export type DataMode = 'demo' | 'live'
 
 export interface SessionSettings {
@@ -28,18 +31,28 @@ export const DEFAULT_SESSION: SessionSettings = {
   currentMemberId: '',
 }
 
+/** 影响联机数据边界的会话指纹；身份、目的或家庭服务器变化都必须丢弃旧 Provider 缓存。 */
+export function sessionContextKey(source: Pick<SessionSettings, 'dataMode' | 'serverBaseUrl' | 'actorId' | 'accessPurpose'>): string {
+  return [source.dataMode, source.serverBaseUrl.trim(), source.actorId.trim(), source.accessPurpose.trim()].join('\u001f')
+}
+
 export function normalizeSession(raw: unknown): SessionSettings {
   if (typeof raw !== 'object' || raw === null) return { ...DEFAULT_SESSION }
   const record = raw as Record<string, unknown>
   const text = (value: unknown, fallback: string): string =>
     typeof value === 'string' ? value : fallback
+  const serverBaseUrl = text(record.serverBaseUrl, '')
+  const validatedServerBaseUrl = validateServerBaseUrl(serverBaseUrl)
+  const caregiverPhone = normalizePhoneNumber(text(record.caregiverPhone, ''))
   return {
     dataMode: record.dataMode === 'live' ? 'live' : 'demo',
-    serverBaseUrl: text(record.serverBaseUrl, ''),
+    serverBaseUrl: validatedServerBaseUrl.ok
+      ? validatedServerBaseUrl.value
+      : '',
     actorId: text(record.actorId, ''),
     accessPurpose: text(record.accessPurpose, 'family-care') || 'family-care',
     caregiverName: text(record.caregiverName, ''),
-    caregiverPhone: text(record.caregiverPhone, ''),
+    caregiverPhone: caregiverPhone ?? '',
     currentMemberId: text(record.currentMemberId, ''),
   }
 }

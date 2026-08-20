@@ -20,6 +20,7 @@ const ICONS: Record<ToastTone, IconName> = {
         type="button"
         class="toast"
         :data-tone="toast.tone"
+        :aria-label="`${toast.text}，点按关闭提示`"
         @click="dismissToast(toast.id)"
       >
         <span class="toast-icon" aria-hidden="true">
@@ -62,6 +63,7 @@ const ICONS: Record<ToastTone, IconName> = {
   box-shadow: var(--shadow-float), inset 0 1px 0 var(--hilite);
   cursor: pointer;
   text-align: left;
+  min-height: var(--tap);
 }
 
 .toast-icon {

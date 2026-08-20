@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import AppIcon from '@/components/AppIcon.vue'
@@ -9,13 +9,16 @@ import { useSpeech } from '@/composables/useSpeech'
 import { activeProvider } from '@/data'
 import { eventStatusLabel, riskLevelLabel } from '@/data/labels'
 import type { RiskCard } from '@/data/types'
-import { useSession } from '@/stores/session'
+import { CAPABILITY_IDS, useCapabilities } from '@/stores/capabilities'
+import { sessionContextKey, useSession } from '@/stores/session'
 import { formatDateTime } from '@/utils/format'
+import { normalizePhoneNumber } from '@/utils/phone'
 import { presentApiError, type ErrorPresentation } from '@/api/errors'
 
 const route = useRoute()
 const router = useRouter()
 const { session } = useSession()
+const { capabilities, hasCapability } = useCapabilities()
 const speech = useSpeech()
 
 const risk = ref<RiskCard | null>(null)
@@ -24,29 +27,44 @@ const error = ref<ErrorPresentation | null>(null)
 const actionMessage = ref('')
 const actionError = ref<ErrorPresentation | null>(null)
 const acknowledging = ref(false)
-const supportsAcknowledgement = computed(() => session.dataMode === 'demo')
-
-const phoneHref = computed(() =>
-  session.caregiverPhone ? `tel:${session.caregiverPhone.replace(/\s+/g, '')}` : '',
+const supportsAcknowledgement = computed(() =>
+  session.dataMode === 'demo' || hasCapability(CAPABILITY_IDS.riskAcknowledgement),
 )
+const acknowledgementStatusMessage = computed(() => {
+  if (session.dataMode === 'demo') return ''
+  if (!capabilities.snapshot) return '能力探测尚未完成；请先到“我的”测试连接，本按钮会按不可用处理。'
+  return '家庭服务器暂不支持回写“已知晓”状态；本页不会将其标记为已记录。'
+})
+let loadGeneration = 0
+
+const phoneHref = computed(() => {
+  const phone = normalizePhoneNumber(session.caregiverPhone)
+  return phone ? `tel:${phone}` : ''
+})
 
 async function load(): Promise<void> {
+  const generation = ++loadGeneration
+  const expectedKey = sessionContextKey(session)
   loading.value = true
   error.value = null
   risk.value = null
   const memberId = String(route.params.memberId ?? '')
   const ruleId = decodeURIComponent(String(route.params.ruleId ?? ''))
   try {
-    risk.value = await activeProvider().getRiskDetail(memberId, ruleId)
+    const nextRisk = await activeProvider().getRiskDetail(memberId, ruleId)
+    if (generation !== loadGeneration || expectedKey !== sessionContextKey(session)) return
+    risk.value = nextRisk
     speech.speak(`${riskLevelLabel(risk.value.level)}风险：${risk.value.message}。${risk.value.suggestion}`)
   } catch (cause) {
+    if (generation !== loadGeneration || expectedKey !== sessionContextKey(session)) return
     error.value = presentApiError(cause)
   } finally {
-    loading.value = false
+    if (generation === loadGeneration) loading.value = false
   }
 }
 
 onMounted(load)
+watch(() => sessionContextKey(session), () => void load())
 
 async function acknowledge(): Promise<void> {
   if (!risk.value || !supportsAcknowledgement.value) return
@@ -114,7 +132,7 @@ async function acknowledge(): Promise<void> {
       <section class="card" aria-labelledby="suggestion-title">
         <h2 id="suggestion-title">建议处理</h2>
         <p>{{ risk.suggestion }}</p>
-        <p v-if="!supportsAcknowledgement" class="notice" data-tone="warn" role="status">家庭服务器暂不支持回写“已知晓”状态；本页不会将其标记为已记录。</p>
+        <p v-if="!supportsAcknowledgement" class="notice" data-tone="warn" role="status">{{ acknowledgementStatusMessage }}</p>
         <ErrorNotice v-if="actionError" :error="actionError" @retry="acknowledge" />
         <p v-else-if="actionMessage" class="notice" data-tone="success" role="status">{{ actionMessage }}</p>
         <div class="btn-row">

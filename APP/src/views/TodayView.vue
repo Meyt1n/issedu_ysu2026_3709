@@ -18,9 +18,9 @@ import { showToast } from '@/composables/useToast'
 import { presentApiError, type ErrorPresentation } from '@/api/errors'
 import { activeProvider } from '@/data'
 import { eventStatusLabel, riskLevelLabel, riskLevelTone, taskLevelLabel } from '@/data/labels'
-import type { MemberSummary, TaskAction, TaskActionPayload, TodaySnapshot, TrendPoint } from '@/data/types'
+import type { CareTask, MemberSummary, TaskAction, TaskActionPayload, TodaySnapshot, TrendPoint } from '@/data/types'
 import { useA11y } from '@/stores/accessibility'
-import { useSession } from '@/stores/session'
+import { sessionContextKey, useSession } from '@/stores/session'
 import { tapFeedback } from '@/utils/haptics'
 import { formatDateTime, greetingByHour } from '@/utils/format'
 
@@ -41,6 +41,8 @@ const busyTaskId = ref('')
 const failedAction = ref<{ taskId: string; action: TaskAction; payload: TaskActionPayload } | null>(null)
 const announced = ref(false)
 const confetti = ref<InstanceType<typeof ConfettiBurst> | null>(null)
+const sessionKey = computed(() => sessionContextKey(session))
+let reloadGeneration = 0
 
 const greeting = computed(() => greetingByHour(new Date().getHours()))
 const dateLine = computed(() => {
@@ -82,26 +84,30 @@ function summaryText(): string {
   return `${parts.join('；')}。`
 }
 
-async function loadMembers(): Promise<void> {
-  members.value = await activeProvider().listMembers()
-  const exists = members.value.some(m => m.id === session.currentMemberId)
+async function loadMembers(expectedKey: string, generation: number): Promise<boolean> {
+  const nextMembers = await activeProvider().listMembers()
+  if (expectedKey !== sessionKey.value || generation !== reloadGeneration) return false
+  members.value = nextMembers
+  const exists = nextMembers.some(m => m.id === session.currentMemberId)
   if (!exists) {
-    const preferred = members.value.find(m => m.role === 'DEPENDENT') ?? members.value[0]
+    const preferred = nextMembers.find(m => m.role === 'DEPENDENT') ?? nextMembers[0]
     updateSession({ currentMemberId: preferred?.id ?? '' })
   }
+  return true
 }
 
-async function loadSnapshot(): Promise<void> {
+async function loadSnapshot(expectedKey = sessionKey.value, generation = reloadGeneration): Promise<boolean> {
   if (!session.currentMemberId) {
     snapshot.value = null
     trend.value = []
-    return
+    return true
   }
   const memberId = session.currentMemberId
   const [nextSnapshot, nextTrend] = await Promise.all([
     activeProvider().getTodaySnapshot(memberId),
     activeProvider().getWeeklyTrend(memberId),
   ])
+  if (expectedKey !== sessionKey.value || generation !== reloadGeneration) return false
   // 任务、趋势和时间线来自同一轮刷新，避免操作后显示不同步的旧数据。
   snapshot.value = nextSnapshot
   trend.value = nextTrend
@@ -109,19 +115,28 @@ async function loadSnapshot(): Promise<void> {
     announced.value = true
     speech.speak(summaryText())
   }
+  return true
 }
 
-async function reload(): Promise<void> {
+async function reload(options: { preserveSnapshot?: boolean } = {}): Promise<void> {
+  const generation = ++reloadGeneration
+  const expectedKey = sessionKey.value
   loading.value = true
   error.value = null
-  try {
-    await loadMembers()
-    await loadSnapshot()
-  } catch (cause) {
-    error.value = presentApiError(cause)
+  if (!options.preserveSnapshot) {
+    members.value = []
     snapshot.value = null
+    trend.value = []
+  }
+  try {
+    if (!(await loadMembers(expectedKey, generation))) return
+    await loadSnapshot(expectedKey, generation)
+  } catch (cause) {
+    if (expectedKey !== sessionKey.value || generation !== reloadGeneration) return
+    error.value = presentApiError(cause)
+    if (!options.preserveSnapshot) snapshot.value = null
   } finally {
-    loading.value = false
+    if (generation === reloadGeneration) loading.value = false
   }
 }
 
@@ -130,38 +145,66 @@ async function onMemberChange(): Promise<void> {
   loading.value = true
   error.value = null
   actionError.value = null
+  failedAction.value = null
+  snapshot.value = null
+  trend.value = []
+  const generation = ++reloadGeneration
+  const expectedKey = sessionKey.value
   try {
-    await loadSnapshot()
+    await loadSnapshot(expectedKey, generation)
   } catch (cause) {
     error.value = presentApiError(cause)
   } finally {
-    loading.value = false
+    if (generation === reloadGeneration) loading.value = false
   }
 }
 
 async function onTaskAction(taskId: string, action: TaskAction, payload: TaskActionPayload): Promise<void> {
+  // 同一轮只能有一个写操作；按钮的 disabled 负责视觉反馈，这个守卫负责
+  // 覆盖同一事件循环内的重复 click/键盘触发。
+  if (busyTaskId.value) return
+  const expectedKey = sessionKey.value
+  const expectedMemberId = session.currentMemberId
   busyTaskId.value = taskId
   actionError.value = null
   failedAction.value = null
   const hadPending = pendingTasks.value.length
+  let task: CareTask
   try {
-    const task = await activeProvider().submitTaskAction(taskId, action, payload)
-    const label = action === 'confirm' ? '已确认' : action === 'defer' ? '已延期' : '已记录跳过'
-    tapFeedback(action === 'confirm' ? [12, 60, 18] : 12)
-    showToast(`${label}：${task.title}`, 'success')
-    speech.speak(`${label}：${task.title}`)
-    await loadSnapshot()
-    // 最后一项任务处理完：彩带庆祝 + 语音鼓励。
-    if (hadPending === 1 && pendingTasks.value.length === 0 && doneTasks.value.length > 0) {
-      confetti.value?.fire()
-      speech.speak('今日照护任务全部完成，辛苦了！')
-    }
+    task = await activeProvider().submitTaskAction(taskId, action, payload)
   } catch (cause) {
     actionError.value = presentApiError(cause)
     failedAction.value = { taskId, action, payload }
-  } finally {
     busyTaskId.value = ''
+    return
   }
+
+  // 会话或当前成员已切换时，丢弃旧上下文的回执，避免把旧家庭结果写进新页面。
+  if (expectedKey !== sessionKey.value || expectedMemberId !== session.currentMemberId) {
+    busyTaskId.value = ''
+    return
+  }
+
+  const label = action === 'confirm' ? '已确认' : action === 'defer' ? '已延期' : '已记录跳过'
+  tapFeedback(action === 'confirm' ? [12, 60, 18] : 12)
+  showToast(`${label}：${task.title}`, 'success')
+  speech.speak(`${label}：${task.title}`)
+
+  // 先应用服务端回执，随后做统一整页刷新。刷新失败不再重提写操作，
+  // 页面保留已收到的回执并只提供刷新重试。
+  if (snapshot.value?.memberId === task.memberId) {
+    snapshot.value = {
+      ...snapshot.value,
+      tasks: snapshot.value.tasks.map(item => item.id === task.id ? task : item),
+    }
+  }
+  await reload({ preserveSnapshot: true })
+  // 最后一项任务处理完：彩带庆祝 + 语音鼓励。
+  if (hadPending === 1 && pendingTasks.value.length === 0 && doneTasks.value.length > 0) {
+    confetti.value?.fire()
+    speech.speak('今日照护任务全部完成，辛苦了！')
+  }
+  busyTaskId.value = ''
 }
 
 async function retryTaskAction(): Promise<void> {
@@ -175,9 +218,11 @@ function speakSummary(): void {
 }
 
 watch(
-  () => session.dataMode,
+  () => sessionKey.value,
   () => {
     announced.value = true
+    actionError.value = null
+    failedAction.value = null
     void reload()
   },
 )
@@ -246,11 +291,20 @@ onMounted(reload)
     <ErrorNotice v-if="error" :error="error" @retry="reload" />
     <ErrorNotice v-if="actionError" :error="actionError" @retry="retryTaskAction" />
 
-    <div v-if="loading" class="plain-list" aria-label="正在加载" aria-live="polite">
+    <div v-if="loading" class="plain-list" aria-label="正在加载家庭和成员数据" aria-live="polite">
+      <p class="meta-line">正在加载家庭和成员数据…</p>
       <SkeletonCard />
       <SkeletonCard />
       <SkeletonCard :disc="false" />
     </div>
+
+    <template v-else-if="members.length === 0">
+      <EmptyState
+        icon="family"
+        title="当前身份没有可用家庭成员"
+        hint="请到“我的”检查联机身份、家庭和授权设置；没有成员时不会显示空健康数据。"
+      />
+    </template>
 
     <template v-else-if="snapshot">
       <section aria-labelledby="tasks-title">
@@ -269,7 +323,7 @@ onMounted(reload)
             v-for="task in pendingTasks"
             :key="task.id"
             :task="task"
-            :busy="busyTaskId === task.id"
+            :busy="Boolean(busyTaskId)"
             @action="(action, payload) => onTaskAction(task.id, action, payload)"
           />
         </div>

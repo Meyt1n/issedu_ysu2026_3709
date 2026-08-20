@@ -103,18 +103,21 @@ npm run dev
 
 ### 联机模式的已知限制（如实记录，不冒充完成）
 
+- 服务器地址由移动端统一校验：只允许 HTTP(S)，明文 HTTP 仅接受 localhost、`.local`、家庭私网/本机地址，公网正式地址必须使用 HTTPS；地址变更或旧值非法会清理当前成员、能力快照和连接状态并要求重新测试；
+- 紧急联系人号码仅保存在本机设置，保存时会去除常见分隔符并拒绝 URL scheme、控制字符和异常长度；求助、风险详情和测试拨号都读取最新规范化值，拨号前仍需确认；
 - 药盒识别链路只到"创建视觉任务"，候选确认仍需回网页端人工复核中心；
 - 风险"我已知晓"回写暂无对应服务端接口，界面会如实提示而不是伪装成功；
+- 联机入口会探测 `/api/v1/meta/capabilities` 并列出服务阶段、可用和未提供能力；能力探测失败或服务端未声明的能力按不可用处理，相关入口会禁用并标注限制；
 - 照护者视角的可见范围按"服务端已过滤"标注（授权明细仅 owner 可读，到期时间不显示）；
 - "近 7 天完成情况"由计划事实与 `plan_confirmed` 事件推导，为近似统计；
-- 登录 / PIN 二次确认沿用主仓库开发期的 `X-Actor-Id` 头约定，正式鉴权跟随主仓库 HCT-107 交付；
+- 登录 / PIN 二次确认尚未接入主仓库正式接口；当前仅保留明确标注的开发期 `X-Actor-Id` 联调路径。移动端适配契约、Bearer/Cookie 传输边界和内存测试桩见 [MOB-115 Story](../docs/stories/MOB-115-正式鉴权适配设计.md)，正式鉴权仍跟随主仓库 HCT-107 交付；
 - 联调发现的主仓库缺口：投影丢弃药品 `expiry_date/stock/ingredient` 导致过期/低库存/重复成分规则无法触发——
   已提交修复（[Issue #140](https://github.com/Meyt1n/issedu_ysu2026_3709/issues/140)、
   [PR #141](https://github.com/Meyt1n/issedu_ysu2026_3709/pull/141)，含"事件→投影→规则"回归测试，待维护者复核合并）。
 
 ## 安卓应用（Capacitor）
 
-同一套代码通过 Capacitor 打包为原生 Android 应用，WebView 内置打包产物，联机数据走"我的 → 数据来源"里配置的家庭服务器地址（`AndroidManifest` 已允许家庭局域网明文 http）。
+同一套代码通过 Capacitor 打包为原生 Android 应用，WebView 内置打包产物，联机数据走"我的 → 数据来源"里配置的家庭服务器地址。Android 工程保留家庭局域网明文 HTTP 的联调能力，但运行时仍执行上述地址边界校验；生产公网地址必须使用 HTTPS。
 
 一键构建（推荐）：
 
@@ -147,12 +150,12 @@ android/             Capacitor 生成的原生安卓工程（构建产物与 loc
 public/              PWA manifest、图标、AI 生成氛围底图（bg/）与离线 Service Worker（sw.js）
 scripts/             联调造数脚本（虚构数据）与一键 APK 构建脚本
 src/
-  api/               与主仓库对齐的 API 契约与客户端（X-Actor-Id 等请求头一致）
+  api/               与主仓库对齐的 API 契约、鉴权适配和客户端（开发期 X-Actor-Id 等请求头一致）
   components/        TabBar、任务卡、等级标签、开关等基础组件
   composables/       语音播报（Web Speech API）
   data/              DataProvider 接口 + 演示数据 + 联机适配器 + 文案映射
   router/            页面路由
-  stores/            无障碍设置、会话设置（localStorage 持久化）
+  stores/            无障碍设置、会话设置（localStorage 持久化）、运行时能力探测状态
   utils/             时间格式化等
   views/             9 个页面
 docs/                无障碍模式设计说明

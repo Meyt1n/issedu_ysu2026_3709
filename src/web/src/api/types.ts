@@ -2,7 +2,7 @@ export type ApiErrorCode = string
 
 export type MemberRole = 'SELF' | 'DEPENDENT' | 'CAREGIVER'
 
-export type AuthorizationAction = 'READ_EVENTS' | 'WRITE_EVENTS'
+export type AuthorizationAction = 'READ_EVENTS' | 'WRITE_EVENTS' | 'ACK_RISK'
 
 export interface ApiErrorEnvelope {
   error?: {
@@ -245,6 +245,21 @@ export interface RiskAlert {
   message: string
   source_event_ids: string[]
   created_at: string | null
+  rule_version: string
+  risk_fingerprint: string
+  acknowledgement: RiskAcknowledgement | null
+}
+
+export interface RiskAcknowledgement {
+  receipt_id: string
+  household_id: string
+  member_id: string
+  rule_id: string
+  rule_version: string
+  risk_fingerprint: string
+  actor_id: string
+  acknowledged_at: string
+  replayed: boolean
 }
 
 export interface RiskListResponse {
@@ -269,11 +284,18 @@ export interface RiskDetailResponse {
 
 export interface RequestOptions {
   actorId?: string
+  sessionToken?: string
   accessPurpose?: string
   idempotencyKey?: string
   signal?: AbortSignal
   /** 单次请求超时（毫秒）。超时视为本地 API 不可用，写请求可凭幂等键安全重试。 */
   timeoutMs?: number
+}
+
+export interface AuthSession {
+  actor_id: string
+  session_token: string
+  expires_at: number
 }
 
 export interface VisionQualityMetric {
@@ -330,6 +352,7 @@ export interface VisionTask {
   status: string
   error_code: string | null
   error_message: string | null
+  error_detail: VisionTaskErrorDetail | null
   result: EvidencePipelineResult | null
   model_version: string | null
   model_threshold: number | null
@@ -340,6 +363,13 @@ export interface VisionTask {
   input_digest: string | null
   created_by: string
   created_at: string
+}
+
+export interface VisionTaskErrorDetail {
+  code: string
+  message: string
+  retryable: boolean
+  next_action: string
 }
 
 export type EvidenceFieldName =
@@ -550,12 +580,16 @@ export interface AssistantCitation {
   document_id: string
   version: string
   chunk_id: string
+  document_title?: string | null
+  text?: string | null
+  locator?: string | null
 }
 
 export interface AssistantResponse {
   answer: string
   sources: string[]
   citations?: AssistantCitation[]
+  suggested_questions?: string[]
   confidence: string
   escalate: boolean
   degraded: boolean
@@ -718,3 +752,4 @@ export interface CorrectionDiff {
   version: number
   created_at: string
 }
+

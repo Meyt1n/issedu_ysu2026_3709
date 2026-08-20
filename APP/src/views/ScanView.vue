@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import AppIcon from '@/components/AppIcon.vue'
 import ErrorNotice from '@/components/ErrorNotice.vue'
@@ -9,15 +9,20 @@ import { useSpeech } from '@/composables/useSpeech'
 import { activeProvider } from '@/data'
 import { recognitionStatusLabel } from '@/data/labels'
 import type { MemberSummary, QualityCheckResult, RecognitionCandidate } from '@/data/types'
-import { useSession } from '@/stores/session'
+import { imageInputUnavailableMessage, validateMedicineImage } from '@/utils/uploadInput'
+import { CAPABILITY_IDS, useCapabilities } from '@/stores/capabilities'
+import { sessionContextKey, useSession } from '@/stores/session'
 import { presentApiError, type ErrorPresentation } from '@/api/errors'
 
 type Stage = 'idle' | 'checking' | 'quality' | 'recognizing' | 'result'
 
 const { session } = useSession()
+const { capabilities, hasCapability } = useCapabilities()
 const speech = useSpeech()
+let memberLoadGeneration = 0
 
 const members = ref<MemberSummary[]>([])
+const membersLoading = ref(true)
 const memberId = ref('')
 const stage = ref<Stage>('idle')
 const file = ref<File | null>(null)
@@ -25,11 +30,20 @@ const previewUrl = ref('')
 const quality = ref<QualityCheckResult | null>(null)
 const candidate = ref<RecognitionCandidate | null>(null)
 const error = ref<ErrorPresentation | null>(null)
+const inputNotice = ref('')
+const visionTaskAvailable = computed(() =>
+  session.dataMode === 'demo' || hasCapability(CAPABILITY_IDS.visionTask),
+)
+const isBusy = computed(() => stage.value === 'checking' || stage.value === 'recognizing')
+const cameraAvailable = computed(() => {
+  if (typeof navigator === 'undefined') return false
+  return Boolean(navigator.mediaDevices?.getUserMedia)
+})
 const handoff = computed(() => candidate.value?.handoff ?? {
   taskId: 'demo-review-pending',
   taskStatus: 'PENDING_REVIEW',
   source: 'DEMO' as const,
-  nextStep: '????????????????????????',
+  nextStep: '请在网页端人工复核中心确认识别候选。',
 })
 
 const steps = [
@@ -60,27 +74,51 @@ function reset(): void {
   candidate.value = null
   error.value = null
   stage.value = 'idle'
+  inputNotice.value = ''
+}
+
+function clearSelection(): void {
+  if (isBusy.value) return
+  releasePreview()
+  file.value = null
+  quality.value = null
+  candidate.value = null
+  error.value = null
+  stage.value = 'idle'
+  inputNotice.value = '已取消本次本地图片选择；未发起上传，也未创建视觉任务。'
 }
 
 async function onFilePicked(event: Event): Promise<void> {
+  if (!visionTaskAvailable.value || isBusy.value) return
   const input = event.target as HTMLInputElement
   const picked = input.files?.[0]
   input.value = ''
   if (!picked) return
+
+  const validation = validateMedicineImage(picked)
+  if (!validation.ok) {
+    inputNotice.value = validation.message
+    error.value = null
+    return
+  }
 
   releasePreview()
   file.value = picked
   previewUrl.value = URL.createObjectURL(picked)
   quality.value = null
   candidate.value = null
+  inputNotice.value = ''
   await checkQuality(picked)
 }
 
 async function checkQuality(picked: File): Promise<void> {
+  const expectedKey = sessionContextKey(session)
   error.value = null
   stage.value = 'checking'
   try {
-    quality.value = await activeProvider().checkImageQuality(picked)
+    const nextQuality = await activeProvider().checkImageQuality(picked)
+    if (expectedKey !== sessionContextKey(session)) return
+    quality.value = nextQuality
     stage.value = 'quality'
     if (quality.value.decision === 'PASS') {
       speech.speak('照片质量合格，可以开始识别。')
@@ -88,32 +126,54 @@ async function checkQuality(picked: File): Promise<void> {
       speech.speak(`照片需要重拍。${quality.value.retakePrompts.join('，')}`)
     }
   } catch (cause) {
+    if (expectedKey !== sessionContextKey(session)) return
     error.value = presentApiError(cause)
     stage.value = 'idle'
   }
 }
 
 async function recognize(): Promise<void> {
-  if (!file.value || !memberId.value) return
+  if (
+    !file.value
+    || !memberId.value
+    || !visionTaskAvailable.value
+    || stage.value === 'checking'
+    || stage.value === 'recognizing'
+  ) return
+  const expectedKey = sessionContextKey(session)
   stage.value = 'recognizing'
   error.value = null
   try {
-    candidate.value = await activeProvider().recognizeMedicine(file.value, memberId.value)
+    const nextCandidate = await activeProvider().recognizeMedicine(file.value, memberId.value)
+    if (expectedKey !== sessionContextKey(session)) return
+    candidate.value = nextCandidate
     stage.value = 'result'
     speech.speak(`识别结果：${recognitionStatusLabel(candidate.value.status)}。${candidate.value.notice}`)
   } catch (cause) {
+    if (expectedKey !== sessionContextKey(session)) return
     error.value = presentApiError(cause)
     stage.value = 'quality'
+    inputNotice.value = '本次识别未确认创建视觉任务。保留已通过质量检查的图片，可点击“开始识别”重试；请勿重复选择图片。'
   }
 }
 
 async function loadMembers(): Promise<void> {
+  const generation = ++memberLoadGeneration
+  const expectedKey = sessionContextKey(session)
+  membersLoading.value = true
   error.value = null
+  members.value = []
+  memberId.value = ''
   try {
-    members.value = await activeProvider().listMembers()
-    memberId.value = session.currentMemberId || members.value[0]?.id || ''
+    const nextMembers = await activeProvider().listMembers()
+    if (generation !== memberLoadGeneration || expectedKey !== sessionContextKey(session)) return
+    members.value = nextMembers
+    memberId.value = session.currentMemberId || nextMembers[0]?.id || ''
   } catch (cause) {
+    if (generation !== memberLoadGeneration || expectedKey !== sessionContextKey(session)) return
     error.value = presentApiError(cause)
+  } finally {
+    if (generation === memberLoadGeneration) membersLoading.value = false
   }
 }
 
@@ -130,6 +190,10 @@ async function retry(): Promise<void> {
 }
 
 onMounted(loadMembers)
+watch(() => sessionContextKey(session), () => {
+  reset()
+  void loadMembers()
+})
 
 onBeforeUnmount(releasePreview)
 </script>
@@ -144,14 +208,43 @@ onBeforeUnmount(releasePreview)
     </header>
 
     <ol class="steps" aria-label="录入步骤">
-      <li v-for="(step, index) in steps" :key="step.key" :data-active="index === activeStepIndex">
+      <li
+        v-for="(step, index) in steps"
+        :key="step.key"
+        :data-active="index === activeStepIndex"
+        :aria-current="index === activeStepIndex ? 'step' : undefined"
+      >
         {{ index + 1 }}.{{ step.label }}
       </li>
     </ol>
 
+    <p v-if="membersLoading" class="notice" role="status">正在加载家庭和成员数据…</p>
+    <p v-else-if="members.length === 0 && !error" class="notice" data-tone="warn" role="status">
+      当前家庭暂无可用成员，请到“我的”检查联机身份、家庭和授权设置；没有成员时不能开始录入。
+    </p>
+    <p
+      v-if="session.dataMode === 'live' && !capabilities.snapshot"
+      class="notice"
+      data-tone="warn"
+      role="status"
+    >
+      尚未完成后端能力探测；请先到“我的”测试连接。未确认提供视觉任务前，拍摄和相册入口保持禁用。
+    </p>
+    <p
+      v-else-if="session.dataMode === 'live' && !visionTaskAvailable"
+      class="notice"
+      data-tone="warn"
+      role="status"
+    >
+      当前家庭服务器未提供视觉任务，拍摄和相册入口已禁用；不会把未提供的识别接口包装成可用功能。
+    </p>
+
+    <p v-if="!cameraAvailable" class="notice" data-tone="warn" role="status">
+      {{ imageInputUnavailableMessage() }}
+    </p>
     <label class="field">
       为哪位成员录入
-      <select v-model="memberId">
+      <select v-model="memberId" :disabled="membersLoading || members.length === 0">
         <option v-for="member in members" :key="member.id" :value="member.id">
           {{ member.name }}（{{ member.relation }}）
         </option>
@@ -180,7 +273,11 @@ onBeforeUnmount(releasePreview)
         ></span>
       </div>
       <div class="btn-row">
-        <label class="btn btn-lg" :data-disabled="stage === 'checking' || stage === 'recognizing'">
+        <label
+          class="btn btn-lg"
+          :data-disabled="!visionTaskAvailable || membersLoading || members.length === 0 || stage === 'checking' || stage === 'recognizing'"
+          :aria-disabled="!visionTaskAvailable || membersLoading || members.length === 0 || stage === 'checking' || stage === 'recognizing'"
+        >
           <AppIcon name="camera" :size="20" />
           {{ file ? '重新拍摄' : '拍摄药盒' }}
           <input
@@ -188,28 +285,41 @@ onBeforeUnmount(releasePreview)
             accept="image/*"
             capture="environment"
             class="visually-hidden-input"
-            :disabled="stage === 'checking' || stage === 'recognizing'"
+            :disabled="!visionTaskAvailable || membersLoading || members.length === 0 || stage === 'checking' || stage === 'recognizing'"
             @change="onFilePicked"
           />
         </label>
-        <label class="btn btn-quiet btn-lg">
+        <label
+          class="btn btn-quiet btn-lg"
+          :data-disabled="!visionTaskAvailable || membersLoading || members.length === 0"
+          :aria-disabled="!visionTaskAvailable || members.length === 0"
+        >
           从相册选择
           <input
             type="file"
             accept="image/*"
             class="visually-hidden-input"
-            :disabled="stage === 'checking' || stage === 'recognizing'"
+            :disabled="!visionTaskAvailable || membersLoading || members.length === 0 || stage === 'checking' || stage === 'recognizing'"
             @change="onFilePicked"
           />
         </label>
       </div>
+      <button
+        v-if="file && !isBusy"
+        type="button"
+        class="btn btn-quiet btn-block"
+        @click="clearSelection"
+      >
+        取消本次选择
+      </button>
     </div>
 
+    <p v-if="inputNotice" class="notice" data-tone="warn" role="status">{{ inputNotice }}</p>
     <ErrorNotice v-if="error" :error="error" @retry="retry" />
     <p v-if="stage === 'checking'" class="notice" role="status">正在进行图片质量检查…</p>
     <p v-if="stage === 'recognizing'" class="notice" role="status">正在提取 OCR、条码与包装特征证据…</p>
 
-    <section v-if="quality && stage !== 'checking'" class="card" aria-labelledby="quality-title">
+    <section v-if="quality && stage !== 'checking'" class="card" aria-labelledby="quality-title" aria-live="polite">
       <div class="card-title-row">
         <h2 id="quality-title">质量检查</h2>
         <span
@@ -232,14 +342,14 @@ onBeforeUnmount(releasePreview)
         v-if="quality.decision === 'PASS' && stage === 'quality'"
         type="button"
         class="btn btn-block btn-lg"
-        :disabled="!memberId"
+        :disabled="!memberId || !visionTaskAvailable"
         @click="recognize"
       >
         开始识别
       </button>
     </section>
 
-    <section v-if="candidate && stage === 'result'" class="card" aria-labelledby="candidate-title">
+    <section v-if="candidate && stage === 'result'" class="card" aria-labelledby="candidate-title" aria-live="polite">
       <div class="card-title-row">
         <h2 id="candidate-title">识别候选</h2>
         <LevelTag kind="recognition" :value="candidate.status" />
@@ -258,11 +368,11 @@ onBeforeUnmount(releasePreview)
       </p>
       <p class="notice" data-tone="warn">{{ candidate.notice }}</p>
       <section class="handoff" aria-labelledby="handoff-title">
-        <h3 id="handoff-title">??????</h3>
-        <p><strong>?????</strong>{{ handoff.taskStatus }}</p>
-        <p><strong>?????</strong>{{ handoff.taskId }}</p>
+        <h3 id="handoff-title">后续人工复核</h3>
+        <p><strong>任务状态：</strong>{{ handoff.taskStatus }}</p>
+        <p><strong>任务编号：</strong>{{ handoff.taskId }}</p>
         <p>{{ handoff.nextStep }}</p>
-        <p v-if="handoff.source === 'DEMO'" class="meta-line">????????????????????????</p>
+        <p v-if="handoff.source === 'DEMO'" class="meta-line">演示模式不会创建真实复核任务。</p>
       </section>
       <p class="meta-line">
         版本：<template v-for="(version, key) in candidate.versions" :key="key">{{ key }} {{ version }}　</template>

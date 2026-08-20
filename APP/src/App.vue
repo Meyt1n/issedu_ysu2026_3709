@@ -70,7 +70,8 @@ const speech = useSpeech()
   position: fixed;
   left: 16px;
   right: 16px;
-  bottom: calc(92px + env(safe-area-inset-bottom));
+  /* 浮层要高于 4/5 项底部导航，避免 320px + 特大字号时遮挡入口。 */
+  bottom: calc(144px + env(safe-area-inset-bottom));
   z-index: 31;
   display: flex;
   align-items: center;
@@ -102,7 +103,7 @@ html[data-contrast='high'] .speech-guidance { background: #fff; border: 2px soli
   position: fixed;
   left: 50%;
   transform: translateX(-50%);
-  bottom: calc(96px + env(safe-area-inset-bottom));
+  bottom: calc(144px + env(safe-area-inset-bottom));
   z-index: 30;
   display: inline-flex;
   align-items: center;
@@ -115,6 +116,7 @@ html[data-contrast='high'] .speech-guidance { background: #fff; border: 2px soli
   color: var(--c-ink);
   font-weight: 700;
   font-size: 0.84rem;
+  min-height: var(--tap);
   padding: 9px 16px;
   box-shadow: var(--shadow-float), inset 0 1px 0 var(--hilite);
   cursor: pointer;
@@ -133,11 +135,14 @@ html[data-contrast='high'] .speech-guidance { background: #fff; border: 2px soli
   from { transform: scaleY(0.45); }
   to { transform: scaleY(1); }
 }
+html[data-elder='on'] .speaking-pill { min-height: var(--tap); }
+html[data-elder='on'] .speech-guidance button { min-height: var(--tap); }
+
 html[data-contrast='high'] .speech-guidance {
   position: fixed;
   left: 16px;
   right: 16px;
-  bottom: calc(92px + env(safe-area-inset-bottom));
+  bottom: calc(144px + env(safe-area-inset-bottom));
   z-index: 31;
   display: flex;
   align-items: center;

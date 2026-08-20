@@ -13,6 +13,21 @@ class HealthResponse(BaseModel):
     version: str
 
 
+class AuthCredentials(BaseModel):
+    actor_id: str = Field(min_length=1, max_length=120)
+    password: str = Field(min_length=8, max_length=256)
+
+
+class AuthSessionRequest(BaseModel):
+    session_token: str = Field(min_length=32, max_length=256)
+
+
+class AuthSessionRead(BaseModel):
+    actor_id: str
+    session_token: str
+    expires_at: float
+
+
 class CapabilityResponse(BaseModel):
     phase: str
     available: list[str]
@@ -53,7 +68,7 @@ class AuthorizationCreate(BaseModel):
     member_id: str
     grantee_actor_id: str = Field(min_length=1, max_length=120)
     data_fields: list[str] = Field(min_length=1)
-    actions: list[Literal["READ_EVENTS", "WRITE_EVENTS"]] = Field(min_length=1)
+    actions: list[Literal["READ_EVENTS", "WRITE_EVENTS", "ACK_RISK"]] = Field(min_length=1)
     purpose: str = Field(pattern=PURPOSE_PATTERN)
     valid_until: datetime
 
@@ -61,7 +76,7 @@ class AuthorizationCreate(BaseModel):
 class AuthorizationUpdate(BaseModel):
     expected_version: int = Field(ge=1)
     data_fields: list[str] | None = Field(default=None, min_length=1)
-    actions: list[Literal["READ_EVENTS", "WRITE_EVENTS"]] | None = Field(
+    actions: list[Literal["READ_EVENTS", "WRITE_EVENTS", "ACK_RISK"]] | None = Field(
         default=None,
         min_length=1,
     )
@@ -114,6 +129,7 @@ class AccessAuditRead(BaseModel):
     purpose: str | None
     outcome: str
     reason: str | None
+    request_id: str | None
     before_version: int | None
     after_version: int | None
     created_at: datetime
@@ -276,6 +292,23 @@ class DashboardSummaryRead(BaseModel):
 # ── HCT-307: Risk evidence schemas ──────────────────────────────────
 
 
+class RiskAcknowledgementCreate(BaseModel):
+    rule_version: str = Field(min_length=1, max_length=64)
+    risk_fingerprint: str = Field(min_length=64, max_length=64)
+
+
+class RiskAcknowledgementRead(BaseModel):
+    receipt_id: str
+    household_id: str
+    member_id: str
+    rule_id: str
+    rule_version: str
+    risk_fingerprint: str
+    actor_id: str
+    acknowledged_at: datetime
+    replayed: bool = False
+
+
 class RiskAlertRead(BaseModel):
     """Risk alert as returned by the rules engine. Evidence is desensitized."""
 
@@ -284,6 +317,9 @@ class RiskAlertRead(BaseModel):
     message: str
     source_event_ids: list[str] = Field(default_factory=list)
     created_at: datetime | None = None
+    rule_version: str
+    risk_fingerprint: str
+    acknowledgement: RiskAcknowledgementRead | None = None
 
 
 class RiskListResponse(BaseModel):
@@ -360,6 +396,7 @@ class ReviewTaskRead(BaseModel):
 
 class VisionTaskCreate(BaseModel):
     file_id: str = Field(min_length=1, description="Reference to an uploaded file")
+    media_type: Literal["image", "video"] = Field(default="image")
     member_id: str | None = Field(default=None)
     task_type: str = Field(default="ocr", min_length=1, max_length=40)
     idempotency_key: str | None = Field(default=None, max_length=128)
@@ -374,10 +411,12 @@ class VisionTaskRead(BaseModel):
     household_id: str
     member_id: str | None
     file_id: str
+    media_type: Literal["image", "video"]
     task_type: str
     status: str
     error_code: str | None = None
     error_message: str | None = None
+    error_detail: dict[str, Any] | None = None
     result: dict[str, Any] | None = None
     preprocess_version: str | None = None
     model_version: str | None = None
@@ -390,6 +429,27 @@ class VisionTaskRead(BaseModel):
     finished_at: datetime | None = None
     created_by: str
     created_at: datetime
+
+    @model_validator(mode="after")
+    def derive_error_detail(self) -> "VisionTaskRead":
+        if not self.error_code:
+            self.error_detail = None
+            return self
+        actions = {
+            "PREPROCESS_FAILED": "请检查图片格式、清晰度和文件是否完整后重新处理。",
+            "MODEL_NOT_FOUND": "本地视觉模型不可用，请启动视觉 worker 或检查模型配置。",
+            "MODEL_INFERENCE_ERROR": "视觉模型处理失败，请查看本地 worker 状态后重新处理。",
+            "TIMEOUT": "任务超过本地处理时限，请确认 worker 正常运行后重新处理。",
+            "UNKNOWN": "本地识别发生未知错误，请保留任务编号并重新处理。",
+        }
+        retryable = self.status in {"failed", "timeout"}
+        self.error_detail = {
+            "code": self.error_code,
+            "message": self.error_message or "未提供错误详情。",
+            "retryable": retryable,
+            "next_action": actions.get(self.error_code, "请刷新任务状态并联系项目维护者。"),
+        }
+        return self
 
 
 class VisionFusionRead(CandidateFusionResult):
@@ -483,6 +543,9 @@ class AssistantCitation(BaseModel):
     document_id: str
     version: str
     chunk_id: str
+    document_title: str | None = None
+    text: str | None = None
+    locator: str | None = None
 
 
 class AssistantRequest(BaseModel):
@@ -496,6 +559,7 @@ class AssistantResponse(BaseModel):
     answer: str
     sources: list[str] = Field(default_factory=list)
     citations: list[AssistantCitation] = Field(default_factory=list)
+    suggested_questions: list[str] = Field(default_factory=list)
     confidence: str = "low"
     escalate: bool = False
     degraded: bool = False

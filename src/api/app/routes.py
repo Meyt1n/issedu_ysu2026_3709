@@ -3,7 +3,7 @@ import secrets
 import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import NoReturn
+from typing import Any, NoReturn
 
 from ai.vision.candidate_fusion import (
     FusionRequest,
@@ -34,6 +34,7 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse
 from sqlalchemy import func, select, text, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth import (
@@ -78,6 +79,7 @@ from app.models import (
     Member,
     MemberStateProjection,
     OutboxMessage,
+    RiskAcknowledgement,
     VisionTask,
 )
 from app.review import (
@@ -95,14 +97,22 @@ from app.review import (
 from app.review import (
     list_review_tasks as list_review_tasks_query,
 )
+from app.risk_acknowledgement import (
+    acknowledgement_read,
+    request_fingerprint,
+    risk_fingerprint,
+)
 from app.schemas import (
     AccessAuditRead,
     AssistantRequest,
     AssistantResponse,
+    AuthCredentials,
     AuthorizationCreate,
     AuthorizationRead,
     AuthorizationRevoke,
     AuthorizationUpdate,
+    AuthSessionRead,
+    AuthSessionRequest,
     CapabilityResponse,
     CorrectionDiffCreate,
     CorrectionDiffRead,
@@ -142,6 +152,8 @@ from app.schemas import (
     ReviewTaskCorrect,
     ReviewTaskRead,
     ReviewTaskSkip,
+    RiskAcknowledgementCreate,
+    RiskAcknowledgementRead,
     RiskAlertRead,
     RiskDetailResponse,
     RiskListResponse,
@@ -164,11 +176,13 @@ from app.tool_call import (
     run_assistant,
 )
 from app.vision_tasks import (
+    VISION_MEDIA_TYPES,
     VisionTaskStatus,
     _file_digest,
     create_vision_task,
     get_vision_task,
     list_vision_tasks,
+    retry_vision_task,
     transition_status,
 )
 from app.weather_adapter import WeatherActionCardsResponse, fetch_weather
@@ -250,6 +264,7 @@ def capabilities() -> CapabilityResponse:
             "knowledge-store",
             "local-assistant",
             "llm",
+            "risk-acknowledgement",
         ],
         unavailable=["vision-inference", "llm-cloud", "external-web"],
     )
@@ -1059,26 +1074,24 @@ def delete_file(
 # ── HCT-107: Local auth ────────────────────────────────────────────
 
 
-@router.post("/auth/register", status_code=status.HTTP_201_CREATED)
+@router.post("/auth/register", response_model=dict, status_code=status.HTTP_201_CREATED)
 def auth_register(
-    actor_id: str,
-    password: str,
+    payload: AuthCredentials,
 ) -> dict:
-    register_account(actor_id, password)
-    return {"status": "registered", "actor_id": actor_id}
+    register_account(payload.actor_id, payload.password)
+    return {"status": "registered", "actor_id": payload.actor_id}
 
 
-@router.post("/auth/login")
+@router.post("/auth/login", response_model=AuthSessionRead)
 def auth_login(
-    actor_id: str,
-    password: str,
+    payload: AuthCredentials,
 ) -> dict:
-    return authenticate(actor_id, password)
+    return {"actor_id": payload.actor_id, **authenticate(payload.actor_id, payload.password)}
 
 
 @router.post("/auth/logout")
-def auth_logout(session_token: str) -> dict:
-    logout(session_token)
+def auth_logout(payload: AuthSessionRequest) -> dict:
+    logout(payload.session_token)
     return {"status": "logged_out"}
 
 
@@ -1807,6 +1820,7 @@ async def check_vision_quality(
             actor_id=actor_id,
             input_digest=input_digest,
             config_version=result["config_version"],
+            media_type=media_type,
         )
         if result["allow_downstream"]
         else None
@@ -1919,6 +1933,21 @@ def create_vision_task_endpoint(
             detail="FILE_NOT_FOUND",
         )
 
+    extension = target.suffix.lower()
+    media_type_by_extension = {
+        ".jpg": "image",
+        ".jpeg": "image",
+        ".png": "image",
+        ".mp4": "video",
+        ".mov": "video",
+    }
+    actual_media_type = media_type_by_extension.get(extension)
+    if actual_media_type not in VISION_MEDIA_TYPES or actual_media_type != payload.media_type:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="MEDIA_TYPE_MISMATCH",
+        )
+
     # Compute input digest for integrity tracking.
     try:
         input_digest = _file_digest(str(target))
@@ -1938,6 +1967,7 @@ def create_vision_task_endpoint(
             actor_id=actor_id,
             input_digest=input_digest,
             config_version=settings.vision_quality_config_version,
+            media_type=payload.media_type,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -1950,6 +1980,7 @@ def create_vision_task_endpoint(
         household_id=household_id,
         created_by=actor_id,
         file_id=payload.file_id,
+        media_type=payload.media_type,
         member_id=payload.member_id,
         task_type=payload.task_type,
         idempotency_key=payload.idempotency_key,
@@ -2418,6 +2449,31 @@ def cancel_vision_task_endpoint(
     return updated
 
 
+@router.post("/vision-tasks/{task_id}/retry", response_model=VisionTaskRead)
+def retry_vision_task_endpoint(
+    task_id: str,
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> VisionTask:
+    """Requeue one failed/timeout task in place.
+
+    The original file, member scope and task ID are retained.  This prevents
+    a retry button from creating a second candidate or a second health fact.
+    """
+    task = _require_vision_task_access(
+        session,
+        task_id,
+        actor_id=actor_id,
+        action="WRITE_EVENTS",
+        access_purpose=access_purpose,
+    )
+    updated = retry_vision_task(session, task)
+    session.commit()
+    session.refresh(updated)
+    return updated
+
+
 # ── HCT-207: Manual review API ────────────────────────────────────────
 
 
@@ -2728,6 +2784,49 @@ def skip_review_endpoint(
 # ── HCT-307: Risk evidence API ─────────────────────────────────────
 
 
+def _risk_alert_read(
+    session: Session,
+    *,
+    household_id: str,
+    member_id: str,
+    alert: Any,
+) -> RiskAlertRead:
+    current_version = settings.ruleset_version
+    fingerprint = risk_fingerprint(
+        rule_id=alert.rule_id,
+        level=alert.level,
+        source_event_ids=alert.source_event_ids,
+        rule_version=current_version,
+    )
+    acknowledgement = session.scalar(
+        select(RiskAcknowledgement).where(
+            RiskAcknowledgement.household_id == household_id,
+            RiskAcknowledgement.member_id == member_id,
+            RiskAcknowledgement.rule_id == alert.rule_id,
+            RiskAcknowledgement.risk_fingerprint == fingerprint,
+        )
+    )
+    return RiskAlertRead(
+        rule_id=alert.rule_id,
+        level=alert.level,
+        message=alert.message,
+        source_event_ids=alert.source_event_ids,
+        rule_version=current_version,
+        risk_fingerprint=fingerprint,
+        acknowledgement=(acknowledgement_read(acknowledgement) if acknowledgement else None),
+    )
+
+
+def _current_risk_alert(session: Session, member_id: str, rule_id: str) -> Any | None:
+    from app.projection import build_relationship_graph, get_timeline
+    from app.rules import run_rules
+
+    events = get_timeline(session, member_id)
+    facts = build_relationship_graph(events)
+    alerts = run_rules(facts, rule_ids=[rule_id])
+    return alerts[0] if alerts else None
+
+
 @router.get(
     "/households/{household_id}/members/{member_id}/risks",
     response_model=RiskListResponse,
@@ -2757,11 +2856,11 @@ def list_risks(
     budgeted = apply_daily_budget(deduped)
 
     alerts = [
-        RiskAlertRead(
-            rule_id=a.rule_id,
-            level=a.level,
-            message=a.message,
-            source_event_ids=a.source_event_ids,
+        _risk_alert_read(
+            session,
+            household_id=household_id,
+            member_id=member_id,
+            alert=a,
         )
         for a in budgeted
     ]
@@ -2815,14 +2914,149 @@ def get_risk_detail(
                 "created_at": evt.created_at.isoformat() if evt.created_at else None,
             })
     return RiskDetailResponse(
-        alert=RiskAlertRead(
-            rule_id=alert.rule_id,
-            level=alert.level,
-            message=alert.message,
-            source_event_ids=alert.source_event_ids,
+        alert=_risk_alert_read(
+            session,
+            household_id=household_id,
+            member_id=member_id,
+            alert=alert,
         ),
         source_events=sources,
     )
+
+
+@router.post(
+    "/households/{household_id}/members/{member_id}/risks/{rule_id}/acknowledge",
+    response_model=RiskAcknowledgementRead,
+)
+def acknowledge_risk(
+    household_id: str,
+    member_id: str,
+    rule_id: str,
+    payload: RiskAcknowledgementCreate,
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> RiskAcknowledgementRead:
+    """Write a minimal receipt only for the currently computed risk signal."""
+
+    if not idempotency_key or len(idempotency_key) > 128:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="IDEMPOTENCY_KEY_REQUIRED",
+        )
+
+    household = session.get(Household, household_id)
+    member = session.get(Member, member_id)
+    if _is_erased(household, member):
+        _raise_resource_not_found()
+    if not has_authorized_action(
+        session,
+        household,
+        member_id,
+        actor_id,
+        "ACK_RISK",
+        "risk_alerts",
+        access_purpose,
+    ):
+        _raise_resource_not_found()
+
+    alert = _current_risk_alert(session, member_id, rule_id)
+    if alert is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RISK_NOT_FOUND")
+
+    current_version = settings.ruleset_version
+    current_fingerprint = risk_fingerprint(
+        rule_id=alert.rule_id,
+        level=alert.level,
+        source_event_ids=alert.source_event_ids,
+        rule_version=current_version,
+    )
+    request_hash = request_fingerprint(
+        household_id=household_id,
+        member_id=member_id,
+        rule_id=rule_id,
+        rule_version=payload.rule_version,
+        risk_fingerprint_value=payload.risk_fingerprint,
+        actor_id=actor_id,
+    )
+    existing = session.scalar(
+        select(RiskAcknowledgement).where(
+            RiskAcknowledgement.household_id == household_id,
+            RiskAcknowledgement.idempotency_key == idempotency_key,
+        )
+    )
+    if existing is not None:
+        if existing.request_fingerprint != request_hash:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="IDEMPOTENCY_KEY_CONFLICT",
+            )
+        return acknowledgement_read(existing, replayed=True)
+
+    if payload.rule_version != current_version or payload.risk_fingerprint != current_fingerprint:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="RISK_VERSION_CONFLICT",
+        )
+
+    existing_signal = session.scalar(
+        select(RiskAcknowledgement).where(
+            RiskAcknowledgement.household_id == household_id,
+            RiskAcknowledgement.member_id == member_id,
+            RiskAcknowledgement.rule_id == rule_id,
+            RiskAcknowledgement.risk_fingerprint == current_fingerprint,
+        )
+    )
+    if existing_signal is not None:
+        return acknowledgement_read(existing_signal, replayed=True)
+
+    acknowledgement = RiskAcknowledgement(
+        household_id=household_id,
+        member_id=member_id,
+        rule_id=rule_id,
+        rule_version=current_version,
+        risk_fingerprint=current_fingerprint,
+        actor_id=actor_id,
+        idempotency_key=idempotency_key,
+        request_fingerprint=request_hash,
+    )
+    session.add(acknowledgement)
+    session.add(
+        AccessAudit(
+            household_id=household_id,
+            authorization_id=None,
+            actor_id=actor_id,
+            operation="RISK_ACK",
+            action="ACK_RISK",
+            data_field="risk_alerts",
+            purpose=access_purpose,
+            outcome="ALLOWED",
+            reason=None,
+            request_id=getattr(request.state, "request_id", None),
+        )
+    )
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raced = session.scalar(
+            select(RiskAcknowledgement).where(
+                RiskAcknowledgement.household_id == household_id,
+                RiskAcknowledgement.risk_fingerprint == current_fingerprint,
+                RiskAcknowledgement.rule_id == rule_id,
+                RiskAcknowledgement.member_id == member_id,
+            )
+        )
+        if raced is not None:
+            return acknowledgement_read(raced, replayed=True)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="IDEMPOTENCY_KEY_CONFLICT",
+        ) from None
+    session.refresh(acknowledgement)
+    return acknowledgement_read(acknowledgement)
 
 
 # ── HCT-208: Correction diff, hard sample, training consent & export ───

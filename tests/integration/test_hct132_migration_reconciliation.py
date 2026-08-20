@@ -11,7 +11,7 @@ from sqlalchemy import create_engine, inspect, text
 from app.config import get_settings
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CURRENT_HEAD = "0012_sync_schema_with_models"
+CURRENT_HEAD = "0014_hct414_vision_media_type"
 RESTORED_TABLES = {
     "projection_checkpoint",
     "review_task",

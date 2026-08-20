@@ -769,6 +769,19 @@ button:focus-visible, a:focus-visible {
 
 .risk-message { flex: 1 1 260px; font-size: 14.5px; font-weight: 650; line-height: 1.5; }
 
+.risk-actions {
+  align-items: center;
+  border-top: 1px dashed var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 18px;
+  padding: 10px 0;
+}
+
+.risk-ack-hint { color: var(--ink-faint); font-size: 12px; }
+.risk-ack-hint.success { color: var(--sage-deep); }
+
 .risk-toggle .risk-expand { color: var(--ink-faint); font-size: 12.5px; }
 
 .risk-detail {
@@ -930,6 +943,35 @@ button:focus-visible, a:focus-visible {
   max-width: 100%;
 }
 
+.capture-guide {
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  width: min(100%, 340px);
+}
+
+.capture-guide img {
+  background: var(--glass-card-strong);
+  border: 1px solid var(--glass-border);
+  height: 150px;
+  object-fit: cover;
+  width: 100%;
+}
+
+.capture-guide-copy {
+  color: var(--ink-soft);
+  display: grid;
+  font-size: 12px;
+  gap: 1px;
+  line-height: 1.45;
+  text-align: center;
+}
+
+.capture-guide-copy strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
 .capture-zone .capture-hint { color: var(--ink-soft); font-size: 13.5px; line-height: 1.6; }
 .capture-zone .app-icon { color: var(--clay); }
 
@@ -957,6 +999,35 @@ button:focus-visible, a:focus-visible {
 .quality-metrics dd { font-size: 15.5px; font-weight: 700; margin: 0; }
 .quality-metrics dd[data-passed="false"] { color: var(--rose); }
 .quality-metrics dd[data-passed="true"] { color: var(--pine-deep); }
+
+.evidence-chain-list {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.evidence-chain-list li {
+  align-items: center;
+  background: var(--glass-card-strong);
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  display: flex;
+  font-size: 12px;
+  gap: 8px;
+  justify-content: space-between;
+  padding: 7px 9px;
+}
+
+.evidence-chain-list li span { color: var(--ink-soft); }
+
+.vision-task-error {
+  align-items: flex-start;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
 
 .step-rail { display: flex; flex-wrap: wrap; gap: 8px; }
 
@@ -1036,6 +1107,46 @@ button:focus-visible, a:focus-visible {
 .chat-bubble-row.assistant .chat-bubble {
   font-family: var(--font-display);
   font-size: 15px;
+}
+
+.chat-follow-ups {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 11px;
+}
+
+.chat-follow-ups-label {
+  color: var(--ink-soft);
+  font-family: var(--font-body);
+  font-size: 12px;
+  width: 100%;
+}
+
+.chat-follow-up {
+  border-color: var(--glass-border);
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: left;
+}
+
+.chat-voice-actions {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 8px;
+}
+
+.chat-voice-actions .app-icon,
+.voice-input-button .app-icon {
+  margin-right: 5px;
+  vertical-align: -2px;
+}
+
+.voice-input-button.listening {
+  background: var(--rose-tint);
+  border-color: var(--rose);
+  color: var(--rose-ink);
 }
 
 .stream-caret {
@@ -1119,8 +1230,47 @@ button:focus-visible, a:focus-visible {
   padding-top: 9px;
 }
 
+.chat-evidence-summary { color: var(--pine); }
+
+.chat-citation {
+  background: color-mix(in srgb, var(--paper) 72%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 7px 9px;
+}
+
+.chat-citation summary {
+  align-items: baseline;
+  cursor: pointer;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 10px;
+  list-style-position: inside;
+}
+
+.chat-citation-text {
+  border-left: 2px solid var(--sage);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  line-height: 1.65;
+  margin: 8px 0 0 15px;
+  padding-left: 9px;
+  white-space: pre-wrap;
+}
+
+.chat-citation > .text-faint,
+.chat-citation > p.text-faint { display: block; font-size: 12px; margin: 7px 0 0 15px; }
+
 .chat-compose { display: flex; gap: 10px; }
 .chat-compose textarea { flex: 1; min-height: 52px; }
+
+@media (max-width: 640px) {
+  .chat-compose { flex-wrap: wrap; }
+  .chat-compose textarea { flex-basis: 100%; }
+  .chat-compose .voice-input-button,
+  .chat-compose > button[type="submit"] { flex: 1; }
+}
 
 /* ---------- 杂项 ---------- */
 
@@ -3531,3 +3681,30 @@ button:focus-visible, a:focus-visible {
   .view-container { padding: 20px 18px 40px; }
   .chat-bubble { max-width: 92%; }
 }
+
+.segmented-control {
+  background: var(--glass-card-strong);
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+}
+
+.segmented-control button {
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  flex: 1;
+  font: inherit;
+  padding: 8px 10px;
+}
+
+.segmented-control button.active {
+  background: var(--pine);
+  color: white;
+  font-weight: 700;
+}
+

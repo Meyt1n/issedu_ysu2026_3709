@@ -1,7 +1,25 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 
 import { apiClient } from '../api/client'
+import type { AssistantCitation } from '../api/types'
+import {
+  clearChatSession,
+  loadChatSession,
+  saveChatSession,
+  sessionEntryToStored,
+  type StoredChatEntry,
+} from '../assistant/chatSession'
+import { normalizeSuggestedQuestions } from '../assistant/followUp'
+import {
+  createSpeechRecognition,
+  isSpeechInputSupported,
+  isSpeechOutputSupported,
+  speakText,
+  stopSpeaking,
+  transcriptFromEvent,
+  type SpeechRecognitionLike,
+} from '../assistant/voice'
 import AppIcon from '../components/AppIcon.vue'
 import {
   formatError,
@@ -16,24 +34,36 @@ interface ChatEntry {
   content: string
   revealed: number
   sources?: string[]
+  citations?: AssistantCitation[]
   confidence?: string
   degraded?: boolean
   degradeReason?: string | null
   escalate?: boolean
+  suggestedQuestions?: string[]
+  route?: string | null
 }
 
 const history = ref<ChatEntry[]>([])
 const draft = ref('')
 const sending = ref(false)
 const sendError = ref('')
+const voiceError = ref('')
+const listening = ref(false)
+const speakingIndex = ref<number | null>(null)
 const thinkingPhase = ref(0)
 const chatWindow = ref<HTMLElement | null>(null)
+const draftInput = ref<HTMLTextAreaElement | null>(null)
 // Demo-facing product label stays stable while the local runtime model can be
 // switched independently through OLLAMA_MODEL.
 const modelLabel = 'hct402-qlora-v5'
 
 let streamTimer: ReturnType<typeof setInterval> | null = null
 let phaseTimer: ReturnType<typeof setInterval> | null = null
+let recognition: SpeechRecognitionLike | null = null
+let voiceDraftPrefix = ''
+
+const speechInputSupported = isSpeechInputSupported()
+const speechOutputSupported = isSpeechOutputSupported()
 
 const canSend = computed(() => draft.value.trim().length > 0 && !sending.value)
 
@@ -65,6 +95,146 @@ function isStreaming(entry: ChatEntry): boolean {
   return entry.role === 'assistant' && entry.revealed < entry.content.length
 }
 
+function restoreChatSession(entries: StoredChatEntry[]): void {
+  history.value = entries.map(entry => ({ ...entry, revealed: entry.content.length }))
+  scrollToEnd()
+}
+
+function persistChatSession(): void {
+  saveChatSession(
+    session.actorId,
+    session.selectedHouseholdId,
+    session.selectedMemberId,
+    history.value.map(entry => sessionEntryToStored(entry)),
+  )
+}
+
+function clearConversation(): void {
+  if (listening.value) recognition?.stop()
+  if (speakingIndex.value !== null) {
+    stopSpeaking()
+    speakingIndex.value = null
+  }
+  if (streamTimer) {
+    clearInterval(streamTimer)
+    streamTimer = null
+  }
+  if (phaseTimer) {
+    clearInterval(phaseTimer)
+    phaseTimer = null
+  }
+  clearChatSession(session.actorId, session.selectedHouseholdId, session.selectedMemberId)
+  history.value = []
+  draft.value = ''
+  sendError.value = ''
+  voiceError.value = ''
+}
+
+function useSuggestedQuestion(question: string): void {
+  draft.value = question
+  sendError.value = ''
+  void nextTick(() => draftInput.value?.focus())
+}
+
+function degradeReasonLabel(reason?: string | null): string {
+  const labels: Record<string, string> = {
+    REQUEST_FAILED: '本地 API 请求失败',
+    MODEL_UNAVAILABLE: '本地模型不可用',
+    OLLAMA_UNAVAILABLE: '本地模型服务不可用',
+    KNOWLEDGE_UNAVAILABLE: '本地知识库不可用',
+    NO_AUTHORISED_DOCUMENTS: '当前范围没有可用知识文档',
+    EVIDENCE_REQUIRED: '没有足够的本地证据',
+    CITATION_NOT_FOUND: '引用未通过服务端校验',
+    TOOL_SCOPE_DENIED: '工具调用超出当前授权范围',
+    EXTERNAL_LINK_DETECTED: '回答包含被禁止的外部链接',
+  }
+  return labels[reason ?? ''] ?? reason ?? '受控降级'
+}
+
+function evidenceSummary(entry: ChatEntry): string {
+  const citationCount = entry.citations?.length ?? 0
+  const sourceCount = entry.sources?.length ?? 0
+  if (citationCount > 0) return `已返回 ${citationCount} 条可核验知识引用`
+  if (sourceCount > 0) return `已返回 ${sourceCount} 个依据标识，未提供可展开的知识片段`
+  if (entry.degraded) return '本次未使用模型生成内容'
+  return '本次响应没有返回可展开的知识文档引用，仍需人工确认'
+}
+
+function citationTitle(citation: AssistantCitation): string {
+  return citation.document_title?.trim() || citation.document_id
+}
+
+watch(
+  () => [session.actorId, session.selectedHouseholdId, session.selectedMemberId] as const,
+  ([actorId, householdId, memberId]) => {
+    if (streamTimer) {
+      clearInterval(streamTimer)
+      streamTimer = null
+    }
+    restoreChatSession(loadChatSession(actorId, householdId, memberId))
+  },
+  { immediate: true },
+)
+
+function toggleVoiceInput(): void {
+  if (listening.value) {
+    recognition?.stop()
+    return
+  }
+  voiceError.value = ''
+  const nextRecognition = createSpeechRecognition()
+  if (!nextRecognition) {
+    voiceError.value = '当前浏览器不支持语音输入，请改用文字输入。'
+    return
+  }
+
+  voiceDraftPrefix = draft.value.trim() ? `${draft.value.trim()} ` : ''
+  nextRecognition.onstart = () => {
+    listening.value = true
+    voiceError.value = ''
+  }
+  nextRecognition.onresult = event => {
+    const transcript = transcriptFromEvent(event)
+    if (transcript) draft.value = `${voiceDraftPrefix}${transcript}`.trimStart()
+  }
+  nextRecognition.onerror = event => {
+    listening.value = false
+    const reason = event.error === 'not-allowed' || event.error === 'service-not-allowed'
+      ? '麦克风权限未开启，请允许浏览器使用麦克风，或改用文字输入。'
+      : '语音识别暂时失败，请重试或改用文字输入。'
+    voiceError.value = reason
+  }
+  nextRecognition.onend = () => {
+    listening.value = false
+    recognition = null
+  }
+  recognition = nextRecognition
+  try {
+    nextRecognition.start()
+  } catch {
+    listening.value = false
+    recognition = null
+    voiceError.value = '语音输入未能启动，请稍后重试或改用文字输入。'
+  }
+}
+
+function toggleSpeech(index: number, content: string): void {
+  if (speakingIndex.value === index) {
+    stopSpeaking()
+    speakingIndex.value = null
+    return
+  }
+  voiceError.value = ''
+  const started = speakText(content, () => {
+    if (speakingIndex.value === index) speakingIndex.value = null
+  })
+  if (!started) {
+    voiceError.value = '当前浏览器不支持语音回复，请阅读文字回答。'
+    return
+  }
+  speakingIndex.value = index
+}
+
 /** 打字机式逐字呈现：对已完整返回的回答做流式展示。 */
 function streamReveal(entry: ChatEntry): void {
   if (reduceMotion()) {
@@ -87,7 +257,13 @@ async function send(text?: string): Promise<void> {
   const content = (text ?? draft.value).trim()
   if (!content || sending.value) return
 
+  if (listening.value) recognition?.stop()
+  if (speakingIndex.value !== null) {
+    stopSpeaking()
+    speakingIndex.value = null
+  }
   history.value.push({ role: 'user', content, revealed: content.length })
+  persistChatSession()
   draft.value = ''
   sending.value = true
   sendError.value = ''
@@ -113,12 +289,16 @@ async function send(text?: string): Promise<void> {
       content: reply.answer,
       revealed: 0,
       sources: reply.sources,
+      citations: reply.citations,
       confidence: reply.confidence,
       degraded: reply.degraded,
       degradeReason: reply.degrade_reason,
       escalate: reply.escalate,
+      suggestedQuestions: normalizeSuggestedQuestions(reply.suggested_questions),
+      route: reply.route,
     }
     history.value.push(entry)
+    persistChatSession()
     streamReveal(history.value[history.value.length - 1]!)
   } catch (cause) {
     sendError.value = formatError(cause)
@@ -130,6 +310,7 @@ async function send(text?: string): Promise<void> {
       degradeReason: 'REQUEST_FAILED',
     }
     history.value.push(entry)
+    persistChatSession()
     streamReveal(history.value[history.value.length - 1]!)
   } finally {
     sending.value = false
@@ -147,6 +328,8 @@ function onMemberChange(event: Event): void {
 onBeforeUnmount(() => {
   if (streamTimer) clearInterval(streamTimer)
   if (phaseTimer) clearInterval(phaseTimer)
+  recognition?.abort()
+  stopSpeaking()
 })
 </script>
 
@@ -167,6 +350,12 @@ onBeforeUnmount(() => {
           </option>
         </select>
       </label>
+      <div v-if="history.length > 0" class="row-actions">
+        <span class="text-faint" style="font-size: 12px">仅保存在当前标签页</span>
+        <button type="button" class="btn btn-ghost btn-small" :disabled="sending" @click="clearConversation">
+          清空会话
+        </button>
+      </div>
     </div>
   </section>
 
@@ -212,7 +401,7 @@ onBeforeUnmount(() => {
             :key="suggestion"
             type="button"
             class="btn btn-ghost btn-small"
-            @click="send(suggestion)"
+            @click="useSuggestedQuestion(suggestion)"
           >
             {{ suggestion }}
           </button>
@@ -231,18 +420,64 @@ onBeforeUnmount(() => {
             class="chat-sources"
           >
             <span v-if="entry.degraded" style="color: var(--gold)">
-              ⚠ 本地模型已降级{{ entry.degradeReason ? `（${entry.degradeReason}）` : '' }}，以上为受控回复，不含模型生成的医疗判断。
+              ⚠ {{ degradeReasonLabel(entry.degradeReason) }}，以上为受控回复，不含模型生成的医疗判断。
             </span>
             <span v-if="entry.escalate" style="color: var(--rose)">
               此问题超出系统边界，请联系医生或药师进一步确认。
             </span>
             <span v-if="entry.confidence && !entry.degraded">回答把握程度：{{ entry.confidence }}（仍需人工确认）</span>
+            <span v-if="!entry.degraded" class="chat-evidence-summary">
+              <AppIcon name="compass" :size="12" style="vertical-align: -1px" />
+              依据状态：{{ evidenceSummary(entry) }}
+            </span>
             <template v-if="(entry.sources?.length ?? 0) > 0">
               <span v-for="source in entry.sources" :key="source">
                 <AppIcon name="compass" :size="12" style="vertical-align: -1px" />
-                依据：{{ source }}
+                依据标识：{{ source }}
               </span>
             </template>
+            <details
+              v-for="citation in entry.citations ?? []"
+              :key="`${citation.document_id}:${citation.chunk_id}`"
+              class="chat-citation"
+            >
+              <summary>
+                <span>{{ citationTitle(citation) }}</span>
+                <span class="text-faint">版本 {{ citation.version || '未提供' }} · 片段 {{ citation.chunk_id }}</span>
+              </summary>
+              <p v-if="citation.text" class="chat-citation-text">{{ citation.text }}</p>
+              <p v-else class="text-faint">本次响应未返回片段正文，仅保留服务端核验过的引用标识。</p>
+              <p v-if="citation.locator" class="text-faint">定位：{{ citation.locator }}</p>
+            </details>
+          </div>
+          <div
+            v-if="entry.role === 'assistant' && !isStreaming(entry) && (entry.suggestedQuestions?.length ?? 0) > 0"
+            class="chat-follow-ups"
+            aria-label="相关追问"
+          >
+            <span class="chat-follow-ups-label">你还可以问：</span>
+            <button
+              v-for="question in entry.suggestedQuestions"
+              :key="question"
+              type="button"
+              class="btn btn-ghost btn-small chat-follow-up"
+              :disabled="sending"
+              @click="useSuggestedQuestion(question)"
+            >
+              {{ question }}
+            </button>
+          </div>
+          <div v-if="entry.role === 'assistant' && !isStreaming(entry) && speechOutputSupported" class="chat-voice-actions">
+            <button
+              type="button"
+              class="btn btn-ghost btn-small"
+              :aria-label="speakingIndex === index ? '停止朗读回答' : '朗读回答'"
+              :aria-pressed="speakingIndex === index"
+              @click="toggleSpeech(index, entry.content)"
+            >
+              <AppIcon :name="speakingIndex === index ? 'close' : 'volume'" :size="14" />
+              {{ speakingIndex === index ? '停止朗读' : '朗读回答' }}
+            </button>
           </div>
         </div>
       </div>
@@ -267,17 +502,36 @@ onBeforeUnmount(() => {
 
     <form class="chat-compose" style="margin-top: 16px" @submit.prevent="send()">
       <textarea
+        ref="draftInput"
         v-model="draft"
         rows="2"
         placeholder="例如：最近的用药提醒是依据什么？（回答仅供参考，不构成医疗建议）"
         @keydown.enter.exact.prevent="send()"
       />
+      <button
+        type="button"
+        class="btn btn-ghost btn-small voice-input-button"
+        :class="{ listening }"
+        :disabled="sending || !speechInputSupported"
+        :aria-label="listening ? '停止语音输入' : '开始语音输入'"
+        :aria-pressed="listening"
+        :title="speechInputSupported ? '语音只会填入输入框，点击发送后才提交' : '当前浏览器不支持语音输入'"
+        @click="toggleVoiceInput"
+      >
+        <AppIcon name="microphone" :size="15" />
+        {{ listening ? '停止录音' : '语音输入' }}
+      </button>
       <button type="submit" class="btn btn-primary" :disabled="!canSend" style="align-self: flex-end">
         {{ sending ? '发送中' : '发送' }}
       </button>
     </form>
+    <p v-if="voiceError" class="notice error" role="alert" style="margin-top: 10px">
+      <AppIcon name="alert" :size="16" />
+      {{ voiceError }}
+    </p>
     <p class="text-faint" style="font-size: 12px; line-height: 1.6; margin: 10px 0 0">
-      当前资料不足时，系统不会替你做用药判断。危险用药问题会进入受控拒答，并建议联系专业人员。
+      语音输入只写入草稿，发送前可修改；语音回复由浏览器本地朗读。当前资料不足时，系统不会替你做用药判断。
     </p>
   </section>
 </template>
+

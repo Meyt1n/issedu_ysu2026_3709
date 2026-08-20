@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { ApiClient } from './client'
 
@@ -53,6 +53,46 @@ describe('ApiClient authorization contract', () => {
     })
   })
 
+  it('uses JSON credentials and keeps session tokens in the Authorization header', async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = []
+    const client = new ApiClient({
+      baseUrl: 'http://local.test',
+      fetcher: async (input, init) => {
+        requests.push({ url: String(input), init: init ?? {} })
+        if (String(input).endsWith('/auth/login')) {
+          return new Response(JSON.stringify({ actor_id: 'owner', session_token: 's'.repeat(40), expires_at: 123 }), { status: 200 })
+        }
+        return new Response(JSON.stringify({ status: 'logged_out' }), { status: 200 })
+      },
+    })
+
+    const session = await client.login('owner', 'password-123')
+    await client.logout(session.session_token)
+
+    expect(requests[0]?.url).toBe('http://local.test/api/v1/auth/login')
+    expect(requests[0]?.url).not.toContain('password-123')
+    expect(JSON.parse(String(requests[0]?.init.body))).toEqual({ actor_id: 'owner', password: 'password-123' })
+    expect(JSON.parse(String(requests[1]?.init.body))).toEqual({ session_token: 's'.repeat(40) })
+  })
+
+  it('prefers bearer session authentication and clears on a 401 callback', async () => {
+    const headers: Headers[] = []
+    const client = new ApiClient({
+      fetcher: async (_input, init) => {
+        headers.push(new Headers(init?.headers))
+        return new Response(JSON.stringify({ detail: 'SESSION_INVALID' }), { status: 401 })
+      },
+    })
+    const onUnauthorized = vi.fn()
+    client.setUnauthorizedHandler(onUnauthorized)
+
+    await expect(client.listHouseholds({ actorId: 'dev-actor', sessionToken: 's'.repeat(40) })).rejects.toMatchObject({ status: 401 })
+
+    expect(headers[0]?.get('Authorization')).toBe(`Bearer ${'s'.repeat(40)}`)
+    expect(headers[0]?.get('X-Actor-Id')).toBeNull()
+    expect(onUnauthorized).toHaveBeenCalledOnce()
+  })
+
   it('loads member risks and encodes a rule id for risk detail', async () => {
     const requests: string[] = []
     const fetcher: typeof fetch = async input => {
@@ -74,6 +114,41 @@ describe('ApiClient authorization contract', () => {
       'http://local.test/api/v1/households/household-1/members/member-1/risks',
       'http://local.test/api/v1/households/household-1/members/member-1/risks/rule%2Fwith%20spaces',
     ])
+  })
+
+  it('writes a risk acknowledgement with the idempotency header', async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = []
+    const client = new ApiClient({
+      baseUrl: 'http://local.test',
+      fetcher: async (input, init) => {
+        requests.push({ url: String(input), init: init ?? {} })
+        return new Response(JSON.stringify({
+          receipt_id: 'receipt-1',
+          household_id: 'household-1',
+          member_id: 'member-1',
+          rule_id: 'expiry_check',
+          rule_version: 'rules-v0',
+          risk_fingerprint: 'a'.repeat(64),
+          actor_id: 'owner',
+          acknowledged_at: '2026-08-19T00:00:00Z',
+          replayed: false,
+        }), { status: 200 })
+      },
+    })
+
+    await client.acknowledgeRisk(
+      'household-1',
+      'member-1',
+      'expiry/check',
+      { rule_version: 'rules-v0', risk_fingerprint: 'a'.repeat(64) },
+      { actorId: 'owner', idempotencyKey: 'ack-1' },
+    )
+
+    expect(requests[0]?.url).toBe(
+      'http://local.test/api/v1/households/household-1/members/member-1/risks/expiry%2Fcheck/acknowledge',
+    )
+    expect(requests[0]?.init.method).toBe('POST')
+    expect(new Headers(requests[0]?.init.headers).get('Idempotency-Key')).toBe('ack-1')
   })
 
   it('loads the authorized member timeline through the API boundary', async () => {
@@ -219,5 +294,23 @@ describe('ApiClient authorization contract', () => {
     expect(new Headers(requests[0]?.init.headers).get('Content-Type')).toBe('application/json')
     expect(requests[1]?.url).toBe('http://local.test/api/v1/files/folder%2Fname.png')
     expect(requests[1]?.init.method).toBe('DELETE')
+  })
+
+  it('requeues a failed vision task in place', async () => {
+    const requests: Array<{ url: string; method: string | undefined }> = []
+    const client = new ApiClient({
+      baseUrl: 'http://local.test',
+      fetcher: async (input, init) => {
+        requests.push({ url: String(input), method: init?.method })
+        return new Response(JSON.stringify({ status: 'queued' }), { status: 200 })
+      },
+    })
+
+    await client.retryVisionTask('task/failed', { actorId: 'owner' })
+
+    expect(requests).toEqual([{
+      url: 'http://local.test/api/v1/vision-tasks/task%2Ffailed/retry',
+      method: 'POST',
+    }])
   })
 })
