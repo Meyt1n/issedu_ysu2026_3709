@@ -180,6 +180,12 @@ class HealthEventRead(BaseModel):
     created_at: datetime
 
 
+class HealthEventPageRead(BaseModel):
+    items: list[HealthEventRead]
+    next_cursor: str | None = None
+    has_more: bool = False
+
+
 class MemberStateRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
