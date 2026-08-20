@@ -12,11 +12,13 @@ import {
 } from '../assistant/chatSession'
 import { normalizeSuggestedQuestions } from '../assistant/followUp'
 import {
+  containsWakePhrase,
   createSpeechRecognition,
   isSpeechInputSupported,
   isSpeechOutputSupported,
   speakText,
   stopSpeaking,
+  transcriptAfterWakePhrase,
   transcriptFromEvent,
   type SpeechRecognitionLike,
 } from '../assistant/voice'
@@ -48,7 +50,11 @@ const draft = ref('')
 const sending = ref(false)
 const sendError = ref('')
 const voiceError = ref('')
-const listening = ref(false)
+type VoiceMode = 'off' | 'wake' | 'active'
+
+const voiceMode = ref<VoiceMode>('off')
+const listening = computed(() => voiceMode.value !== 'off')
+const voicePreview = ref('')
 const speakingIndex = ref<number | null>(null)
 const thinkingPhase = ref(0)
 const chatWindow = ref<HTMLElement | null>(null)
@@ -59,11 +65,27 @@ const modelLabel = 'hct402-qlora-v5'
 
 let streamTimer: ReturnType<typeof setInterval> | null = null
 let phaseTimer: ReturnType<typeof setInterval> | null = null
+let voiceRestartTimer: ReturnType<typeof setTimeout> | null = null
 let recognition: SpeechRecognitionLike | null = null
 let voiceDraftPrefix = ''
+let voiceSessionId = 0
+let voiceStopRequested = false
+let voiceFatalError = false
 
 const speechInputSupported = isSpeechInputSupported()
 const speechOutputSupported = isSpeechOutputSupported()
+
+const voiceStatusText = computed(() => {
+  if (voiceMode.value === 'wake') return '正在聆听唤醒词：“小燕打开”'
+  if (voiceMode.value === 'active') return '已唤醒，识别中的文字会实时填入草稿'
+  return ''
+})
+
+const voiceButtonLabel = computed(() => {
+  if (voiceMode.value === 'wake') return '等待唤醒'
+  if (voiceMode.value === 'active') return '停止语音'
+  return '开启唤醒'
+})
 
 const canSend = computed(() => draft.value.trim().length > 0 && !sending.value)
 
@@ -110,7 +132,7 @@ function persistChatSession(): void {
 }
 
 function clearConversation(): void {
-  if (listening.value) recognition?.stop()
+  stopVoiceInput()
   if (speakingIndex.value !== null) {
     stopSpeaking()
     speakingIndex.value = null
@@ -176,46 +198,132 @@ watch(
   { immediate: true },
 )
 
+function stopVoiceInput(): void {
+  voiceStopRequested = true
+  voiceFatalError = false
+  voiceSessionId += 1
+  voiceMode.value = 'off'
+  voicePreview.value = ''
+  if (voiceRestartTimer) {
+    clearTimeout(voiceRestartTimer)
+    voiceRestartTimer = null
+  }
+  const currentRecognition = recognition
+  recognition = null
+  currentRecognition?.abort()
+}
+
+function scheduleVoiceRecognition(sessionId: number): void {
+  if (voiceRestartTimer) clearTimeout(voiceRestartTimer)
+  voiceRestartTimer = setTimeout(() => {
+    voiceRestartTimer = null
+    if (sessionId !== voiceSessionId || voiceStopRequested || voiceFatalError || !listening.value) return
+    startVoiceRecognition(sessionId)
+  }, 80)
+}
+
+function startVoiceRecognition(sessionId: number): void {
+  const nextRecognition = createSpeechRecognition('zh-CN', {
+    continuous: true,
+    interimResults: true,
+    maxAlternatives: 1,
+  })
+  if (!nextRecognition) {
+    voiceFatalError = true
+    voiceMode.value = 'off'
+    voiceError.value = '当前浏览器不支持连续语音输入，请改用文字输入。'
+    return
+  }
+
+  nextRecognition.onstart = () => {
+    if (sessionId !== voiceSessionId) return
+    voiceError.value = ''
+  }
+  nextRecognition.onresult = event => {
+    if (sessionId !== voiceSessionId) return
+    const transcript = transcriptFromEvent(event)
+    if (!transcript) return
+
+    if (voiceMode.value === 'wake') {
+      if (!containsWakePhrase(transcript)) {
+        voicePreview.value = `正在聆听：${transcript}`
+        return
+      }
+      voiceMode.value = 'active'
+    }
+
+    const spoken = containsWakePhrase(transcript)
+      ? transcriptAfterWakePhrase(transcript)
+      : transcript.trim()
+    if (spoken) {
+      // interimResults=true means this is intentionally updated before the
+      // browser marks the utterance final; it never submits the message.
+      draft.value = `${voiceDraftPrefix}${spoken}`.trimStart()
+      voicePreview.value = `正在输入：${spoken}`
+    } else {
+      voicePreview.value = '已唤醒，请说出问题'
+    }
+  }
+  nextRecognition.onerror = event => {
+    if (sessionId !== voiceSessionId) return
+    const error = event.error ?? ''
+    if (error === 'no-speech' || error === 'aborted') return
+
+    if (error === 'not-allowed' || error === 'service-not-allowed') {
+      voiceFatalError = true
+      voiceStopRequested = true
+      voiceMode.value = 'off'
+      voiceError.value = '麦克风权限未开启，请允许浏览器使用麦克风，或改用文字输入。'
+      return
+    }
+    if (error === 'audio-capture') {
+      voiceFatalError = true
+      voiceStopRequested = true
+      voiceMode.value = 'off'
+      voiceError.value = '没有检测到可用麦克风，请检查系统设备或改用文字输入。'
+      return
+    }
+    voiceError.value = '语音识别服务暂时中断，正在快速重试；也可以改用文字输入。'
+  }
+  nextRecognition.onend = () => {
+    if (sessionId !== voiceSessionId) return
+    if (recognition === nextRecognition) recognition = null
+    if (!voiceStopRequested && !voiceFatalError && listening.value) {
+      scheduleVoiceRecognition(sessionId)
+    }
+  }
+
+  recognition = nextRecognition
+  try {
+    nextRecognition.start()
+  } catch {
+    if (sessionId !== voiceSessionId) return
+    voiceFatalError = true
+    voiceStopRequested = true
+    voiceMode.value = 'off'
+    recognition = null
+    voiceError.value = '语音输入未能启动，请稍后重试或改用文字输入。'
+  }
+}
+
 function toggleVoiceInput(): void {
   if (listening.value) {
-    recognition?.stop()
+    stopVoiceInput()
     return
   }
   voiceError.value = ''
-  const nextRecognition = createSpeechRecognition()
-  if (!nextRecognition) {
+  if (!speechInputSupported) {
     voiceError.value = '当前浏览器不支持语音输入，请改用文字输入。'
     return
   }
 
   voiceDraftPrefix = draft.value.trim() ? `${draft.value.trim()} ` : ''
-  nextRecognition.onstart = () => {
-    listening.value = true
-    voiceError.value = ''
-  }
-  nextRecognition.onresult = event => {
-    const transcript = transcriptFromEvent(event)
-    if (transcript) draft.value = `${voiceDraftPrefix}${transcript}`.trimStart()
-  }
-  nextRecognition.onerror = event => {
-    listening.value = false
-    const reason = event.error === 'not-allowed' || event.error === 'service-not-allowed'
-      ? '麦克风权限未开启，请允许浏览器使用麦克风，或改用文字输入。'
-      : '语音识别暂时失败，请重试或改用文字输入。'
-    voiceError.value = reason
-  }
-  nextRecognition.onend = () => {
-    listening.value = false
-    recognition = null
-  }
-  recognition = nextRecognition
-  try {
-    nextRecognition.start()
-  } catch {
-    listening.value = false
-    recognition = null
-    voiceError.value = '语音输入未能启动，请稍后重试或改用文字输入。'
-  }
+  voicePreview.value = ''
+  voiceStopRequested = false
+  voiceFatalError = false
+  const sessionId = ++voiceSessionId
+  voiceMode.value = 'wake'
+  startVoiceRecognition(sessionId)
 }
 
 function toggleSpeech(index: number, content: string): void {
@@ -257,7 +365,7 @@ async function send(text?: string): Promise<void> {
   const content = (text ?? draft.value).trim()
   if (!content || sending.value) return
 
-  if (listening.value) recognition?.stop()
+  stopVoiceInput()
   if (speakingIndex.value !== null) {
     stopSpeaking()
     speakingIndex.value = null
@@ -328,7 +436,7 @@ function onMemberChange(event: Event): void {
 onBeforeUnmount(() => {
   if (streamTimer) clearInterval(streamTimer)
   if (phaseTimer) clearInterval(phaseTimer)
-  recognition?.abort()
+  stopVoiceInput()
   stopSpeaking()
 })
 </script>
@@ -500,7 +608,7 @@ onBeforeUnmount(() => {
       {{ sendError }}
     </p>
 
-    <form class="chat-compose" style="margin-top: 16px" @submit.prevent="send()">
+    <form class="chat-compose" @submit.prevent="send()">
       <textarea
         ref="draftInput"
         v-model="draft"
@@ -508,29 +616,49 @@ onBeforeUnmount(() => {
         placeholder="例如：最近的用药提醒是依据什么？（回答仅供参考，不构成医疗建议）"
         @keydown.enter.exact.prevent="send()"
       />
-      <button
-        type="button"
-        class="btn btn-ghost btn-small voice-input-button"
-        :class="{ listening }"
-        :disabled="sending || !speechInputSupported"
-        :aria-label="listening ? '停止语音输入' : '开始语音输入'"
-        :aria-pressed="listening"
-        :title="speechInputSupported ? '语音只会填入输入框，点击发送后才提交' : '当前浏览器不支持语音输入'"
-        @click="toggleVoiceInput"
-      >
-        <AppIcon name="microphone" :size="15" />
-        {{ listening ? '停止录音' : '语音输入' }}
-      </button>
-      <button type="submit" class="btn btn-primary" :disabled="!canSend" style="align-self: flex-end">
-        {{ sending ? '发送中' : '发送' }}
-      </button>
+      <div class="chat-compose-actions">
+        <button
+          type="button"
+          class="btn btn-ghost btn-small voice-input-button"
+          :class="{ listening, active: voiceMode === 'active' }"
+          :disabled="sending || !speechInputSupported"
+          :aria-label="listening ? '停止语音唤醒' : '开启语音唤醒'"
+          :aria-pressed="listening"
+          :title="speechInputSupported ? '先点击开启，再说“小燕打开”；识别文字只会实时填入草稿' : '当前浏览器不支持语音输入'"
+          @click="toggleVoiceInput"
+        >
+          <AppIcon name="microphone" :size="15" />
+          {{ voiceButtonLabel }}
+        </button>
+        <button type="submit" class="btn btn-primary" :disabled="!canSend">
+          {{ sending ? '发送中' : '发送' }}
+        </button>
+      </div>
     </form>
+    <div
+      v-if="listening"
+      class="voice-session-panel"
+      :class="voiceMode"
+      role="status"
+      aria-live="polite"
+    >
+      <span class="voice-session-visual" aria-hidden="true">
+        <span class="voice-session-ring" />
+        <span class="voice-session-ring second" />
+        <AppIcon name="microphone" :size="17" />
+      </span>
+      <span class="voice-session-copy">
+        <strong>{{ voiceMode === 'wake' ? '等待唤醒' : '已唤醒，正在实时输入' }}</strong>
+        <span>{{ voiceStatusText }}</span>
+        <span v-if="voicePreview" class="voice-live-transcript">{{ voicePreview }}</span>
+      </span>
+    </div>
     <p v-if="voiceError" class="notice error" role="alert" style="margin-top: 10px">
       <AppIcon name="alert" :size="16" />
       {{ voiceError }}
     </p>
     <p class="text-faint" style="font-size: 12px; line-height: 1.6; margin: 10px 0 0">
-      语音输入只写入草稿，发送前可修改；语音回复由浏览器本地朗读。当前资料不足时，系统不会替你做用药判断。
+      先点击“开启唤醒”，再说“小燕打开”开始实时填入草稿；发送前可修改。语音回复由浏览器本地朗读，原始音频不会上传到本地助手 API。
     </p>
   </section>
 </template>

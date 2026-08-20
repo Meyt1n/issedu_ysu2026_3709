@@ -1251,7 +1251,9 @@ button:focus-visible, a:focus-visible {
 .chat-window {
   display: grid;
   gap: 15px;
-  max-height: 56vh;
+  height: clamp(460px, calc(100vh - 300px), 720px);
+  min-height: 460px;
+  max-height: 72vh;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 2px 8px 2px 2px;
@@ -1336,6 +1338,12 @@ button:focus-visible, a:focus-visible {
   background: var(--rose-tint);
   border-color: var(--rose);
   color: var(--rose-ink);
+}
+
+.voice-input-button.active {
+  background: var(--pine-tint);
+  border-color: var(--pine);
+  color: var(--pine-deep);
 }
 
 .stream-caret {
@@ -1451,14 +1459,101 @@ button:focus-visible, a:focus-visible {
 .chat-citation > .text-faint,
 .chat-citation > p.text-faint { display: block; font-size: 12px; margin: 7px 0 0 15px; }
 
-.chat-compose { display: flex; gap: 10px; }
-.chat-compose textarea { flex: 1; min-height: 52px; }
+.chat-compose { align-items: stretch; display: flex; gap: 10px; margin-top: 16px; }
+.chat-compose textarea { flex: 1 1 auto; min-height: 52px; min-width: 0; }
+
+.chat-compose-actions {
+  align-items: stretch;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 10px;
+}
+
+.chat-compose-actions > .btn {
+  height: 52px;
+  min-width: 112px;
+  white-space: nowrap;
+}
+
+.voice-session-panel {
+  align-items: center;
+  background: color-mix(in srgb, var(--pine-tint) 72%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pine) 34%, var(--glass-border));
+  border-radius: 16px;
+  display: flex;
+  gap: 12px;
+  margin-top: 12px;
+  min-height: 66px;
+  padding: 10px 14px;
+}
+
+.voice-session-panel.active {
+  background: color-mix(in srgb, var(--rose-tint) 62%, transparent);
+  border-color: color-mix(in srgb, var(--rose) 40%, var(--glass-border));
+}
+
+.voice-session-visual {
+  align-items: center;
+  background: var(--glass-card-strong);
+  border: 1px solid var(--glass-border);
+  border-radius: 50%;
+  color: var(--pine-deep);
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 42px;
+  justify-content: center;
+  position: relative;
+  width: 42px;
+}
+
+.voice-session-panel.active .voice-session-visual { color: var(--rose-ink); }
+
+.voice-session-ring {
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  inset: 3px;
+  opacity: 0.48;
+  position: absolute;
+  animation: voice-ring-pulse 1.6s ease-out infinite;
+}
+
+.voice-session-ring.second {
+  animation-delay: 0.8s;
+}
+
+@keyframes voice-ring-pulse {
+  0% { opacity: 0.5; transform: scale(0.76); }
+  100% { opacity: 0; transform: scale(1.7); }
+}
+
+.voice-session-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.voice-session-copy strong { color: var(--ink); font-size: 13px; }
+.voice-session-copy > span { color: var(--ink-soft); font-size: 12px; }
+.voice-live-transcript {
+  color: var(--pine-deep) !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 @media (max-width: 640px) {
   .chat-compose { flex-wrap: wrap; }
   .chat-compose textarea { flex-basis: 100%; }
-  .chat-compose .voice-input-button,
-  .chat-compose > button[type="submit"] { flex: 1; }
+  .chat-compose-actions { flex: 1 0 100%; }
+  .chat-compose-actions > .btn { flex: 1; }
+}
+
+@media (max-height: 700px) and (min-width: 641px) {
+  .chat-window { height: 430px; min-height: 430px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-session-ring { animation: none; }
 }
 
 /* ---------- 杂项 ---------- */
