@@ -22,6 +22,7 @@ import type {
   HealthEvent,
   HealthResponse,
   CapabilityResponse,
+  DashboardSummary,
   Household,
   KnowledgeDocument,
   KnowledgeIndexSnapshot,
@@ -34,6 +35,7 @@ import type {
   OutboxMessage,
   ProjectionCheckpoint,
   ProjectionReplayResult,
+  PlanWorkbenchResponse,
   RequestOptions,
   ReviewTask,
   SkipReviewInput,
@@ -408,6 +410,22 @@ export class ApiClient {
       },
       options,
     )
+  }
+
+  getPlanWorkbench(
+    householdId: string,
+    memberId: string,
+    options?: RequestOptions,
+  ): Promise<PlanWorkbenchResponse> {
+    return this.request(
+      `/api/v1/households/${householdId}/members/${memberId}/plan-workbench`,
+      undefined,
+      options,
+    )
+  }
+
+  getDashboardSummary(householdId: string, options?: RequestOptions): Promise<DashboardSummary> {
+    return this.request(`/api/v1/households/${householdId}/dashboard-summary`, undefined, options)
   }
 
   listOutboxMessages(

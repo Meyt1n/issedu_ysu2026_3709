@@ -52,6 +52,40 @@ async function installSyntheticApi(page: Page): Promise<void> {
     }
     if (request.method() === 'GET' && path.endsWith('/audits')) return respond([])
     if (request.method() === 'GET' && path.endsWith('/timeline')) return respond([])
+    if (request.method() === 'GET' && path.endsWith('/plan-workbench')) {
+      return respond({
+        member_id: member.id,
+        generated_at: '2026-08-20T02:00:00Z',
+        plans: [{
+          plan_event_id: 'plan-1',
+          drug: '合成药品',
+          schedule: '每日一次',
+          status: 'REMINDER',
+          next_action_at: '2026-08-20T03:00:00Z',
+          last_action: null,
+          allowed_actions: ['CONFIRM', 'DEFER', 'SKIP'],
+        }],
+      })
+    }
+    if (request.method() === 'GET' && path.endsWith('/dashboard-summary')) {
+      return respond({
+        generated_at: '2026-08-20T02:00:00Z',
+        member_count: 1,
+        events_today: 2,
+        events_total: 5,
+        severe_count: 0,
+        warning_count: 1,
+        info_count: 1,
+        pending_reviews: 1,
+        pending_outbox: 0,
+        week_series: [
+          { day: '2026-08-14', count: 0 }, { day: '2026-08-15', count: 0 },
+          { day: '2026-08-16', count: 0 }, { day: '2026-08-17', count: 0 },
+          { day: '2026-08-18', count: 1 }, { day: '2026-08-19', count: 2 },
+          { day: '2026-08-20', count: 2 },
+        ],
+      })
+    }
     if (request.method() === 'GET' && path.endsWith('/state')) {
       return respond({
         member_id: member.id,
@@ -193,6 +227,28 @@ test('命令面板 Ctrl+K 可以在十二个视图之间快速跳转', async ({ 
   await expect(palette.getByText(/没有匹配「购药」的命令/)).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(palette).toHaveCount(0)
+})
+
+test('健康计划页只展示服务端返回的照护待办', async ({ page }) => {
+  await installSyntheticApi(page)
+  await enterFamilySpace(page)
+
+  await navItem(page, '健康计划').click()
+  await expect(viewHeading(page)).toHaveText('健康计划中心')
+  await expect(page.getByText('合成药品')).toBeVisible()
+  await expect(page.getByText('待提醒')).toBeVisible()
+  await expect(page.getByText(/下次处理/)).toBeVisible()
+})
+
+test('家庭大屏使用脱敏聚合接口而非成员逐项汇总', async ({ page }) => {
+  await installSyntheticApi(page)
+  await enterFamilySpace(page)
+
+  const summary = page.waitForResponse(response => response.url().includes('/dashboard-summary'))
+  await navItem(page, '家庭大屏').click()
+  await summary
+  await expect(page.getByRole('heading', { name: '家庭大屏', level: 1 })).toBeVisible()
+  await expect(page.getByText('累计 5 条已确认事实')).toBeVisible()
 })
 
 test('本地 API 不可用时不进入家庭空间，也不渲染任何健康摘要', async ({ page }) => {
