@@ -54,6 +54,41 @@ def test_projection_tolerates_missing_optional_fields():
     assert drug["expiry_date"] is None
     assert drug["stock"] is None
     assert drug["ingredient"] is None
+    assert drug["active_ingredients"] == []
+    assert drug["interaction_warnings"] == []
+
+
+def test_projection_keeps_confirmed_master_metadata():
+    events = [
+        _medication_event(
+            "e1",
+            {
+                "drug_name": "演示药",
+                "candidate_id": "rec-demo",
+                "active_ingredients": ["成分甲"],
+                "indications": ["演示用途"],
+                "cautions": ["演示注意"],
+                "contraindications": ["演示禁忌"],
+                "interaction_warnings": [
+                    {"with_record_id": "rec-other", "level": "WARNING", "message": "核对"}
+                ],
+            },
+        )
+    ]
+    facts = build_relationship_graph(
+        [
+            HealthEvent(
+                id="e1",
+                event_type="medication_confirmed",
+                payload=events[0].payload,
+            )
+        ]
+    )
+    drug = facts["drugs"][0]
+    assert drug["candidate_id"] == "rec-demo"
+    assert drug["active_ingredients"] == ["成分甲"]
+    assert drug["contraindications"] == ["演示禁忌"]
+    assert drug["interaction_warnings"][0]["with_record_id"] == "rec-other"
 
 
 def test_expiry_stock_duplicate_rules_fire_from_projected_events():

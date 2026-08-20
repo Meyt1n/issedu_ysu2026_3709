@@ -25,7 +25,7 @@ let removeHealthRefreshListener: (() => void) | null = null
 
 const actionDraft = reactive({
   planEventId: '',
-  action: 'confirm' as 'confirm' | 'defer' | 'skip',
+  action: 'confirm' as 'confirm' | 'defer' | 'skip' | 'miss',
   delayHours: 4,
   skipReason: '',
 })
@@ -58,7 +58,7 @@ async function loadPlans(): Promise<void> {
   }
 }
 
-function openAction(plan: PlanWorkbenchItem, action: 'confirm' | 'defer' | 'skip'): void {
+function openAction(plan: PlanWorkbenchItem, action: 'confirm' | 'defer' | 'skip' | 'miss'): void {
   if (actionDraft.planEventId === plan.plan_event_id && actionDraft.action === action) {
     actionDraft.planEventId = ''
     return
@@ -73,8 +73,8 @@ async function submitAction(plan: PlanWorkbenchItem): Promise<void> {
   const householdId = session.selectedHouseholdId
   const memberId = session.selectedMemberId
   if (!householdId || !memberId || busyPlanId.value) return
-  if (actionDraft.action === 'skip' && !actionDraft.skipReason.trim()) {
-    pushToast('error', '跳过服药前请填写原因，方便家人了解情况。')
+  if ((actionDraft.action === 'skip' || actionDraft.action === 'miss') && !actionDraft.skipReason.trim()) {
+    pushToast('error', actionDraft.action === 'miss' ? '记录漏服前请填写原因。' : '跳过服药前请填写原因，方便家人了解情况。')
     return
   }
 
@@ -91,9 +91,12 @@ async function submitAction(plan: PlanWorkbenchItem): Promise<void> {
     } else if (actionDraft.action === 'defer') {
       await apiClient.deferCarePlan(householdId, memberId, plan.plan_event_id, actionDraft.delayHours, options)
       pushToast('success', `「${plan.drug}」已延期 ${actionDraft.delayHours} 小时提醒。`)
-    } else {
+    } else if (actionDraft.action === 'skip') {
       await apiClient.skipCarePlan(householdId, memberId, plan.plan_event_id, actionDraft.skipReason.trim(), options)
       pushToast('info', `已记录跳过「${plan.drug}」及原因。`)
+    } else {
+      await apiClient.missCarePlan(householdId, memberId, plan.plan_event_id, actionDraft.skipReason.trim(), options)
+      pushToast('error', `已记录「${plan.drug}」本次漏服，后续提醒仍会保留。`)
     }
     actionDraft.planEventId = ''
     await loadPlans()
@@ -113,6 +116,7 @@ function activityTone(action: string): string {
 function actionLabel(action: string): string {
   if (action === 'CONFIRM') return '确认服药'
   if (action === 'DEFER') return '延期提醒'
+  if (action === 'MISS') return '记录漏服'
   return '跳过'
 }
 
@@ -194,10 +198,16 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
           </div>
           <p class="row-meta" style="margin: 0">
             <AppIcon name="clock" :size="14" style="vertical-align: -2px" />
-            {{ plan.schedule }} · 下次处理 {{ formatDateTime(plan.next_action_at) }}
+            {{ plan.schedule }}
+            <span v-if="plan.dose"> · 每次 {{ plan.dose }}</span>
+            <span v-if="plan.times.length > 0"> · {{ plan.times.join('、') }}</span>
+            · 下次处理 {{ formatDateTime(plan.next_action_at) }}
             <span class="pill" :class="plan.status === 'ESCALATED' ? 'rose' : plan.status === 'REMINDER' ? 'gold' : 'pine'">
               {{ plan.status === 'ESCALATED' ? '已升级' : plan.status === 'REMINDER' ? '待提醒' : '时间窗内' }}
             </span>
+          </p>
+          <p v-if="plan.start_date || plan.end_date" class="row-meta" style="margin: 0">
+            疗程：{{ plan.start_date ?? '未设开始日期' }} 至 {{ plan.end_date ?? '未设结束日期' }}
           </p>
           <div class="row-actions">
             <span v-if="celebratingPlanId === plan.plan_event_id" class="heart-burst" aria-hidden="true">
@@ -227,6 +237,14 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
             >
               跳过
             </button>
+            <button
+              type="button"
+              class="btn btn-danger btn-small"
+              :disabled="busyPlanId === plan.plan_event_id || !plan.allowed_actions.includes('MISS')"
+              @click="openAction(plan, 'miss')"
+            >
+              记录漏服
+            </button>
           </div>
 
           <form
@@ -247,9 +265,10 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
             </template>
             <template v-else>
               <label class="field">
-                跳过原因（必填）
-                <input v-model="actionDraft.skipReason" autocomplete="off" required placeholder="例如 医生建议今日暂停" />
-                <small>系统不会替你判断能否停药；连续未响应将升级给照护者。</small>
+                {{ actionDraft.action === 'miss' ? '漏服原因（必填）' : '跳过原因（必填）' }}
+                <input v-model="actionDraft.skipReason" autocomplete="off" required :placeholder="actionDraft.action === 'miss' ? '例如 忘记服用或外出未携带' : '例如 医生建议今日暂停'" />
+                <small v-if="actionDraft.action === 'miss'">漏服只记录事实，不会自动补服或修改剂量；后续提醒仍由计划决定。</small>
+                <small v-else>系统不会替你判断能否停药；连续未响应将升级给照护者。</small>
               </label>
             </template>
             <div class="row-actions">
@@ -258,6 +277,11 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
               </button>
             </div>
           </form>
+          <div v-if="plan.action_history.length > 0" class="capability-chips" style="margin-top: 8px">
+            <span v-for="(action, index) in plan.action_history" :key="`${plan.plan_event_id}-${index}`" class="pill" :class="activityTone(action.action)">
+              {{ actionLabel(action.action) }} · {{ formatDateTime(action.recorded_at) }}
+            </span>
+          </div>
         </li>
       </ul>
 

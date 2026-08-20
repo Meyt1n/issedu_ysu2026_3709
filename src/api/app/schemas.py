@@ -269,18 +269,25 @@ class OutboxDispatchRead(BaseModel):
 
 
 class PlanWorkbenchActionRead(BaseModel):
-    action: str
+    action: Literal["CONFIRM", "DEFER", "SKIP", "MISS"]
     recorded_at: datetime
+    reason: str | None = None
+    delay_hours: int | None = None
 
 
 class PlanWorkbenchItemRead(BaseModel):
     plan_event_id: str
     drug: str
     schedule: str
+    dose: str | None = None
+    times: list[str] = Field(default_factory=list)
+    start_date: str | None = None
+    end_date: str | None = None
     status: Literal["NORMAL", "REMINDER", "ESCALATED"]
     next_action_at: datetime
     last_action: PlanWorkbenchActionRead | None = None
-    allowed_actions: list[Literal["CONFIRM", "DEFER", "SKIP"]]
+    action_history: list[PlanWorkbenchActionRead] = Field(default_factory=list)
+    allowed_actions: list[Literal["CONFIRM", "DEFER", "SKIP", "MISS"]]
 
 
 class PlanWorkbenchRead(BaseModel):

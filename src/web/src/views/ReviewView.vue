@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 
 import { apiClient } from '../api/client'
-import type { ReviewTask, VisionTask } from '../api/types'
+import type { ReviewCandidate, ReviewTask, VisionTask } from '../api/types'
 import AppIcon from '../components/AppIcon.vue'
 import VisionResultViewer from '../components/VisionResultViewer.vue'
 import {
@@ -58,6 +58,10 @@ function statusTone(status: string): string {
   if (status === 'CORRECTED') return 'gold'
   if (status === 'SKIPPED') return 'plain'
   return 'clay'
+}
+
+function interactionSummary(candidate: ReviewCandidate): string {
+  return (candidate.interaction_warnings ?? []).map(item => item.message).join('；')
 }
 
 // 原始证据（原图 + 定位框）缓存，键为 vision_task_id
@@ -317,6 +321,27 @@ onMounted(() => void loadTasks())
               <span v-if="candidate.evidence?.length" class="text-faint" style="font-size: 12px">
                 证据来源：{{ candidate.evidence.join('、') }}
               </span>
+              <div class="candidate-facts" style="display: grid; gap: 4px; margin-top: 6px; font-size: 12.5px">
+                <span v-if="candidate.specification || candidate.manufacturer" class="text-soft">
+                  {{ candidate.specification ? `规格：${candidate.specification}` : '' }}
+                  {{ candidate.manufacturer ? ` · 厂家：${candidate.manufacturer}` : '' }}
+                </span>
+                <span v-if="candidate.active_ingredients?.length" class="text-soft">
+                  成分：{{ candidate.active_ingredients.join('、') }}
+                </span>
+                <span v-if="candidate.indications?.length" class="text-soft">
+                  用途：{{ candidate.indications.join('；') }}
+                </span>
+                <span v-if="candidate.cautions?.length" class="text-soft">
+                  注意：{{ candidate.cautions.join('；') }}
+                </span>
+                <span v-if="candidate.contraindications?.length" class="text-soft">
+                  禁忌核对：{{ candidate.contraindications.join('；') }}
+                </span>
+                <span v-if="candidate.interaction_warnings?.length" class="text-soft" style="color: var(--clay)">
+                  组合提醒：{{ interactionSummary(candidate) }}
+                </span>
+              </div>
             </span>
           </label>
         </div>
@@ -332,7 +357,7 @@ onMounted(() => void loadTasks())
             class="btn btn-primary btn-small"
             @click="openPanel(task, 'confirm')"
           >
-            确认候选
+            确认保存
           </button>
           <button type="button" class="btn btn-ghost btn-small" @click="openPanel(task, 'correct')">
             人工修正
@@ -354,7 +379,7 @@ onMounted(() => void loadTasks())
         >
           <template v-if="panel.mode === 'confirm'">
             <p class="card-note" style="margin: 0">
-              确认后将以「已确认」状态写入健康事件，确认人与时间会记录在案。
+              点击确认保存后，才会以「已确认」状态写入健康事件并参与用药规则；当前候选不会自动入档。
             </p>
             <label class="field">
               确认备注（可选）
@@ -393,7 +418,7 @@ onMounted(() => void loadTasks())
           </template>
           <div class="row-actions">
             <button type="submit" class="btn btn-clay btn-small" :disabled="busyTaskId === task.id">
-              {{ busyTaskId === task.id ? '正在提交' : '提交' }}
+              {{ busyTaskId === task.id ? '正在保存' : panel.mode === 'confirm' ? '确认保存' : '提交' }}
             </button>
           </div>
         </form>

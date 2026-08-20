@@ -9,7 +9,8 @@ Timeout triggers automatic care-level escalation.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from datetime import time as clock_time
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -89,6 +90,58 @@ def check_escalation(
     return "escalated"
 
 
+def _parse_plan_times(raw: Any) -> list[clock_time]:
+    values = raw if isinstance(raw, list) else str(raw or "").replace("，", ",").split(",")
+    result: list[clock_time] = []
+    for value in values:
+        text = str(value).strip()
+        try:
+            parsed = datetime.strptime(text, "%H:%M").time()
+        except ValueError:
+            continue
+        if parsed not in result:
+            result.append(parsed)
+    return sorted(result)
+
+
+def _parse_plan_date(raw: Any) -> date | None:
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        return date.fromisoformat(raw.strip())
+    except ValueError:
+        return None
+
+
+def _next_action_at(
+    payload: dict[str, Any],
+    *,
+    reference_time: datetime,
+    now: datetime,
+) -> datetime:
+    """Use explicit local clock times when available, otherwise keep HCT-304's 24h fallback."""
+    times = _parse_plan_times(payload.get("times"))
+    if not times:
+        return reference_time + timedelta(hours=DEFAULT_MAX_INTERVAL_HOURS)
+
+    local_now = now.astimezone()
+    start_date = _parse_plan_date(payload.get("start_date"))
+    end_date = _parse_plan_date(payload.get("end_date"))
+    lower_bound = max(reference_time, now)
+    for offset in range(0, 8):
+        candidate_date = local_now.date() + timedelta(days=offset)
+        if start_date is not None and candidate_date < start_date:
+            continue
+        if end_date is not None and candidate_date > end_date:
+            continue
+        for scheduled_time in times:
+            candidate = datetime.combine(candidate_date, scheduled_time, tzinfo=local_now.tzinfo)
+            candidate_utc = candidate.astimezone(UTC)
+            if candidate_utc > lower_bound:
+                return candidate_utc
+    return reference_time + timedelta(hours=DEFAULT_MAX_INTERVAL_HOURS)
+
+
 def build_plan_workbench(events: list[HealthEvent]) -> list[dict[str, Any]]:
     """Build a read-only, server-authoritative plan workbench from confirmed events."""
     compensated = {
@@ -96,7 +149,7 @@ def build_plan_workbench(events: list[HealthEvent]) -> list[dict[str, Any]]:
         for event in events
         if event.event_type == "COMPENSATION" and event.compensates_event_id
     }
-    actions_by_plan: dict[str, HealthEvent] = {}
+    actions_by_plan: dict[str, list[HealthEvent]] = {}
     plans: list[HealthEvent] = []
 
     for event in events:
@@ -105,11 +158,16 @@ def build_plan_workbench(events: list[HealthEvent]) -> list[dict[str, Any]]:
         if event.event_type in {"plan_created", "plan_updated"}:
             plans.append(event)
             continue
-        if event.event_type not in {"plan_confirmed", "plan_deferred", "plan_skipped"}:
+        if event.event_type not in {
+            "plan_confirmed",
+            "plan_deferred",
+            "plan_skipped",
+            "plan_missed",
+        }:
             continue
         plan_event_id = str((event.payload or {}).get("plan_event_id") or "")
         if plan_event_id:
-            actions_by_plan[plan_event_id] = event
+            actions_by_plan.setdefault(plan_event_id, []).append(event)
 
     def as_utc(value: datetime) -> datetime:
         return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
@@ -118,7 +176,8 @@ def build_plan_workbench(events: list[HealthEvent]) -> list[dict[str, Any]]:
     workbench: list[dict[str, Any]] = []
     for plan in plans:
         payload = plan.payload or {}
-        last_action = actions_by_plan.get(plan.id)
+        action_history = actions_by_plan.get(plan.id, [])
+        last_action = action_history[-1] if action_history else None
         reference_time = as_utc(plan.occurred_at)
         deferred_until: datetime | None = None
         if last_action is not None:
@@ -129,7 +188,7 @@ def build_plan_workbench(events: list[HealthEvent]) -> list[dict[str, Any]]:
             else:
                 reference_time = as_utc(last_action.occurred_at)
 
-        due_at = deferred_until or reference_time + timedelta(hours=DEFAULT_MAX_INTERVAL_HOURS)
+        due_at = deferred_until or _next_action_at(payload, reference_time=reference_time, now=now)
         if now < due_at:
             status_label = "NORMAL"
         elif now < due_at + timedelta(hours=GRACE_PERIOD_HOURS):
@@ -142,6 +201,12 @@ def build_plan_workbench(events: list[HealthEvent]) -> list[dict[str, Any]]:
                 "plan_event_id": plan.id,
                 "drug": str(payload.get("drug") or "未命名药品"),
                 "schedule": str(payload.get("schedule") or "未填写安排"),
+                "dose": str(payload.get("dose")) if payload.get("dose") else None,
+                "times": [str(item) for item in payload.get("times", [])]
+                if isinstance(payload.get("times"), list)
+                else [],
+                "start_date": payload.get("start_date"),
+                "end_date": payload.get("end_date"),
                 "status": status_label,
                 "next_action_at": due_at,
                 "last_action": None
@@ -151,10 +216,27 @@ def build_plan_workbench(events: list[HealthEvent]) -> list[dict[str, Any]]:
                         "plan_confirmed": "CONFIRM",
                         "plan_deferred": "DEFER",
                         "plan_skipped": "SKIP",
+                        "plan_missed": "MISS",
                     }[last_action.event_type],
                     "recorded_at": last_action.occurred_at,
+                    "reason": (last_action.payload or {}).get("reason"),
+                    "delay_hours": (last_action.payload or {}).get("delay_hours"),
                 },
-                "allowed_actions": ["CONFIRM", "DEFER", "SKIP"],
+                "action_history": [
+                    {
+                        "action": {
+                            "plan_confirmed": "CONFIRM",
+                            "plan_deferred": "DEFER",
+                            "plan_skipped": "SKIP",
+                            "plan_missed": "MISS",
+                        }[event.event_type],
+                        "recorded_at": event.occurred_at,
+                        "reason": (event.payload or {}).get("reason"),
+                        "delay_hours": (event.payload or {}).get("delay_hours"),
+                    }
+                    for event in action_history
+                ],
+                "allowed_actions": ["CONFIRM", "DEFER", "SKIP", "MISS"],
             }
         )
     return workbench
@@ -208,4 +290,24 @@ def skip_plan(
          "skipped_at": datetime.now(UTC).isoformat()},
         actor_id,
         idempotency_key=f"skip:{plan_event_id}",
+    )
+
+
+def miss_plan(
+    member_id: str,
+    household_id: str,
+    plan_event_id: str,
+    reason: str,
+    actor_id: str,
+) -> HealthEvent:
+    """Record a missed dose separately from an intentional skip."""
+    return record_plan_event(
+        member_id, household_id, "plan_missed",
+        {
+            "plan_event_id": plan_event_id,
+            "reason": reason,
+            "missed_at": datetime.now(UTC).isoformat(),
+        },
+        actor_id,
+        idempotency_key=f"miss:{plan_event_id}:{datetime.now(UTC).date().isoformat()}",
     )

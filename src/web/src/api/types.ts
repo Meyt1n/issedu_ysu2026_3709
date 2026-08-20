@@ -182,18 +182,25 @@ export interface ProjectionReplayResult {
 export type PlanWorkbenchStatus = 'NORMAL' | 'REMINDER' | 'ESCALATED'
 
 export interface PlanWorkbenchAction {
-  action: 'CONFIRM' | 'DEFER' | 'SKIP'
+  action: 'CONFIRM' | 'DEFER' | 'SKIP' | 'MISS'
   recorded_at: string
+  reason?: string | null
+  delay_hours?: number | null
 }
 
 export interface PlanWorkbenchItem {
   plan_event_id: string
   drug: string
   schedule: string
+  dose?: string | null
+  times: string[]
+  start_date?: string | null
+  end_date?: string | null
   status: PlanWorkbenchStatus
   next_action_at: string
   last_action: PlanWorkbenchAction | null
-  allowed_actions: Array<'CONFIRM' | 'DEFER' | 'SKIP'>
+  action_history: PlanWorkbenchAction[]
+  allowed_actions: Array<'CONFIRM' | 'DEFER' | 'SKIP' | 'MISS'>
 }
 
 export interface PlanWorkbenchResponse {
@@ -529,6 +536,19 @@ export interface ReviewCandidate {
   evidence?: string[]
   dosage?: string | null
   frequency?: string | null
+  specification?: string | null
+  manufacturer?: string | null
+  active_ingredients?: string[]
+  indications?: string[]
+  cautions?: string[]
+  contraindications?: string[]
+  interaction_warnings?: Array<{
+    with_record_id: string
+    level: 'INFO' | 'WARNING' | string
+    message: string
+  }>
+  master_data_version?: string | null
+  candidate_id?: string | null
   [key: string]: unknown
 }
 

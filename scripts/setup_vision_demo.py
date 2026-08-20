@@ -33,6 +33,10 @@ RECORDS = [
         "specification": "0.25g×24粒",
         "manufacturer": "家健示例制药有限公司",
         "packaging_type": "box",
+        "active_ingredients": ["阿莫西林"],
+        "indications": ["用于演示的细菌感染相关用药信息核对"],
+        "cautions": ["使用前核对说明书、过敏史和当前医嘱"],
+        "contraindications": ["对青霉素类或本品成分过敏者需先人工核对"],
     },
     {
         "record_id": "rec-ibuprofen-en",
@@ -49,6 +53,10 @@ RECORDS = [
         "specification": "200mgx20",
         "manufacturer": "HomeCare Demo Pharma",
         "packaging_type": "box",
+        "active_ingredients": ["布洛芬"],
+        "indications": ["用于演示的疼痛或发热信息核对"],
+        "cautions": ["使用前核对说明书、胃肠道风险和当前医嘱"],
+        "contraindications": ["对本品或相关解热镇痛药过敏者需先人工核对"],
     },
 ]
 
@@ -67,6 +75,16 @@ def main() -> None:
         "approval_ref": "docs/demo/受控演示知识说明（教学合成数据）",
         "revocation_status": "ACTIVE",
         "records": RECORDS,
+        "interactions": [
+            {
+                "record_ids": ["rec-amoxicillin-cn", "rec-ibuprofen-en"],
+                "level": "INFO",
+                "message": (
+                    "本地演示主数据要求核对这两种药品的当前医嘱和说明书；"
+                    "系统不判断是否可以同用。"
+                ),
+            }
+        ],
     }
     snapshot["sha256"] = hashlib.sha256(canonical(snapshot)).hexdigest()
 

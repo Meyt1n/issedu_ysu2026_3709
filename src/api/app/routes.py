@@ -1634,6 +1634,45 @@ def skip_plan_endpoint(
     return HealthEventRead.model_validate(event)
 
 
+@router.post(
+    "/households/{household_id}/members/{member_id}/plans/missed",
+    status_code=status.HTTP_201_CREATED,
+)
+def miss_plan_endpoint(
+    household_id: str,
+    member_id: str,
+    plan_event_id: str,
+    request: Request,
+    reason: str = Query(min_length=1, max_length=240),
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> HealthEventRead:
+    household = session.get(Household, household_id)
+    member = session.get(Member, member_id)
+    if _is_erased(household, member):
+        _raise_resource_not_found()
+    if not has_authorized_action(
+        session, household, member_id, actor_id, "WRITE_EVENTS", "health_events", access_purpose,
+    ):
+        _raise_resource_not_found()
+    event = _append_care_plan_action(
+        session,
+        household=household,
+        member=member,
+        actor_id=actor_id,
+        request=request,
+        event_type="plan_missed",
+        payload={
+            "plan_event_id": plan_event_id,
+            "reason": reason.strip(),
+            "missed_at": datetime.now(UTC).isoformat(),
+        },
+        idempotency_key=f"miss:{plan_event_id}:{datetime.now(UTC).date().isoformat()}",
+    )
+    return HealthEventRead.model_validate(event)
+
+
 # ── HCT-401: Knowledge store & RAG ──────────────────────────────────
 
 
@@ -2202,6 +2241,44 @@ _FUSION_CHANNEL_LABELS = {
 }
 
 
+def _review_candidate_metadata(
+    master_data: LocalMasterData,
+    record_id: str | None,
+) -> dict[str, Any]:
+    """Copy only approved, non-OCR medicine metadata into the review card."""
+    if not record_id:
+        return {}
+    record = next((item for item in master_data.records if item.record_id == record_id), None)
+    if record is None:
+        return {}
+
+    interaction_warnings: list[dict[str, str]] = []
+    for interaction in master_data.interactions:
+        if record_id not in interaction.record_ids:
+            continue
+        other_ids = [item for item in interaction.record_ids if item != record_id]
+        if not other_ids:
+            continue
+        interaction_warnings.append(
+            {
+                "with_record_id": other_ids[0],
+                "level": interaction.level,
+                "message": interaction.message,
+            }
+        )
+
+    return {
+        "specification": record.specification,
+        "manufacturer": record.manufacturer,
+        "active_ingredients": list(record.active_ingredients),
+        "indications": list(record.indications),
+        "cautions": list(record.cautions),
+        "contraindications": list(record.contraindications),
+        "interaction_warnings": interaction_warnings,
+        "master_data_version": master_data.version,
+    }
+
+
 def _ensure_review_task_for_vision(
     session: Session,
     *,
@@ -2255,6 +2332,7 @@ def _ensure_review_task_for_vision(
                 "candidate_id": fused.candidate_id,
                 "rank": fused.rank,
                 "conflicts": fused.conflicts,
+                **_review_candidate_metadata(master_data, fused.candidate_id),
             }
         )
 
@@ -2283,6 +2361,12 @@ def _ensure_review_task_for_vision(
                     "candidate_id": None,
                     "rank": index + 1,
                     "conflicts": [],
+                    "active_ingredients": [],
+                    "indications": [],
+                    "cautions": [],
+                    "contraindications": [],
+                    "interaction_warnings": [],
+                    "master_data_version": master_data.version,
                 }
             )
 
@@ -2473,6 +2557,7 @@ def fuse_vision_task_endpoint(
                     "specification": record.specification,
                     "manufacturer": record.manufacturer,
                     "packaging_type": record.packaging_type,
+                    **_review_candidate_metadata(master_data, record.record_id),
                 }
             )
         review_candidates.append(review_candidate)

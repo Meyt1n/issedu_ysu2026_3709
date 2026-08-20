@@ -28,6 +28,15 @@ def _drug_from_payload(payload: dict[str, Any], event_id: str, *, name: Any) -> 
         "expiry_date": payload.get("expiry_date"),
         "stock": payload.get("stock"),
         "ingredient": payload.get("ingredient"),
+        "candidate_id": payload.get("candidate_id"),
+        "active_ingredients": payload.get("active_ingredients", []),
+        "interaction_warnings": payload.get("interaction_warnings", []),
+        "master_data_version": payload.get("master_data_version"),
+        "specification": payload.get("specification") or payload.get("dosage"),
+        "manufacturer": payload.get("manufacturer"),
+        "indications": payload.get("indications", []),
+        "cautions": payload.get("cautions", []),
+        "contraindications": payload.get("contraindications", []),
     }
 
 

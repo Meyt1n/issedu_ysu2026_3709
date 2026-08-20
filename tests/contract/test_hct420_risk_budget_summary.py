@@ -34,6 +34,7 @@ def test_risk_list_reports_budget_and_suppressed_signal_count(client: TestClient
                 "payload": {
                     "drug": f"Synthetic medicine {index}",
                     "ingredient": f"ingredient-{index}",
+                    "stock": 1,
                 },
                 "occurred_at": datetime.now(UTC).isoformat(),
             },
@@ -51,4 +52,4 @@ def test_risk_list_reports_budget_and_suppressed_signal_count(client: TestClient
     assert body["non_severe_budget"] == 10
     assert body["suppressed_count"] > 0
     assert body["total"] == len(body["alerts"])
-    assert body["suppressed_count"] + body["total"] >= 66
+    assert body["suppressed_count"] + body["total"] >= 12

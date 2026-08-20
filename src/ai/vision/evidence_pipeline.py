@@ -173,6 +173,10 @@ class MasterDataRecord(EvidenceModel):
     specification: str | None = None
     manufacturer: str | None = None
     packaging_type: str | None = None
+    active_ingredients: list[str] = Field(default_factory=list, max_length=32)
+    indications: list[str] = Field(default_factory=list, max_length=16)
+    cautions: list[str] = Field(default_factory=list, max_length=16)
+    contraindications: list[str] = Field(default_factory=list, max_length=16)
 
     @field_validator("product_barcode")
     @classmethod
@@ -180,10 +184,19 @@ class MasterDataRecord(EvidenceModel):
         return _normalize_barcode(value) if value else value
 
 
+class MasterDataInteraction(EvidenceModel):
+    """An approved, human-authored pair rule from the local master snapshot."""
+
+    record_ids: list[str] = Field(min_length=2, max_length=2)
+    level: Literal["INFO", "WARNING"] = "WARNING"
+    message: str = Field(min_length=1, max_length=240)
+
+
 class LocalMasterData(EvidenceModel):
     version: str = Field(min_length=1, max_length=128)
     available: bool = False
     records: list[MasterDataRecord] = Field(default_factory=list, max_length=10000)
+    interactions: list[MasterDataInteraction] = Field(default_factory=list, max_length=10000)
 
 
 class MasterCandidate(EvidenceModel):
