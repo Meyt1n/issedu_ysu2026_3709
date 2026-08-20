@@ -270,6 +270,52 @@ export async function connectWithPassword(
   }
 }
 
+export async function connectWithPin(
+  actorId: string,
+  householdId: string,
+  pin: string,
+  accessPurpose: string,
+): Promise<void> {
+  clearSessionContext()
+  state.authMode = 'session'
+  state.actorId = actorId.trim()
+  state.accessPurpose = accessPurpose.trim()
+  if (!state.actorId || !householdId.trim() || !/^\d{6}$/.test(pin)) {
+    state.status = 'signed-out'
+    state.error = '请输入家庭、身份和六位数字 PIN。'
+    return
+  }
+
+  state.status = 'loading'
+  state.error = ''
+  try {
+    const sessionResult = await apiClient.loginWithPin(householdId.trim(), state.actorId, pin)
+    state.sessionToken = sessionResult.session_token
+    state.sessionExpiresAt = sessionResult.expires_at
+    scheduleSessionExpiry(state.sessionToken, state.sessionExpiresAt)
+    state.actorId = sessionResult.actor_id
+    state.households = await apiClient.listHouseholds(requestOptions.value)
+    if (state.households.length === 0) {
+      state.status = 'empty'
+      return
+    }
+    state.selectedHouseholdId =
+      sessionResult.household_id && state.households.some(item => item.id === sessionResult.household_id)
+        ? sessionResult.household_id
+        : state.households[0]?.id ?? ''
+    await loadHouseholdScope()
+    if (sessionIsSignedOut()) return
+    state.status = 'ready'
+  } catch (cause) {
+    const sessionExpired = sessionIsSignedOut() && state.error.includes('会话已过期')
+    if (!sessionExpired) clearSessionContext()
+    state.authMode = 'session'
+    state.status = 'signed-out'
+    if (sessionExpired) return
+    state.error = formatError(cause)
+  }
+}
+
 export async function createHouseholdAndEnter(
   householdName: string,
   memberDrafts: Array<{ displayName: string; role: 'SELF' | 'DEPENDENT' | 'CAREGIVER' }>,

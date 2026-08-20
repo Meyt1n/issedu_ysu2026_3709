@@ -318,6 +318,7 @@ export interface AuthSession {
   actor_id: string
   session_token: string
   expires_at: number
+  household_id?: string
 }
 
 export interface VisionQualityMetric {

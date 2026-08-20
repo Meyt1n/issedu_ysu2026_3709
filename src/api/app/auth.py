@@ -23,6 +23,7 @@ PIN_TTL_SECONDS = 300
 
 # In-memory stores (replace with DB-backed stores in production)
 _password_hashes: dict[str, str] = {}  # actor_id → bcrypt hash
+_pin_hashes: dict[tuple[str, str], str] = {}  # (household_id, actor_id) → bcrypt hash
 _failed_attempts: dict[str, list[float]] = defaultdict(list)
 _sessions: dict[str, dict[str, Any]] = {}  # session_token → {actor_id, expires_at}
 # pin_code → {actor_id, action, session_token, expires_at, used}
@@ -35,6 +36,10 @@ def hash_password(password: str) -> str:
 
 def verify_password(password: str, hashed: str) -> bool:
     return bcrypt.checkpw(password.encode("utf-8"), hashed.encode("utf-8"))
+
+
+# Used to keep unknown household identities on the same bcrypt verification path.
+_DUMMY_PIN_HASH = hash_password("000000")
 
 
 def _check_rate_limit(actor_id: str) -> None:
@@ -62,11 +67,42 @@ def authenticate(actor_id: str, password: str) -> dict[str, Any]:
         _failed_attempts[actor_id].append(time.time())
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="AUTH_FAILED")
     _failed_attempts.pop(actor_id, None)
+    return _create_session(actor_id)
+
+
+def _create_session(actor_id: str) -> dict[str, Any]:
     token = secrets.token_hex(32)
     expires_at = time.time() + SESSION_TTL_SECONDS
     _sessions[token] = {"actor_id": actor_id, "expires_at": expires_at}
     logger.info("LOGIN_OK actor=%s", actor_id)
     return {"session_token": token, "expires_at": expires_at}
+
+
+def _validate_pin(pin: str) -> None:
+    if len(pin) != 6 or any(char < "0" or char > "9" for char in pin):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="PIN_FORMAT_INVALID",
+        )
+
+
+def set_account_pin(actor_id: str, household_id: str, pin: str) -> None:
+    """Create or replace the six-digit PIN for one actor in one household."""
+    _validate_pin(pin)
+    _pin_hashes[(household_id, actor_id)] = hash_password(pin)
+
+
+def authenticate_with_pin(actor_id: str, household_id: str, pin: str) -> dict[str, Any]:
+    """Authenticate a household-scoped actor with a six-digit PIN."""
+    _validate_pin(pin)
+    rate_key = f"pin:{household_id}:{actor_id}"
+    _check_rate_limit(rate_key)
+    hashed = _pin_hashes.get((household_id, actor_id))
+    if not verify_password(pin, hashed or _DUMMY_PIN_HASH):
+        _failed_attempts[rate_key].append(time.time())
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="AUTH_FAILED")
+    _failed_attempts.pop(rate_key, None)
+    return _create_session(actor_id)
 
 
 def validate_session(token: str) -> str:

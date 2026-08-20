@@ -315,4 +315,29 @@ describe('ApiClient authorization contract', () => {
       method: 'POST',
     }])
   })
+
+  it('sends household-scoped PIN credentials and uses the bearer session for PIN setup', async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = []
+    const client = new ApiClient({
+      baseUrl: 'http://local.test',
+      fetcher: async (input, init) => {
+        requests.push({ url: String(input), init: init ?? {} })
+        const response = String(input).endsWith('/auth/pin-login')
+          ? { actor_id: 'owner', household_id: 'household-1', session_token: 's'.repeat(40), expires_at: 123 }
+          : { status: 'pin_configured', household_id: 'household-1' }
+        return new Response(JSON.stringify(response), { status: 200 })
+      },
+    })
+
+    const loggedIn = await client.loginWithPin('household-1', 'owner', '042006')
+    await client.setPin('household-1', '042006', { sessionToken: loggedIn.session_token })
+
+    expect(JSON.parse(String(requests[0]?.init.body))).toEqual({
+      household_id: 'household-1',
+      actor_id: 'owner',
+      pin: '042006',
+    })
+    expect(new Headers(requests[1]?.init.headers).get('Authorization')).toBe(`Bearer ${'s'.repeat(40)}`)
+    expect(JSON.parse(String(requests[1]?.init.body))).toEqual({ household_id: 'household-1', pin: '042006' })
+  })
 })
