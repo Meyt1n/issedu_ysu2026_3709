@@ -179,6 +179,42 @@ export interface ProjectionReplayResult {
   projection_version: number
 }
 
+export type PlanWorkbenchStatus = 'NORMAL' | 'REMINDER' | 'ESCALATED'
+
+export interface PlanWorkbenchAction {
+  action: 'CONFIRM' | 'DEFER' | 'SKIP'
+  recorded_at: string
+}
+
+export interface PlanWorkbenchItem {
+  plan_event_id: string
+  drug: string
+  schedule: string
+  status: PlanWorkbenchStatus
+  next_action_at: string
+  last_action: PlanWorkbenchAction | null
+  allowed_actions: Array<'CONFIRM' | 'DEFER' | 'SKIP'>
+}
+
+export interface PlanWorkbenchResponse {
+  member_id: string
+  generated_at: string
+  plans: PlanWorkbenchItem[]
+}
+
+export interface DashboardSummary {
+  generated_at: string
+  member_count: number
+  events_today: number
+  events_total: number
+  severe_count: number
+  warning_count: number
+  info_count: number
+  pending_reviews: number
+  pending_outbox: number
+  week_series: Array<{ day: string; count: number }>
+}
+
 export interface OutboxMessage {
   id: string
   event_id: string

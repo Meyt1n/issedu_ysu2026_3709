@@ -250,6 +250,45 @@ class OutboxDispatchRead(BaseModel):
     recovered_stale: int
 
 
+class PlanWorkbenchActionRead(BaseModel):
+    action: str
+    recorded_at: datetime
+
+
+class PlanWorkbenchItemRead(BaseModel):
+    plan_event_id: str
+    drug: str
+    schedule: str
+    status: Literal["NORMAL", "REMINDER", "ESCALATED"]
+    next_action_at: datetime
+    last_action: PlanWorkbenchActionRead | None = None
+    allowed_actions: list[Literal["CONFIRM", "DEFER", "SKIP"]]
+
+
+class PlanWorkbenchRead(BaseModel):
+    member_id: str
+    generated_at: datetime
+    plans: list[PlanWorkbenchItemRead]
+
+
+class DashboardDayCountRead(BaseModel):
+    day: str
+    count: int
+
+
+class DashboardSummaryRead(BaseModel):
+    generated_at: datetime
+    member_count: int
+    events_today: int
+    events_total: int
+    severe_count: int
+    warning_count: int
+    info_count: int
+    pending_reviews: int
+    pending_outbox: int
+    week_series: list[DashboardDayCountRead]
+
+
 # ── HCT-307: Risk evidence schemas ──────────────────────────────────
 
 

@@ -75,71 +75,32 @@ const sparkPath = computed(() => {
 
 async function loadAggregates(): Promise<void> {
   const householdId = session.selectedHouseholdId
-  if (!householdId || session.members.length === 0) return
+  if (!householdId) return
 
   loading.value = true
   try {
-    const memberIds = session.members.map(member => member.id)
-    const [timelines, risks, reviews, outbox, weatherResult] = await Promise.all([
-      Promise.allSettled(
-        memberIds.map(id => apiClient.listMemberTimeline(householdId, id, requestOptions.value)),
-      ),
-      Promise.allSettled(
-        memberIds.map(id => apiClient.listMemberRisks(householdId, id, requestOptions.value)),
-      ),
-      Promise.allSettled(
-        memberIds.map(id => apiClient.listReviewTasks(householdId, id, requestOptions.value)),
-      ),
-      apiClient.listOutboxMessages(householdId, requestOptions.value).catch(() => []),
+    const [summaryResult, weatherResult] = await Promise.all([
+      apiClient.getDashboardSummary(householdId, requestOptions.value),
       apiClient.getWeatherActionCards(undefined, undefined, requestOptions.value).catch(() => null),
     ])
-
-    const allEvents = timelines
-      .filter((r): r is PromiseFulfilledResult<Awaited<ReturnType<typeof apiClient.listMemberTimeline>>> => r.status === 'fulfilled')
-      .flatMap(r => r.value)
-    eventsTotal.value = allEvents.length
-
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
-    eventsToday.value = allEvents.filter(event => new Date(event.created_at) >= today).length
-
-    const days: DayPoint[] = []
-    for (let offset = 6; offset >= 0; offset -= 1) {
-      const dayStart = new Date(today)
-      dayStart.setDate(today.getDate() - offset)
-      const dayEnd = new Date(dayStart)
-      dayEnd.setDate(dayStart.getDate() + 1)
-      days.push({
-        label: offset === 0 ? '今天' : dayStart.toLocaleDateString('zh-CN', { weekday: 'short' }),
-        count: allEvents.filter(event => {
-          const created = new Date(event.created_at)
-          return created >= dayStart && created < dayEnd
-        }).length,
-      })
-    }
-    weekSeries.value = days
-
-    let severe = 0
-    let warning = 0
-    let info = 0
-    for (const result of risks) {
-      if (result.status !== 'fulfilled') continue
-      severe += result.value.severe_count
-      warning += result.value.warning_count
-      info += result.value.total - result.value.severe_count - result.value.warning_count
-    }
-    severeCount.value = severe
-    warningCount.value = warning
-    infoCount.value = info
-
-    pendingReviews.value = reviews
-      .filter((r): r is PromiseFulfilledResult<Awaited<ReturnType<typeof apiClient.listReviewTasks>>> => r.status === 'fulfilled')
-      .flatMap(r => r.value)
-      .filter(task => task.status === 'PENDING_REVIEW').length
-
-    pendingOutbox.value = outbox.filter(message => message.status === 'PENDING' || message.status === 'FAILED').length
+    eventsTotal.value = summaryResult.events_total
+    eventsToday.value = summaryResult.events_today
+    severeCount.value = summaryResult.severe_count
+    warningCount.value = summaryResult.warning_count
+    infoCount.value = summaryResult.info_count
+    pendingReviews.value = summaryResult.pending_reviews
+    pendingOutbox.value = summaryResult.pending_outbox
+    weekSeries.value = summaryResult.week_series.map(point => {
+      const date = new Date(`${point.day}T00:00:00`)
+      return {
+        label: point.day === new Date().toISOString().slice(0, 10)
+          ? '今天'
+          : date.toLocaleDateString('zh-CN', { weekday: 'short' }),
+        count: point.count,
+      }
+    })
     weather.value = weatherResult
-    lastUpdated.value = new Date()
+    lastUpdated.value = new Date(summaryResult.generated_at)
   } finally {
     loading.value = false
   }

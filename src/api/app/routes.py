@@ -33,7 +33,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import FileResponse
-from sqlalchemy import select, text, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -116,6 +116,7 @@ from app.schemas import (
     CapabilityResponse,
     CorrectionDiffCreate,
     CorrectionDiffRead,
+    DashboardSummaryRead,
     ErasureTaskRead,
     ExportManifestCreate,
     ExportManifestInvalidate,
@@ -143,6 +144,7 @@ from app.schemas import (
     OutboxDispatchRead,
     OutboxDispatchRequest,
     OutboxRead,
+    PlanWorkbenchRead,
     ProjectionCheckpointRead,
     ProjectionReplayRead,
     ProjectionReplayRequest,
@@ -1157,6 +1159,121 @@ def rebuild_member_projection(
 
     proj = rebuild_projection(session, member_id, household_id)
     return {"member_id": member_id, "state": proj.state, "last_event_id": proj.last_event_id}
+
+
+@router.get(
+    "/households/{household_id}/members/{member_id}/plan-workbench",
+    response_model=PlanWorkbenchRead,
+)
+def get_plan_workbench(
+    household_id: str,
+    member_id: str,
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> PlanWorkbenchRead:
+    household = session.get(Household, household_id)
+    member = session.get(Member, member_id)
+    if _is_erased(household, member):
+        _raise_resource_not_found()
+    if not has_authorized_action(
+        session, household, member_id, actor_id, "READ_EVENTS", "health_events", access_purpose,
+    ):
+        _raise_resource_not_found()
+
+    from app.care_plan import build_plan_workbench
+    from app.projection import get_timeline
+
+    return PlanWorkbenchRead(
+        member_id=member_id,
+        generated_at=datetime.now(UTC),
+        plans=build_plan_workbench(get_timeline(session, member_id)),
+    )
+
+
+@router.get("/households/{household_id}/dashboard-summary", response_model=DashboardSummaryRead)
+def get_dashboard_summary(
+    household_id: str,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> DashboardSummaryRead:
+    household = session.get(Household, household_id)
+    if _is_erased(household) or household.created_by != actor_id:
+        _raise_resource_not_found()
+
+    members = list(
+        session.scalars(
+            select(Member).where(Member.household_id == household_id, Member.deleted_at.is_(None))
+        ).all()
+    )
+    member_ids = [member.id for member in members]
+    events = list(
+        session.scalars(
+            select(HealthEvent)
+            .where(
+                HealthEvent.household_id == household_id,
+                HealthEvent.confirmation_status == "CONFIRMED",
+            )
+            .order_by(HealthEvent.created_at)
+        ).all()
+    )
+    now = datetime.now(UTC)
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    counts_by_day: dict[str, int] = {}
+    for event in events:
+        occurred_at = event.occurred_at
+        normalized = occurred_at if occurred_at.tzinfo else occurred_at.replace(tzinfo=UTC)
+        day = normalized.date().isoformat()
+        counts_by_day[day] = counts_by_day.get(day, 0) + 1
+
+    from app.projection import build_relationship_graph
+    from app.rules import run_rules
+
+    severe_count = 0
+    warning_count = 0
+    info_count = 0
+    for member_id in member_ids:
+        member_events = [event for event in events if event.member_id == member_id]
+        for alert in run_rules(build_relationship_graph(member_events)):
+            if alert.level == "SEVERE":
+                severe_count += 1
+            elif alert.level == "WARNING":
+                warning_count += 1
+            else:
+                info_count += 1
+
+    pending_reviews = session.scalar(
+        select(func.count()).select_from(ReviewTask).where(
+            ReviewTask.household_id == household_id,
+            ReviewTask.status == "PENDING_REVIEW",
+        )
+    ) or 0
+    pending_outbox = session.scalar(
+        select(func.count())
+        .select_from(OutboxMessage)
+        .join(HealthEvent, OutboxMessage.event_id == HealthEvent.id)
+        .where(
+            HealthEvent.household_id == household_id,
+            OutboxMessage.status.in_(("PENDING", "FAILED")),
+        )
+    ) or 0
+    week_series = []
+    for offset in range(6, -1, -1):
+        day = (today - timedelta(days=offset)).date().isoformat()
+        week_series.append({"day": day, "count": counts_by_day.get(day, 0)})
+
+    return DashboardSummaryRead(
+        generated_at=now,
+        member_count=len(members),
+        events_today=counts_by_day.get(today.date().isoformat(), 0),
+        events_total=len(events),
+        severe_count=severe_count,
+        warning_count=warning_count,
+        info_count=info_count,
+        pending_reviews=int(pending_reviews),
+        pending_outbox=int(pending_outbox),
+        week_series=week_series,
+    )
 
 
 # ── HCT-302: Rules engine ──────────────────────────────────────────

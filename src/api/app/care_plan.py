@@ -89,6 +89,77 @@ def check_escalation(
     return "escalated"
 
 
+def build_plan_workbench(events: list[HealthEvent]) -> list[dict[str, Any]]:
+    """Build a read-only, server-authoritative plan workbench from confirmed events."""
+    compensated = {
+        event.compensates_event_id
+        for event in events
+        if event.event_type == "COMPENSATION" and event.compensates_event_id
+    }
+    actions_by_plan: dict[str, HealthEvent] = {}
+    plans: list[HealthEvent] = []
+
+    for event in events:
+        if event.id in compensated:
+            continue
+        if event.event_type in {"plan_created", "plan_updated"}:
+            plans.append(event)
+            continue
+        if event.event_type not in {"plan_confirmed", "plan_deferred", "plan_skipped"}:
+            continue
+        plan_event_id = str((event.payload or {}).get("plan_event_id") or "")
+        if plan_event_id:
+            actions_by_plan[plan_event_id] = event
+
+    def as_utc(value: datetime) -> datetime:
+        return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+    now = datetime.now(UTC)
+    workbench: list[dict[str, Any]] = []
+    for plan in plans:
+        payload = plan.payload or {}
+        last_action = actions_by_plan.get(plan.id)
+        reference_time = as_utc(plan.occurred_at)
+        deferred_until: datetime | None = None
+        if last_action is not None:
+            action_payload = last_action.payload or {}
+            if last_action.event_type == "plan_deferred":
+                delay_hours = int(action_payload.get("delay_hours") or 0)
+                deferred_until = as_utc(last_action.occurred_at) + timedelta(hours=delay_hours)
+            else:
+                reference_time = as_utc(last_action.occurred_at)
+
+        due_at = deferred_until or reference_time + timedelta(hours=DEFAULT_MAX_INTERVAL_HOURS)
+        if now < due_at:
+            status_label = "NORMAL"
+        elif now < due_at + timedelta(hours=GRACE_PERIOD_HOURS):
+            status_label = "REMINDER"
+        else:
+            status_label = "ESCALATED"
+
+        workbench.append(
+            {
+                "plan_event_id": plan.id,
+                "drug": str(payload.get("drug") or "未命名药品"),
+                "schedule": str(payload.get("schedule") or "未填写安排"),
+                "status": status_label,
+                "next_action_at": due_at,
+                "last_action": None
+                if last_action is None
+                else {
+                    "action": {
+                        "plan_confirmed": "CONFIRM",
+                        "plan_deferred": "DEFER",
+                        "plan_skipped": "SKIP",
+                    }[last_action.event_type],
+                    "recorded_at": last_action.occurred_at,
+                },
+                "allowed_actions": ["CONFIRM", "DEFER", "SKIP"],
+            }
+        )
+    return workbench
+
+
 # ── Confirmation actions ───────────────────────────────────────────
 
 def confirm_plan(
