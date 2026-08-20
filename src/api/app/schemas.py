@@ -289,6 +289,23 @@ class DashboardSummaryRead(BaseModel):
     week_series: list[DashboardDayCountRead]
 
 
+class RelationshipGraphNodeRead(BaseModel):
+    id: str
+    category: Literal["drug", "allergy", "disease", "plan", "caregiver"]
+    label: str
+    source_event_id: str
+    source_recorded_at: datetime
+    source_created_by: str
+
+
+class RelationshipGraphRead(BaseModel):
+    member_id: str
+    generated_at: datetime
+    events_count: int
+    last_event_id: str | None
+    nodes: list[RelationshipGraphNodeRead]
+
+
 # ── HCT-307: Risk evidence schemas ──────────────────────────────────
 
 

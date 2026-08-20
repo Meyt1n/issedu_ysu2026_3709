@@ -215,6 +215,25 @@ export interface DashboardSummary {
   week_series: Array<{ day: string; count: number }>
 }
 
+export type RelationshipGraphCategory = 'drug' | 'allergy' | 'disease' | 'plan' | 'caregiver'
+
+export interface RelationshipGraphNode {
+  id: string
+  category: RelationshipGraphCategory
+  label: string
+  source_event_id: string
+  source_recorded_at: string
+  source_created_by: string
+}
+
+export interface RelationshipGraph {
+  member_id: string
+  generated_at: string
+  events_count: number
+  last_event_id: string | null
+  nodes: RelationshipGraphNode[]
+}
+
 export interface OutboxMessage {
   id: string
   event_id: string

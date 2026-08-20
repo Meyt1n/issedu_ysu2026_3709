@@ -148,6 +148,7 @@ from app.schemas import (
     ProjectionCheckpointRead,
     ProjectionReplayRead,
     ProjectionReplayRequest,
+    RelationshipGraphRead,
     ReviewTaskConfirm,
     ReviewTaskCorrect,
     ReviewTaskRead,
@@ -1143,6 +1144,32 @@ def member_timeline(
     until_dt = datetime.fromisoformat(until) if until else None
     events = get_timeline(session, member_id, since=since_dt, until=until_dt)
     return [HealthEventRead.model_validate(e) for e in events]
+
+
+@router.get(
+    "/households/{household_id}/members/{member_id}/relationship-graph",
+    response_model=RelationshipGraphRead,
+)
+def get_relationship_graph(
+    household_id: str,
+    member_id: str,
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> RelationshipGraphRead:
+    household = session.get(Household, household_id)
+    member = session.get(Member, member_id)
+    if _is_erased(household, member):
+        _raise_resource_not_found()
+    if not has_authorized_action(
+        session, household, member_id, actor_id, "READ_EVENTS", "health_events", access_purpose,
+    ):
+        _raise_resource_not_found()
+
+    from app.projection import build_relationship_graph_view, get_timeline
+
+    graph = build_relationship_graph_view(get_timeline(session, member_id))
+    return RelationshipGraphRead(member_id=member_id, generated_at=datetime.now(UTC), **graph)
 
 
 @router.post("/households/{household_id}/members/{member_id}/projection/rebuild")

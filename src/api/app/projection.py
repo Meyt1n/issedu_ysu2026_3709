@@ -113,6 +113,58 @@ def build_relationship_graph(
     }
 
 
+def build_relationship_graph_view(events: list[HealthEvent]) -> dict[str, Any]:
+    """Return the minimum traceable graph representation for desktop rendering.
+
+    The event payload is deliberately consumed only here and never returned to
+    the browser. Callers receive active facts plus their source metadata.
+    """
+    facts = build_relationship_graph(events)
+    events_by_id = {event.id: event for event in events}
+    nodes: list[dict[str, Any]] = []
+
+    def append_node(category: str, label: Any, source_event_id: str) -> None:
+        if not isinstance(label, str) or not label:
+            return
+        source = events_by_id.get(source_event_id)
+        if source is None:
+            return
+        nodes.append({
+            "id": f"{category}:{source_event_id}",
+            "category": category,
+            "label": label,
+            "source_event_id": source_event_id,
+            "source_recorded_at": source.created_at,
+            "source_created_by": source.created_by,
+        })
+
+    for drug in facts["drugs"]:
+        append_node("drug", drug.get("name"), drug["added_by"])
+    for allergy in facts["allergies"]:
+        append_node("allergy", allergy.get("name"), allergy["added_by"])
+    for disease in facts["diseases"]:
+        append_node("disease", disease.get("name"), disease["added_by"])
+    for plan in facts["plans"]:
+        drug = plan.get("drug")
+        if isinstance(drug, str) and drug:
+            append_node("plan", f"{drug} · 计划", plan["added_by"])
+
+    compensated = {
+        event.compensates_event_id
+        for event in events
+        if event.event_type == "COMPENSATION" and event.compensates_event_id
+    }
+    for event in events:
+        if event.id not in compensated and event.event_type == "caregiver_assigned":
+            append_node("caregiver", "已授权照护关系", event.id)
+
+    return {
+        "nodes": nodes,
+        "last_event_id": facts["last_event_id"],
+        "events_count": facts["events_count"],
+    }
+
+
 def get_timeline(
     session: Session,
     member_id: str,

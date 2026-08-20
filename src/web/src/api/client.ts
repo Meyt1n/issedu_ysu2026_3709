@@ -37,6 +37,7 @@ import type {
   ProjectionCheckpoint,
   ProjectionReplayResult,
   PlanWorkbenchResponse,
+  RelationshipGraph,
   RequestOptions,
   ReviewTask,
   SkipReviewInput,
@@ -399,6 +400,18 @@ export class ApiClient {
   ): Promise<HealthEvent[]> {
     return this.request(
       `/api/v1/households/${householdId}/members/${memberId}/timeline`,
+      undefined,
+      options,
+    )
+  }
+
+  getRelationshipGraph(
+    householdId: string,
+    memberId: string,
+    options?: RequestOptions,
+  ): Promise<RelationshipGraph> {
+    return this.request(
+      `/api/v1/households/${householdId}/members/${memberId}/relationship-graph`,
       undefined,
       options,
     )
