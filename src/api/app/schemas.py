@@ -670,6 +670,11 @@ class AssistantRequest(BaseModel):
     model: str | None = Field(default=None, max_length=64)
     temperature: float = Field(default=0.3, ge=0.0, le=2.0)
     max_tokens: int = Field(default=512, ge=1, le=4096)
+    # Keep existing API clients on HCT-403's single-agent contract.  The web
+    # demo opts into multi-agent mode explicitly so this additive field cannot
+    # change legacy tool-call tests or integrations unexpectedly.
+    agent_mode: Literal["single", "multi_agent"] = "single"
+    allow_network_search: bool = False
 
 
 class AssistantResponse(BaseModel):
@@ -685,6 +690,13 @@ class AssistantResponse(BaseModel):
     route: str | None = None
     query_type: str | None = None
     risk_notice: str | None = None
+    orchestration_mode: Literal["single", "multi_agent"] | None = None
+    orchestration_id: str | None = None
+    all_agents_local: bool = True
+    network_used: bool = False
+    network_query: str | None = None
+    agent_trace: list[dict[str, Any]] = Field(default_factory=list)
+    external_sources: list[dict[str, Any]] = Field(default_factory=list)
 
 
 # ── HCT-208: Correction diff schemas ──────────────────────────────────

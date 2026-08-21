@@ -5,6 +5,7 @@ import type {
   ApiErrorCode,
   ApiErrorEnvelope,
   AssistantChatInput,
+  AssistantAgentCatalog,
   AssistantResponse,
   AssistantTool,
   Authorization,
@@ -819,6 +820,10 @@ export class ApiClient {
 
   listAssistantTools(options?: RequestOptions): Promise<{ tools: AssistantTool[]; count: number }> {
     return this.request('/api/v1/assistant/tools', undefined, options)
+  }
+
+  listAssistantAgents(options?: RequestOptions): Promise<AssistantAgentCatalog> {
+    return this.request('/api/v1/assistant/agents', undefined, options)
   }
 
   listKnowledgeDocuments(options?: RequestOptions): Promise<KnowledgeDocument[]> {
