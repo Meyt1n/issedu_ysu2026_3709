@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.auth import validate_session
 from app.config import get_settings
 from app.models import AccessAudit, CareAuthorization, Household, Member
+from app.request_context import current_request_id
 
 PURPOSE_CODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
 
@@ -106,6 +107,7 @@ def _record_access_decision(
             purpose=purpose,
             outcome=outcome,
             reason=reason,
+            request_id=current_request_id(),
         )
     )
     # Access checks run before any business mutation. Persisting the decision here ensures
