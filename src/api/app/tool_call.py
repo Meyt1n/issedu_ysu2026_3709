@@ -41,6 +41,13 @@ _MEDICAL_PROHIBITIONS: list[str] = [
     "诊断:", "Diagnosis:", "Prescription:", "你应当", "你必须",
     "buy", "purchase", "order", "点击购买", "咨询电话", "添加微信",
 ]
+_DATA_EXFILTRATION_PROHIBITIONS: list[str] = [
+    "身份证号",
+    "身份证号码",
+    "联系方式",
+    "手机号码",
+    "银行卡号",
+]
 
 # Default degrade template when model is unavailable
 _DEGRADE_TEMPLATE = """当前助手服务暂时不可用。您可以：
@@ -380,6 +387,14 @@ def _check_medical_boundary(output_text: str) -> list[str]:
     return violations
 
 
+def _check_data_exfiltration(output_text: str) -> list[str]:
+    return [
+        keyword
+        for keyword in _DATA_EXFILTRATION_PROHIBITIONS
+        if keyword.casefold() in output_text.casefold()
+    ]
+
+
 def _contains_external_links(output_text: str) -> bool:
     """Detect external URLs that could be used for referral / advertising."""
     import re
@@ -599,6 +614,12 @@ def build_degrade_response(
             degraded=True,
             reason=reason,
             escalate=True,
+        )
+    if reason == "DATA_EXFILTRATION_VIOLATION":
+        return DegradedResponse(
+            answer="当前请求包含未授权的敏感字段，已拒绝输出；请仅查看当前授权范围内的本地摘要。",
+            degraded=True,
+            reason=reason,
         )
     if reason == "SCHEMA_VALIDATION_FAILED":
         return DegradedResponse(
@@ -1394,8 +1415,18 @@ def run_assistant(
     if _contains_external_links(parsed.answer):
         logger.warning("External link detected in assistant output")
         return degraded("EXTERNAL_LINK_DETECTED")
+    if _check_data_exfiltration(parsed.answer):
+        logger.warning("Sensitive data exfiltration detected in assistant output")
+        return degraded("DATA_EXFILTRATION_VIOLATION")
 
-    if "TOOL_SCOPE_DENIED" in tool_errors:
+    # A model-proposed tool is never an authority boundary.  Unknown tools,
+    # missing sessions and cross-scope arguments all degrade to the same
+    # structured refusal instead of allowing the model to continue as if its
+    # tool request had succeeded.
+    if any(
+        error in tool_errors
+        for error in {"TOOL_SCOPE_DENIED", "TOOL_NOT_ALLOWED", "TOOL_SESSION_REQUIRED"}
+    ):
         return degraded("TOOL_SCOPE_DENIED")
     if "NO_AUTHORISED_DOCUMENTS" in tool_errors and not allowed_citations:
         return degraded("NO_AUTHORISED_DOCUMENTS")

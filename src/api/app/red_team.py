@@ -47,6 +47,7 @@ class RedTeamCase:
             "id": self.id,
             "category": self.category.value,
             "name": self.name,
+            "payload": self.payload,
             "expected": self.expected.value,
             "description": self.description,
             "blocked": self.blocked,

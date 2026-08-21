@@ -1,6 +1,6 @@
 # HCT-402：指令数据与 QLoRA 盲测对照
 
-- 状态：进行中（本 PR 增加离线盲测评估器和合成回放；不训练或发布模型）
+- 状态：进行中（本增量增加可复现 QLoRA 训练与真实盲测预测入口；尚未在仓库内执行训练或发布模型）
 - 需求：FR-08、NFR-05、NFR-06
 - 风险：R3；模型输出涉及证据、权限和医疗安全边界
 - 主责角色：项目负责人（CV/LLM）
@@ -22,10 +22,12 @@
 - 增加许可证、去标识化、路径/密钥、重复 ID 和盲测隔离审计。
 - 增加离线盲测评估器：校验预测集合完整性、结构化格式、状态/路由、引用来源、安全拒答和未授权字段泄露；
 - 用合成回放生成可复现的演示报告，报告明确标记为 `synthetic_fixture_only`。
+- 增加 `hct402_train_qlora.py`：锁定 seed、QLoRA/4-bit NF4、LoRA 模块、assistant-only loss、数据 manifest 和外部产物元数据；
+- 增加 `hct402_predict_blind.py`：只读取 blind inputs 生成真实模型结构化预测，不加载标签，再交给既有评估器。
 
 ## 明确不做
 
-- 不在本增量执行 QLoRA、全参数微调、模型合并、量化或 Ollama 导入；
+- 不在仓库内执行 QLoRA、全参数微调、模型合并、量化或 Ollama 导入；实际运行必须在受控外部训练目录完成；
 - 不提交真实家庭健康对话、真实患者数据、药盒图片、模型权重或训练缓存；
 - 不把合成起步样本宣称为正式生产训练集；
 - 不让模型生成风险等级、诊断、处方、停药、换药或剂量结论。
@@ -47,18 +49,23 @@ LLM 训练样本的输入是已授权的 OCR token、条码结果、包装候选
 
 - [ ] 数据卡记录来源、许可证、训练同意、去标识化、质量审查、删除传播和禁止用途
 - [ ] 至少覆盖 `MATCHED`、`CONFLICT`、`UNKNOWN`、`REVIEW` 与 `REFUSE` 相关样本
-- [ ] 训练/验证/盲测按场景组隔离，生成结果可由输入哈希和版本复现
+- [x] 训练/验证/盲测按场景组隔离，生成结果可由输入哈希和版本复现
+- [x] QLoRA dry-run 校验 approved manifest、有效 batch、LoRA 配置和 assistant-only loss 边界；真实运行拒绝未批准的合成/未发布数据
+- [x] 真实 blind 预测入口不加载 labels，并输出可交给评估器的结构化 JSONL
 - [x] 盲测输入与标签分离，训练输出不包含盲测样本或 assistant 目标
 - [x] 审计拒绝重复 ID、重复场景跨 split、绝对路径、密钥模式、非合成来源和非法输出 Schema
 - [x] 评估器拒绝预测缺失/重复/多余 ID，并输出格式、状态、路由、引用和安全指标
 - [x] 合成回放报告标记为 `synthetic_fixture_only`，不被解释为模型效果
-- [x] 本 PR 不改变运行时模型，不改变 Ollama 配置，不产生模型权重
+- [x] 本 PR 不改变运行时模型，不改变 Ollama 配置，不在仓库产生模型权重
 
 ## 验证命令
 
 ```powershell
 uv run ruff check scripts/hct402_prepare_dataset.py scripts/hct402_evaluate_blind.py tests/data/test_hct402_dataset.py tests/data/test_hct402_blind_eval.py
 uv run pytest tests/data/test_hct402_dataset.py tests/data/test_hct402_blind_eval.py
+uv run pytest tests/data/test_hct402_training.py tests/unit/test_hct402_predict_blind.py
+uv run python scripts/hct402_train_qlora.py --prepared-dir <外部 prepared> --output-dir <全新外部目录> --base-model Qwen/Qwen3-4B --dry-run
+uv run python scripts/hct402_predict_blind.py --inputs <外部 blind inputs> --output <外部 predictions.jsonl> --base-model Qwen/Qwen3-4B --model-version <版本> --dry-run
 uv run python scripts/hct402_prepare_dataset.py --source tests/fixtures/hct402/starter_source.jsonl --output-dir tmp/hct402-blind-eval-demo/prepared
 uv run python scripts/hct402_evaluate_blind.py --inputs tmp/hct402-blind-eval-demo/prepared/blind/inputs.jsonl --labels tmp/hct402-blind-eval-demo/prepared/blind/labels.jsonl --predictions tests/fixtures/hct402/synthetic-evaluator-replay.jsonl --model-name synthetic-evaluator-replay --model-version fixture-v1 --output tmp/hct402-blind-eval-demo/report.json
 git diff --check
@@ -66,8 +73,9 @@ git diff --check
 
 ## 回滚
 
-删除本 PR 新增的数据规范、合成 fixture、准备脚本和测试；不需要回滚数据库、API、运行时模型或 Ollama。任何后续训练都必须重新引用通过评审的数据版本和 manifest 哈希。
+删除本 PR 新增的数据规范、合成 fixture、准备/训练/预测脚本和测试；不需要回滚数据库、API、运行时模型或 Ollama。任何后续训练都必须重新引用通过评审的数据版本和 manifest 哈希。
 
 ## 当前限制
 
-合成起步样本和回放报告只用于验证数据协议、评估器和演示链，不能证明基础模型或 QLoRA 模型效果。正式训练前仍需补充经许可的指令样本、独立盲测集、真实模型预测、人工质量审查、模型卡和安全评估。
+合成起步样本和回放报告只用于验证数据协议、评估器和演示链，不能证明基础模型或 QLoRA 模型效果。正式训练仍需使用
+`APPROVED_FOR_TRAINING` manifest，并补充经许可的指令样本、独立盲测集、真实模型预测、人工质量审查、模型卡和安全评估。
