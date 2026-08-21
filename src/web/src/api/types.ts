@@ -47,6 +47,21 @@ export interface Member {
   created_at: string
 }
 
+export interface FaceCredential {
+  id: string
+  household_id: string
+  actor_id: string
+  algorithm_version: string
+  feature_version: string
+  credential_version: number
+  consent_version: string
+  status: 'ACTIVE' | 'REVOKED' | 'DELETED'
+  created_by: string
+  consented_at: string
+  revoked_at: string | null
+  created_at: string
+}
+
 export interface CreateMemberInput {
   display_name: string
   role?: MemberRole

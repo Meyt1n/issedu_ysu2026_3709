@@ -15,7 +15,7 @@ from app.erasure import (
     request_household_erasure,
 )
 from app.knowledge import KnowledgeChunk, add_document
-from app.models import HealthEvent, Household, Member, VisionTask
+from app.models import FaceCredential, HealthEvent, Household, Member, VisionTask
 
 
 def test_redacted_audit_rejects_health_fields() -> None:
@@ -70,6 +70,7 @@ def test_household_erasure_hides_rows_and_writes_skip_marker(
         schema_version=1,
     )
     db_session.add(event)
+    db_session.flush()
     original_payload = dict(event.payload)
 
     storage_key = "synthetic-object.bin"
@@ -87,6 +88,17 @@ def test_household_erasure_hides_rows_and_writes_skip_marker(
             created_by="owner",
         )
     )
+    credential = FaceCredential(
+        household_id=household.id,
+        actor_id="owner",
+        encrypted_template=b"encrypted-template",
+        algorithm_version="test-algorithm",
+        feature_version="test-feature",
+        consent_version="test-consent",
+        created_by="owner",
+        consented_at=event.created_at,
+    )
+    db_session.add(credential)
 
     scoped = add_document(
         db_session,
@@ -121,12 +133,16 @@ def test_household_erasure_hides_rows_and_writes_skip_marker(
     db_session.refresh(household)
     db_session.refresh(member)
     db_session.refresh(event)
+    db_session.refresh(credential)
     db_session.refresh(scoped)
     db_session.refresh(kept)
     assert household.deleted_at is not None
     assert member.deleted_at is not None
     assert event.payload == original_payload
     assert event.confirmation_status == "CONFIRMED"
+    assert credential.status == "DELETED"
+    assert credential.encrypted_template == b""
+    assert "face_credential" in task.scope["tables_affected"]
     assert not (tmp_path / storage_key).exists()
     assert not cache_file.exists()
     assert scoped.status == "deleted"

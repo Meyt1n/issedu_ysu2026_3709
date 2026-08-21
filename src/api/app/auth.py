@@ -45,6 +45,7 @@ def verify_password(password: str, hashed: str) -> bool:
 
 # Used to keep unknown household identities on the same bcrypt verification path.
 _DUMMY_PIN_HASH = hash_password("000000")
+_DUMMY_PASSWORD_HASH = hash_password("dev-only-dummy-password")
 
 
 def _check_rate_limit(actor_id: str) -> None:
@@ -108,6 +109,39 @@ def authenticate_with_pin(actor_id: str, household_id: str, pin: str) -> dict[st
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="AUTH_FAILED")
     _failed_attempts.pop(rate_key, None)
     return _create_session(actor_id)
+
+
+def verify_reauthentication(
+    actor_id: str,
+    household_id: str,
+    method: str,
+    code: str,
+) -> None:
+    """Verify a second factor without issuing another session or logging secrets."""
+    if method == "pin":
+        _validate_pin(code)
+        rate_key = f"reauth-pin:{household_id}:{actor_id}"
+        hashed = _pin_hashes.get((household_id, actor_id))
+        dummy = _DUMMY_PIN_HASH
+    elif method == "password":
+        if not 8 <= len(code) <= 256:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="PASSWORD_FORMAT_INVALID",
+            )
+        rate_key = f"reauth-password:{household_id}:{actor_id}"
+        hashed = _password_hashes.get(actor_id)
+        dummy = _DUMMY_PASSWORD_HASH
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="CONFIRMATION_METHOD_INVALID",
+        )
+    _check_rate_limit(rate_key)
+    if not verify_password(code, hashed or dummy):
+        _failed_attempts[rate_key].append(time.time())
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="CONFIRMATION_FAILED")
+    _failed_attempts.pop(rate_key, None)
 
 
 def validate_session(token: str) -> str:
@@ -234,6 +268,8 @@ def verify_pin_challenge(
     _failed_attempts.pop(rate_key, None)
     challenge["used"] = True
     confirmed_at = time.time()
+    challenge["confirmed_at"] = confirmed_at
+    challenge["grant_consumed"] = False
     logger.info("PIN_VERIFIED actor=%s action=%s challenge=%s", actor_id, action, challenge_id)
     return {
         "status": "confirmed",
@@ -241,3 +277,27 @@ def verify_pin_challenge(
         "action": action,
         "confirmed_at": confirmed_at,
     }
+
+
+def consume_pin_challenge(
+    challenge_id: str,
+    action: str,
+    session_token: str,
+    household_id: str,
+) -> None:
+    """Consume a previously verified PIN step-up grant for one protected action."""
+    challenge = _pin_challenges.get(challenge_id)
+    if challenge is None:
+        raise _step_up_failed()
+    if challenge["session_token"] != session_token:
+        raise _step_up_failed()
+    if challenge["action"] != action or challenge["household_id"] != household_id:
+        raise _step_up_failed()
+    if challenge["expires_at"] < time.time():
+        _pin_challenges.pop(challenge_id, None)
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="STEP_UP_EXPIRED")
+    if not challenge.get("used") or "confirmed_at" not in challenge:
+        raise _step_up_failed()
+    if challenge.get("grant_consumed"):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="STEP_UP_REPLAY")
+    challenge["grant_consumed"] = True

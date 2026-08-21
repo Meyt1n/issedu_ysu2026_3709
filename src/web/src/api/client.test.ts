@@ -3,6 +3,65 @@ import { describe, expect, it, vi } from 'vitest'
 import { ApiClient } from './client'
 
 describe('ApiClient authorization contract', () => {
+  it('registers face credentials as multipart without exposing secrets in the URL', async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = []
+    const client = new ApiClient({
+      baseUrl: 'http://local.test',
+      fetcher: async (input, init) => {
+        requests.push({ url: String(input), init: init ?? {} })
+        return new Response(JSON.stringify({
+          id: 'credential-1',
+          household_id: 'household-1',
+          actor_id: 'owner',
+          algorithm_version: 'opencv-haar-grayscale-v1',
+          feature_version: 'face-template-v1',
+          credential_version: 1,
+          consent_version: 'face-registration-consent-v1',
+          status: 'ACTIVE',
+          created_by: 'owner',
+          consented_at: '2026-08-21T00:00:00Z',
+          revoked_at: null,
+          created_at: '2026-08-21T00:00:00Z',
+        }), { status: 201 })
+      },
+    })
+    const file = new File(['pixels'], 'face.png', { type: 'image/png' })
+
+    await client.registerFaceCredential('household/1', file, {
+      consent: true,
+      targetActorId: 'owner',
+      confirmationMethod: 'pin',
+      confirmationCode: '123456',
+    }, { sessionToken: 's'.repeat(40) })
+
+    expect(requests[0]?.url).toBe('http://local.test/api/v1/households/household%2F1/face-credentials')
+    expect(requests[0]?.url).not.toContain('123456')
+    const headers = new Headers(requests[0]?.init.headers)
+    expect(headers.get('Authorization')).toBe(`Bearer ${'s'.repeat(40)}`)
+    expect(headers.get('Content-Type')).toBeNull()
+    const body = requests[0]?.init.body as FormData
+    expect(body.get('consent')).toBe('true')
+    expect(body.get('confirmation_code')).toBe('123456')
+    expect(body.get('file')).toBeInstanceOf(File)
+  })
+
+  it('encodes face credential list and delete paths', async () => {
+    const requests: string[] = []
+    const client = new ApiClient({
+      baseUrl: 'http://local.test',
+      fetcher: async input => {
+        requests.push(String(input))
+        return new Response(JSON.stringify([]), { status: 200 })
+      },
+    })
+    await client.listFaceCredentials('household/1')
+    await client.deleteFaceCredential('household/1', 'credential/1')
+    expect(requests).toEqual([
+      'http://local.test/api/v1/households/household%2F1/face-credentials',
+      'http://local.test/api/v1/households/household%2F1/face-credentials/credential%2F1',
+    ])
+  })
+
   it('loads households and members through the shared identity headers', async () => {
     const requests: Array<{ url: string; headers: Headers }> = []
     const fetcher: typeof fetch = async (input, init) => {

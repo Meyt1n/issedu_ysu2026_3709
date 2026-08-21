@@ -40,6 +40,23 @@ class AuthSessionRead(BaseModel):
     household_id: str | None = None
 
 
+class FaceCredentialRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    household_id: str
+    actor_id: str
+    algorithm_version: str
+    feature_version: str
+    credential_version: int
+    consent_version: str
+    status: Literal["ACTIVE", "REVOKED", "DELETED"]
+    created_by: str
+    consented_at: datetime
+    revoked_at: datetime | None
+    created_at: datetime
+
+
 # ── HCT-427: step-up confirmation and session revalidation ─────────
 
 # Action codes stay ASCII and short so they can be logged and compared safely.

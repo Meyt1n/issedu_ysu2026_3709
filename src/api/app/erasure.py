@@ -26,6 +26,7 @@ from app.models import (
     AccessAudit,
     Base,
     CareAuthorization,
+    FaceCredential,
     HealthEvent,
     Household,
     Member,
@@ -264,6 +265,7 @@ def request_household_erasure(
 
     tables_affected = [
         "member",
+        "face_credential",
         "care_authorization",
         "vision_task",
         "knowledge_document",
@@ -277,6 +279,28 @@ def request_household_erasure(
 
     revoked = 0
     try:
+        credential_stmt = select(FaceCredential).where(
+            FaceCredential.household_id == household.id,
+        )
+        if member_id is not None:
+            target_actor_ids = {
+                member.actor_id for member in members if member.actor_id
+            }
+            if target_actor_ids:
+                credential_stmt = credential_stmt.where(
+                    FaceCredential.actor_id.in_(target_actor_ids)
+                )
+            else:
+                credential_stmt = credential_stmt.where(False)
+        credentials = list(session.scalars(credential_stmt).all())
+        credentials_deleted = 0
+        for credential in credentials:
+            if credential.status != "DELETED" or credential.encrypted_template:
+                credential.status = "DELETED"
+                credential.revoked_at = credential.revoked_at or now
+                credential.encrypted_template = b""
+                credentials_deleted += 1
+
         if member_ids:
             authorizations = list(
                 session.scalars(
@@ -320,7 +344,7 @@ def request_household_erasure(
             layers,
             "database",
             status="completed",
-            count=len(members) + revoked + cancelled_vision,
+            count=len(members) + revoked + cancelled_vision + credentials_deleted,
         )
     except Exception:
         logger.exception("ERASURE_DATABASE_FAILED task=%s", task.id)
