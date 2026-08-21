@@ -40,6 +40,14 @@ Android 静态网络配置无法表达“任意 RFC1918/ULA 地址可明文、�
 
 本次环境已完成 `aapt2` 对新增 XML 资源的编译和 Debug Web 产物同步；Gradle 首次下载发行包后因本机 JBR 为 25.0.2，而仓库固定 Gradle 8.14.3 只接受 JDK 21–24，`assembleDebug` 在 settings 阶段停止。脚本现已提前检测并给出明确提示；换用 JDK 21–24 后应重新执行原生命令。
 
+## 交付轨迹（补记）
+
+首版实现走 PR [#253](https://github.com/Meyt1n/issedu_ysu2026_3709/pull/253)，但它的 base 误选成 `codex/mob-138-140-foundation` 而不是 `master`；而那条分支的 PR [#249](https://github.com/Meyt1n/issedu_ysu2026_3709/pull/249) 早在 #253 之前就已合并，之后再没往 master 合过。结果本 Story 的全部产物（Android 备份/迁移/网络策略、`audit-android-security.mjs`、地址策略与本文件）从未出现在 `master` 上，#237 也因此一直 open。
+
+2026-08-21 从当前 `master` 重新切分支、cherry-pick 原提交并解决与 MOB-133 的冲突后重新提交。冲突只在两处，均为叠加而非取舍：`APP/package.json` 的脚本表（保留 `verify:android-a11y-evidence`，补回 `android:sync:debug` 与 `audit:android-security`）、`APP/src/views/MeView.vue` 的 setup 段（保留 MOB-133 的会话与 PIN 状态，补回地址策略文案）。
+
+**对 MOB-133 联调复现方式的影响：** 本 Story 让发布构建拒绝私网明文 HTTP，因此 MOB-133 那批用 `vite preview`（production 模式）连 `http://127.0.0.1:18812` 取证的步骤在本 PR 之后不再适用；复现时请改用 `npm run dev`，或 `vite build --mode android-debug` 后再 preview。已取得的证据本身仍然有效，它们是在本变更之前采集的。
+
 ## 未完成证据与回滚
 
 - Android 真机首次使用、拒绝/永久拒绝、卸载重装、`bmgr` 备份恢复、设备迁移、多用户和受控 HTTPS 证书联调仍需维护者执行；完成前 Issue 保持进行中。
