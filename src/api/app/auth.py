@@ -20,6 +20,7 @@ MAX_LOGIN_ATTEMPTS = 5
 LOCKOUT_SECONDS = 300
 SESSION_TTL_SECONDS = 3600
 PIN_TTL_SECONDS = 300
+FACE_CHALLENGE_TTL_SECONDS = 120
 
 # In-memory stores (replace with DB-backed stores in production)
 _password_hashes: dict[str, str] = {}  # actor_id → bcrypt hash
@@ -33,6 +34,7 @@ _sessions: dict[str, dict[str, Any]] = {}  # session_token → {actor_id, expire
 # user must re-enter is their existing household PIN (see _pin_hashes), so the
 # server never has to hand a one-time code back to the caller.
 _pin_challenges: dict[str, dict[str, Any]] = {}
+_face_challenges: dict[str, dict[str, Any]] = {}
 
 
 def hash_password(password: str) -> str:
@@ -82,6 +84,62 @@ def _create_session(actor_id: str) -> dict[str, Any]:
     _sessions[token] = {"actor_id": actor_id, "expires_at": expires_at}
     logger.info("LOGIN_OK actor=%s", actor_id)
     return {"session_token": token, "expires_at": expires_at}
+
+
+def create_face_challenge(actor_id: str, household_id: str) -> dict[str, Any]:
+    """Create an opaque, single-use challenge for a face login attempt."""
+    now = time.time()
+    for challenge_id, challenge in list(_face_challenges.items()):
+        if challenge["expires_at"] < now:
+            _face_challenges.pop(challenge_id, None)
+    if len(_face_challenges) >= 2048:
+        oldest = min(_face_challenges, key=lambda key: _face_challenges[key]["expires_at"])
+        _face_challenges.pop(oldest, None)
+    challenge_id = secrets.token_hex(16)
+    expires_at = now + FACE_CHALLENGE_TTL_SECONDS
+    _face_challenges[challenge_id] = {
+        "actor_id": actor_id,
+        "household_id": household_id,
+        "expires_at": expires_at,
+        "used": False,
+    }
+    return {
+        "challenge_id": challenge_id,
+        "expires_at": expires_at,
+    }
+
+
+def consume_face_challenge(challenge_id: str, actor_id: str, household_id: str) -> None:
+    """Consume a challenge without revealing which binding check failed."""
+    challenge = _face_challenges.get(challenge_id)
+    if (
+        challenge is None
+        or challenge["actor_id"] != actor_id
+        or challenge["household_id"] != household_id
+    ):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="FACE_AUTH_FAILED")
+    if challenge["expires_at"] < time.time() or challenge["used"]:
+        _face_challenges.pop(challenge_id, None)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="FACE_AUTH_FAILED")
+    challenge["used"] = True
+
+
+def check_face_rate_limit(household_id: str, actor_id: str) -> str:
+    rate_key = f"face:{household_id}:{actor_id}"
+    _check_rate_limit(rate_key)
+    return rate_key
+
+
+def record_face_failure(rate_key: str) -> None:
+    _failed_attempts[rate_key].append(time.time())
+
+
+def clear_face_failures(rate_key: str) -> None:
+    _failed_attempts.pop(rate_key, None)
+
+
+def create_face_session(actor_id: str) -> dict[str, Any]:
+    return _create_session(actor_id)
 
 
 def _validate_pin(pin: str) -> None:

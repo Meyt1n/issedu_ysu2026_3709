@@ -913,6 +913,9 @@ button:focus-visible, a:focus-visible {
 
 .welcome-form-card h2 { font-family: var(--font-display); font-size: 20px; margin: 0; }
 .welcome-form-card .form-sub { color: var(--ink-soft); font-size: 13px; line-height: 1.6; margin: -8px 0 0; }
+.face-capture { display: grid; gap: 12px; }
+.face-preview { width: 100%; max-height: 220px; min-height: 160px; object-fit: cover; border: 1px solid var(--line); border-radius: 8px; background: var(--card-soft); }
+.face-capture-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 
 .welcome-disclaimer { color: var(--ink-faint); font-size: 12px; line-height: 1.65; margin: 2px 0 0; }
 
