@@ -2,7 +2,17 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Integer, String, func
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    LargeBinary,
+    String,
+    func,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -39,6 +49,40 @@ class Member(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
+    )
+
+
+class FaceCredential(Base):
+    """Encrypted face template bound to one household account.
+
+    Raw registration frames never reach this table.  ``encrypted_template`` is
+    an authenticated Fernet envelope produced by ``face_credentials.py``.
+    """
+
+    __tablename__ = "face_credential"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    household_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("household.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    actor_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    encrypted_template: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    algorithm_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    feature_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    credential_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    consent_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="ACTIVE", index=True)
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    consented_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        server_default=func.now(),
+        onupdate=lambda: datetime.now(UTC),
     )
 
 
@@ -191,6 +235,13 @@ class ProjectionCheckpoint(Base):
 
 
 Index("ix_member_household_actor", Member.household_id, Member.actor_id)
+Index(
+    "uq_face_credential_active_account",
+    FaceCredential.household_id,
+    FaceCredential.actor_id,
+    FaceCredential.status,
+    unique=True,
+)
 Index(
     "ix_event_household_member_time",
     HealthEvent.household_id,

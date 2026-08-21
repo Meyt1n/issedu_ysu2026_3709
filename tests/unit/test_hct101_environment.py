@@ -150,7 +150,7 @@ def test_alembic_has_a_single_head() -> None:
 
     assert len(scripts.get_heads()) == 1
     head = scripts.get_heads()[0]
-    assert head == "0014_hct414_vision_media_type"
+    assert head == "0015_hct424_face_credential"
     assert len(head) <= 64
 
 

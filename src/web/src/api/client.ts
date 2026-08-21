@@ -46,6 +46,7 @@ import type {
   RiskDetailResponse,
   RiskListResponse,
   EvidencePipelineResult,
+  FaceCredential,
   TrainingConsent,
   UpdateAuthorizationInput,
   UploadedFile,
@@ -307,6 +308,50 @@ export class ApiClient {
     return this.request(
       `/api/v1/households/${householdId}/members`,
       undefined,
+      options,
+    )
+  }
+
+  listFaceCredentials(householdId: string, options?: RequestOptions): Promise<FaceCredential[]> {
+    return this.request(
+      `/api/v1/households/${encodeURIComponent(householdId)}/face-credentials`,
+      undefined,
+      options,
+    )
+  }
+
+  registerFaceCredential(
+    householdId: string,
+    file: File,
+    input: {
+      consent: boolean
+      targetActorId?: string
+      replaceExisting?: boolean
+      confirmationMethod: 'pin' | 'password'
+      confirmationCode?: string
+      confirmationChallengeId?: string
+    },
+    options?: RequestOptions,
+  ): Promise<FaceCredential> {
+    const body = new FormData()
+    body.append('file', file)
+    body.append('consent', String(input.consent))
+    if (input.targetActorId) body.append('target_actor_id', input.targetActorId)
+    body.append('replace_existing', String(input.replaceExisting ?? false))
+    body.append('confirmation_method', input.confirmationMethod)
+    if (input.confirmationCode) body.append('confirmation_code', input.confirmationCode)
+    if (input.confirmationChallengeId) body.append('confirmation_challenge_id', input.confirmationChallengeId)
+    return this.request(
+      `/api/v1/households/${encodeURIComponent(householdId)}/face-credentials`,
+      { method: 'POST', body },
+      options,
+    )
+  }
+
+  deleteFaceCredential(householdId: string, credentialId: string, options?: RequestOptions): Promise<FaceCredential> {
+    return this.request(
+      `/api/v1/households/${encodeURIComponent(householdId)}/face-credentials/${encodeURIComponent(credentialId)}`,
+      { method: 'DELETE' },
       options,
     )
   }

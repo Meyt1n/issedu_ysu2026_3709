@@ -40,6 +40,7 @@ from sqlalchemy.orm import Session
 from app.auth import (
     authenticate,
     authenticate_with_pin,
+    consume_pin_challenge,
     generate_pin_challenge,
     introspect_session,
     logout,
@@ -65,6 +66,11 @@ from app.event_service import (
     dispatch_outbox_batch,
     replay_member_projection,
 )
+from app.face_credentials import (
+    FACE_CONSENT_VERSION,
+    encrypt_template,
+    extract_face_template,
+)
 from app.file_upload import (
     compute_hash,
     delete_file_tree,
@@ -78,6 +84,7 @@ from app.knowledge import KnowledgeDocument
 from app.models import (
     AccessAudit,
     CareAuthorization,
+    FaceCredential,
     HealthEvent,
     Household,
     Member,
@@ -125,6 +132,7 @@ from app.schemas import (
     ExportManifestCreate,
     ExportManifestInvalidate,
     ExportManifestRead,
+    FaceCredentialRead,
     HardSampleCreate,
     HardSampleRead,
     HardSampleUpdate,
@@ -1304,6 +1312,240 @@ def auth_pin_verify(
         session_token,
         payload.code,
     )
+
+
+# HCT-424: face credential registration and binding.  Login matching and
+# liveness remain deliberately outside this route (HCT-425).
+FACE_REGISTER_ACTION = "register_face"
+
+
+def _require_face_target(
+    session: Session,
+    household_id: str,
+    target_actor_id: str,
+) -> None:
+    if not _actor_belongs_to_household(session, household_id, target_actor_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RESOURCE_NOT_FOUND")
+
+
+def _confirm_face_registration(
+    *,
+    actor_id: str,
+    household_id: str,
+    session_token: str,
+    confirmation_method: str,
+    confirmation_code: str,
+    confirmation_challenge_id: str | None,
+) -> None:
+    if confirmation_challenge_id:
+        consume_pin_challenge(
+            confirmation_challenge_id,
+            FACE_REGISTER_ACTION,
+            session_token,
+            household_id,
+        )
+        return
+    from app.auth import verify_reauthentication
+
+    verify_reauthentication(actor_id, household_id, confirmation_method, confirmation_code)
+
+
+@router.get(
+    "/households/{household_id}/face-credentials",
+    response_model=list[FaceCredentialRead],
+)
+def list_face_credentials(
+    household_id: str,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> list[FaceCredential]:
+    require_household_owner(session, household_id, actor_id)
+    return list(
+        session.scalars(
+            select(FaceCredential)
+            .where(FaceCredential.household_id == household_id)
+            .order_by(FaceCredential.created_at.desc())
+        ).all()
+    )
+
+
+@router.post(
+    "/households/{household_id}/face-credentials",
+    response_model=FaceCredentialRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def register_face_credential(
+    household_id: str,
+    file: UploadFile = File(...),
+    consent: bool = Form(default=False),
+    target_actor_id: str | None = Form(default=None, max_length=120),
+    replace_existing: bool = Form(default=False),
+    confirmation_method: str = Form(default="pin"),
+    confirmation_code: str = Form(default=""),
+    confirmation_challenge_id: str | None = Form(default=None, max_length=128),
+    actor_id: str = Depends(get_actor_id),
+    session_token: str = Depends(require_session_token),
+    session: Session = Depends(get_session),
+) -> FaceCredential:
+    if not consent:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="FACE_CONSENT_REQUIRED",
+        )
+    household = require_household_owner(session, household_id, actor_id)
+    target = (target_actor_id or actor_id).strip()
+    if not target:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="FACE_TARGET_REQUIRED",
+        )
+    _require_face_target(session, household.id, target)
+
+    active = session.scalar(
+        select(FaceCredential).where(
+            FaceCredential.household_id == household.id,
+            FaceCredential.actor_id == target,
+            FaceCredential.status == "ACTIVE",
+        )
+    )
+    if active is not None and not replace_existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="FACE_CREDENTIAL_EXISTS")
+
+    filename = validate_filename(file.filename or "unknown")
+    extension = validate_extension(filename)
+    if extension not in {".jpg", ".jpeg", ".png"} or file.content_type not in {
+        "image/jpeg", "image/png"
+    }:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="FACE_IMAGE_INVALID",
+        )
+    validate_magic(file.file, extension)
+    validate_size(file.file)
+    image_bytes = await file.read()
+    try:
+        from ai.vision.quality_gate import assess_image, decode_image
+
+        quality = assess_image(
+            decode_image(image_bytes),
+            source_id="face-registration",
+            thresholds=settings.vision_quality_thresholds(),
+        )
+        if not quality["allow_downstream"]:
+            raise ValueError("FACE_FRAME_LOW_QUALITY")
+        template, metadata = extract_face_template(image_bytes)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    finally:
+        # Drop the decoded registration frame before touching the database.
+        image_bytes = b""
+
+    _confirm_face_registration(
+        actor_id=actor_id,
+        household_id=household.id,
+        session_token=session_token,
+        confirmation_method=confirmation_method,
+        confirmation_code=confirmation_code,
+        confirmation_challenge_id=confirmation_challenge_id,
+    )
+    now = datetime.now(UTC)
+    previous_version = active.credential_version if active is not None else 0
+    if active is not None:
+        active.status = "REVOKED"
+        active.revoked_at = now
+        active.encrypted_template = b""
+        session.flush()
+
+    credential = FaceCredential(
+        household_id=household.id,
+        actor_id=target,
+        encrypted_template=encrypt_template(template),
+        algorithm_version=metadata["algorithm_version"],
+        feature_version=metadata["feature_version"],
+        credential_version=previous_version + 1,
+        consent_version=FACE_CONSENT_VERSION,
+        status="ACTIVE",
+        created_by=actor_id,
+        consented_at=now,
+    )
+    session.add(credential)
+    session.add(
+        AccessAudit(
+            household_id=household.id,
+            authorization_id=None,
+            actor_id=actor_id,
+            operation="FACE_CREDENTIAL",
+            action="REGISTER" if active is None else "REBIND",
+            data_field="biometric_template",
+            purpose="face-registration",
+            outcome="SUCCESS",
+            reason=None,
+            before_version=previous_version or None,
+            after_version=credential.credential_version,
+        )
+    )
+    session.commit()
+    session.refresh(credential)
+    logger.info(
+        "FACE_CREDENTIAL_%s actor=%s household=%s credential=%s version=%d",
+        "REGISTERED" if active is None else "REBIND",
+        actor_id,
+        household.id,
+        credential.id,
+        credential.credential_version,
+    )
+    return credential
+
+
+@router.delete(
+    "/households/{household_id}/face-credentials/{credential_id}",
+    response_model=FaceCredentialRead,
+)
+def revoke_face_credential(
+    household_id: str,
+    credential_id: str,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> FaceCredential:
+    household = require_household_owner(session, household_id, actor_id)
+    credential = session.scalar(
+        select(FaceCredential).where(
+            FaceCredential.id == credential_id,
+            FaceCredential.household_id == household.id,
+        )
+    )
+    if credential is None:
+        _raise_resource_not_found()
+    if credential.status == "ACTIVE":
+        credential.status = "DELETED"
+        credential.revoked_at = datetime.now(UTC)
+        credential.encrypted_template = b""
+        session.add(
+            AccessAudit(
+                household_id=household.id,
+                authorization_id=None,
+                actor_id=actor_id,
+                operation="FACE_CREDENTIAL",
+                action="DELETE",
+                data_field="biometric_template",
+                purpose="face-registration",
+                outcome="SUCCESS",
+                reason=None,
+                before_version=credential.credential_version,
+                after_version=credential.credential_version,
+            )
+        )
+        session.commit()
+        session.refresh(credential)
+    return credential
 
 
 # ── HCT-301: Event timeline & projection ───────────────────────────

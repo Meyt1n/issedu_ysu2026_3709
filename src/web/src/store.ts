@@ -22,6 +22,7 @@ export type ViewName =
   | 'bigscreen'
   | 'knowledge'
   | 'modellab'
+  | 'face-credentials'
 
 export type SessionStatus = 'signed-out' | 'loading' | 'ready' | 'empty' | 'error'
 

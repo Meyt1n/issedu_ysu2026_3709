@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     vision_quality_min_edge_density: float = 0.005
     vision_quality_min_subject_area_ratio: float = 0.08
     vision_quality_max_border_touch_ratio: float = 0.50
+    biometric_encryption_key: str = "dev-only-biometric-key-change-me"
     ruleset_version: str = "rules-v0"
     knowledge_version: str = "knowledge-v0"
     embedding_version: str = "unavailable"
