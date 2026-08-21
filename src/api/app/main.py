@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from app import __version__
 from app.config import get_settings
 from app.log_mask import install_log_mask
+from app.request_context import reset_request_id, set_request_id
 from app.routes import router
 
 settings = get_settings()
@@ -38,7 +39,11 @@ async def request_id_middleware(request: Request, call_next):
         else str(uuid4())
     )
     request.state.request_id = request_id
-    response = await call_next(request)
+    context_token = set_request_id(request_id)
+    try:
+        response = await call_next(request)
+    finally:
+        reset_request_id(context_token)
     response.headers[settings.request_id_header] = request_id
     return response
 
