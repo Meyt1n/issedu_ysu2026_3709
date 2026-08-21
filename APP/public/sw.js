@@ -3,7 +3,7 @@
    - 页面导航 network-first、离线回退外壳；
    - /api 与 /health 永不缓存（健康数据不落缓存）。 */
 
-const CACHE_NAME = 'hct-mobile-shell-v1'
+const CACHE_NAME = 'hct-mobile-shell-v2'
 const SHELL = ['/', '/manifest.webmanifest', '/icons/icon.svg', '/bg/ambient-light.jpg', '/bg/ambient-dark.jpg']
 
 self.addEventListener('install', event => {
@@ -24,6 +24,12 @@ self.addEventListener('activate', event => {
   )
 })
 
+function offlineShellResponse() {
+  return new Response(
+    '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>离线状态</title><body><main><h1>当前无法连接网络</h1><p>请恢复网络后重试。紧急情况请使用身边可用电话拨打 120 或联系家人。</p><p>为保护隐私，应用不会显示或缓存旧的健康页面数据。</p></main></body></html>',
+    { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } },
+  )
+}
 self.addEventListener('fetch', event => {
   const request = event.request
   if (request.method !== 'GET') return
@@ -42,7 +48,7 @@ self.addEventListener('fetch', event => {
           caches.open(CACHE_NAME).then(cache => cache.put('/', copy))
           return response
         })
-        .catch(() => caches.match('/')),
+        .catch(() => caches.match('/').then(cached => cached ?? offlineShellResponse())),
     )
     return
   }
