@@ -2,7 +2,10 @@
  * 联调造数脚本：向主仓库 FastAPI 写入一套【虚构】演示家庭数据，
  * 用于移动端（联机模式）与网页端互通验证。
  *
- * 用法：node scripts/seed-live-demo.mjs [--base http://127.0.0.1:8000] [--actor dev-wang]
+ * 用法：node scripts/seed-live-demo.mjs [--base http://127.0.0.1:8000] [--actor dev-wang] [--multi-household]
+ *
+ * --multi-household 额外创建第二个同 owner 的家庭，用于 MOB-158 的多家庭
+ * 显式选择与切换隔离验证；不加该参数时行为与之前完全一致。
  *
  * 事件语义与主仓库 app/projection.py 对齐：
  *   allergy_added / medication_added / plan_created（小写）。
@@ -19,6 +22,12 @@ const BASE = argOf('--base', 'http://127.0.0.1:18800')
 const OWNER = argOf('--actor', 'dev-wang')
 const CAREGIVER = argOf('--caregiver', 'dev-uncle')
 const HOUSEHOLD_NAME = '演示家庭（联调）'
+/**
+ * MOB-158 需要"同一身份被授权访问多个家庭"的场景来验证显式选择与切换隔离。
+ * 默认不建第二个家庭，避免改变既有单家庭联调的行为；加 --multi-household 开启。
+ */
+const SECOND_HOUSEHOLD_NAME = '演示家庭·二号（联调）'
+const MULTI_HOUSEHOLD = args.includes('--multi-household')
 
 async function api(path, { method = 'GET', body, actor = OWNER, purpose = 'family-care' } = {}) {
   const response = await fetch(`${BASE}${path}`, {
@@ -49,6 +58,7 @@ async function main() {
   if (household) {
     console.log(`家庭已存在，复用：${household.id}`)
     const members = await api(`/api/v1/households/${household.id}/members`)
+    if (MULTI_HOUSEHOLD) await ensureSecondHousehold()
     printSummary(household, members)
     return
   }
@@ -163,7 +173,68 @@ async function main() {
   console.log(`  授权：${CAREGIVER} 可读 王秀兰 health_events -> ${auth.id}`)
 
   const members = await api(`/api/v1/households/${household.id}/members`)
+  if (MULTI_HOUSEHOLD) await ensureSecondHousehold()
   printSummary(household, members, { plan1: plan1.id, plan2: plan2.id })
+}
+
+/**
+ * 第二个家庭：数据刻意与一号家庭不同，切换后一眼能看出换了家庭。
+ * 幂等：同名家庭已存在则复用。
+ */
+async function ensureSecondHousehold() {
+  const existing = (await api('/api/v1/households')).find(h => h.name === SECOND_HOUSEHOLD_NAME)
+  if (existing) {
+    console.log(`第二个家庭已存在，复用：${existing.id}`)
+    return existing
+  }
+
+  const second = await api('/api/v1/households', {
+    method: 'POST',
+    body: { name: SECOND_HOUSEHOLD_NAME },
+  })
+  console.log(`已创建第二个家庭：${second.id}（owner=${OWNER}）`)
+
+  const member = await api(`/api/v1/households/${second.id}/members`, {
+    method: 'POST',
+    body: { display_name: '赵慧兰（演示·二号家庭）', role: 'DEPENDENT', actor_id: null },
+  })
+  console.log(`  成员：赵慧兰（演示·二号家庭） -> ${member.id}`)
+
+  async function addSecondEvent(event_type, payload, key) {
+    const event = await api(`/api/v1/households/${second.id}/events`, {
+      method: 'POST',
+      body: {
+        member_id: member.id,
+        event_type,
+        source: 'MANUAL',
+        confirmation_status: 'CONFIRMED',
+        payload,
+        idempotency_key: key,
+      },
+    })
+    console.log(`  事件：${event_type} -> ${event.id}`)
+    return event
+  }
+
+  await addSecondEvent(
+    'medication_added',
+    {
+      drug: '碳酸钙 D3 片（演示·二号家庭）',
+      spec: '600mg×60片',
+      schedule: '每日 1 次，午餐后',
+      expiry_date: '2027-06-30',
+      stock: 45,
+      ingredient: '碳酸钙',
+    },
+    'seed2-med-1',
+  )
+  await addSecondEvent(
+    'plan_created',
+    { drug: '碳酸钙 D3 片（演示·二号家庭）', schedule: '每日午餐后 1 片', due_time: '12:30', level: 'GENERAL' },
+    'seed2-plan-1',
+  )
+
+  return second
 }
 
 function printSummary(household, members, extra = {}) {
@@ -172,6 +243,9 @@ function printSummary(household, members, extra = {}) {
   for (const member of members) console.log(`成员：${member.display_name} = ${member.id}`)
   if (extra.plan1) console.log(`计划事件：早间计划=${extra.plan1} 晚间计划=${extra.plan2}`)
   console.log(`Owner 身份：${OWNER}；照护者身份：${CAREGIVER}（仅读王秀兰事件）`)
+  if (MULTI_HOUSEHOLD) {
+    console.log(`多家庭：${OWNER} 同时拥有「${HOUSEHOLD_NAME}」与「${SECOND_HOUSEHOLD_NAME}」，可用于 MOB-158 的显式选择与切换验证。`)
+  }
   console.log('移动端联机模式设置：服务器地址填后端地址（或走 dev 代理留空），身份填上述 Actor。')
 }
 

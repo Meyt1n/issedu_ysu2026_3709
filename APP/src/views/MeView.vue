@@ -177,10 +177,11 @@ async function loadHouseholds(): Promise<HouseholdOption[]> {
   try {
     const options = await activeProvider().listHouseholds()
     households.value = options
-    // 已选家庭不在列表里（被撤权、删除或授权变化）：回到安全选择态，不自动换一个。
+    // 已选家庭不在列表里（被撤权、删除或授权变化）：清除选择回到安全态，不自动换一个，
+    // 并把确切原因告诉用户 —— 守卫刻意保留了这个失效选择，就是为了能在这里解释。
     if (session.currentHouseholdId && !options.some(item => item.id === session.currentHouseholdId)) {
       clearHouseholdSelection()
-      householdMessage.value = '之前选择的家庭已不可用，请重新选择；页面不会自动切到另一个家庭。'
+      householdMessage.value = '之前选择的家庭已不可用（可能已被撤权或删除），选择已清除，请重新选择；页面不会自动切到另一个家庭。'
     }
     return options
   } catch (cause) {
