@@ -20,6 +20,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from pydantic import BaseModel, Field, ValidationError
@@ -492,6 +493,14 @@ def risk_notice_for_question(query_type: str) -> str | None:
     if query_type == "URGENT":
         return "如出现紧急症状，请及时联系医务人员；本助手不能替代紧急救治。"
     return None
+
+
+def is_loopback_ollama_url(url: str) -> bool:
+    """Return whether an Ollama endpoint is local to this machine."""
+    parsed = urlparse(url)
+    return parsed.scheme in {"http", "https"} and parsed.hostname in {
+        "localhost", "127.0.0.1", "::1",
+    }
 
 
 def _sanitize_follow_up_questions(candidates: list[str]) -> list[str]:
@@ -1305,6 +1314,10 @@ def run_assistant(
             model,
             query_type=query_type,
         )
+
+    if not is_loopback_ollama_url(settings.ollama_base_url):
+        logger.warning("Blocked non-loopback Ollama endpoint for local assistant")
+        return degraded("LOCAL_MODEL_ENDPOINT_REQUIRED")
 
     # Pin the output contract as the leading system message; caller-provided
     # system context (e.g. injected member facts) is merged after it so

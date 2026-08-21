@@ -92,6 +92,7 @@ from app.file_upload import (
     validate_size,
 )
 from app.knowledge import KnowledgeDocument
+from app.local_agents import get_agent_catalog, run_local_multi_agent
 from app.models import (
     AccessAudit,
     CareAuthorization,
@@ -2370,6 +2371,15 @@ def list_assistant_tools(
     return {"tools": tools, "count": len(tools)}
 
 
+@router.get("/assistant/agents")
+def list_assistant_agents(
+    actor_id: str = Depends(get_actor_id),
+) -> dict:
+    """Describe the local agent graph and its explicit network-search gate."""
+    del actor_id  # The catalog contains no household or member data.
+    return get_agent_catalog(settings)
+
+
 def _summarize_event_payload(payload: dict | None) -> str:
     if not payload:
         return ""
@@ -2468,17 +2478,43 @@ def assistant_chat(
     context = _build_assistant_context(session, actor_id, household_id, member_id)
     if context:
         messages = [{"role": "system", "content": context}, *messages]
-    result = run_assistant(
-        session,
-        messages=messages,
-        actor_id=actor_id,
-        household_id=household_id,
-        member_id=member_id,
-        access_purpose=access_purpose,
-        model=payload.model,
-        max_tokens=payload.max_tokens,
-        temperature=payload.temperature,
-    )
+    member_display_name = None
+    if context and member_id:
+        # _build_assistant_context has already checked household ownership and
+        # member binding.  Reuse only the authorized display name for query
+        # redaction; it never enters the model/search response.
+        member = session.get(Member, member_id)
+        member_display_name = member.display_name if member else None
+    if payload.agent_mode == "multi_agent" and settings.agent_orchestration_enabled:
+        result = run_local_multi_agent(
+            session,
+            messages=messages,
+            actor_id=actor_id,
+            household_id=household_id,
+            member_id=member_id,
+            access_purpose=access_purpose,
+            model=payload.model,
+            max_tokens=payload.max_tokens,
+            temperature=payload.temperature,
+            allow_network_search=payload.allow_network_search,
+            sensitive_values=[member_display_name],
+        )
+    else:
+        result = run_assistant(
+            session,
+            messages=messages,
+            actor_id=actor_id,
+            household_id=household_id,
+            member_id=member_id,
+            access_purpose=access_purpose,
+            model=payload.model,
+            max_tokens=payload.max_tokens,
+            temperature=payload.temperature,
+        )
+        result.update({
+            "orchestration_mode": "single",
+            "all_agents_local": True,
+        })
     session.commit()
     return AssistantResponse(**result)
 

@@ -49,6 +49,15 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "unavailable"
     ollama_timeout_seconds: float = 30.0
+    # HCT-430: the orchestrator and every model call stay local.  Public web
+    # search is an explicitly opt-in, redacted tool and remains disabled by
+    # default so HCT-004's default-deny posture is preserved.
+    agent_orchestration_enabled: bool = True
+    agent_web_search_enabled: bool = False
+    agent_web_search_url: str = "https://html.duckduckgo.com/html/"
+    agent_web_search_timeout_seconds: float = Field(default=8.0, gt=0, le=20)
+    agent_web_search_max_results: int = Field(default=5, ge=1, le=10)
+    agent_web_search_allowed_domains: str = ""
     weather_adapter: str = "disabled"
     weather_provider: str = "generic"
     weather_api_url: str = ""
@@ -92,6 +101,14 @@ class Settings(BaseSettings):
     def weather_location_whitelist_set(self) -> set[str]:
         return {
             item.strip() for item in self.weather_location_whitelist.split(",") if item.strip()
+        }
+
+    @property
+    def agent_web_search_allowed_domain_set(self) -> set[str]:
+        return {
+            item.strip().lower()
+            for item in self.agent_web_search_allowed_domains.split(",")
+            if item.strip()
         }
 
     def vision_quality_thresholds(self):

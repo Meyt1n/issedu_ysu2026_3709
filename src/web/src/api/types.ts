@@ -637,6 +637,8 @@ export interface AssistantChatInput {
   model?: string
   temperature?: number
   max_tokens?: number
+  agent_mode?: 'single' | 'multi_agent'
+  allow_network_search?: boolean
 }
 
 export interface AssistantCitation {
@@ -646,6 +648,42 @@ export interface AssistantCitation {
   document_title?: string | null
   text?: string | null
   locator?: string | null
+}
+
+export interface AssistantAgentTrace {
+  agent_id: string
+  role: string
+  status: string
+  local: boolean
+  network_used: boolean
+  duration_ms?: number
+  summary?: string
+  source_count?: number
+}
+
+export interface AssistantExternalSource {
+  title: string
+  url: string
+  snippet?: string
+  domain?: string
+  source?: string
+}
+
+export interface AssistantAgentCatalogItem {
+  agent_id: string
+  name: string
+  role: string
+  local: boolean
+  network: boolean
+}
+
+export interface AssistantAgentCatalog {
+  mode: 'multi_agent'
+  all_agents_local: boolean
+  ollama_local_only: boolean
+  web_search_enabled: boolean
+  web_search_requires_request_opt_in: boolean
+  agents: AssistantAgentCatalogItem[]
 }
 
 export interface AssistantResponse {
@@ -661,6 +699,13 @@ export interface AssistantResponse {
   route?: string | null
   query_type?: string | null
   risk_notice?: string | null
+  orchestration_mode?: 'single' | 'multi_agent' | null
+  orchestration_id?: string | null
+  all_agents_local?: boolean
+  network_used?: boolean
+  network_query?: string | null
+  agent_trace?: AssistantAgentTrace[]
+  external_sources?: AssistantExternalSource[]
 }
 
 export interface AssistantTool {
