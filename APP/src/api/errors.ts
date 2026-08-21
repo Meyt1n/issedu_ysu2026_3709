@@ -84,6 +84,14 @@ export function presentApiError(cause: unknown): ErrorPresentation {
     return settings('当前家庭暂无可用成员，请检查家庭设置和授权范围。')
   }
 
+  if (code === 'HOUSEHOLD_NOT_SELECTED') {
+    return settings('当前身份可以访问多个家庭，请到“我的 → 数据来源”选择要查看的家庭。')
+  }
+
+  if (code === 'HOUSEHOLD_UNAVAILABLE') {
+    return settings('之前选择的家庭已不可用（可能已被撤权或删除）。为保护隐私，页面不会自动切到另一个家庭，请重新选择。')
+  }
+
   const authPresentation = presentAuthCode(code)
   if (authPresentation) return authPresentation
 

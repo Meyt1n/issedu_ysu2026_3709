@@ -164,8 +164,16 @@ export interface ProviderInfo {
 }
 
 /** 数据提供方接口：演示数据与家庭服务器联机共用同一契约。 */
+export interface HouseholdOption {
+  id: string
+  /** 服务端授权范围内的家庭名称；仅用于展示，不参与权限判定。 */
+  name: string
+}
+
 export interface DataProvider {
   info(): ProviderInfo
+  /** 当前身份被服务端授权访问的家庭；用于显式选择，不代表任何额外权限。 */
+  listHouseholds(): Promise<HouseholdOption[]>
   listMembers(): Promise<MemberSummary[]>
   getMemberDetail(memberId: string): Promise<MemberDetail>
   getTodaySnapshot(memberId: string): Promise<TodaySnapshot>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 import AppIcon from '@/components/AppIcon.vue'
 import SwitchRow from '@/components/SwitchRow.vue'
@@ -8,6 +8,8 @@ import { createSpeaker } from '@/composables/useSpeech'
 import { ApiClient, ApiClientError } from '@/api/client'
 import { presentApiError, type ErrorPresentation } from '@/api/errors'
 import { resetDemoData } from '@/data/demoProvider'
+import { activeProvider, clearHouseholdSelection, selectHousehold } from '@/data'
+import type { HouseholdOption } from '@/data/types'
 import { currentAuthAdapter, familyAuthAdapter } from '@/data/authAdapter'
 import { useA11y } from '@/stores/accessibility'
 import {
@@ -51,7 +53,57 @@ const authMessage = ref('')
 const authError = ref('')
 const stepUpCode = ref('')
 const pinDraft = ref('')
-const householdId = ref('')
+const households = ref<HouseholdOption[]>([])
+const householdsLoading = ref(false)
+const householdError = ref<ErrorPresentation | null>(null)
+const householdMessage = ref('')
+
+const currentHousehold = computed(
+  () => households.value.find(item => item.id === session.currentHouseholdId) ?? null,
+)
+const needsHouseholdChoice = computed(
+  () => households.value.length > 1 && !session.currentHouseholdId,
+)
+
+/** 读取服务端授权范围内的家庭列表；错误不暴露隐藏家庭是否存在。 */
+async function loadHouseholds(): Promise<HouseholdOption[]> {
+  householdsLoading.value = true
+  householdError.value = null
+  try {
+    const options = await activeProvider().listHouseholds()
+    households.value = options
+    // 已选家庭不在列表里（被撤权、删除或授权变化）：回到安全选择态，不自动换一个。
+    if (session.currentHouseholdId && !options.some(item => item.id === session.currentHouseholdId)) {
+      clearHouseholdSelection()
+      householdMessage.value = '之前选择的家庭已不可用，请重新选择；页面不会自动切到另一个家庭。'
+    }
+    return options
+  } catch (cause) {
+    households.value = []
+    householdError.value = presentApiError(cause)
+    throw cause
+  } finally {
+    householdsLoading.value = false
+  }
+}
+
+async function onHouseholdChange(nextId: string): Promise<void> {
+  if (!nextId || nextId === session.currentHouseholdId) return
+  const label = households.value.find(item => item.id === nextId)?.name ?? nextId
+  const confirmed = typeof window.confirm !== 'function'
+    || window.confirm(`切换到「${label}」？当前家庭的成员、任务、风险、事件和上传草稿会被清除后重新加载。`)
+  if (!confirmed) return
+
+  householdMessage.value = ''
+  // selectHousehold 走 updateSession，会触发上下文清理（Provider 缓存、上传草稿、当前成员）。
+  selectHousehold(nextId)
+  cancelStepUp()
+  stepUpCode.value = ''
+  // 旧家庭的能力快照不再适用；立即重探而不是留一个空状态让入口全禁用。
+  clearCapabilities()
+  await probeCapabilities()
+  householdMessage.value = `已切换到「${label}」，旧家庭的查询、上传草稿和能力快照已清除。`
+}
 const serverAddressPlaceholder = DEFAULT_SERVER_URL_POLICY.allowPrivateHttp
   ? '例如 http://192.168.1.10:8000（受控 Debug 联调）'
   : '例如 https://family.example.test（发布构建仅 HTTPS）'
@@ -144,22 +196,22 @@ function onAuthModeChange(mode: AuthMode): void {
 }
 
 /**
- * 解析当前身份可访问的第一个家庭，与联机 Provider 的选择逻辑一致。
- * 二次确认需要家庭 PIN，而 PIN 按家庭划分，因此设置与发起都要带上家庭。
+ * 当前用于二次确认的家庭。
+ *
+ * MOB-158：只使用用户显式选择的家庭；恰好一个家庭时自动选定以保持低步骤体验，
+ * 可访问多个但未选择时 fail-closed，绝不再默认取列表第一个。
  */
 async function resolveHouseholdId(): Promise<string> {
-  if (householdId.value) return householdId.value
-  const client = new ApiClient({
-    baseUrl: session.serverBaseUrl,
-    authSessionProvider: getAuthSession,
-  })
-  const households = await client.listHouseholds({ accessPurpose: session.accessPurpose || undefined })
-  const first = households[0]
-  if (!first) {
-    throw new ApiClientError('当前身份没有可访问的家庭', { status: 404, code: 'NO_HOUSEHOLD' })
+  if (session.currentHouseholdId) return session.currentHouseholdId
+  const options = await loadHouseholds()
+  if (options.length === 1) {
+    selectHousehold(options[0]!.id)
+    return options[0]!.id
   }
-  householdId.value = first.id
-  return first.id
+  throw new ApiClientError('当前身份可访问多个家庭，请先选择一个家庭', {
+    status: 409,
+    code: 'HOUSEHOLD_NOT_SELECTED',
+  })
 }
 
 async function submitHouseholdPin(): Promise<void> {
@@ -196,7 +248,8 @@ async function submitSignOut(): Promise<void> {
   try {
     // 本地会话先失效；随后通知服务端销毁会话。
     await signOut(currentAuthAdapter())
-    householdId.value = ''
+    households.value = []
+    householdMessage.value = ''
     authMessage.value = '已退出登录，本机不再保留该会话的查询、上传和能力探测结果。'
     connectionState.value = 'idle'
     connectionMessage.value = ''
@@ -273,6 +326,32 @@ function onModeChange(mode: 'demo' | 'live'): void {
   clearCapabilities()
 }
 
+function probeClient(): ApiClient {
+  return new ApiClient({
+    baseUrl: session.serverBaseUrl,
+    // 正式鉴权模式下只用内存会话，未登录时不回退开发期身份头。
+    ...(usesRealAuth.value ? { authSessionProvider: getAuthSession } : {}),
+  })
+}
+
+function probeOptions() {
+  return usesRealAuth.value
+    ? { accessPurpose: session.accessPurpose || undefined }
+    : { actorId: session.actorId || undefined, accessPurpose: session.accessPurpose || undefined }
+}
+
+/** 重探服务端能力；供测试连接与家庭切换共用。 */
+async function probeCapabilities(): Promise<ReturnType<typeof setCapabilities> | null> {
+  capabilityProbeError.value = null
+  try {
+    return setCapabilities(await probeClient().getCapabilities(probeOptions()))
+  } catch (cause) {
+    clearCapabilities()
+    capabilityProbeError.value = presentApiError(cause)
+    return null
+  }
+}
+
 async function testConnection(): Promise<void> {
   const serverAddress = validateServerBaseUrl(serverBaseUrlDraft.value)
   if (!serverAddress.ok) {
@@ -287,28 +366,16 @@ async function testConnection(): Promise<void> {
   connectionError.value = null
   capabilityProbeError.value = null
   clearCapabilities()
-  const client = new ApiClient({
-    baseUrl: session.serverBaseUrl,
-    // 正式鉴权模式下只用内存会话，未登录时不回退开发期身份头。
-    ...(usesRealAuth.value ? { authSessionProvider: getAuthSession } : {}),
-  })
-  const probeOptions = usesRealAuth.value
-    ? { accessPurpose: session.accessPurpose || undefined }
-    : { actorId: session.actorId || undefined, accessPurpose: session.accessPurpose || undefined }
   try {
-    const health = await client.getHealth(probeOptions)
-    let probe: ReturnType<typeof setCapabilities> | null = null
-    try {
-      probe = setCapabilities(await client.getCapabilities(probeOptions))
-    } catch (cause) {
-      clearCapabilities()
-      capabilityProbeError.value = presentApiError(cause)
-    }
+    const health = await probeClient().getHealth(probeOptions())
+    const probe = await probeCapabilities()
     resumeAuthorizationBoundary()
     connectionState.value = 'ok'
     connectionMessage.value = `已连接：${health.service} ${health.version}${
       probe ? `，已探测 ${probe.available.length} 项可用能力` : '；能力探测未完成'
     }`
+    // 连接可用后再读家庭列表：多家庭时要求显式选择，单家庭自动选定。
+    await loadHouseholds().catch(() => undefined)
   } catch (cause) {
     clearCapabilities()
     connectionState.value = 'failed'
@@ -320,6 +387,14 @@ function restoreDemoData(): void {
   resetDemoData()
   demoResetMessage.value = '演示数据已恢复到初始状态。'
 }
+
+onMounted(() => {
+  // 联机且已具备取数条件时预读家庭列表，让选择器一进页面就能用。
+  if (session.dataMode !== 'live') return
+  if (usesRealAuth.value && !signedIn.value) return
+  if (!usesRealAuth.value && !session.actorId.trim()) return
+  void loadHouseholds().catch(() => undefined)
+})
 </script>
 
 <template>
@@ -504,6 +579,44 @@ function restoreDemoData(): void {
           能力限制暂时无法读取：{{ capabilityProbeError.message }} 未声明的能力均按不可用处理，请先不要使用相关入口。
         </p>
         <ErrorNotice v-if="connectionError" :error="connectionError" @retry="testConnection" />
+
+        <section class="household-panel" aria-labelledby="household-title">
+          <div class="h-icon-row">
+            <span class="row-icon" data-tone="info" aria-hidden="true"><AppIcon name="user" :size="16" /></span>
+            <h3 id="household-title">当前家庭</h3>
+          </div>
+
+          <p v-if="householdsLoading" class="meta-line">正在读取可访问的家庭…</p>
+
+          <template v-else-if="households.length">
+            <p v-if="currentHousehold" class="meta-line">
+              数据来源：{{ currentHousehold.name }}<template v-if="households.length > 1">（共 {{ households.length }} 个可访问家庭，可切换）</template>
+            </p>
+            <p v-if="needsHouseholdChoice" class="notice" data-tone="warn" role="alert">
+              当前身份可以访问 {{ households.length }} 个家庭。请显式选择一个后再加载数据；应用不会替你选默认家庭。
+            </p>
+            <label v-if="households.length > 1" class="field">
+              选择家庭
+              <select
+                :value="session.currentHouseholdId"
+                :disabled="householdsLoading"
+                @change="onHouseholdChange(($event.target as HTMLSelectElement).value)"
+              >
+                <option value="" disabled>请选择家庭</option>
+                <option v-for="item in households" :key="item.id" :value="item.id">{{ item.name }}</option>
+              </select>
+            </label>
+            <p v-else class="meta-line">当前身份只被授权访问这一个家庭；出现多个家庭时这里会要求显式选择。</p>
+          </template>
+
+          <p v-else-if="!householdError" class="meta-line">尚未读取家庭列表；测试连接后会自动读取。</p>
+
+          <p v-if="householdMessage" class="notice" data-tone="info" role="status">{{ householdMessage }}</p>
+          <ErrorNotice v-if="householdError" :error="householdError" @retry="loadHouseholds" />
+          <p class="meta-line">
+            选择家庭不等于获得权限：成员、字段、动作、目的和期限仍由家庭服务器逐次校验。本机只保存家庭标识，不保存家庭健康数据。
+          </p>
+        </section>
 
         <section
           v-if="capabilityState.snapshot"
@@ -728,6 +841,14 @@ html[data-contrast='high'] .mode-option { border-color: #000; background: #fff; 
 .auth-design-note h3 { margin: 0; font-size: 1rem; }
 .auth-design-note .divided-list { margin: 0; }
 .step-up-title { margin: 6px 0 0; font-size: 0.94rem; }
+.household-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+.household-panel h3 { margin: 0; font-size: 1rem; }
 .capability-panel {
   display: grid;
   gap: 12px;
