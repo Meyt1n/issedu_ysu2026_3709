@@ -6,7 +6,7 @@ const config: CapacitorConfig = {
   webDir: 'dist',
   server: {
     // WebView 以 https://localhost 为源加载本地打包资源；
-    // 访问家庭服务器的明文 http 地址由 AndroidManifest 的 usesCleartextTraffic 允许（仅家庭局域网）。
+    // Release 只允许 HTTPS；Android Debug 配合 APP 层私网地址校验开放受控 HTTP 联调。
     androidScheme: 'https',
   },
 }
