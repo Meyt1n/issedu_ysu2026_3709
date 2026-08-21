@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 
 import welcomeHero from '../assets/welcome-hero.jpg'
+import { apiClient } from '../api/client'
+import type { Household } from '../api/types'
 import AppIcon from '../components/AppIcon.vue'
 import FaceLoginCapture from '../components/FaceLoginCapture.vue'
 import {
@@ -43,6 +45,11 @@ const registerMode = ref(false)
 const connecting = ref(false)
 const creating = ref(false)
 const createError = ref('')
+const loginHouseholds = ref<Household[]>([])
+const householdsLoading = ref(false)
+const householdsError = ref('')
+let householdsRequest: AbortController | null = null
+let householdsTimer: ReturnType<typeof setTimeout> | null = null
 
 const householdDraft = reactive({
   name: '',
@@ -61,6 +68,52 @@ const canCreate = computed(
     householdDraft.members.some(member => member.displayName.trim().length > 0) &&
     !creating.value,
 )
+
+watch(
+  [actorId, accessPurpose, credentialMode, authMode],
+  ([nextActorId, nextAccessPurpose, nextCredentialMode, nextAuthMode]) => {
+    if (householdsTimer) clearTimeout(householdsTimer)
+    householdsRequest?.abort()
+    householdsRequest = null
+    loginHouseholds.value = []
+    householdId.value = ''
+    householdsLoading.value = false
+    householdsError.value = ''
+
+    if (nextAuthMode !== 'session' || (nextCredentialMode !== 'pin' && nextCredentialMode !== 'face')) return
+    const actor = nextActorId.trim()
+    const purpose = nextAccessPurpose.trim()
+    if (!actor || !purpose || !accessPurposeValid.value) return
+
+    householdsTimer = setTimeout(async () => {
+      householdsTimer = null
+      const controller = new AbortController()
+      householdsRequest = controller
+      householdsLoading.value = true
+      try {
+        const households = await apiClient.listHouseholds({
+          actorId: actor,
+          accessPurpose: purpose,
+          signal: controller.signal,
+        })
+        if (controller.signal.aborted) return
+        loginHouseholds.value = households
+        if (households.length > 0 && !households.some(item => item.id === householdId.value)) {
+          householdId.value = households[0]!.id
+        }
+      } catch (cause) {
+        if (!controller.signal.aborted) householdsError.value = formatError(cause)
+      } finally {
+        if (!controller.signal.aborted) householdsLoading.value = false
+      }
+    }, 300)
+  },
+)
+
+onBeforeUnmount(() => {
+  householdsRequest?.abort()
+  if (householdsTimer) clearTimeout(householdsTimer)
+})
 
 async function submitConnect(): Promise<void> {
   connecting.value = true
@@ -205,8 +258,22 @@ async function submitCreate(): Promise<void> {
             <input v-model="actorId" autocomplete="username" placeholder="例如 parent-1" required />
           </label>
           <label v-else class="field">
-            家庭 ID
-            <input v-model="householdId" autocomplete="off" placeholder="例如 household-1" required />
+            家庭
+            <select v-if="loginHouseholds.length > 0" v-model="householdId" autocomplete="off" required>
+              <option v-for="household in loginHouseholds" :key="household.id" :value="household.id">
+                {{ household.name }}
+              </option>
+            </select>
+            <input
+              v-else
+              v-model="householdId"
+              autocomplete="off"
+              placeholder="请输入家庭唯一编号"
+              required
+            />
+            <small v-if="householdsLoading">正在加载可访问的家庭...</small>
+            <small v-else-if="householdsError">家庭列表加载失败，可手动填写家庭唯一编号。</small>
+            <small v-else>家庭名称仅用于展示，提交时使用系统唯一编号。</small>
           </label>
           <label v-if="credentialMode === 'pin' || credentialMode === 'face'" class="field">
             家庭成员身份

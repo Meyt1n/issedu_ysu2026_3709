@@ -1599,7 +1599,10 @@ def list_face_credentials(
     return list(
         session.scalars(
             select(FaceCredential)
-            .where(FaceCredential.household_id == household_id)
+            .where(
+                FaceCredential.household_id == household_id,
+                FaceCredential.status != "DELETED",
+            )
             .order_by(FaceCredential.created_at.desc())
         ).all()
     )

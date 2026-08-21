@@ -11,7 +11,7 @@ from sqlalchemy import create_engine, inspect, text
 from app.config import get_settings
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CURRENT_HEAD = "0015_hct424_face_credential"
+CURRENT_HEAD = "0016_hct424_face_credential_status_index"
 RESTORED_TABLES = {
     "projection_checkpoint",
     "review_task",

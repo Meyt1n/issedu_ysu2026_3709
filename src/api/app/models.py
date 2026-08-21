@@ -241,6 +241,8 @@ Index(
     FaceCredential.actor_id,
     FaceCredential.status,
     unique=True,
+    sqlite_where=FaceCredential.status == "ACTIVE",
+    postgresql_where=FaceCredential.status == "ACTIVE",
 )
 Index(
     "ix_event_household_member_time",
