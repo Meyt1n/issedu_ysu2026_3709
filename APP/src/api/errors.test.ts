@@ -101,3 +101,21 @@ describe('鉴权适配器错误也走文案映射（不直接显示内部消息�
     expect(presented.message).toContain('重新登录')
   })
 })
+
+describe('多家庭选择的错误文案（MOB-158）', () => {
+  it('未选择家庭引导去设置页显式选择', () => {
+    const presented = presentApiError(
+      new ApiClientError('多个家庭', { status: 409, code: 'HOUSEHOLD_NOT_SELECTED' }),
+    )
+    expect(presented.action).toBe('settings')
+    expect(presented.message).toContain('选择')
+  })
+
+  it('已选家庭失效时说明不会自动切换，且不暴露其它家庭是否存在', () => {
+    const presented = presentApiError(
+      new ApiClientError('家庭不可用', { status: 404, code: 'HOUSEHOLD_UNAVAILABLE' }),
+    )
+    expect(presented.message).toContain('不会自动')
+    expect(presented.message).not.toMatch(/其它家庭名|hh-/)
+  })
+})

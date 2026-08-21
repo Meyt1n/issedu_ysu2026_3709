@@ -2,9 +2,9 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { createAuthTestStub } from '@/api/auth'
 import { registerSessionCleanup, requireReauth, resetAuthState, signIn } from '@/stores/auth'
-import { resetSession, updateSession } from '@/stores/session'
+import { resetSession, sessionContextKey, updateSession, useSession } from '@/stores/session'
 
-import { activeProvider, canSubmitWrites } from './index'
+import { activeProvider, canSubmitWrites, clearHouseholdSelection, selectHousehold } from './index'
 
 const CREDENTIALS = { account: 'demo-account', password: 'demo-password' }
 
@@ -76,5 +76,57 @@ describe('联机 Provider 的正式会话边界', () => {
     scopes.length = 0
     updateSession({ currentMemberId: 'member-1' })
     expect(scopes).toEqual([])
+  })
+})
+
+describe('家庭切换的上下文清理（MOB-158）', () => {
+  afterEach(() => {
+    resetAuthState()
+    resetSession()
+  })
+
+  it('切换家庭触发上下文清理，同一家庭重复选择不清理', async () => {
+    const scopes: string[] = []
+    registerSessionCleanup(scope => scopes.push(scope))
+    goLive()
+    await signIn(createAuthTestStub(), CREDENTIALS)
+    scopes.length = 0
+
+    selectHousehold('hh-1')
+    expect(scopes).toEqual(['context'])
+
+    scopes.length = 0
+    selectHousehold('hh-1')
+    expect(scopes).toEqual([])
+  })
+
+  it('切换家庭同时清掉当前成员，避免新家庭沿用旧成员', () => {
+    goLive()
+    updateSession({ currentHouseholdId: 'hh-1', currentMemberId: 'member-1' })
+
+    selectHousehold('hh-2')
+
+    const { session } = useSession()
+    expect(session.currentHouseholdId).toBe('hh-2')
+    expect(session.currentMemberId).toBe('')
+  })
+
+  it('清除家庭选择后回到安全选择态', () => {
+    goLive()
+    updateSession({ currentHouseholdId: 'hh-1', currentMemberId: 'member-1' })
+
+    clearHouseholdSelection()
+
+    const { session } = useSession()
+    expect(session.currentHouseholdId).toBe('')
+    expect(session.currentMemberId).toBe('')
+  })
+
+  it('家庭是联机指纹的一部分，换家庭必然丢弃旧 Provider 缓存', () => {
+    goLive()
+    updateSession({ currentHouseholdId: 'hh-1' })
+    const first = sessionContextKey(useSession().session)
+    updateSession({ currentHouseholdId: 'hh-2' })
+    expect(sessionContextKey(useSession().session)).not.toBe(first)
   })
 })

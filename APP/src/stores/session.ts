@@ -21,6 +21,11 @@ export interface SessionSettings {
   /** 仅 dev-actor 模式使用的开发期身份 */
   actorId: string
   accessPurpose: string
+  /**
+   * 当前选择的家庭 ID。只保存最小标识，不保存家庭名称或任何健康数据；
+   * 家庭选择不是授权，服务端仍对每个请求做家庭/成员/字段/动作校验。
+   */
+  currentHouseholdId: string
   /** 紧急联系人（本地保存，仅用于拨号按钮） */
   caregiverName: string
   caregiverPhone: string
@@ -36,6 +41,7 @@ export const DEFAULT_SESSION: SessionSettings = {
   authMode: 'real',
   actorId: '',
   accessPurpose: 'family-care',
+  currentHouseholdId: '',
   caregiverName: '',
   caregiverPhone: '',
   currentMemberId: '',
@@ -106,8 +112,8 @@ export function useAuthorizationBoundary() {
   return { authorizationBoundary, requireAuthorizationReverification, resumeAuthorizationBoundary }
 }
 /** 影响联机数据边界的会话指纹；身份、目的、家庭服务器或正式会话变化都必须丢弃旧 Provider 缓存。 */
-export function sessionContextKey(source: Pick<SessionSettings, 'dataMode' | 'serverBaseUrl' | 'actorId' | 'accessPurpose'> & { authMode?: AuthMode }): string {
-  return [source.dataMode, source.serverBaseUrl.trim(), source.authMode ?? 'real', source.actorId.trim(), source.accessPurpose.trim(), String(authorizationBoundary.generation), String(authGeneration())].join('\u001f')
+export function sessionContextKey(source: Pick<SessionSettings, 'dataMode' | 'serverBaseUrl' | 'actorId' | 'accessPurpose'> & { authMode?: AuthMode; currentHouseholdId?: string }): string {
+  return [source.dataMode, source.serverBaseUrl.trim(), source.authMode ?? 'real', source.actorId.trim(), source.accessPurpose.trim(), source.currentHouseholdId ?? '', String(authorizationBoundary.generation), String(authGeneration())].join('\u001f')
 }
 
 export function normalizeSession(raw: unknown): SessionSettings {
@@ -127,6 +133,7 @@ export function normalizeSession(raw: unknown): SessionSettings {
       : '',
     authMode,
     actorId: authMode === 'dev-actor' ? text(record.actorId, '') : '',
+    currentHouseholdId: text(record.currentHouseholdId, ''),
     accessPurpose: text(record.accessPurpose, 'family-care') || 'family-care',
     caregiverName: text(record.caregiverName, ''),
     caregiverPhone: caregiverPhone ?? '',
@@ -165,6 +172,7 @@ const SCOPE_FIELDS: readonly (keyof SessionSettings)[] = [
   'authMode',
   'actorId',
   'accessPurpose',
+  'currentHouseholdId',
   'currentMemberId',
 ]
 

@@ -3,6 +3,7 @@ import type { HealthEvent, Member, RequestOptions, UploadedFile, VisionTask } fr
 import type {
   CareTask,
   DataProvider,
+  HouseholdOption,
   MemberDetail,
   MemberSummary,
   MedicationItem,
@@ -33,6 +34,8 @@ import type {
 interface SessionContext {
   actorId: string
   accessPurpose: string
+  /** 用户已显式选择的家庭；空字符串表示尚未选择。 */
+  householdId: string
 }
 
 interface VisionDraft {
@@ -286,9 +289,16 @@ export class HttpDataProvider implements DataProvider {
     return draft
   }
 
+  /**
+   * 解析本轮请求使用的家庭。
+   *
+   * MOB-158：绝不再取 `listHouseholds()[0]` —— 列表顺序变化会让用户看错家庭。
+   * 规则是：已选家庭必须仍在服务端返回的列表里；恰好一个家庭时自动选定以保持
+   * 低步骤体验；可访问多个但未选择时 fail-closed，由界面要求显式选择。
+   */
   private async resolveHouseholdId(): Promise<string> {
     if (this.householdId) return this.householdId
-    const { actorId, accessPurpose } = this.context()
+    const { actorId, accessPurpose, householdId } = this.context()
     if (!actorId.trim() || !accessPurpose.trim()) {
       throw new ApiClientError('联机模式需要身份和访问目的', {
         status: 401,
@@ -296,16 +306,46 @@ export class HttpDataProvider implements DataProvider {
       })
     }
     const households = await this.client.listHouseholds(this.options())
-    const first = households[0]
-    if (!first) {
+    if (households.length === 0) {
       throw new ApiClientError('当前身份没有可访问的家庭', {
         status: 404,
         code: 'NO_HOUSEHOLD',
       })
     }
-    this.householdId = first.id
-    this.householdTimeZone = typeof first.time_zone === 'string' && first.time_zone.trim() ? first.time_zone.trim() : null
-    return first.id
+    const choose = (household: (typeof households)[number]) => {
+      this.householdId = household.id
+      this.householdTimeZone = typeof household.time_zone === 'string' && household.time_zone.trim()
+        ? household.time_zone.trim()
+        : null
+      return household.id
+    }
+
+    const selected = householdId.trim()
+    if (selected) {
+      const match = households.find(candidate => candidate.id === selected)
+      if (!match) {
+        // Revoked, removed, or outside current authorization: never fall back to another household.
+        throw new ApiClientError('当前选择的家庭已不可用，请重新选择', {
+          status: 404,
+          code: 'HOUSEHOLD_UNAVAILABLE',
+        })
+      }
+      return choose(match)
+    }
+
+    if (households.length === 1) return choose(households[0]!)
+
+    throw new ApiClientError('当前身份可访问多个家庭，请先选择一个家庭', {
+      status: 409,
+      code: 'HOUSEHOLD_NOT_SELECTED',
+    })
+  }
+
+  /** 服务端授权范围内的家庭列表；只暴露 ID 与名称，供界面显式选择。 */
+  async listHouseholds(): Promise<HouseholdOption[]> {
+    const households = await this.client.listHouseholds(this.options())
+    return households.map(household => ({ id: household.id, name: household.name }))
+  }
   }
 
   private async memberName(memberId: string): Promise<string> {

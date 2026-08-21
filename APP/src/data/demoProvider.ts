@@ -4,6 +4,7 @@ import { formatDay } from '@/utils/format'
 import type {
   CareTask,
   DataProvider,
+  HouseholdOption,
   MemberDetail,
   MemberSummary,
   ProviderInfo,
@@ -369,6 +370,12 @@ export const demoProvider: DataProvider = {
       label: '演示数据（虚构）',
       detail: '内置虚构家庭数据，不连接任何服务器；切换到联机模式可连接家庭服务器。',
     }
+  },
+
+  async listHouseholds(): Promise<HouseholdOption[]> {
+    await delay(80)
+    // 演示模式只有一个虚构家庭；保留这个方法让家庭选择界面对两种模式一致。
+    return [{ id: 'demo-household', name: '演示家庭（虚构）' }]
   },
 
   async listMembers(): Promise<MemberSummary[]> {
