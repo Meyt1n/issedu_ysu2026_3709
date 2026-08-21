@@ -270,6 +270,29 @@ jobs:
             plan_previous_sha="${sync_sha}"
           done
 
+          push_cloud_with_retry() {
+            local refspec="$1"
+            local max_retries=3
+            local attempt=1
+            local delay_seconds=2
+
+            while true; do
+              if cloud_git push original-cloud "${refspec}"; then
+                return 0
+              fi
+
+              if (( attempt >= max_retries + 1 )); then
+                echo "::error::原云端 push 在 ${max_retries} 次重试后仍失败，共尝试 ${attempt} 次"
+                return 1
+              fi
+
+              echo "::warning::原云端 push 第 ${attempt} 次失败，${delay_seconds} 秒后进行第 $((attempt + 1)) 次尝试"
+              sleep "${delay_seconds}"
+              delay_seconds=$((delay_seconds * 2))
+              attempt=$((attempt + 1))
+            done
+          }
+
           for plan_row in "${sync_plan[@]}"; do
             IFS='|' read -r \
               sync_sha kind reference pr_login token_env cloud_username username_env commit_count introduced_count \
@@ -283,7 +306,7 @@ jobs:
             fi
 
             echo "同步 ${kind} ${reference}：${pr_login}，新增可达提交 ${introduced_count} 个，目标 ${sync_sha}"
-            cloud_git push original-cloud "${sync_sha}:refs/heads/master"
+            push_cloud_with_retry "${sync_sha}:refs/heads/master"
 
             verified_cloud_sha="$(cloud_git ls-remote original-cloud refs/heads/master | awk '{print $1}')"
             if [[ "${verified_cloud_sha}" != "${sync_sha}" ]]; then
