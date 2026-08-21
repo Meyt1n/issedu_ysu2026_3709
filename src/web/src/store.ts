@@ -103,13 +103,40 @@ export function formatError(cause: unknown): string {
   if (cause instanceof ApiClientError) {
     if (cause.code === 'DEPENDENCY_UNAVAILABLE') return '本地 API 服务不可用，本次没有改变任何数据。'
     if (cause.status === 401) {
+      if (cause.message === 'SESSION_REQUIRED' || cause.message === 'AUTH_REQUIRED') {
+        return '此操作需要正式账号会话，请切换到“正式账号登录”后重试。'
+      }
       return state.authMode === 'session'
         ? '账号、密码或会话无效，请重新登录。'
         : '需要先填写开发身份才能继续这次请求。'
     }
+    if (cause.status === 403) {
+      if (cause.message === 'CONFIRMATION_FAILED') return '二次确认失败，请检查当前账号的 PIN 或密码后重试。'
+      if (cause.message === 'STEP_UP_FAILED') return '二次确认未通过，请重新发起确认后重试。'
+      return '当前账号没有执行此操作的权限。'
+    }
     if (cause.status === 404) return '当前身份无权访问该资源，或资源不存在。'
-    if (cause.status === 409) return '数据已在其它位置被修改，请刷新后再试。'
-    if (cause.status === 422) return `请求内容未通过校验：${cause.message}`
+    if (cause.status === 409) {
+      if (cause.message === 'FACE_CREDENTIAL_EXISTS') {
+        return '当前身份已经有有效的人脸凭证；如需替换，请勾选“已有凭证时重新绑定”。'
+      }
+      if (cause.message === 'PIN_NOT_CONFIGURED') return '当前家庭账号尚未配置 PIN，请改用账号密码确认。'
+      if (cause.message === 'STEP_UP_EXPIRED' || cause.message === 'STEP_UP_REPLAY') {
+        return '二次确认已过期或已使用，请重新发起确认。'
+      }
+      return '数据已在其它位置被修改，请刷新后再试。'
+    }
+    if (cause.status === 422) {
+      if (cause.message === 'FACE_FRAME_LOW_QUALITY') {
+        return '人脸图片质量不足：请使用至少 640×480 的清晰正面照片，保证光线均匀、仅有一张人脸且不要裁切脸部。'
+      }
+      if (cause.message === 'FACE_NOT_FOUND') return '图片中没有检测到清晰人脸，请重新拍摄正面照片。'
+      if (cause.message === 'FACE_MULTIPLE_SUBJECTS') return '图片中检测到多张人脸，请只保留要绑定的一个人。'
+      return `请求内容未通过校验：${cause.message}`
+    }
+    if (cause.status === 503 && cause.message === 'FACE_DETECTOR_UNAVAILABLE') {
+      return '本地人脸检测器暂不可用，请重启 API 服务后重试。'
+    }
     if (cause.status === 429) return '尝试过于频繁，请稍后再试。'
   }
   return '请求未能完成，页面不会显示未经授权的健康数据。'

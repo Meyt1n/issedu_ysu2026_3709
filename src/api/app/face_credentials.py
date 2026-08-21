@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import os
+import tempfile
 from typing import Any
 
 import cv2
@@ -24,6 +26,7 @@ FACE_CONSENT_VERSION = "face-registration-consent-v1"
 FACE_LIVENESS_VERSION = "motion-sequence-v1"
 _FEATURE_SIZE = 32
 FACE_MATCH_THRESHOLD = 0.82
+_FACE_CASCADE_FILENAME = "haarcascade_frontalface_default.xml"
 
 
 def _cipher() -> Fernet:
@@ -51,6 +54,33 @@ def decrypt_template(ciphertext: bytes) -> bytes:
         ) from exc
 
 
+def _load_face_cascade() -> cv2.CascadeClassifier:
+    """Load the bundled detector, including Windows Unicode-path fallback."""
+    source = os.path.join(cv2.data.haarcascades, _FACE_CASCADE_FILENAME)
+    if os.name != "nt" or source.isascii():
+        cascade = cv2.CascadeClassifier(source)
+        if not cascade.empty():
+            return cascade
+
+    # OpenCV's Windows loader can fail when the repository path contains non-ASCII
+    # characters.  A short-lived ASCII temp path keeps the detector local and
+    # avoids changing the configured project or model paths.
+    try:
+        with open(source, "rb") as source_file, tempfile.NamedTemporaryFile(
+            mode="wb", suffix=".xml", delete=False
+        ) as fallback_file:
+            fallback_file.write(source_file.read())
+            fallback_path = fallback_file.name
+        cascade = cv2.CascadeClassifier(fallback_path)
+    finally:
+        if "fallback_path" in locals():
+            try:
+                os.unlink(fallback_path)
+            except OSError:
+                pass
+    return cascade
+
+
 def extract_face_template(image_bytes: bytes) -> tuple[bytes, dict[str, Any]]:
     """Detect exactly one face and derive a normalized, versioned template."""
     encoded = np.frombuffer(image_bytes, dtype=np.uint8)
@@ -61,9 +91,7 @@ def extract_face_template(image_bytes: bytes) -> tuple[bytes, dict[str, Any]]:
     if image is None:
         raise ValueError("FACE_FRAME_DECODE_FAILED")
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    cascade = cv2.CascadeClassifier(
-        cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-    )
+    cascade = _load_face_cascade()
     if cascade.empty():
         raise RuntimeError("FACE_DETECTOR_UNAVAILABLE")
     faces = cascade.detectMultiScale(

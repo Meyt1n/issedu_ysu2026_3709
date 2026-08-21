@@ -128,3 +128,55 @@ def test_household_erasure_removes_pin_face_secret_and_bound_sessions(
     assert stored.encrypted_template == b""
     household = db_session.get(Household, household_id)
     assert household is not None and household.deleted_at is not None
+
+
+def test_face_credential_can_be_deleted_after_a_previous_tombstone(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    actor_id = f"hct426-face-delete-{uuid4().hex[:10]}"
+    household_id, password_token, _ = _create_pin_household(client, actor_id)
+    now = datetime.now(UTC)
+    previous = FaceCredential(
+        household_id=household_id,
+        actor_id=actor_id,
+        encrypted_template=b"previous-template",
+        algorithm_version="test",
+        feature_version="test",
+        credential_version=1,
+        consent_version="test",
+        status="DELETED",
+        created_by=actor_id,
+        consented_at=now,
+        revoked_at=now,
+    )
+    current = FaceCredential(
+        household_id=household_id,
+        actor_id=actor_id,
+        encrypted_template=b"current-template",
+        algorithm_version="test",
+        feature_version="test",
+        credential_version=2,
+        consent_version="test",
+        status="ACTIVE",
+        created_by=actor_id,
+        consented_at=now,
+    )
+    db_session.add_all([previous, current])
+    db_session.commit()
+
+    deleted = client.delete(
+        f"/api/v1/households/{household_id}/face-credentials/{current.id}",
+        headers={"Authorization": f"Bearer {password_token}"},
+    )
+
+    assert deleted.status_code == 200
+    assert deleted.json()["status"] == "DELETED"
+    stored = db_session.scalar(select(FaceCredential).where(FaceCredential.id == current.id))
+    assert stored is not None and stored.status == "DELETED"
+    listed = client.get(
+        f"/api/v1/households/{household_id}/face-credentials",
+        headers={"Authorization": f"Bearer {password_token}"},
+    )
+    assert listed.status_code == 200
+    assert all(item["status"] != "DELETED" for item in listed.json())
