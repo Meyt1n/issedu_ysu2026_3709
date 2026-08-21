@@ -109,7 +109,7 @@ describe('联机模式任务推导（与主仓库事件语义对齐）', () => {
 describe('联机会话初始化边界', () => {
   it('身份或访问目的缺失时不请求家庭，也不进入空数据状态', async () => {
     const client = { listHouseholds: vi.fn() } as unknown as ApiClient
-    const provider = new HttpDataProvider(client, () => ({ actorId: '', accessPurpose: '' }))
+    const provider = new HttpDataProvider(client, () => ({ actorId: '', accessPurpose: '', householdId: '' }))
 
     await expect(provider.listMembers()).rejects.toMatchObject({ code: 'SESSION_NOT_CONFIGURED', status: 401 })
     expect(client.listHouseholds).not.toHaveBeenCalled()
@@ -117,7 +117,7 @@ describe('联机会话初始化边界', () => {
 
   it('身份没有家庭时返回可被设置页识别的错误码', async () => {
     const client = { listHouseholds: vi.fn().mockResolvedValue([]) } as unknown as ApiClient
-    const provider = new HttpDataProvider(client, () => ({ actorId: 'actor-a', accessPurpose: 'family-care' }))
+    const provider = new HttpDataProvider(client, () => ({ actorId: 'actor-a', accessPurpose: 'family-care', householdId: '' }))
 
     await expect(provider.listMembers()).rejects.toMatchObject({ code: 'NO_HOUSEHOLD', status: 404 })
   })
@@ -130,7 +130,7 @@ describe('联机写请求的幂等与重试', () => {
       listHouseholds: vi.fn().mockResolvedValue([{ id: 'h1' }]),
       confirmCarePlan,
     } as unknown as ApiClient
-    const provider = new HttpDataProvider(client, () => ({ actorId: 'actor-1', accessPurpose: 'family-care' }))
+    const provider = new HttpDataProvider(client, () => ({ actorId: 'actor-1', accessPurpose: 'family-care', householdId: '' }))
     const task: CareTask = {
       id: 'task-1',
       memberId: 'm1',
@@ -188,7 +188,7 @@ describe('联机写请求的幂等与重试', () => {
       uploadFile,
       createVisionTask,
     } as unknown as ApiClient
-    const provider = new HttpDataProvider(client, () => ({ actorId: 'actor-1', accessPurpose: 'family-care' }))
+    const provider = new HttpDataProvider(client, () => ({ actorId: 'actor-1', accessPurpose: 'family-care', householdId: '' }))
     const file = new File(['safe demo image'], 'medicine.jpg', { type: 'image/jpeg' })
 
     await expect(provider.recognizeMedicine(file, 'm1')).rejects.toThrow('网络中断')
@@ -249,5 +249,93 @@ describe('近 7 天完成趋势推导', () => {
     expect(points[6]!.done).toBe(1)
     // 8-12 无确认
     expect(points[5]!.done).toBe(0)
+  })
+})
+
+describe('多家庭选择与隔离（MOB-158）', () => {
+  const two = [
+    { id: 'hh-1', name: '王家' },
+    { id: 'hh-2', name: '李家' },
+  ]
+
+  function providerFor(households: { id: string; name: string }[], selected: string) {
+    const listHouseholds = vi.fn().mockResolvedValue(households)
+    const listMembers = vi.fn().mockResolvedValue([])
+    const listAuthorizations = vi.fn().mockResolvedValue([])
+    const client = { listHouseholds, listMembers, listAuthorizations } as unknown as ApiClient
+    const provider = new HttpDataProvider(client, () => ({
+      actorId: 'actor-1',
+      accessPurpose: 'family-care',
+      householdId: selected,
+    }))
+    return { provider, listHouseholds, listMembers }
+  }
+
+  it('可访问多个家庭且未选择时 fail-closed，绝不默认取第一个', async () => {
+    const { provider, listMembers } = providerFor(two, '')
+
+    await expect(provider.listMembers()).rejects.toMatchObject({
+      code: 'HOUSEHOLD_NOT_SELECTED',
+      status: 409,
+    })
+    // 关键：没有任何成员请求被发出，也就不会显示某个家庭的数据。
+    expect(listMembers).not.toHaveBeenCalled()
+  })
+
+  it('只有一个家庭时自动选定，保持低步骤体验', async () => {
+    const { provider, listMembers } = providerFor([two[0]!], '')
+
+    await provider.listMembers()
+
+    expect(listMembers).toHaveBeenCalledWith('hh-1', expect.anything())
+  })
+
+  it('使用已选家庭而不是列表顺序', async () => {
+    const { provider, listMembers } = providerFor(two, 'hh-2')
+
+    await provider.listMembers()
+
+    expect(listMembers).toHaveBeenCalledWith('hh-2', expect.anything())
+  })
+
+  it('列表顺序变化不改变已选家庭', async () => {
+    const { provider, listMembers } = providerFor([two[1]!, two[0]!], 'hh-1')
+
+    await provider.listMembers()
+
+    expect(listMembers).toHaveBeenCalledWith('hh-1', expect.anything())
+  })
+
+  it('已选家庭被撤权或删除时报专用错误码，不自动切到另一个家庭', async () => {
+    const { provider, listMembers } = providerFor([two[1]!], 'hh-1')
+
+    await expect(provider.listMembers()).rejects.toMatchObject({
+      code: 'HOUSEHOLD_UNAVAILABLE',
+      status: 404,
+    })
+    expect(listMembers).not.toHaveBeenCalled()
+  })
+
+  it('没有任何可访问家庭时仍返回 NO_HOUSEHOLD', async () => {
+    const { provider } = providerFor([], 'hh-1')
+
+    await expect(provider.listMembers()).rejects.toMatchObject({
+      code: 'NO_HOUSEHOLD',
+      status: 404,
+    })
+  })
+
+  it('listHouseholds 只暴露 ID 与名称', async () => {
+    const listHouseholds = vi.fn().mockResolvedValue([
+      { id: 'hh-1', name: '王家', created_by: 'actor-1', created_at: '2026-08-01T00:00:00Z' },
+    ])
+    const client = { listHouseholds } as unknown as ApiClient
+    const provider = new HttpDataProvider(client, () => ({
+      actorId: 'actor-1',
+      accessPurpose: 'family-care',
+      householdId: '',
+    }))
+
+    await expect(provider.listHouseholds()).resolves.toEqual([{ id: 'hh-1', name: '王家' }])
   })
 })

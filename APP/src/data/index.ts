@@ -76,6 +76,12 @@ function guardAuthorization(provider: DataProvider): DataProvider {
       return (...args: unknown[]) => Promise.resolve(value.apply(target, args)).catch((cause: unknown) => {
         // 401/会话过期/撤权先收敛到正式会话生命周期，再落到授权边界。
         if (handleAuthFailure(cause)) throw cause
+        // 已选家庭失效只需回到安全选择态；不必把整个授权边界判为需重新验证。
+        if (cause instanceof ApiClientError && cause.code === 'HOUSEHOLD_UNAVAILABLE') {
+          dropLiveProvider()
+          clearHouseholdSelection()
+          throw cause
+        }
         if (isAuthorizationRejection(cause)) {
           clearCapabilities()
           requireAuthorizationReverification()
@@ -109,6 +115,7 @@ export function activeProvider(): DataProvider {
       // 正式模式使用服务端确认的 actor，仅用于前置校验；请求身份由 Bearer/Cookie 承载。
       actorId: session.authMode === 'real' ? auth.actorId : session.actorId,
       accessPurpose: session.accessPurpose,
+      householdId: session.currentHouseholdId,
     }))
   }
   return guardAuthorization(liveProvider)
@@ -121,4 +128,23 @@ export function canSubmitWrites(): boolean {
   if (session.dataMode !== 'live') return true
   if (session.authMode === 'dev-actor') return true
   return auth.status === 'authenticated'
+}
+
+/**
+ * 显式选择家庭。
+ *
+ * 走 `updateSession` 是必须的：它会触发上下文清理，丢弃上一个家庭的成员、任务、
+ * 风险、时间线、上传草稿与 Provider 缓存，避免新家庭页面上出现旧家庭数据。
+ */
+export function selectHousehold(householdId: string): void {
+  const { session, updateSession } = useSession()
+  if (session.currentHouseholdId === householdId) return
+  updateSession({ currentHouseholdId: householdId, currentMemberId: '' })
+}
+
+/** 让当前家庭选择失效，回到安全选择态（撤权、删除或列表变化时使用）。 */
+export function clearHouseholdSelection(): void {
+  const { session, updateSession } = useSession()
+  if (!session.currentHouseholdId && !session.currentMemberId) return
+  updateSession({ currentHouseholdId: '', currentMemberId: '' })
 }
