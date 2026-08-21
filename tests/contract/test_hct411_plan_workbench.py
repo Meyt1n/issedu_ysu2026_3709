@@ -21,7 +21,13 @@ def _create_household_and_member(client: TestClient) -> tuple[str, str]:
     return household.json()["id"], member.json()["id"]
 
 
-def _append_plan(client: TestClient, household_id: str, member_id: str) -> dict:
+def _append_plan(
+    client: TestClient,
+    household_id: str,
+    member_id: str,
+    *,
+    payload: dict | None = None,
+) -> dict:
     response = client.post(
         f"/api/v1/households/{household_id}/events",
         headers=OWNER_HEADERS,
@@ -29,12 +35,83 @@ def _append_plan(client: TestClient, household_id: str, member_id: str) -> dict:
             "member_id": member_id,
             "event_type": "plan_created",
             "confirmation_status": "CONFIRMED",
-            "payload": {"drug": "Synthetic medicine", "schedule": "每日一次"},
+            "payload": payload or {"drug": "Synthetic medicine", "schedule": "每日一次"},
             "occurred_at": (datetime.now(UTC) - timedelta(hours=25)).isoformat(),
         },
     )
     assert response.status_code == 201, response.text
     return response.json()
+
+
+def test_confirm_plan_enforces_minimum_interval_and_retries_idempotently(
+    client: TestClient,
+) -> None:
+    household_id, member_id = _create_household_and_member(client)
+    plan = _append_plan(
+        client,
+        household_id,
+        member_id,
+        payload={
+            "drug": "Synthetic medicine",
+            "schedule": "每日一次",
+            "safety_window": {"min_interval_hours": 4},
+        },
+    )
+
+    first = client.post(
+        f"/api/v1/households/{household_id}/members/{member_id}/plans/confirm",
+        headers={**OWNER_HEADERS, "Idempotency-Key": "confirm-hct304-1"},
+        params={"plan_event_id": plan["id"]},
+    )
+    assert first.status_code == 201, first.text
+
+    retry = client.post(
+        f"/api/v1/households/{household_id}/members/{member_id}/plans/confirm",
+        headers={**OWNER_HEADERS, "Idempotency-Key": "confirm-hct304-1"},
+        params={"plan_event_id": plan["id"]},
+    )
+    assert retry.status_code == 201, retry.text
+    assert retry.json()["id"] == first.json()["id"]
+
+    too_soon = client.post(
+        f"/api/v1/households/{household_id}/members/{member_id}/plans/confirm",
+        headers={**OWNER_HEADERS, "Idempotency-Key": "confirm-hct304-2"},
+        params={"plan_event_id": plan["id"]},
+    )
+    assert too_soon.status_code == 422, too_soon.text
+    assert too_soon.json()["detail"] == "TIME_WINDOW_VIOLATION"
+
+
+def test_confirm_plan_enforces_daily_limit_and_clock_window(client: TestClient) -> None:
+    household_id, member_id = _create_household_and_member(client)
+    plan = _append_plan(
+        client,
+        household_id,
+        member_id,
+        payload={
+            "drug": "Synthetic medicine",
+            "schedule": "每日一次",
+            "safety_window": {
+                "min_interval_hours": 1,
+                "max_daily_doses": 1,
+                "earliest_time": "00:00",
+                "latest_time": "23:59",
+            },
+        },
+    )
+    first = client.post(
+        f"/api/v1/households/{household_id}/members/{member_id}/plans/confirm",
+        headers={**OWNER_HEADERS, "Idempotency-Key": "confirm-hct304-limit-1"},
+        params={"plan_event_id": plan["id"]},
+    )
+    assert first.status_code == 201, first.text
+    second = client.post(
+        f"/api/v1/households/{household_id}/members/{member_id}/plans/confirm",
+        headers={**OWNER_HEADERS, "Idempotency-Key": "confirm-hct304-limit-2"},
+        params={"plan_event_id": plan["id"]},
+    )
+    assert second.status_code == 422, second.text
+    assert second.json()["detail"] == "TIME_WINDOW_VIOLATION"
 
 
 def test_plan_workbench_returns_server_authoritative_due_status(client: TestClient) -> None:

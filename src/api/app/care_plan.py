@@ -42,6 +42,110 @@ def validate_safety_window(
         )
 
 
+def _as_utc(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _policy_value(payload: dict[str, Any], key: str) -> Any:
+    policy = payload.get("safety_window")
+    if isinstance(policy, dict) and key in policy:
+        return policy[key]
+    return payload.get(key)
+
+
+def _positive_int(value: Any, *, default: int | None = None) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def validate_plan_confirmation_window(
+    events: list[HealthEvent],
+    plan_event_id: str,
+    proposed_time: datetime,
+) -> None:
+    """Validate a confirmation against the plan's server-side safety policy.
+
+    The policy is optional for backwards-compatible plan events.  It can be
+    supplied either under ``payload.safety_window`` or as the documented
+    top-level payload keys.  The endpoint must call this function before it
+    appends a confirmation; the helper deliberately delegates the minimum
+    interval check to :func:`validate_safety_window`.
+    """
+    plan = next(
+        (
+            event
+            for event in events
+            if event.id == plan_event_id
+            and event.event_type in {"plan_created", "plan_updated"}
+        ),
+        None,
+    )
+    if plan is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="PLAN_NOT_FOUND",
+        )
+
+    proposed = _as_utc(proposed_time)
+    payload = plan.payload or {}
+    minimum_hours = _positive_int(
+        _policy_value(payload, "min_interval_hours"),
+        default=DEFAULT_MIN_INTERVAL_HOURS,
+    )
+    confirmations = [
+        event
+        for event in events
+        if event.event_type == "plan_confirmed"
+        and str((event.payload or {}).get("plan_event_id") or "") == plan_event_id
+    ]
+    last_confirmation = max(
+        (_as_utc(event.occurred_at) for event in confirmations),
+        default=None,
+    )
+    validate_safety_window(last_confirmation, proposed, min_interval=minimum_hours or 0)
+
+    maximum_daily = _positive_int(_policy_value(payload, "max_daily_doses"))
+    if maximum_daily is not None:
+        local_date = proposed.astimezone().date()
+        confirmations_today = sum(
+            _as_utc(event.occurred_at).astimezone().date() == local_date
+            for event in confirmations
+        )
+        if confirmations_today >= maximum_daily:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="TIME_WINDOW_VIOLATION",
+            )
+
+    earliest_raw = _policy_value(payload, "earliest_time")
+    latest_raw = _policy_value(payload, "latest_time")
+    earliest_values = _parse_plan_times([earliest_raw]) if earliest_raw else []
+    latest_values = _parse_plan_times([latest_raw]) if latest_raw else []
+    earliest = earliest_values[0] if earliest_values else None
+    latest = latest_values[0] if latest_values else None
+    if earliest is not None or latest is not None:
+        current = proposed.astimezone().time().replace(second=0, microsecond=0)
+        outside = False
+        if earliest is not None and latest is not None:
+            if earliest <= latest:
+                outside = current < earliest or current > latest
+            else:
+                # A window such as 22:00–06:00 crosses midnight.
+                outside = latest < current < earliest
+        elif earliest is not None:
+            outside = current < earliest
+        else:
+            outside = current > latest
+        if outside:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="TIME_WINDOW_VIOLATION",
+            )
+
+
 # ── Plan event helpers ─────────────────────────────────────────────
 
 def record_plan_event(

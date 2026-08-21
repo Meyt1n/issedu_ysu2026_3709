@@ -54,6 +54,7 @@ from app.auth import (
     set_account_pin,
     verify_pin_challenge,
 )
+from app.care_plan import validate_plan_confirmation_window
 from app.config import get_settings
 from app.db import get_session
 from app.erasure import (
@@ -1885,6 +1886,7 @@ def _append_care_plan_action(
     event_type: str,
     payload: dict[str, object],
     idempotency_key: str,
+    occurred_at: datetime | None = None,
 ) -> HealthEvent:
     correlation_id = getattr(request.state, "request_id", None) or request.headers.get(
         settings.request_id_header, ""
@@ -1901,6 +1903,7 @@ def _append_care_plan_action(
             event_type=event_type,
             confirmation_status="CONFIRMED",
             payload=payload,
+            occurred_at=occurred_at,
         ),
     )
 
@@ -1914,6 +1917,7 @@ def confirm_plan_endpoint(
     member_id: str,
     plan_event_id: str,
     request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     actor_id: str = Depends(get_actor_id),
     access_purpose: str | None = Depends(get_access_purpose),
     session: Session = Depends(get_session),
@@ -1926,6 +1930,27 @@ def confirm_plan_endpoint(
         session, household, member_id, actor_id, "WRITE_EVENTS", "health_events", access_purpose,
     ):
         _raise_resource_not_found()
+    from app.projection import get_timeline
+
+    now = datetime.now(UTC)
+    effective_key = idempotency_key or f"confirm:{plan_event_id}:{now.strftime('%Y%m%d%H%M')}"
+    existing = session.scalar(
+        select(HealthEvent).where(
+            HealthEvent.household_id == household.id,
+            HealthEvent.idempotency_key == effective_key,
+        )
+    )
+    if existing is not None:
+        if (
+            existing.member_id != member.id
+            or str((existing.payload or {}).get("plan_event_id") or "") != plan_event_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="IDEMPOTENCY_KEY_CONFLICT",
+            )
+        return HealthEventRead.model_validate(existing)
+    validate_plan_confirmation_window(get_timeline(session, member_id), plan_event_id, now)
     event = _append_care_plan_action(
         session,
         household=household,
@@ -1933,8 +1958,9 @@ def confirm_plan_endpoint(
         actor_id=actor_id,
         request=request,
         event_type="plan_confirmed",
-        payload={"plan_event_id": plan_event_id, "confirmed_at": datetime.now(UTC).isoformat()},
-        idempotency_key=f"confirm:{plan_event_id}",
+        payload={"plan_event_id": plan_event_id, "confirmed_at": now.isoformat()},
+        idempotency_key=effective_key,
+        occurred_at=now,
     )
     return HealthEventRead.model_validate(event)
 
