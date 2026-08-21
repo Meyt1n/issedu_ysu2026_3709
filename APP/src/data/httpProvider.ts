@@ -346,7 +346,6 @@ export class HttpDataProvider implements DataProvider {
     const households = await this.client.listHouseholds(this.options())
     return households.map(household => ({ id: household.id, name: household.name }))
   }
-  }
 
   private async memberName(memberId: string): Promise<string> {
     const cached = this.memberCache.get(memberId)
