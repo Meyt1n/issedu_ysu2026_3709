@@ -9,6 +9,18 @@ export interface HelpCallConfirmation {
   confirmLabel: string
 }
 
+export type PhoneCapability = 'available' | 'unavailable'
+
+/** A tel: intent does not prove the current host can complete a phone call. */
+export function detectPhoneCapability(userAgent = ''): PhoneCapability {
+  const normalized = userAgent.toLowerCase()
+  if (!normalized) return 'unavailable'
+  return /android|iphone|ipad|ipod|mobile/.test(normalized) ? 'available' : 'unavailable'
+}
+
+export function offlineRiskSpeechMessage(): string {
+  return '当前没有网络，无法读取实时风险提醒。应用不会朗读旧缓存或虚构提醒；如情况紧急，请直接拨打 120 或联系家人。'
+}
 export function getHelpCallConfirmation(
   target: HelpCallTarget,
   caregiverPhone = '',

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import AppIcon from '@/components/AppIcon.vue'
 import { createSpeaker } from '@/composables/useSpeech'
@@ -7,12 +7,30 @@ import { activeProvider } from '@/data'
 import { riskLevelLabel } from '@/data/labels'
 import { useSession } from '@/stores/session'
 import { tapFeedback } from '@/utils/haptics'
-import { getHelpCallConfirmation, type HelpCallTarget } from '@/utils/help'
+import { detectPhoneCapability, getHelpCallConfirmation, offlineRiskSpeechMessage, type HelpCallTarget } from '@/utils/help'
 import { normalizePhoneNumber } from '@/utils/phone'
 
 const { session } = useSession()
 const manualSpeaker = createSpeaker(() => true)
 const speaking = ref(false)
+const online = ref(typeof navigator === 'undefined' ? true : navigator.onLine)
+const phoneCapability = computed(() =>
+  detectPhoneCapability(typeof navigator === 'undefined' ? '' : navigator.userAgent),
+)
+const offlineNotice = computed(() => !online.value)
+
+function updateOnlineState(): void {
+  online.value = navigator.onLine
+}
+
+onMounted(() => {
+  window.addEventListener('online', updateOnlineState)
+  window.addEventListener('offline', updateOnlineState)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('online', updateOnlineState)
+  window.removeEventListener('offline', updateOnlineState)
+})
 const pendingCall = ref<HelpCallTarget | null>(null)
 const confirmButton = ref<HTMLButtonElement | null>(null)
 const emergencyTrigger = ref<HTMLButtonElement | null>(null)
@@ -52,6 +70,10 @@ function confirmCall(): void {
 async function speakImportant(): Promise<void> {
   speaking.value = true
   try {
+    if (!online.value) {
+      manualSpeaker.speak(offlineRiskSpeechMessage())
+      return
+    }
     const risks = await activeProvider().listRisks()
     const important = risks.filter(r => (r.level === 'SEVERE' || r.level === 'WARNING') && !r.acknowledged)
     if (important.length === 0) {
@@ -70,6 +92,13 @@ async function speakImportant(): Promise<void> {
 
 <template>
   <main id="main" class="screen">
+        <p v-if="offlineNotice" class="notice" data-tone="warn" role="status">
+      当前处于离线状态：静态求助说明、120、已保存联系人和拨号确认仍可用；动态风险提醒不会从缓存恢复。
+    </p>
+    <p v-if="phoneCapability === 'unavailable'" class="notice" data-tone="warn" role="status">
+      当前设备可能无法直接拨号。确认后会尝试交给系统处理；若未打开电话应用，请使用身边可用电话拨打 120 或联系家人。
+    </p>
+
     <header class="screen-header">
       <p class="eyebrow">紧急情况</p>
       <h1>求助</h1>
