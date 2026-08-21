@@ -16,7 +16,9 @@
     "audit:android-security": "node scripts/audit-android-security.mjs",
     "seed:live": "node scripts/seed-live-demo.mjs",
     "verify:linkage": "node scripts/verify-web-linkage.mjs",
-    "audit:pwa": "npm run build && node scripts/audit-pwa.mjs"
+    "audit:pwa": "npm run build && node scripts/audit-pwa.mjs",
+    "verify:controlled-release": "node scripts/verify-controlled-release.mjs",
+    "test:controlled-release": "node scripts/verify-controlled-release.test.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.0",

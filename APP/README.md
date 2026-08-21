@@ -67,6 +67,14 @@ npm run build      # 产物输出到 dist/
 ## 近 7 天趋势统计口径
 
 联机趋势只使用服务端事件时间戳和家庭接口返回的 IANA 时区 `time_zone` 分日，不使用浏览器本地时区。同一计划的更新按稳定计划标识折叠，计划总数保留原始创建日期；完成数只计服务端最终动作为 `plan_confirmed` 的那一天。时区、稳定关联或事件时间不完整时趋势显示为不可用，不使用零值代替未知结果。演示模式的趋势为虚构教学数据，标签固定按 `Asia/Shanghai` 生成。
+## 受控发布环境
+
+MOB-147 为 PWA、Android WebView 与正式后端依赖联调提供了受控发布记录模板和静态校验器。它只允许合成“演示”数据与 HTTPS 受控环境，并要求同一记录关联服务端/APP 提交、API、PWA shell、APK、种子 SHA-256、设备和实际场景；模板、运行手册和已知限制见 [受控发布环境运行手册](docs/MOB-147-受控发布环境运行手册.md)。真实地址、密钥、令牌、Cookie、真实健康数据及原始 API 正文不得写入仓库或发布记录。
+
+```powershell
+npm run test:controlled-release
+npm run verify:controlled-release -- --record C:\temp\mob147-release-record.json
+```
 ## 数据来源与诚实状态说明
 
 应用有两种数据模式（在"我的 → 数据来源"切换）：

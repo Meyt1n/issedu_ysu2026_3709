@@ -1,0 +1,23 @@
+{
+  "release_id": "<受控发布批次，例如 MOB-147-controlled-demo-YYYYMMDD>",
+  "environment": "controlled-demo",
+  "server_base_url": "<仅在未提交的本地记录填写 HTTPS 受控地址>",
+  "server_commit": "<服务端 Git 提交哈希>",
+  "app_commit": "<移动端 Git 提交哈希>",
+  "api_version": "v1",
+  "pwa_shell_version": "<Service Worker CACHE_NAME>",
+  "android_version": "<APK versionName/versionCode>",
+  "synthetic_seed_sha256": "<合成数据种子文件 SHA-256>",
+  "synthetic_data": { "is_real": false, "label": "演示" },
+  "device": {
+    "target": "PWA",
+    "os": "<系统与版本>",
+    "browser_or_webview": "<浏览器或 WebView 版本>",
+    "device_model": "<设备型号或模拟器标识>"
+  },
+  "evidence": {
+    "scenarios": ["<已执行场景，例如 cold-start>"],
+    "report_path": "<脱敏测试报告路径>",
+    "known_limitations": ["<未完成项必须如实记录>"]
+  }
+}

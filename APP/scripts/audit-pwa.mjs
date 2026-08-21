@@ -38,7 +38,10 @@ assert(swSource.includes("if (request.method !== 'GET') return"), '非 GET 请�
 assert(swSource.includes('if (url.origin !== self.location.origin) return'), '跨源请求未明确绕过缓存')
 assert(swSource.includes("url.pathname.startsWith('/api') || url.pathname.startsWith('/health')"), '/api 或 /health 未明确绕过缓存')
 assert(swSource.includes("if (request.mode === 'navigate')"), '页面导航未单独采用离线策略')
-assert(swSource.includes(".catch(() => caches.match('/'))"), '离线导航缺少应用外壳回退')
+assert(
+  swSource.includes(".catch(() => caches.match('/'))") || swSource.includes('cached ?? offlineShellResponse()'),
+  '离线导航缺少应用外壳回退',
+)
 assert(swSource.includes('caches.match(request)'), '静态资源未采用缓存优先读取')
 assert(swSource.includes('cache.put(request, copy)'), '静态资源未在成功回源后写入缓存')
 assert(swSource.includes("cache.put('/', copy)"), '在线导航未更新应用外壳缓存')
