@@ -343,6 +343,11 @@ export interface AuthSession {
   household_id?: string
 }
 
+export interface FaceChallenge {
+  challenge_id: string
+  expires_at: number
+}
+
 export interface VisionQualityMetric {
   value: number
   passed: boolean

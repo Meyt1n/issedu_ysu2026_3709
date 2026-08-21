@@ -134,6 +134,32 @@ describe('ApiClient authorization contract', () => {
     expect(JSON.parse(String(requests[1]?.init.body))).toEqual({ session_token: 's'.repeat(40) })
   })
 
+  it('creates a face challenge and sends frames as multipart without URL secrets', async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = []
+    const client = new ApiClient({
+      baseUrl: 'http://local.test',
+      fetcher: async (input, init) => {
+        requests.push({ url: String(input), init: init ?? {} })
+        if (String(input).endsWith('/face-challenge')) {
+          return new Response(JSON.stringify({ challenge_id: 'c'.repeat(32), expires_at: 123 }), { status: 200 })
+        }
+        return new Response(JSON.stringify({ actor_id: 'owner', household_id: 'home', session_token: 's'.repeat(40), expires_at: 123 }), { status: 200 })
+      },
+    })
+    const challenge = await client.createFaceChallenge('home/1', 'owner')
+    const frame = new File(['frame'], 'frame.jpg', { type: 'image/jpeg' })
+    const session = await client.loginWithFace('home/1', 'owner', challenge.challenge_id, [frame, frame])
+
+    expect(session.household_id).toBe('home')
+    expect(requests[0]?.url).toBe('http://local.test/api/v1/auth/face-challenge')
+    expect(JSON.parse(String(requests[0]?.init.body))).toEqual({ household_id: 'home/1', actor_id: 'owner' })
+    expect(requests[1]?.url).toBe('http://local.test/api/v1/auth/face-login')
+    expect(requests[1]?.url).not.toContain(challenge.challenge_id)
+    expect(new Headers(requests[1]?.init.headers).get('Content-Type')).toBeNull()
+    const body = requests[1]?.init.body as FormData
+    expect(body.getAll('frames')).toHaveLength(2)
+  })
+
   it('prefers bearer session authentication and clears on a 401 callback', async () => {
     const headers: Headers[] = []
     const client = new ApiClient({

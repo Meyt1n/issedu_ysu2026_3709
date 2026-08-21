@@ -24,6 +24,16 @@ class PinLoginCredentials(BaseModel):
     pin: str = Field(pattern=r"^[0-9]{6}$")
 
 
+class FaceChallengeRequest(BaseModel):
+    household_id: str = Field(min_length=1, max_length=120)
+    actor_id: str = Field(min_length=1, max_length=120)
+
+
+class FaceChallengeRead(BaseModel):
+    challenge_id: str
+    expires_at: float
+
+
 class PinSetRequest(BaseModel):
     household_id: str = Field(min_length=1, max_length=120)
     pin: str = Field(pattern=r"^[0-9]{6}$")

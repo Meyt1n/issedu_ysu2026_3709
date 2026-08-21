@@ -47,6 +47,7 @@ import type {
   RiskListResponse,
   EvidencePipelineResult,
   FaceCredential,
+  FaceChallenge,
   TrainingConsent,
   UpdateAuthorizationInput,
   UploadedFile,
@@ -207,6 +208,27 @@ export class ApiClient {
       method: 'POST',
       body: JSON.stringify({ household_id: householdId, actor_id: actorId, pin }),
     })
+  }
+
+  createFaceChallenge(householdId: string, actorId: string): Promise<FaceChallenge> {
+    return this.request('/api/v1/auth/face-challenge', {
+      method: 'POST',
+      body: JSON.stringify({ household_id: householdId, actor_id: actorId }),
+    })
+  }
+
+  loginWithFace(
+    householdId: string,
+    actorId: string,
+    challengeId: string,
+    frames: File[],
+  ): Promise<AuthSession> {
+    const body = new FormData()
+    body.append('household_id', householdId)
+    body.append('actor_id', actorId)
+    body.append('challenge_id', challengeId)
+    for (const frame of frames) body.append('frames', frame, frame.name)
+    return this.request('/api/v1/auth/face-login', { method: 'POST', body })
   }
 
   setPin(householdId: string, pin: string, options?: RequestOptions): Promise<{ status: string; household_id: string }> {

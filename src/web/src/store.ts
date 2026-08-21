@@ -317,6 +317,58 @@ export async function connectWithPin(
   }
 }
 
+export async function connectWithFace(
+  actorId: string,
+  householdId: string,
+  frames: File[],
+  accessPurpose: string,
+): Promise<void> {
+  clearSessionContext()
+  state.authMode = 'session'
+  state.actorId = actorId.trim()
+  state.accessPurpose = accessPurpose.trim()
+  if (!state.actorId || !householdId.trim() || frames.length < 2) {
+    state.status = 'signed-out'
+    state.error = '需要选择家庭、账号并完成摄像头活体采集。'
+    return
+  }
+
+  state.status = 'loading'
+  state.error = ''
+  try {
+    const challenge = await apiClient.createFaceChallenge(householdId.trim(), state.actorId)
+    const sessionResult = await apiClient.loginWithFace(
+      householdId.trim(),
+      state.actorId,
+      challenge.challenge_id,
+      frames,
+    )
+    state.sessionToken = sessionResult.session_token
+    state.sessionExpiresAt = sessionResult.expires_at
+    scheduleSessionExpiry(state.sessionToken, state.sessionExpiresAt)
+    state.actorId = sessionResult.actor_id
+    state.households = await apiClient.listHouseholds(requestOptions.value)
+    if (state.households.length === 0) {
+      state.status = 'empty'
+      return
+    }
+    state.selectedHouseholdId =
+      sessionResult.household_id && state.households.some(item => item.id === sessionResult.household_id)
+        ? sessionResult.household_id
+        : state.households[0]?.id ?? ''
+    await loadHouseholdScope()
+    if (sessionIsSignedOut()) return
+    state.status = 'ready'
+  } catch (cause) {
+    const sessionExpired = sessionIsSignedOut() && state.error.includes('会话已过期')
+    if (!sessionExpired) clearSessionContext()
+    state.authMode = 'session'
+    state.status = 'signed-out'
+    if (sessionExpired) return
+    state.error = formatError(cause)
+  }
+}
+
 export async function createHouseholdAndEnter(
   householdName: string,
   memberDrafts: Array<{ displayName: string; role: 'SELF' | 'DEPENDENT' | 'CAREGIVER' }>,

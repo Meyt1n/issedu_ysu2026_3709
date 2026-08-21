@@ -40,10 +40,16 @@ from sqlalchemy.orm import Session
 from app.auth import (
     authenticate,
     authenticate_with_pin,
+    check_face_rate_limit,
+    clear_face_failures,
+    consume_face_challenge,
     consume_pin_challenge,
+    create_face_challenge,
+    create_face_session,
     generate_pin_challenge,
     introspect_session,
     logout,
+    record_face_failure,
     register_account,
     set_account_pin,
     verify_pin_challenge,
@@ -68,8 +74,12 @@ from app.event_service import (
 )
 from app.face_credentials import (
     FACE_CONSENT_VERSION,
+    FACE_MATCH_THRESHOLD,
+    check_face_liveness,
+    decrypt_template,
     encrypt_template,
     extract_face_template,
+    face_template_similarity,
 )
 from app.file_upload import (
     compute_hash,
@@ -132,6 +142,8 @@ from app.schemas import (
     ExportManifestCreate,
     ExportManifestInvalidate,
     ExportManifestRead,
+    FaceChallengeRead,
+    FaceChallengeRequest,
     FaceCredentialRead,
     HardSampleCreate,
     HardSampleRead,
@@ -1251,6 +1263,106 @@ def auth_pin_login(
         "actor_id": payload.actor_id,
         "household_id": payload.household_id,
         **authenticate_with_pin(payload.actor_id, payload.household_id, payload.pin),
+    }
+
+
+@router.post("/auth/face-challenge", response_model=FaceChallengeRead)
+def auth_face_challenge(payload: FaceChallengeRequest) -> dict[str, Any]:
+    """Issue an opaque short-lived challenge; binding is checked at login."""
+    return create_face_challenge(payload.actor_id, payload.household_id)
+
+
+@router.post("/auth/face-login", response_model=AuthSessionRead)
+async def auth_face_login(
+    household_id: str = Form(..., min_length=1, max_length=120),
+    actor_id: str = Form(..., min_length=1, max_length=120),
+    challenge_id: str = Form(..., min_length=16, max_length=128),
+    frames: list[UploadFile] = File(...),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    """Match an in-memory motion sequence and issue the normal Bearer session."""
+    rate_key = check_face_rate_limit(household_id, actor_id)
+
+    def failed() -> NoReturn:
+        record_face_failure(rate_key)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="FACE_AUTH_FAILED")
+
+    try:
+        consume_face_challenge(challenge_id, actor_id, household_id)
+    except HTTPException:
+        failed()
+
+    if not _actor_belongs_to_household(session, household_id, actor_id):
+        failed()
+    credential = session.scalar(
+        select(FaceCredential).where(
+            FaceCredential.household_id == household_id,
+            FaceCredential.actor_id == actor_id,
+            FaceCredential.status == "ACTIVE",
+        )
+    )
+    if credential is None or not credential.encrypted_template:
+        failed()
+
+    frame_bytes: list[bytes] = []
+    templates: list[bytes] = []
+    try:
+        if len(frames) < 2 or len(frames) > 3:
+            failed()
+        for upload in frames:
+            if upload.content_type not in {"image/jpeg", "image/png"}:
+                failed()
+            data = await upload.read(2 * 1024 * 1024 + 1)
+            if not data or len(data) > 2 * 1024 * 1024:
+                failed()
+            if upload.content_type == "image/jpeg" and not data.startswith(b"\xff\xd8\xff"):
+                failed()
+            if upload.content_type == "image/png" and not data.startswith(b"\x89PNG\r\n\x1a\n"):
+                failed()
+            frame_bytes.append(data)
+            from ai.vision.quality_gate import assess_image, decode_image
+
+            quality = assess_image(
+                decode_image(data),
+                source_id="face-login",
+                thresholds=settings.vision_quality_thresholds(),
+            )
+            if not quality["allow_downstream"]:
+                failed()
+            template, _ = extract_face_template(data)
+            templates.append(template)
+        check_face_liveness(templates)
+        try:
+            stored_template = decrypt_template(credential.encrypted_template)
+        except HTTPException as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="FACE_AUTH_UNAVAILABLE",
+            ) from exc
+        best_similarity = max(
+            face_template_similarity(template, stored_template) for template in templates
+        )
+        if best_similarity < FACE_MATCH_THRESHOLD:
+            failed()
+    except HTTPException:
+        raise
+    except ValueError:
+        failed()
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="FACE_AUTH_UNAVAILABLE",
+        ) from exc
+    finally:
+        for index in range(len(frame_bytes)):
+            frame_bytes[index] = b""
+        templates.clear()
+
+    clear_face_failures(rate_key)
+    return {
+        "actor_id": actor_id,
+        "household_id": household_id,
+        **create_face_session(actor_id),
     }
 
 

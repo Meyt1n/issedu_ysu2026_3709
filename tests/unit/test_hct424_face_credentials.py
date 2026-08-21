@@ -3,7 +3,13 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
-from app.face_credentials import decrypt_template, encrypt_template, extract_face_template
+from app.face_credentials import (
+    check_face_liveness,
+    decrypt_template,
+    encrypt_template,
+    extract_face_template,
+    face_template_similarity,
+)
 
 
 def test_face_template_is_encrypted_and_round_trips() -> None:
@@ -22,6 +28,20 @@ def test_invalid_ciphertext_is_not_returned() -> None:
 
     assert error.value.status_code == 500
     assert error.value.detail == "FACE_CREDENTIAL_UNAVAILABLE"
+
+
+def test_face_liveness_rejects_replayed_still_frames() -> None:
+    template = b"\x00" * (32 * 32 * 4)
+
+    with pytest.raises(ValueError, match="FACE_LIVENESS_FAILED"):
+        check_face_liveness([template, template])
+
+
+def test_face_template_similarity_is_bounded_for_valid_templates() -> None:
+    first = (b"\x00\x00\x80\x3f" * (32 * 32))
+    second = (b"\x00\x00\x80\x3f" * (32 * 32))
+
+    assert face_template_similarity(first, second) == pytest.approx(1.0)
 
 
 @pytest.mark.parametrize("image_bytes", [b"", b"not-an-image"])

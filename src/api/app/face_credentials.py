@@ -21,7 +21,9 @@ from app.config import get_settings
 FACE_ALGORITHM_VERSION = "opencv-haar-grayscale-v1"
 FACE_FEATURE_VERSION = "face-template-v1"
 FACE_CONSENT_VERSION = "face-registration-consent-v1"
+FACE_LIVENESS_VERSION = "motion-sequence-v1"
 _FEATURE_SIZE = 32
+FACE_MATCH_THRESHOLD = 0.82
 
 
 def _cipher() -> Fernet:
@@ -93,3 +95,35 @@ def extract_face_template(image_bytes: bytes) -> tuple[bytes, dict[str, Any]]:
         "algorithm_version": FACE_ALGORITHM_VERSION,
         "feature_version": FACE_FEATURE_VERSION,
     }
+
+
+def face_template_similarity(left: bytes, right: bytes) -> float:
+    """Return cosine similarity for two local, versioned face templates."""
+    expected = _FEATURE_SIZE * _FEATURE_SIZE * 4
+    if len(left) != expected or len(right) != expected:
+        raise ValueError("FACE_TEMPLATE_INVALID")
+    left_values = np.frombuffer(left, dtype="<f4").astype(np.float32)
+    right_values = np.frombuffer(right, dtype="<f4").astype(np.float32)
+    left_norm = float(np.linalg.norm(left_values))
+    right_norm = float(np.linalg.norm(right_values))
+    if left_norm == 0 or right_norm == 0:
+        raise ValueError("FACE_TEMPLATE_INVALID")
+    return float(np.dot(left_values, right_values) / (left_norm * right_norm))
+
+
+def check_face_liveness(templates: list[bytes]) -> None:
+    """Require a short motion sequence; identical replayed frames are rejected."""
+    if len(templates) < 2 or len(templates) > 3:
+        raise ValueError("FACE_LIVENESS_FAILED")
+    try:
+        similarities = [
+            face_template_similarity(templates[index], templates[index + 1])
+            for index in range(len(templates) - 1)
+        ]
+    except ValueError as exc:
+        raise ValueError("FACE_LIVENESS_FAILED") from exc
+    # A live sequence must contain measurable pose/illumination change.  This
+    # intentionally rejects a repeated still image while keeping the heuristic
+    # deterministic and versioned for this local OpenCV implementation.
+    if all(similarity >= 0.9995 for similarity in similarities):
+        raise ValueError("FACE_LIVENESS_FAILED")
