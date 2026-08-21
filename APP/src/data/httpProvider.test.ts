@@ -209,7 +209,7 @@ describe('近 7 天完成趋势推导', () => {
   const now = new Date('2026-08-13T12:00:00Z')
 
   it('返回按时间升序的 7 天，最后一天标记为“今”', () => {
-    const points = deriveWeeklyTrendFromEvents([], now)
+    const points = deriveWeeklyTrendFromEvents([], now, 'Asia/Shanghai')
     expect(points).toHaveLength(7)
     expect(points[6]!.label).toBe('今')
     expect(points.every(p => p.total === 0 && p.done === 0)).toBe(true)
@@ -236,7 +236,7 @@ describe('近 7 天完成趋势推导', () => {
         occurred_at: '2026-08-13T03:00:00Z',
       }),
     ]
-    const points = deriveWeeklyTrendFromEvents(events, now)
+    const points = deriveWeeklyTrendFromEvents(events, now, 'Asia/Shanghai')
 
     // 8-07 至 8-09：计划尚未创建
     expect(points[0]!.total).toBe(0)
@@ -244,10 +244,56 @@ describe('近 7 天完成趋势推导', () => {
     // 8-10 起计划存在
     expect(points[3]!.total).toBe(1)
     expect(points[6]!.total).toBe(1)
-    // 8-11 与今天各有一次确认
-    expect(points[4]!.done).toBe(1)
+    // 重复确认按最终服务端动作折叠，只在最后一次确认日计数
+    expect(points[4]!.done).toBe(0)
     expect(points[6]!.done).toBe(1)
     // 8-12 无确认
     expect(points[5]!.done).toBe(0)
+  })
+  it('folds plan updates by stable plan_event_id and counts only the final confirmation', () => {
+    const events = [
+      makeEvent({ id: 'p1', event_type: 'plan_created', occurred_at: '2026-08-12T14:30:00Z' }),
+      makeEvent({ id: 'u1', event_type: 'plan_updated', payload: { plan_event_id: 'p1' }, occurred_at: '2026-08-12T15:00:00Z' }),
+      makeEvent({ id: 'a1', event_type: 'plan_deferred', payload: { plan_event_id: 'p1' }, occurred_at: '2026-08-13T00:10:00Z' }),
+      makeEvent({ id: 'a2', event_type: 'plan_confirmed', payload: { plan_event_id: 'p1' }, occurred_at: '2026-08-13T00:20:00Z' }),
+    ]
+    const points = deriveWeeklyTrendFromEvents(events, now, 'Asia/Shanghai')
+    expect(points[6]).toMatchObject({ total: 1, done: 1 })
+  })
+
+  it('returns no trend rather than applying the browser timezone when household timezone is absent', () => {
+    expect(deriveWeeklyTrendFromEvents([], now)).toEqual([])
+  })
+  it('uses household calendar days across a DST transition instead of fixed 24-hour browser days', () => {
+    const dstNow = new Date('2026-03-09T04:30:00Z')
+    const points = deriveWeeklyTrendFromEvents([], dstNow, 'America/New_York')
+    expect(points).toHaveLength(7)
+    expect(points.map(point => point.label)).toEqual(['二', '三', '四', '五', '六', '日', '今'])
+  })
+
+  it('keeps a plan created before the window in totals after an in-window update', () => {
+    const events = [
+      makeEvent({ id: 'p-before', event_type: 'plan_created', occurred_at: '2026-08-01T03:00:00Z' }),
+      makeEvent({ id: 'p-update', event_type: 'plan_updated', payload: { plan_event_id: 'p-before' }, occurred_at: '2026-08-12T03:00:00Z' }),
+    ]
+    const points = deriveWeeklyTrendFromEvents(events, now, 'Asia/Shanghai')
+    expect(points[0]).toMatchObject({ total: 1, done: 0 })
+    expect(points[6]).toMatchObject({ total: 1, done: 0 })
+  })
+
+  it('uses the latest action: a later defer or skip prevents an earlier confirmation from counting', () => {
+    const events = [
+      makeEvent({ id: 'p-final', event_type: 'plan_created', occurred_at: '2026-08-13T00:00:00Z' }),
+      makeEvent({ id: 'c-final', event_type: 'plan_confirmed', payload: { plan_event_id: 'p-final' }, occurred_at: '2026-08-13T01:00:00Z' }),
+      makeEvent({ id: 's-final', event_type: 'plan_skipped', payload: { plan_event_id: 'p-final' }, occurred_at: '2026-08-13T02:00:00Z' }),
+    ]
+    expect(deriveWeeklyTrendFromEvents(events, now, 'Asia/Shanghai')[6]).toMatchObject({ total: 1, done: 0 })
+  })
+
+  it('returns unavailable when a plan update or action has no stable relation or timestamp', () => {
+    const orphanUpdate = [makeEvent({ id: 'u-orphan', event_type: 'plan_updated', occurred_at: '2026-08-13T01:00:00Z' })]
+    const invalidAction = [makeEvent({ id: 'a-invalid', event_type: 'plan_confirmed', payload: { plan_event_id: 'p1' }, occurred_at: 'not-a-time' })]
+    expect(deriveWeeklyTrendFromEvents(orphanUpdate, now, 'Asia/Shanghai')).toEqual([])
+    expect(deriveWeeklyTrendFromEvents(invalidAction, now, 'Asia/Shanghai')).toEqual([])
   })
 })
