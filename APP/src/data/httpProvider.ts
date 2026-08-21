@@ -145,37 +145,83 @@ const TREND_WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六']
 
 function eventTime(event: HealthEvent): number {
   const time = Date.parse(event.occurred_at ?? event.created_at)
-  return Number.isFinite(time) ? time : 0
+  return Number.isFinite(time) ? time : Number.NaN
+}
+
+function stablePlanId(event: HealthEvent): string | null {
+  const payload = event.payload ?? {}
+  const linked = textOf(payload['plan_event_id']) || textOf(payload['plan_id'])
+  if (event.event_type === 'plan_created') return linked || event.id
+  return linked || null
+}
+
+function dateParts(time: number, timeZone: string): { day: string; weekday: number } | null {
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short',
+    }).formatToParts(new Date(time))
+    const value = (kind: string) => parts.find(part => part.type === kind)?.value
+    const weekday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(value('weekday') ?? '')
+    const year = value('year'); const month = value('month'); const day = value('day')
+    return year && month && day && weekday >= 0 ? { day: `${year}-${month}-${day}`, weekday } : null
+  } catch { return null }
 }
 
 /**
- * 从时间线事件推导近 7 天完成趋势：
- * 某天的 total = 截至当天结束已存在的计划事实数；
- * done = 当天发生的 plan_confirmed 动作数（服务端按计划幂等）。
+ * Uses server timestamps and an explicit household IANA timezone. Updates must
+ * reference a stable plan id; orphan updates are ignored rather than counted.
+ * The total is plans active by local business-day end; done is the plan's final
+ * action only, when that final action is a confirmation on that business day.
  */
-export function deriveWeeklyTrendFromEvents(events: HealthEvent[], now: Date = new Date()): TrendPoint[] {
-  const plans = events.filter(e => PLAN_FACT_TYPES.has(e.event_type))
-  const confirms = events.filter(e => e.event_type === 'plan_confirmed')
-
-  const points: TrendPoint[] = []
-  for (let offset = 6; offset >= 0; offset -= 1) {
-    const dayStart = new Date(now)
-    dayStart.setDate(dayStart.getDate() - offset)
-    dayStart.setHours(0, 0, 0, 0)
-    const dayEnd = dayStart.getTime() + 24 * 3600 * 1000
-
-    points.push({
-      label: offset === 0 ? '今' : TREND_WEEKDAYS[dayStart.getDay()]!,
-      total: plans.filter(p => eventTime(p) < dayEnd).length,
-      done: confirms.filter(c => {
-        const time = eventTime(c)
-        return time >= dayStart.getTime() && time < dayEnd
-      }).length,
-    })
+export function deriveWeeklyTrendFromEvents(
+  events: HealthEvent[],
+  now: Date = new Date(),
+  timeZone?: string,
+): TrendPoint[] {
+  if (!timeZone) return []
+  const nowTime = now.getTime()
+  const today = dateParts(nowTime, timeZone)
+  if (!today) return []
+  const dayFormatter = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' })
+  const dayKey = (time: number) => {
+    const p = dayFormatter.formatToParts(new Date(time)); const v = (type: string) => p.find(x => x.type === type)?.value
+    return `${v('year')}-${v('month')}-${v('day')}`
   }
-  return points
+  // Calendar arithmetic is performed on YYYY-MM-DD keys, so a 23/25-hour DST
+  // day cannot duplicate or omit a business date in the seven-day window.
+  const addCalendarDays = (day: string, offset: number) => {
+    const [year, month, date] = day.split('-').map(Number)
+    return new Date(Date.UTC(year!, month! - 1, date! + offset)).toISOString().slice(0, 10)
+  }
+  const weekdayForDay = (day: string) => new Date(`${day}T12:00:00Z`).getUTCDay()
+  const windowDays = Array.from({ length: 7 }, (_, index) => addCalendarDays(today.day, index - 6))
+  const planFacts = new Map<string, HealthEvent>()
+  const actions = new Map<string, HealthEvent>()
+  for (const event of events) {
+    const isPlanEvent = PLAN_FACT_TYPES.has(event.event_type) || PLAN_ACTION_TYPES.has(event.event_type)
+    if (!isPlanEvent) continue
+    const time = eventTime(event)
+    if (!Number.isFinite(time)) return []
+    const id = stablePlanId(event)
+    if (!id) return []
+    if (PLAN_FACT_TYPES.has(event.event_type)) {
+      const prior = planFacts.get(id)
+      // An update changes plan content, not the fact that the plan already existed.
+      if (!prior || eventTime(prior) > time) planFacts.set(id, event)
+    } else {
+      const prior = actions.get(id)
+      if (!prior || eventTime(prior) <= time) actions.set(id, event)
+    }
+  }
+  return windowDays.map((day, index) => {
+    const total = [...planFacts.values()].filter(plan => dayKey(eventTime(plan)) <= day).length
+    const done = [...actions.entries()].filter(([id, action]) =>
+      planFacts.has(id) && action.event_type === 'plan_confirmed' && dayKey(eventTime(action)) === day,
+    ).length
+    return { label: index === 6 ? '今' : TREND_WEEKDAYS[weekdayForDay(day)]!, total, done }
+  })
 }
-
 function toMedication(event: HealthEvent): MedicationItem {
   const payload = event.payload ?? {}
   const expiry = textOf(payload['expiry_date'])
@@ -196,6 +242,7 @@ export class HttpDataProvider implements DataProvider {
   private readonly client: ApiClient
   private readonly context: () => SessionContext
   private householdId: string | null = null
+  private householdTimeZone: string | null = null
   private memberCache = new Map<string, Member>()
   private taskCache = new Map<string, CareTask>()
   /** 同一 File 的上传请求在当前运行时共享，避免重试或重复点击产生多个文件。 */
@@ -265,25 +312,28 @@ export class HttpDataProvider implements DataProvider {
         code: 'NO_HOUSEHOLD',
       })
     }
+    const choose = (household: (typeof households)[number]) => {
+      this.householdId = household.id
+      this.householdTimeZone = typeof household.time_zone === 'string' && household.time_zone.trim()
+        ? household.time_zone.trim()
+        : null
+      return household.id
+    }
 
     const selected = householdId.trim()
     if (selected) {
       const match = households.find(candidate => candidate.id === selected)
       if (!match) {
-        // 被撤权、被删除或已不在授权范围：回到安全选择态，不自动落到另一个家庭。
+        // Revoked, removed, or outside current authorization: never fall back to another household.
         throw new ApiClientError('当前选择的家庭已不可用，请重新选择', {
           status: 404,
           code: 'HOUSEHOLD_UNAVAILABLE',
         })
       }
-      this.householdId = match.id
-      return match.id
+      return choose(match)
     }
 
-    if (households.length === 1) {
-      this.householdId = households[0]!.id
-      return this.householdId
-    }
+    if (households.length === 1) return choose(households[0]!)
 
     throw new ApiClientError('当前身份可访问多个家庭，请先选择一个家庭', {
       status: 409,
@@ -516,7 +566,7 @@ export class HttpDataProvider implements DataProvider {
   async getWeeklyTrend(memberId: string): Promise<TrendPoint[]> {
     const householdId = await this.resolveHouseholdId()
     const events = await this.client.listMemberTimeline(householdId, memberId, this.options())
-    return deriveWeeklyTrendFromEvents(events)
+    return deriveWeeklyTrendFromEvents(events, new Date(), this.householdTimeZone ?? undefined)
   }
 
   async checkImageQuality(file: File): Promise<QualityCheckResult> {

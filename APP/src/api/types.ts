@@ -32,6 +32,8 @@ export interface Household {
   name: string
   created_by: string
   created_at: string
+  /** IANA household timezone supplied by the server for business-day reporting. */
+  time_zone?: string
 }
 
 export interface Member {

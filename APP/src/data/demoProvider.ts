@@ -510,13 +510,16 @@ export const demoProvider: DataProvider = {
     // 前 6 天为稳定的虚构数据（按成员区分），今天与当前任务状态联动。
     const seed = memberId === 'm-li' ? [1, 1, 1, 0, 1, 1] : [2, 3, 2, 3, 1, 3]
     const totalSeed = memberId === 'm-li' ? [1, 1, 1, 1, 1, 1] : [3, 3, 3, 3, 3, 3]
+    // Demo fixtures are fictional, but their business-day labels still use an explicit timezone.
+    const demoTimeZone = 'Asia/Shanghai'
+    const weekday = new Intl.DateTimeFormat('en-US', { timeZone: demoTimeZone, weekday: 'short' })
+    const weekdayIndex = (date: Date) => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(weekday.format(date))
     const points: TrendPoint[] = []
     for (let offset = 6; offset >= 1; offset -= 1) {
-      const date = new Date()
-      date.setDate(date.getDate() - offset)
+      const date = new Date(Date.now() - offset * 86_400_000)
       const index = 6 - offset
       points.push({
-        label: WEEKDAY_LABELS[date.getDay()]!,
+        label: WEEKDAY_LABELS[weekdayIndex(date)]!,
         done: seed[index] ?? 0,
         total: totalSeed[index] ?? 0,
       })

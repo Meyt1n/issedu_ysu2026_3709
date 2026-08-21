@@ -350,13 +350,18 @@ onMounted(reload)
         </details>
       </section>
 
-      <section v-if="trend.length > 0" aria-labelledby="trend-title">
+      <section aria-labelledby="trend-title">
         <div class="section-heading">
           <h2 id="trend-title"><span class="heading-dot" data-tone="accent" aria-hidden="true"></span>近 7 天完成情况</h2>
         </div>
         <div class="card" style="margin-top: 10px">
-          <TrendChart :points="trend" />
-          <p class="meta-line">柱高为当日完成比例；琥珀色为今天。数据来自计划确认事件。</p>
+          <p v-if="trend.length === 0" class="meta-line" role="status">
+            趋势当前不可用或没有可复核的计划数据；应用不会用零值代替未知结果。
+          </p>
+          <template v-else>
+            <TrendChart :points="trend" />
+            <p class="meta-line">按家庭服务端时区分日；同一计划的更新会折叠，且仅最终确认为完成。</p>
+          </template>
         </div>
       </section>
 
