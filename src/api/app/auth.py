@@ -78,10 +78,14 @@ def authenticate(actor_id: str, password: str) -> dict[str, Any]:
     return _create_session(actor_id)
 
 
-def _create_session(actor_id: str) -> dict[str, Any]:
+def _create_session(actor_id: str, household_id: str | None = None) -> dict[str, Any]:
     token = secrets.token_hex(32)
     expires_at = time.time() + SESSION_TTL_SECONDS
-    _sessions[token] = {"actor_id": actor_id, "expires_at": expires_at}
+    _sessions[token] = {
+        "actor_id": actor_id,
+        "household_id": household_id,
+        "expires_at": expires_at,
+    }
     logger.info("LOGIN_OK actor=%s", actor_id)
     return {"session_token": token, "expires_at": expires_at}
 
@@ -138,8 +142,8 @@ def clear_face_failures(rate_key: str) -> None:
     _failed_attempts.pop(rate_key, None)
 
 
-def create_face_session(actor_id: str) -> dict[str, Any]:
-    return _create_session(actor_id)
+def create_face_session(actor_id: str, household_id: str) -> dict[str, Any]:
+    return _create_session(actor_id, household_id)
 
 
 def _validate_pin(pin: str) -> None:
@@ -156,6 +160,11 @@ def set_account_pin(actor_id: str, household_id: str, pin: str) -> None:
     _pin_hashes[(household_id, actor_id)] = hash_password(pin)
 
 
+def revoke_account_pin(actor_id: str, household_id: str) -> None:
+    """Remove a household PIN during erasure; no recoverable secret remains."""
+    _pin_hashes.pop((household_id, actor_id), None)
+
+
 def authenticate_with_pin(actor_id: str, household_id: str, pin: str) -> dict[str, Any]:
     """Authenticate a household-scoped actor with a six-digit PIN."""
     _validate_pin(pin)
@@ -166,7 +175,7 @@ def authenticate_with_pin(actor_id: str, household_id: str, pin: str) -> dict[st
         _failed_attempts[rate_key].append(time.time())
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="AUTH_FAILED")
     _failed_attempts.pop(rate_key, None)
-    return _create_session(actor_id)
+    return _create_session(actor_id, household_id)
 
 
 def verify_reauthentication(
@@ -222,6 +231,22 @@ def introspect_session(token: str) -> dict[str, Any]:
 
 def logout(token: str) -> None:
     _sessions.pop(token, None)
+
+
+def revoke_household_sessions(
+    household_id: str,
+    actor_ids: set[str] | None = None,
+) -> int:
+    """Revoke PIN/face sessions bound to an erased household."""
+    removed = 0
+    for token, session in list(_sessions.items()):
+        if session.get("household_id") != household_id:
+            continue
+        if actor_ids is not None and session.get("actor_id") not in actor_ids:
+            continue
+        _sessions.pop(token, None)
+        removed += 1
+    return removed
 
 
 def pin_households_for_actor(actor_id: str) -> list[str]:

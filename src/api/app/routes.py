@@ -256,6 +256,35 @@ def _actor_belongs_to_household(session: Session, household_id: str, actor_id: s
     ) is not None
 
 
+def _record_authentication_audit(
+    session: Session,
+    *,
+    household_id: str,
+    actor_id: str,
+    method: str,
+    outcome: str,
+    reason: str,
+) -> None:
+    """Persist only authentication metadata; never secrets, templates, or scores."""
+    household = session.get(Household, household_id)
+    if _is_erased(household):
+        return
+    session.add(
+        AccessAudit(
+            household_id=household_id,
+            authorization_id=None,
+            actor_id=actor_id,
+            operation="AUTHENTICATION",
+            action=f"{method}_LOGIN",
+            data_field="pin" if method == "PIN" else "biometric_template",
+            purpose="authentication",
+            outcome=outcome,
+            reason=reason[:64],
+        )
+    )
+    session.commit()
+
+
 def _future_time(value: datetime) -> datetime:
     normalized = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
     if normalized <= datetime.now(UTC):
@@ -1258,11 +1287,43 @@ def auth_pin_login(
     # Keep household and identity selection server-side: a client cannot use a
     # valid PIN to enter a different household or impersonate another member.
     if not _actor_belongs_to_household(session, payload.household_id, payload.actor_id):
+        _record_authentication_audit(
+            session,
+            household_id=payload.household_id,
+            actor_id=payload.actor_id,
+            method="PIN",
+            outcome="FAILED",
+            reason="AUTH_FAILED",
+        )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="AUTH_FAILED")
+    try:
+        authentication = authenticate_with_pin(
+            payload.actor_id,
+            payload.household_id,
+            payload.pin,
+        )
+    except HTTPException as exc:
+        _record_authentication_audit(
+            session,
+            household_id=payload.household_id,
+            actor_id=payload.actor_id,
+            method="PIN",
+            outcome="FAILED",
+            reason=str(exc.detail).split(":", 1)[0],
+        )
+        raise
+    _record_authentication_audit(
+        session,
+        household_id=payload.household_id,
+        actor_id=payload.actor_id,
+        method="PIN",
+        outcome="SUCCESS",
+        reason="AUTHENTICATED",
+    )
     return {
         "actor_id": payload.actor_id,
         "household_id": payload.household_id,
-        **authenticate_with_pin(payload.actor_id, payload.household_id, payload.pin),
+        **authentication,
     }
 
 
@@ -1281,19 +1342,38 @@ async def auth_face_login(
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     """Match an in-memory motion sequence and issue the normal Bearer session."""
-    rate_key = check_face_rate_limit(household_id, actor_id)
+    try:
+        rate_key = check_face_rate_limit(household_id, actor_id)
+    except HTTPException:
+        _record_authentication_audit(
+            session,
+            household_id=household_id,
+            actor_id=actor_id,
+            method="FACE",
+            outcome="FAILED",
+            reason="RATE_LIMITED",
+        )
+        raise
 
-    def failed() -> NoReturn:
+    def failed(reason: str = "FACE_AUTH_FAILED") -> NoReturn:
         record_face_failure(rate_key)
+        _record_authentication_audit(
+            session,
+            household_id=household_id,
+            actor_id=actor_id,
+            method="FACE",
+            outcome="FAILED",
+            reason=reason,
+        )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="FACE_AUTH_FAILED")
 
     try:
         consume_face_challenge(challenge_id, actor_id, household_id)
     except HTTPException:
-        failed()
+        failed("CHALLENGE_INVALID")
 
     if not _actor_belongs_to_household(session, household_id, actor_id):
-        failed()
+        failed("ACCOUNT_SCOPE_INVALID")
     credential = session.scalar(
         select(FaceCredential).where(
             FaceCredential.household_id == household_id,
@@ -1302,23 +1382,23 @@ async def auth_face_login(
         )
     )
     if credential is None or not credential.encrypted_template:
-        failed()
+        failed("CREDENTIAL_UNAVAILABLE")
 
     frame_bytes: list[bytes] = []
     templates: list[bytes] = []
     try:
         if len(frames) < 2 or len(frames) > 3:
-            failed()
+            failed("FRAME_COUNT_INVALID")
         for upload in frames:
             if upload.content_type not in {"image/jpeg", "image/png"}:
-                failed()
+                failed("FRAME_TYPE_INVALID")
             data = await upload.read(2 * 1024 * 1024 + 1)
             if not data or len(data) > 2 * 1024 * 1024:
-                failed()
+                failed("FRAME_SIZE_INVALID")
             if upload.content_type == "image/jpeg" and not data.startswith(b"\xff\xd8\xff"):
-                failed()
+                failed("FRAME_MAGIC_INVALID")
             if upload.content_type == "image/png" and not data.startswith(b"\x89PNG\r\n\x1a\n"):
-                failed()
+                failed("FRAME_MAGIC_INVALID")
             frame_bytes.append(data)
             from ai.vision.quality_gate import assess_image, decode_image
 
@@ -1328,13 +1408,26 @@ async def auth_face_login(
                 thresholds=settings.vision_quality_thresholds(),
             )
             if not quality["allow_downstream"]:
-                failed()
+                failed("FRAME_QUALITY_INVALID")
             template, _ = extract_face_template(data)
             templates.append(template)
-        check_face_liveness(templates)
+        try:
+            check_face_liveness(templates)
+        except ValueError as exc:
+            if str(exc) == "FACE_LIVENESS_FAILED":
+                failed("LIVENESS_FAILED")
+            failed("FACE_MATCH_FAILED")
         try:
             stored_template = decrypt_template(credential.encrypted_template)
         except HTTPException as exc:
+            _record_authentication_audit(
+                session,
+                household_id=household_id,
+                actor_id=actor_id,
+                method="FACE",
+                outcome="FAILED",
+                reason="FACE_SERVICE_UNAVAILABLE",
+            )
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="FACE_AUTH_UNAVAILABLE",
@@ -1347,8 +1440,16 @@ async def auth_face_login(
     except HTTPException:
         raise
     except ValueError:
-        failed()
+        failed("FACE_MATCH_FAILED")
     except RuntimeError as exc:
+        _record_authentication_audit(
+            session,
+            household_id=household_id,
+            actor_id=actor_id,
+            method="FACE",
+            outcome="FAILED",
+            reason="FACE_SERVICE_UNAVAILABLE",
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="FACE_AUTH_UNAVAILABLE",
@@ -1359,10 +1460,18 @@ async def auth_face_login(
         templates.clear()
 
     clear_face_failures(rate_key)
+    _record_authentication_audit(
+        session,
+        household_id=household_id,
+        actor_id=actor_id,
+        method="FACE",
+        outcome="SUCCESS",
+        reason="AUTHENTICATED",
+    )
     return {
         "actor_id": actor_id,
         "household_id": household_id,
-        **create_face_session(actor_id),
+        **create_face_session(actor_id, household_id),
     }
 
 
@@ -1375,6 +1484,20 @@ def auth_set_pin(
     if not _actor_belongs_to_household(session, payload.household_id, actor_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RESOURCE_NOT_FOUND")
     set_account_pin(actor_id, payload.household_id, payload.pin)
+    session.add(
+        AccessAudit(
+            household_id=payload.household_id,
+            authorization_id=None,
+            actor_id=actor_id,
+            operation="PIN_CREDENTIAL",
+            action="SET",
+            data_field="pin",
+            purpose="authentication",
+            outcome="SUCCESS",
+            reason="PIN_CONFIGURED",
+        )
+    )
+    session.commit()
     return {"status": "pin_configured", "household_id": payload.household_id}
 
 

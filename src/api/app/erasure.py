@@ -18,6 +18,7 @@ from sqlalchemy import JSON, DateTime, String, func, select
 from sqlalchemy.orm import Mapped, Session, mapped_column
 from sqlalchemy.orm.attributes import flag_modified
 
+from app.auth import revoke_account_pin, revoke_household_sessions
 from app.config import get_settings
 from app.file_upload import delete_file_tree
 from app.hard_sample import HardSample, delete_hard_sample
@@ -266,6 +267,8 @@ def request_household_erasure(
     tables_affected = [
         "member",
         "face_credential",
+        "pin_hash",
+        "auth_session",
         "care_authorization",
         "vision_task",
         "knowledge_document",
@@ -278,6 +281,8 @@ def request_household_erasure(
         tables_affected.insert(0, "household")
 
     revoked = 0
+    pins_deleted = 0
+    sessions_revoked = 0
     try:
         credential_stmt = select(FaceCredential).where(
             FaceCredential.household_id == household.id,
@@ -294,12 +299,25 @@ def request_household_erasure(
                 credential_stmt = credential_stmt.where(False)
         credentials = list(session.scalars(credential_stmt).all())
         credentials_deleted = 0
+        target_actor_ids = {
+            member.actor_id for member in members if member.actor_id
+        }
+        pin_actor_ids = target_actor_ids | {credential.actor_id for credential in credentials}
+        if member_id is None:
+            pin_actor_ids.add(household.created_by)
+        for target_actor_id in pin_actor_ids:
+            revoke_account_pin(target_actor_id, household.id)
+        pins_deleted = len(pin_actor_ids)
         for credential in credentials:
             if credential.status != "DELETED" or credential.encrypted_template:
                 credential.status = "DELETED"
                 credential.revoked_at = credential.revoked_at or now
                 credential.encrypted_template = b""
                 credentials_deleted += 1
+        if member_id is None:
+            sessions_revoked = revoke_household_sessions(household.id)
+        else:
+            sessions_revoked = revoke_household_sessions(household.id, target_actor_ids)
 
         if member_ids:
             authorizations = list(
@@ -450,6 +468,8 @@ def request_household_erasure(
         "hard_samples_deleted": samples_deleted,
         "event_rows_retained": int(event_count),
         "authorizations_revoked": revoked if "database" not in error_layers else 0,
+        "pins_deleted": pins_deleted,
+        "sessions_revoked": sessions_revoked,
     }
     try:
         assert_redacted_audit(scope)
