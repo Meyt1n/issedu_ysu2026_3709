@@ -103,3 +103,35 @@ describe('ApiClient 鉴权传输适配', () => {
     }
   })
 })
+
+describe('家庭 PIN 设置（HCT-427）', () => {
+  it('PIN 只出现在请求体，不进 URL 或 query', async () => {
+    let url = ''
+    let request: RequestInit | undefined
+    const session: AuthSession = {
+      actorId: 'owner',
+      accessPurpose: 'family-care',
+      transport: 'bearer',
+      accessToken: 'test-only-token',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    }
+    const client = new ApiClient({
+      authSessionProvider: () => session,
+      fetcher: async (input, init) => {
+        url = String(input)
+        request = init
+        return response()
+      },
+    })
+
+    await client.setAccountPin('household-1', '135790')
+
+    expect(url).toBe('/api/v1/auth/pin')
+    expect(url).not.toContain('135790')
+    expect(JSON.parse(String(request?.body))).toEqual({
+      household_id: 'household-1',
+      pin: '135790',
+    })
+    expect(new Headers(request?.headers).get('Authorization')).toBe('Bearer test-only-token')
+  })
+})

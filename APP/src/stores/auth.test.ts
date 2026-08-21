@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
-import { createAuthTestStub } from '@/api/auth'
+import { AuthAdapterError, createAuthTestStub } from '@/api/auth'
 import { ApiClientError } from '@/api/client'
 
 import {
@@ -164,5 +164,43 @@ describe('正式会话生命周期', () => {
     await confirmStepUp(adapter, { action: 'confirm_high_risk', method: 'pin', code: '123456' })
     expect(auth.pendingStepUp).toBeNull()
     expect(JSON.stringify(auth)).not.toContain('123456')
+  })
+})
+
+describe('二次确认失败不得连带清空登录会话', () => {
+  beforeEach(() => {
+    resetAuthState()
+    localStorage.clear()
+  })
+
+  it('未配置 PIN、需要选定家庭、重放和过期都保留当前会话', async () => {
+    await signIn(createAuthTestStub(), CREDENTIALS)
+    const { auth } = useAuth()
+
+    for (const code of [
+      'STEP_UP_NOT_CONFIGURED',
+      'STEP_UP_HOUSEHOLD_REQUIRED',
+      'STEP_UP_REPLAY',
+      'STEP_UP_EXPIRED',
+      'STEP_UP_FAILED',
+    ] as const) {
+      const handled = handleAuthFailure(
+        new AuthAdapterError('step-up rejected', { code, status: 409 }),
+      )
+      expect(handled).toBe(false)
+      expect(auth.status).toBe('authenticated')
+      expect(getAuthSession()).not.toBeNull()
+      expect(isWriteBlocked()).toBe(false)
+    }
+  })
+
+  it('真正的会话失效仍然清空会话', async () => {
+    await signIn(createAuthTestStub(), CREDENTIALS)
+    const handled = handleAuthFailure(
+      new AuthAdapterError('session gone', { code: 'SESSION_EXPIRED', status: 401 }),
+    )
+    expect(handled).toBe(true)
+    expect(useAuth().auth.status).toBe('reauth-required')
+    expect(getAuthSession()).toBeNull()
   })
 })

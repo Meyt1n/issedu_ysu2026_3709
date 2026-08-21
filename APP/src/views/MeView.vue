@@ -5,7 +5,7 @@ import AppIcon from '@/components/AppIcon.vue'
 import SwitchRow from '@/components/SwitchRow.vue'
 import ErrorNotice from '@/components/ErrorNotice.vue'
 import { createSpeaker } from '@/composables/useSpeech'
-import { ApiClient } from '@/api/client'
+import { ApiClient, ApiClientError } from '@/api/client'
 import { presentApiError, type ErrorPresentation } from '@/api/errors'
 import { resetDemoData } from '@/data/demoProvider'
 import { currentAuthAdapter, familyAuthAdapter } from '@/data/authAdapter'
@@ -50,6 +50,8 @@ const authBusy = ref(false)
 const authMessage = ref('')
 const authError = ref('')
 const stepUpCode = ref('')
+const pinDraft = ref('')
+const householdId = ref('')
 
 const usesRealAuth = computed(() => session.authMode === 'real')
 const signedIn = computed(() => auth.status === 'authenticated')
@@ -135,6 +137,52 @@ function onAuthModeChange(mode: AuthMode): void {
   clearCapabilities()
 }
 
+/**
+ * 解析当前身份可访问的第一个家庭，与联机 Provider 的选择逻辑一致。
+ * 二次确认需要家庭 PIN，而 PIN 按家庭划分，因此设置与发起都要带上家庭。
+ */
+async function resolveHouseholdId(): Promise<string> {
+  if (householdId.value) return householdId.value
+  const client = new ApiClient({
+    baseUrl: session.serverBaseUrl,
+    authSessionProvider: getAuthSession,
+  })
+  const households = await client.listHouseholds({ accessPurpose: session.accessPurpose || undefined })
+  const first = households[0]
+  if (!first) {
+    throw new ApiClientError('当前身份没有可访问的家庭', { status: 404, code: 'NO_HOUSEHOLD' })
+  }
+  householdId.value = first.id
+  return first.id
+}
+
+async function submitHouseholdPin(): Promise<void> {
+  const pin = pinDraft.value.trim()
+  if (!/^[0-9]{6}$/.test(pin)) {
+    authError.value = '家庭 PIN 必须是 6 位数字。'
+    return
+  }
+  authBusy.value = true
+  authError.value = ''
+  authMessage.value = ''
+  try {
+    const client = new ApiClient({
+      baseUrl: session.serverBaseUrl,
+      authSessionProvider: getAuthSession,
+    })
+    await client.setAccountPin(await resolveHouseholdId(), pin, {
+      accessPurpose: session.accessPurpose || undefined,
+    })
+    authMessage.value = '家庭 PIN 已保存在家庭服务器（只存哈希）；本机不保留这个 PIN。'
+  } catch (cause) {
+    authError.value = presentApiError(cause).message
+  } finally {
+    // PIN 用完即弃，不留在输入框、store 或本机存储里。
+    pinDraft.value = ''
+    authBusy.value = false
+  }
+}
+
 async function submitSignOut(): Promise<void> {
   authBusy.value = true
   authError.value = ''
@@ -142,6 +190,7 @@ async function submitSignOut(): Promise<void> {
   try {
     // 本地会话先失效；随后通知服务端销毁会话。
     await signOut(currentAuthAdapter())
+    householdId.value = ''
     authMessage.value = '已退出登录，本机不再保留该会话的查询、上传和能力探测结果。'
     connectionState.value = 'idle'
     connectionMessage.value = ''
@@ -161,8 +210,9 @@ async function startStepUp(): Promise<void> {
     const challenge = await beginStepUp(familyAuthAdapter(), {
       action: 'confirm_high_risk',
       method: 'pin',
+      householdId: await resolveHouseholdId(),
     })
-    authMessage.value = `已发起二次确认（${challenge.action}），请输入家庭服务器提供的一次性 PIN。`
+    authMessage.value = `已发起二次确认（${challenge.action}），请输入该家庭的 6 位 PIN。`
   } catch (cause) {
     authError.value = presentApiError(cause).message
   } finally {
@@ -511,9 +561,28 @@ function restoreDemoData(): void {
 
             <h4 class="step-up-title">高风险动作二次确认（PIN）</h4>
             <p class="meta-line">
-              授权变更、删除等高风险动作需要一次性 PIN。PIN 由家庭服务器下发到已确认的渠道，
-              不会显示在本页，也不会写入本机存储或日志。
+              授权变更、删除等高风险动作需要用本家庭的 6 位 PIN 再确认一次。PIN 只保存在家庭服务器上（仅哈希），
+              本机不保留，也不会写入日志或地址栏。
             </p>
+            <label class="field">
+              设置或更新家庭 PIN
+              <input
+                v-model="pinDraft"
+                type="password"
+                inputmode="numeric"
+                autocomplete="new-password"
+                maxlength="6"
+                placeholder="6 位数字"
+              />
+            </label>
+            <button
+              type="button"
+              class="btn btn-quiet btn-block"
+              :disabled="authBusy || pinDraft.trim().length !== 6"
+              @click="submitHouseholdPin"
+            >
+              保存家庭 PIN
+            </button>
             <button
               type="button"
               class="btn btn-quiet btn-block"
@@ -524,13 +593,14 @@ function restoreDemoData(): void {
             </button>
             <template v-if="auth.pendingStepUp">
               <label class="field">
-                一次性 PIN
+                家庭 PIN
                 <input
                   v-model="stepUpCode"
-                  type="text"
+                  type="password"
                   inputmode="numeric"
                   autocomplete="one-time-code"
-                  placeholder="家庭服务器下发的 PIN"
+                  maxlength="6"
+                  placeholder="本家庭的 6 位 PIN"
                 />
               </label>
               <button

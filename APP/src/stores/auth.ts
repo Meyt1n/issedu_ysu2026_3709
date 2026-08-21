@@ -182,7 +182,7 @@ export async function revalidate(adapter: AuthAdapter): Promise<boolean> {
 
 export async function beginStepUp(
   adapter: AuthAdapter,
-  input: { action: string; method: StepUpMethod },
+  input: { action: string; method: StepUpMethod; householdId?: string },
 ): Promise<StepUpChallenge> {
   const challenge = await adapter.beginStepUp(input)
   state.pendingStepUp = challenge
