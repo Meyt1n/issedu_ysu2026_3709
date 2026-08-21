@@ -1,3 +1,4 @@
+import { AuthAdapterError } from './auth'
 import { ApiClientError } from './client'
 
 export type ErrorAction = 'retry' | 'settings'
@@ -19,12 +20,50 @@ function settings(message: string): ErrorPresentation {
 }
 
 /**
+ * 鉴权与二次确认错误码的统一文案。
+ *
+ * `ApiClientError` 和 `AuthAdapterError` 共用这张表，避免适配器抛出的错误
+ * 绕过文案映射、把内部消息直接显示给用户。返回 null 表示不是鉴权类错误码。
+ */
+function presentAuthCode(code: string): ErrorPresentation | null {
+  if (code === 'AUTH_FAILED' || code === 'AUTH_LOCKED') {
+    return settings('登录信息不正确或暂时无法验证，请稍后重试。')
+  }
+  if (code === 'AUTH_UNAVAILABLE') {
+    return retry('家庭服务器暂时无法验证身份，请稍后重试。')
+  }
+  if (code === 'SESSION_EXPIRED' || code === 'AUTH_REVOKED') {
+    return settings('登录会话已失效，请重新登录后重试。')
+  }
+  if (code === 'STEP_UP_REQUIRED') {
+    return settings('该操作需要 PIN 或二维码二次确认，请完成确认后重试。')
+  }
+  if (code === 'STEP_UP_NOT_CONFIGURED') {
+    return settings('还没有为这个家庭设置 PIN，请在下面的“设置或更新家庭 PIN”里设置后再发起二次确认。')
+  }
+  if (code === 'STEP_UP_HOUSEHOLD_REQUIRED') {
+    return settings('这个身份在多个家庭设置过 PIN，请先确认要操作的家庭。')
+  }
+  if (code === 'STEP_UP_EXPIRED' || code === 'STEP_UP_REPLAY') {
+    return retry('二次确认已过期或已经使用，请重新发起该操作。')
+  }
+  if (code === 'STEP_UP_FAILED') {
+    return retry('二次确认未通过，请检查 PIN 后重试。')
+  }
+  return null
+}
+
+/**
  * 将 API/网络异常转换成不会泄露后端拒绝细节的用户文案。
  *
- * 仅 ApiClientError 使用状态码和服务端错误码；普通 Error 保留本地业务
+ * `ApiClientError` 与 `AuthAdapterError` 走错误码映射；普通 Error 保留本地业务
  * 校验提示（例如“跳过前请填写原因”），未知异常则使用统一兜底文案。
  */
 export function presentApiError(cause: unknown): ErrorPresentation {
+  if (cause instanceof AuthAdapterError) {
+    return presentAuthCode(cause.code) ?? retry(cause.message.trim() || GENERIC_MESSAGE)
+  }
+
   if (!(cause instanceof ApiClientError)) {
     if (cause instanceof Error && cause.message.trim()) {
       return retry(cause.message)
@@ -45,31 +84,11 @@ export function presentApiError(cause: unknown): ErrorPresentation {
     return settings('当前家庭暂无可用成员，请检查家庭设置和授权范围。')
   }
 
-  if (code === 'AUTH_FAILED' || code === 'AUTH_LOCKED') {
-    return settings('登录信息不正确或暂时无法验证，请稍后重试。')
-  }
-
-  if (code === 'AUTH_UNAVAILABLE') {
-    return retry('家庭服务器暂时无法验证身份，请稍后重试。')
-  }
+  const authPresentation = presentAuthCode(code)
+  if (authPresentation) return authPresentation
 
   if (code === 'AUTHORIZATION_REVERIFICATION_REQUIRED' || code === 'AUTHORIZATION_EXPIRED' || code === 'CONSENT_REVOKED') {
     return settings('授权可能已到期、被撤回或访问范围已变化。为保护隐私，已清除本地页面数据；请到“我的”重新验证身份与访问目的。')
-  }
-  if (code === 'SESSION_EXPIRED' || code === 'AUTH_REVOKED') {
-    return settings('登录会话已失效，请重新登录后重试。')
-  }
-
-  if (code === 'STEP_UP_REQUIRED') {
-    return settings('该操作需要 PIN 或二维码二次确认，请完成确认后重试。')
-  }
-
-  if (code === 'STEP_UP_EXPIRED' || code === 'STEP_UP_REPLAY') {
-    return retry('二次确认已过期或已经使用，请重新发起该操作。')
-  }
-
-  if (code === 'STEP_UP_FAILED') {
-    return retry('二次确认未通过，请检查后重试。')
   }
 
   if (code === 'DEPENDENCY_UNAVAILABLE' || cause.status === 0) {

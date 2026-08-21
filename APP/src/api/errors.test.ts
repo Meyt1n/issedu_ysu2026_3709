@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { AuthAdapterError } from './auth'
 import { ApiClientError } from './client'
 import { errorMessage, presentApiError } from './errors'
 
@@ -63,5 +64,40 @@ describe('移动端 API 错误用户文案', () => {
   it('保留本地业务校验提示，未知异常使用兜底文案', () => {
     expect(errorMessage(new Error('跳过前请填写原因'))).toBe('跳过前请填写原因')
     expect(errorMessage({ unexpected: true })).toBe('请求未能完成，页面不会显示未经授权的健康数据。')
+  })
+})
+
+describe('鉴权适配器错误也走文案映射（不直接显示内部消息）', () => {
+  it('未配置家庭 PIN 给出可操作指引，而不是"会话已失效"', () => {
+    const presented = presentApiError(
+      new AuthAdapterError('尚未设置家庭 PIN', { code: 'STEP_UP_NOT_CONFIGURED', status: 409 }),
+    )
+    expect(presented.action).toBe('settings')
+    expect(presented.message).toContain('设置或更新家庭 PIN')
+    expect(presented.message).not.toContain('会话')
+  })
+
+  it('多家庭歧义提示先确认家庭', () => {
+    const presented = presentApiError(
+      new AuthAdapterError('需要先选定家庭', { code: 'STEP_UP_HOUSEHOLD_REQUIRED', status: 409 }),
+    )
+    expect(presented.message).toContain('多个家庭')
+  })
+
+  it('二次确认未通过提示检查 PIN，且不建议重新登录', () => {
+    const presented = presentApiError(
+      new AuthAdapterError('二次确认未通过', { code: 'STEP_UP_FAILED', status: 403 }),
+    )
+    expect(presented.action).toBe('retry')
+    expect(presented.message).toContain('PIN')
+    expect(presented.message).not.toContain('重新登录')
+  })
+
+  it('会话失效仍然引导重新登录', () => {
+    const presented = presentApiError(
+      new AuthAdapterError('登录会话已失效', { code: 'SESSION_EXPIRED', status: 401 }),
+    )
+    expect(presented.action).toBe('settings')
+    expect(presented.message).toContain('重新登录')
   })
 })

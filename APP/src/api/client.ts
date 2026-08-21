@@ -145,6 +145,18 @@ export class ApiClient {
     return this.request('/api/v1/households', undefined, options)
   }
 
+  /**
+   * 设置或更新当前身份在某个家庭的六位 PIN（HCT-427 的二次确认凭据）。
+   * PIN 只出现在请求体里，不进 URL；服务端只保存哈希。
+   */
+  setAccountPin(householdId: string, pin: string, options?: RequestOptions): Promise<unknown> {
+    return this.request(
+      '/api/v1/auth/pin',
+      { method: 'POST', body: JSON.stringify({ household_id: householdId, pin }) },
+      options,
+    )
+  }
+
   listMembers(householdId: string, options?: RequestOptions): Promise<Member[]> {
     return this.request(`/api/v1/households/${householdId}/members`, undefined, options)
   }

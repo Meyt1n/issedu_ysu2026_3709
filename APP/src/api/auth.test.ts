@@ -292,3 +292,92 @@ describe('HCT-107 正式鉴权 HTTP 适配', () => {
     expect(() => createHttpAuthAdapter({ baseUrl: 'http://example.com:8000' })).toThrow('明文 HTTP')
   })
 })
+
+describe('二次确认的配置错误不会被当成会话失效', () => {
+  const future = () => Math.floor((Date.now() + 600_000) / 1000)
+
+  async function signedInAdapter(replies: { status?: number; body?: unknown }[]) {
+    const recorded = recordingFetcher([
+      { body: { session_token: 'server-token', expires_at: future() } },
+      ...replies,
+    ])
+    const adapter = createHttpAuthAdapter({ fetcher: recorded.fetcher })
+    await adapter.login({ account: 'owner', password: 'pw-at-least-8' })
+    return { adapter, requests: recorded.requests }
+  }
+
+  it('未设置家庭 PIN 返回专用错误码，不报"会话已失效"', async () => {
+    const { adapter } = await signedInAdapter([
+      { status: 409, body: { detail: 'PIN_NOT_CONFIGURED' } },
+    ])
+
+    await expect(adapter.beginStepUp({ action: 'confirm_high_risk', method: 'pin' }))
+      .rejects.toMatchObject({ code: 'STEP_UP_NOT_CONFIGURED' })
+    // 会话必须保留：这只是配置缺失，不能把用户踢回登录页。
+    expect(adapter.getSession()).not.toBeNull()
+  })
+
+  it('多家庭歧义返回需要选定家庭，而不是会话失效', async () => {
+    const { adapter } = await signedInAdapter([
+      { status: 409, body: { detail: 'HOUSEHOLD_REQUIRED' } },
+    ])
+
+    await expect(adapter.beginStepUp({ action: 'confirm_high_risk', method: 'pin' }))
+      .rejects.toMatchObject({ code: 'STEP_UP_HOUSEHOLD_REQUIRED' })
+    expect(adapter.getSession()).not.toBeNull()
+  })
+
+  it('重放与过期按服务端 detail 精确区分', async () => {
+    const replay = await signedInAdapter([
+      { body: { challenge_id: 'c-1', expires_at: future() } },
+      { status: 409, body: { detail: 'STEP_UP_REPLAY' } },
+    ])
+    await replay.adapter.beginStepUp({ action: 'confirm_high_risk', method: 'pin' })
+    await expect(replay.adapter.confirmStepUp({
+      challengeId: 'c-1',
+      action: 'confirm_high_risk',
+      method: 'pin',
+      code: '135790',
+    })).rejects.toMatchObject({ code: 'STEP_UP_REPLAY' })
+
+    const expired = await signedInAdapter([
+      { body: { challenge_id: 'c-2', expires_at: future() } },
+      { status: 409, body: { detail: 'STEP_UP_EXPIRED' } },
+    ])
+    await expired.adapter.beginStepUp({ action: 'confirm_high_risk', method: 'pin' })
+    await expect(expired.adapter.confirmStepUp({
+      challengeId: 'c-2',
+      action: 'confirm_high_risk',
+      method: 'pin',
+      code: '135790',
+    })).rejects.toMatchObject({ code: 'STEP_UP_EXPIRED' })
+  })
+
+  it('指定家庭时把 household_id 放进请求体', async () => {
+    const { adapter, requests } = await signedInAdapter([
+      { body: { challenge_id: 'c-3', expires_at: future() } },
+    ])
+
+    await adapter.beginStepUp({
+      action: 'confirm_high_risk',
+      method: 'pin',
+      householdId: 'household-1',
+    })
+
+    expect(bodyOf(requests[1]!)).toMatchObject({
+      action: 'confirm_high_risk',
+      household_id: 'household-1',
+    })
+    expect(requests[1]!.url).not.toContain('household-1')
+  })
+
+  it('不指定家庭时不发送 household_id，由服务端解析', async () => {
+    const { adapter, requests } = await signedInAdapter([
+      { body: { challenge_id: 'c-4', expires_at: future() } },
+    ])
+
+    await adapter.beginStepUp({ action: 'confirm_high_risk', method: 'pin' })
+
+    expect('household_id' in bodyOf(requests[1]!)).toBe(false)
+  })
+})

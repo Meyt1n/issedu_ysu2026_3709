@@ -20,6 +20,10 @@ export type AuthErrorCode =
   | 'STEP_UP_FAILED'
   | 'STEP_UP_EXPIRED'
   | 'STEP_UP_REPLAY'
+  /** 该家庭还没设置过 PIN，属于配置问题，不是会话失效。 */
+  | 'STEP_UP_NOT_CONFIGURED'
+  /** 该身份在多个家庭配置过 PIN，必须显式指定家庭。 */
+  | 'STEP_UP_HOUSEHOLD_REQUIRED'
 
 export class AuthAdapterError extends Error {
   readonly code: AuthErrorCode
@@ -79,7 +83,7 @@ export interface AuthAdapter {
   logout(): Promise<void>
   refresh(): Promise<AuthSession | null>
   getSession(): AuthSession | null
-  beginStepUp(input: { action: string; method: StepUpMethod }): Promise<StepUpChallenge>
+  beginStepUp(input: { action: string; method: StepUpMethod; householdId?: string }): Promise<StepUpChallenge>
   confirmStepUp(input: StepUpInput): Promise<StepUpGrant>
 }
 
@@ -300,13 +304,30 @@ function mapAuthError(operation: AuthOperation, status: number, body: unknown): 
   if (status === 429 || detail.startsWith('LOCKED')) {
     return new AuthAdapterError('登录暂时被锁定，请稍后再试', { code: 'AUTH_LOCKED', status })
   }
+  // 二次确认的配置问题必须先于"契约不一致"和会话失效分支判断：
+  // 它既不是接口缺失，也不该导致清空会话把用户踢回登录页。
+  if (detail === 'PIN_NOT_CONFIGURED') {
+    return new AuthAdapterError('尚未设置家庭 PIN', { code: 'STEP_UP_NOT_CONFIGURED', status })
+  }
+  if (detail === 'HOUSEHOLD_REQUIRED') {
+    return new AuthAdapterError('需要先选定家庭', { code: 'STEP_UP_HOUSEHOLD_REQUIRED', status })
+  }
+  if (detail === 'STEP_UP_REPLAY') {
+    return new AuthAdapterError('二次确认已经使用过', { code: 'STEP_UP_REPLAY', status })
+  }
+  if (detail === 'STEP_UP_EXPIRED') {
+    return new AuthAdapterError('二次确认已过期', { code: 'STEP_UP_EXPIRED', status })
+  }
+  if (detail === 'STEP_UP_FAILED') {
+    return new AuthAdapterError('二次确认未通过', { code: 'STEP_UP_FAILED', status })
+  }
   if (status === 422 || status === 400 || status === 404 || status === 405 || status >= 500) {
     return new AuthAdapterError(CONTRACT_MISMATCH, { code: 'AUTH_UNAVAILABLE', status })
   }
   if (operation === 'login') {
     return new AuthAdapterError('登录失败', { code: 'AUTH_FAILED', status })
   }
-  if (operation === 'stepUpConfirm') {
+  if (operation === 'stepUpBegin' || operation === 'stepUpConfirm') {
     if (status === 409 || status === 410) {
       return new AuthAdapterError('二次确认已过期或已经使用', { code: 'STEP_UP_EXPIRED', status })
     }
@@ -491,6 +512,8 @@ export function createHttpAuthAdapter(options: HttpAuthAdapterOptions = {}): Aut
       const payload = await post('stepUpBegin', '/pin-challenge', {
         action: input.action,
         method: input.method,
+        // 家庭由服务端校验成员关系；只在调用方已知家庭时显式指定，避免多家庭歧义。
+        ...(input.householdId ? { household_id: input.householdId } : {}),
       }, true)
       // 服务端回显一次性口令等于把二次确认降级成摆设；契约禁止，检测到即拒绝。
       if (readText(payload, 'pin', 'pin_code', 'code')) throw contractMismatch()
