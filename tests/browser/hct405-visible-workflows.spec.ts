@@ -174,17 +174,17 @@ async function enterFamilySpace(page: Page): Promise<void> {
   await expect(navItem(page, '授权管理')).toBeVisible()
 }
 
-test('家庭总览显著展示带来源、范围和规则版本的环境行动卡', async ({ page }) => {
+test('家庭总览显著展示简洁的环境行动卡', async ({ page }) => {
   await installSyntheticApi(page)
   await enterFamilySpace(page)
 
-  const panel = page.getByRole('region', { name: '今日环境与可执行提醒' })
+  const panel = page.getByRole('region', { name: '今天的环境提醒' })
   await expect(panel).toBeVisible()
   await expect(panel.getByText('37°')).toBeVisible()
   await expect(panel.getByText(/高温提醒：建议减少长时间户外活动/)).toBeVisible()
-  await expect(panel.getByText('城市级范围，不发送精确住址或成员健康信息')).toBeVisible()
-  await expect(panel.getByText(/来源时间 08月18日 09:00/)).toBeVisible()
-  await expect(panel.getByText('规则 weather-actions-v1')).toBeVisible()
+  await expect(panel.getByText('城市级范围天气')).toBeVisible()
+  await expect(panel.getByText(/更新于 08月18日 09:00/)).toBeVisible()
+  await expect(panel.getByText('规则 weather-actions-v1')).toHaveCount(0)
   await expect(panel.getByText(/不构成诊断或用药建议/)).toBeVisible()
 
   const refreshed = page.waitForResponse(response =>
@@ -192,7 +192,7 @@ test('家庭总览显著展示带来源、范围和规则版本的环境行动�
   )
   await panel.getByRole('button', { name: '刷新天气' }).click()
   await refreshed
-  await expect(panel.getByText('天气已更新')).toBeVisible()
+  await expect(panel.getByText(/更新于/)).toBeVisible()
 })
 
 test('管理员创建授权后撤回，照护者可见范围立即清空', async ({ page }) => {

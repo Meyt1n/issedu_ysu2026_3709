@@ -30,6 +30,7 @@
 4. `ci.yml` 与 `relay-review-bot.yml` 只保留 `workflow_dispatch`，不再自动触发或作为
    Required Check；合并人承担本地检查和人工风险复核。
 4. 文档说明 Billing、Runner 注册、权限隔离、公开仓库风险、故障恢复和回滚方式。
+5. 同步向内部云端推送时使用有限次数的指数退避重试；每次重试仍必须通过原有身份、快进边界和推送后 SHA 校验，最终失败时明确终止任务。
 
 ## Given / When / Then
 

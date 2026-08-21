@@ -31,17 +31,21 @@ const conditionLabel = computed(() => {
   if (!condition) return '暂无描述'
   return conditionLabels[condition.toLowerCase()] ?? condition
 })
+
+const updatedLabel = computed(() => view.value.sourceLabel.replace(/^来源时间\s*/, '更新于 '))
 </script>
 
 <template>
   <section class="weather-action-panel" aria-labelledby="weather-action-title">
     <header class="weather-action-head">
       <div>
-        <span class="weather-eyebrow"><AppIcon name="cloud" :size="15" />家庭环境行动卡</span>
-        <h3 id="weather-action-title">今日环境与可执行提醒</h3>
+        <span class="weather-eyebrow"><AppIcon name="cloud" :size="15" />家庭环境</span>
+        <h3 id="weather-action-title">今天的环境提醒</h3>
       </div>
       <div class="weather-head-actions">
-        <span class="pill" :class="view.statusTone">{{ view.statusLabel }}</span>
+        <span v-if="view.stale" class="weather-status degraded">{{ view.statusLabel }}</span>
+        <span v-else-if="view.available" class="weather-updated">{{ updatedLabel }}</span>
+        <span v-else class="pill" :class="view.statusTone">{{ view.statusLabel }}</span>
         <button
           type="button"
           class="btn btn-ghost btn-small"
@@ -62,11 +66,22 @@ const conditionLabel = computed(() => {
         </span>
         <div class="weather-reading-copy">
           <strong>{{ conditionLabel }}</strong>
-          <span>
-            湿度 {{ weather?.humidity != null ? `${weather.humidity}%` : '暂无' }}
-            · AQI {{ weather?.aqi ?? '暂无' }}
-          </span>
-          <span v-if="weather?.wind">风况 {{ weather.wind }}</span>
+          <span>今日天气</span>
+        </div>
+      </div>
+
+      <div class="weather-metrics" aria-label="天气指标">
+        <div class="weather-metric">
+          <span>湿度</span>
+          <strong>{{ weather?.humidity != null ? `${weather.humidity}%` : '暂无' }}</strong>
+        </div>
+        <div v-if="weather?.wind" class="weather-metric">
+          <span>风况</span>
+          <strong>{{ weather.wind }}</strong>
+        </div>
+        <div v-if="weather?.aqi != null" class="weather-metric">
+          <span>空气质量</span>
+          <strong>AQI {{ weather.aqi }}</strong>
         </div>
       </div>
 
@@ -79,13 +94,16 @@ const conditionLabel = computed(() => {
         >
           <AppIcon :name="card.level === 'warning' ? 'alert' : 'info'" :size="18" />
           <div>
-            <strong>{{ card.level === 'warning' ? '需要留意' : '生活安排建议' }}</strong>
+            <strong>{{ card.level === 'warning' ? '需要留意' : '生活安排' }}</strong>
             <p>{{ card.message }}</p>
           </div>
         </article>
         <div v-if="(weather?.action_cards.length ?? 0) === 0" class="weather-calm">
           <AppIcon name="check" :size="18" />
-          <span>当前没有触发已审核的环境行动规则。</span>
+          <div>
+            <strong>今天没有特别提醒</strong>
+            <span>按日常节奏安排活动即可。</span>
+          </div>
         </div>
       </div>
     </div>
@@ -99,11 +117,12 @@ const conditionLabel = computed(() => {
     </div>
 
     <footer class="weather-evidence">
-      <span><AppIcon name="lock" :size="13" />{{ view.scopeLabel }}，不发送精确住址或成员健康信息</span>
-      <span><AppIcon name="clock" :size="13" />{{ view.sourceLabel }}</span>
-      <span>规则 {{ weather?.ruleset_version ?? '待配置' }}</span>
+      <span><AppIcon name="lock" :size="13" />{{ view.scopeLabel }}天气</span>
       <p v-if="view.stale" class="weather-degraded">{{ view.detail }}</p>
-      <p>{{ weather?.disclaimer ?? '环境行动建议仅供日常生活安排参考，不构成诊断或用药建议。' }}</p>
+      <p class="weather-disclaimer">
+        {{ weather?.disclaimer ?? '环境行动建议仅供日常生活安排参考，不构成诊断或用药建议。' }}
+      </p>
+      <span class="weather-sr-only">规则版本 {{ weather?.ruleset_version ?? '待配置' }}</span>
     </footer>
   </section>
 </template>
