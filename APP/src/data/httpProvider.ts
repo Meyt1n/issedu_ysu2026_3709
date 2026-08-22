@@ -13,6 +13,7 @@ import type {
   QualityCheckResult,
   RecognitionCandidate,
   RiskCard,
+  ReminderPolicy,
   RiskLevel,
   TaskAction,
   TaskActionPayload,
@@ -106,6 +107,27 @@ function planLevel(event: HealthEvent): TaskLevel {
   return (TASK_LEVELS as string[]).includes(raw) ? (raw as TaskLevel) : 'GENERAL'
 }
 
+function recordOf(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null
+}
+
+/** Only a server-provided, member-authorized reminder contract may enter local scheduling. */
+function planReminder(event: HealthEvent): ReminderPolicy | undefined {
+  const reminder = recordOf((event.payload ?? {})['reminder'])
+  if (!reminder || textOf(reminder['authorization']).toUpperCase() !== 'AUTHORIZED') return undefined
+  const planVersion = textOf(reminder['plan_version'])
+  const deduplicationKey = textOf(reminder['deduplication_key'])
+  const firstReminderAt = textOf(reminder['first_reminder_at'])
+  const repeatReminderAt = textOf(reminder['repeat_reminder_at']) || undefined
+  const maxReminders = Number(reminder['max_reminders'])
+  if (!planVersion || !deduplicationKey || !firstReminderAt || (maxReminders !== 1 && maxReminders !== 2)) return undefined
+  if (maxReminders === 2 && !repeatReminderAt) return undefined
+  return {
+    authorization: 'AUTHORIZED', planVersion, deduplicationKey, firstReminderAt, repeatReminderAt,
+    maxReminders: maxReminders as 1 | 2,
+  }
+}
+
 /** 从时间线推导任务：计划事实 + 指向它的最后一条动作事件。 */
 export function deriveTasksFromEvents(
   events: HealthEvent[],
@@ -129,6 +151,7 @@ export function deriveTasksFromEvents(
       dueAt: planDueAt(plan),
       status: 'PENDING',
       planEventId: plan.id,
+      reminder: planReminder(plan),
     }
 
     if (latest) {

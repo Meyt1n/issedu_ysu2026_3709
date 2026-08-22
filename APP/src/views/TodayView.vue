@@ -6,6 +6,7 @@ import ConfettiBurst from '@/components/ConfettiBurst.vue'
 import ErrorNotice from '@/components/ErrorNotice.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import EnvironmentActionCard from '@/components/EnvironmentActionCard.vue'
+import ReminderStatusCard from '@/components/ReminderStatusCard.vue'
 import LevelTag from '@/components/LevelTag.vue'
 import PrivacyBadge from '@/components/PrivacyBadge.vue'
 import ProgressRing from '@/components/ProgressRing.vue'
@@ -21,6 +22,7 @@ import { activeProvider } from '@/data'
 import { eventStatusLabel, riskLevelLabel, riskLevelTone, taskLevelLabel } from '@/data/labels'
 import type { CareTask, MemberSummary, TaskAction, TaskActionPayload, TodaySnapshot, TrendPoint } from '@/data/types'
 import { useA11y } from '@/stores/accessibility'
+import { cancelScheduledReminders, reminderState, synchronizeReminders } from '@/notifications/reminderService'
 import { sessionContextKey, useSession } from '@/stores/session'
 import { tapFeedback } from '@/utils/haptics'
 import { formatDateTime, greetingByHour } from '@/utils/format'
@@ -121,6 +123,7 @@ async function loadSnapshot(expectedKey = sessionKey.value, generation = reloadG
   // 任务、趋势和时间线来自同一轮刷新，避免操作后显示不同步的旧数据。
   snapshot.value = nextSnapshot
   trend.value = nextTrend
+  void synchronizeReminders(nextSnapshot.tasks)
   if (!announced.value && settings.voiceBroadcast) {
     announced.value = true
     speech.speak(summaryText())
@@ -208,6 +211,7 @@ async function onTaskAction(taskId: string, action: TaskAction, payload: TaskAct
       tasks: snapshot.value.tasks.map(item => item.id === task.id ? task : item),
     }
   }
+  await cancelScheduledReminders()
   await reload({ preserveSnapshot: true })
   // 最后一项任务处理完：彩带庆祝 + 语音鼓励。
   if (hadPending === 1 && pendingTasks.value.length === 0 && doneTasks.value.length > 0) {
@@ -317,6 +321,7 @@ onMounted(reload)
     </template>
 
     <template v-else-if="snapshot">
+      <ReminderStatusCard :state="reminderState" />
       <EnvironmentActionCard :state="snapshot.environmentAction" />
 
       <section aria-labelledby="tasks-title">

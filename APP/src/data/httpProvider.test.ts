@@ -393,6 +393,28 @@ describe('环境行动卡的受控降级（MOB-157）', () => {
     expect(environmentActionUnavailable()).toMatchObject({ availability: 'UNAVAILABLE', card: null })
   })
 
+  it('只映射带完整授权、版本和去重键的服务端提醒契约', () => {
+    const complete = makeEvent({
+      id: 'p-reminder',
+      event_type: 'plan_created',
+      payload: {
+        reminder: {
+          authorization: 'AUTHORIZED', plan_version: 'v3', deduplication_key: 'plan-v3',
+          first_reminder_at: '2030-01-01T08:00:00.000Z', repeat_reminder_at: '2030-01-01T08:15:00.000Z', max_reminders: 2,
+        },
+      },
+    })
+    const incomplete = makeEvent({
+      id: 'p-incomplete',
+      event_type: 'plan_created',
+      payload: { reminder: { authorization: 'AUTHORIZED', plan_version: 'v3' } },
+    })
+
+    const [authorized, rejected] = deriveTasksFromEvents([complete, incomplete], 'm1', '王秀兰')
+    expect(authorized!.reminder).toMatchObject({ planVersion: 'v3', deduplicationKey: 'plan-v3', maxReminders: 2 })
+    expect(rejected!.reminder).toBeUndefined()
+  })
+
   it('即使声明能力，缺少成员授权和审计元数据契约时仍拒绝请求天气接口', () => {
     setCapabilities({ phase: 'test', available: ['environment-action-card'], unavailable: [] })
     expect(environmentActionUnavailable()).toMatchObject({ availability: 'UNAVAILABLE', card: null })
