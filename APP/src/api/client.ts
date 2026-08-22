@@ -247,4 +247,13 @@ export class ApiClient {
   ): Promise<VisionTask> {
     return this.request('/api/v1/vision-tasks', { method: 'POST', body: JSON.stringify(input) }, options)
   }
+
+  /** 回查单个视觉任务的状态；身份由会话承载，路径只包含服务端签发的任务 ID。 */
+  getVisionTask(taskId: string, options?: RequestOptions): Promise<VisionTask> {
+    return this.request(
+      `/api/v1/vision-tasks/${encodeURIComponent(taskId)}`,
+      { method: 'GET' },
+      options,
+    )
+  }
 }

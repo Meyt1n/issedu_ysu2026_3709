@@ -135,3 +135,32 @@ describe('家庭 PIN 设置（HCT-427）', () => {
     expect(new Headers(request?.headers).get('Authorization')).toBe('Bearer test-only-token')
   })
 })
+
+describe('视觉任务状态回查（MOB-132）', () => {
+  it('getVisionTask 走 GET 且任务 ID 编码进路径，凭据由会话承载', async () => {
+    let url = ''
+    let request: RequestInit | undefined
+    const session: AuthSession = {
+      actorId: 'owner',
+      accessPurpose: 'family-care',
+      transport: 'bearer',
+      accessToken: 'test-only-token',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    }
+    const client = new ApiClient({
+      authSessionProvider: () => session,
+      fetcher: async (input, init) => {
+        url = String(input)
+        request = init
+        return response()
+      },
+    })
+
+    await client.getVisionTask('vision/1 abc')
+
+    expect(url).toBe('/api/v1/vision-tasks/vision%2F1%20abc')
+    expect(request?.method).toBe('GET')
+    expect(request?.body).toBeUndefined()
+    expect(new Headers(request?.headers).get('Authorization')).toBe('Bearer test-only-token')
+  })
+})
