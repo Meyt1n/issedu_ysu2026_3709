@@ -37,6 +37,7 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.audit_pagination import decode_audit_cursor, encode_audit_cursor
 from app.auth import (
     authenticate,
     authenticate_with_pin,
@@ -126,6 +127,7 @@ from app.risk_acknowledgement import (
     risk_fingerprint,
 )
 from app.schemas import (
+    AccessAuditPageRead,
     AccessAuditRead,
     AssistantRequest,
     AssistantResponse,
@@ -754,6 +756,65 @@ def list_authorization_audits(
             .order_by(AccessAudit.created_at, AccessAudit.id)
         ).all()
     )
+
+
+@router.get(
+    "/households/{household_id}/authorization-audits/page",
+    response_model=AccessAuditPageRead,
+)
+def page_authorization_audits(
+    household_id: str,
+    request_id: str | None = Query(default=None, min_length=1, max_length=120),
+    cursor: str | None = Query(default=None, min_length=1),
+    limit: int = Query(default=50, ge=1, le=100),
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> AccessAuditPageRead:
+    household = require_household_owner(session, household_id, actor_id)
+    decoded_cursor = None
+    if cursor is not None:
+        try:
+            decoded_cursor = decode_audit_cursor(cursor, secret=settings.cursor_signing_key)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
+        if decoded_cursor.household_id != household.id or decoded_cursor.request_id != request_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="AUDIT_CURSOR_INVALID",
+            )
+
+    query = select(AccessAudit).where(AccessAudit.household_id == household.id)
+    if request_id is not None:
+        query = query.where(AccessAudit.request_id == request_id)
+    if decoded_cursor is not None:
+        query = query.where(
+            (AccessAudit.created_at > decoded_cursor.created_at)
+            | (
+                (AccessAudit.created_at == decoded_cursor.created_at)
+                & (AccessAudit.id > decoded_cursor.audit_id)
+            )
+        )
+    rows = list(
+        session.scalars(
+            query.order_by(AccessAudit.created_at, AccessAudit.id).limit(limit + 1)
+        ).all()
+    )
+    has_more = len(rows) > limit
+    items = rows[:limit]
+    next_cursor = None
+    if has_more and items:
+        last = items[-1]
+        next_cursor = encode_audit_cursor(
+            household_id=household.id,
+            request_id=request_id,
+            created_at=last.created_at,
+            audit_id=last.id,
+            secret=settings.cursor_signing_key,
+        )
+    return AccessAuditPageRead(items=items, next_cursor=next_cursor, has_more=has_more)
 
 
 @router.post(
