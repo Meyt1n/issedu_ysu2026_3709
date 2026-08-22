@@ -459,6 +459,30 @@ button:focus-visible, a:focus-visible {
   padding: 6px 8px 6px 14px;
 }
 
+.identity-person {
+  display: grid;
+  gap: 1px;
+  line-height: 1.15;
+  min-width: 0;
+}
+
+.identity-person strong {
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.identity-person small {
+  color: var(--ink-faint);
+  font-size: 10.5px;
+  font-weight: 500;
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .identity-chip .role-tag {
   background: var(--pine-tint);
   border-radius: 999px;
@@ -988,8 +1012,24 @@ button:focus-visible, a:focus-visible {
 
 .welcome-form-card h2 { font-family: var(--font-display); font-size: 20px; margin: 0; }
 .welcome-form-card .form-sub { color: var(--ink-soft); font-size: 13px; line-height: 1.6; margin: -8px 0 0; }
+.face-family-summary {
+  align-items: flex-start;
+  background: var(--sky-tint);
+  border: 1px solid color-mix(in srgb, var(--sky) 18%, transparent);
+  border-radius: var(--radius-sm);
+  color: var(--sky-ink);
+  display: flex;
+  gap: 10px;
+  line-height: 1.5;
+  padding: 12px 14px;
+}
+
+.face-family-summary > .app-icon { flex: 0 0 auto; margin-top: 2px; }
+.face-family-summary > div { display: grid; gap: 3px; }
+.face-family-summary strong { font-size: 14px; }
+.face-family-summary small { color: inherit; font-size: 12.5px; opacity: 0.82; }
 .face-capture { display: grid; gap: 12px; }
-.face-preview { width: 100%; max-height: 220px; min-height: 160px; object-fit: cover; border: 1px solid var(--line); border-radius: 8px; background: var(--card-soft); }
+.face-preview { width: 100%; max-height: 260px; min-height: 180px; object-fit: cover; transform: scaleX(-1); border: 1px solid var(--line); border-radius: 8px; background: var(--card-soft); }
 .face-capture-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 
 .welcome-disclaimer { color: var(--ink-faint); font-size: 12px; line-height: 1.65; margin: 2px 0 0; }

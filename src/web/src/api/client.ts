@@ -19,6 +19,7 @@ import type {
   CreateHouseholdInput,
   CreateKnowledgeDocumentInput,
   CreateMemberInput,
+  MemberAccountBindingInput,
   CreateModelVersionBindingInput,
   HardSample,
   HealthEvent,
@@ -218,6 +219,13 @@ export class ApiClient {
     })
   }
 
+  createFamilyFaceChallenge(householdId: string): Promise<FaceChallenge> {
+    return this.request('/api/v1/auth/family-face-challenge', {
+      method: 'POST',
+      body: JSON.stringify({ household_id: householdId }),
+    })
+  }
+
   loginWithFace(
     householdId: string,
     actorId: string,
@@ -230,6 +238,18 @@ export class ApiClient {
     body.append('challenge_id', challengeId)
     for (const frame of frames) body.append('frames', frame, frame.name)
     return this.request('/api/v1/auth/face-login', { method: 'POST', body })
+  }
+
+  loginWithFamilyFace(
+    householdId: string,
+    challengeId: string,
+    frames: File[],
+  ): Promise<AuthSession> {
+    const body = new FormData()
+    body.append('household_id', householdId)
+    body.append('challenge_id', challengeId)
+    for (const frame of frames) body.append('frames', frame, frame.name)
+    return this.request('/api/v1/auth/family-face-login', { method: 'POST', body })
   }
 
   setPin(householdId: string, pin: string, options?: RequestOptions): Promise<{ status: string; household_id: string }> {
@@ -324,6 +344,19 @@ export class ApiClient {
     }, options)
   }
 
+  bindMemberAccount(
+    householdId: string,
+    memberId: string,
+    input: MemberAccountBindingInput,
+    options?: RequestOptions,
+  ): Promise<Member> {
+    return this.request(
+      `/api/v1/households/${encodeURIComponent(householdId)}/members/${encodeURIComponent(memberId)}/account`,
+      { method: 'PATCH', body: JSON.stringify(input) },
+      options,
+    )
+  }
+
   listMembers(
     householdId: string,
     options?: RequestOptions,
@@ -345,7 +378,7 @@ export class ApiClient {
 
   registerFaceCredential(
     householdId: string,
-    file: File,
+    frames: File | File[],
     input: {
       consent: boolean
       targetActorId?: string
@@ -357,7 +390,12 @@ export class ApiClient {
     options?: RequestOptions,
   ): Promise<FaceCredential> {
     const body = new FormData()
-    body.append('file', file)
+    if (Array.isArray(frames)) {
+      for (const frame of frames) body.append('frames', frame)
+    } else {
+      // Backward-compatible payload for older local clients; new UI uses frames.
+      body.append('file', frames)
+    }
     body.append('consent', String(input.consent))
     if (input.targetActorId) body.append('target_actor_id', input.targetActorId)
     body.append('replace_existing', String(input.replaceExisting ?? false))

@@ -5,14 +5,16 @@ import welcomeHero from '../assets/welcome-hero.jpg'
 import { apiClient } from '../api/client'
 import type { Household } from '../api/types'
 import AppIcon from '../components/AppIcon.vue'
-import FaceLoginCapture from '../components/FaceLoginCapture.vue'
+import FaceVideoCapture from '../components/FaceVideoCapture.vue'
 import {
   connect,
-  connectWithFace,
+  connectWithFamilyFace,
   connectWithPin,
   connectWithPassword,
   createHouseholdAndEnter,
   formatError,
+  getBoundFaceHouseholdId,
+  getBoundFaceHouseholdName,
   pushToast,
   session,
 } from '../store'
@@ -36,15 +38,20 @@ function onStageLeave(): void {
 const actorId = ref(session.actorId)
 const accessPurpose = ref(session.accessPurpose || 'family-care')
 const password = ref('')
-const householdId = ref('')
+const initialBoundFaceHouseholdId = getBoundFaceHouseholdId()
+const householdId = ref(initialBoundFaceHouseholdId)
+const boundFaceHouseholdName = ref(getBoundFaceHouseholdName())
 const pin = ref('')
 const faceFrames = ref<File[]>([])
 const authMode = ref<'development' | 'session'>(session.authMode)
-const credentialMode = ref<'password' | 'pin' | 'face'>('password')
+const credentialMode = ref<'password' | 'pin' | 'face'>(
+  initialBoundFaceHouseholdId ? 'face' : 'password',
+)
 const registerMode = ref(false)
 const connecting = ref(false)
 const creating = ref(false)
 const createError = ref('')
+const localError = ref('')
 const loginHouseholds = ref<Household[]>([])
 const householdsLoading = ref(false)
 const householdsError = ref('')
@@ -54,18 +61,32 @@ let householdsTimer: ReturnType<typeof setTimeout> | null = null
 const householdDraft = reactive({
   name: '',
   members: [
-    { displayName: '', role: 'SELF' as const },
-    { displayName: '', role: 'DEPENDENT' as const },
+    { displayName: '', actorId: session.actorId, role: 'SELF' as const },
+    { displayName: '', actorId: '', role: 'DEPENDENT' as const },
   ],
 })
 
 const showCreateForm = computed(() => session.status === 'empty')
-const canConnect = computed(() => actorId.value.trim().length > 0 && !connecting.value)
 const accessPurposeValid = computed(() => /^[a-z][a-z0-9-]{1,63}$/.test(accessPurpose.value.trim()))
+const faceBindingReady = computed(() => householdId.value.trim().length > 0)
+const faceHouseholdLabel = computed(
+  () => boundFaceHouseholdName.value || '当前绑定家庭（仅在本机使用）',
+)
+const canConnect = computed(
+  () => actorId.value.trim().length > 0 && accessPurposeValid.value && !connecting.value,
+)
 const canCreate = computed(
   () =>
     householdDraft.name.trim().length > 0 &&
     householdDraft.members.some(member => member.displayName.trim().length > 0) &&
+    householdDraft.members
+      .filter(member => member.displayName.trim().length > 0)
+      .every(member => /^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(member.actorId.trim())) &&
+    new Set(
+      householdDraft.members
+        .filter(member => member.displayName.trim().length > 0)
+        .map(member => member.actorId.trim()),
+    ).size === householdDraft.members.filter(member => member.displayName.trim().length > 0).length &&
     !creating.value,
 )
 
@@ -76,14 +97,23 @@ watch(
     householdsRequest?.abort()
     householdsRequest = null
     loginHouseholds.value = []
-    householdId.value = ''
+    householdId.value = nextCredentialMode === 'face' ? getBoundFaceHouseholdId() : ''
+    boundFaceHouseholdName.value = nextCredentialMode === 'face' ? getBoundFaceHouseholdName() : ''
     householdsLoading.value = false
     householdsError.value = ''
+    localError.value = ''
 
     if (nextAuthMode !== 'session' || (nextCredentialMode !== 'pin' && nextCredentialMode !== 'face')) return
     const actor = nextActorId.trim()
     const purpose = nextAccessPurpose.trim()
-    if (!actor || !purpose || !accessPurposeValid.value) return
+    if (!purpose || !accessPurposeValid.value) return
+    if (nextCredentialMode === 'face') {
+      householdsError.value = householdId.value
+        ? ''
+        : '这是第一次使用人脸登录。请先用账号密码进入，再到“人脸凭证”页面绑定当前家庭。'
+      return
+    }
+    if (!actor) return
 
     householdsTimer = setTimeout(async () => {
       householdsTimer = null
@@ -126,10 +156,19 @@ async function submitConnect(): Promise<void> {
 }
 
 async function submitSession(): Promise<void> {
+  localError.value = ''
+  if (!accessPurposeValid.value) {
+    localError.value = '访问用途代码需使用小写字母开头，并只包含小写字母、数字和连字符。'
+    return
+  }
   connecting.value = true
   try {
     if (credentialMode.value === 'face') {
-      await connectWithFace(actorId.value, householdId.value, faceFrames.value, accessPurpose.value)
+      if (!faceBindingReady.value) {
+        localError.value = '本机还没有绑定家庭，请先用账号密码进入完成首次设置。'
+        return
+      }
+      await connectWithFamilyFace(householdId.value, faceFrames.value, accessPurpose.value)
     } else if (credentialMode.value === 'pin') {
       await connectWithPin(actorId.value, householdId.value, pin.value, accessPurpose.value)
     } else {
@@ -152,13 +191,25 @@ async function submitSession(): Promise<void> {
 }
 
 async function onFaceCaptured(frames: File[]): Promise<void> {
+  if (!accessPurposeValid.value) {
+    localError.value = '请先填写正确的访问用途代码，再开始人脸验证。'
+    return
+  }
   faceFrames.value = frames
   await submitSession()
 }
 
 function usePinFallback(): void {
   faceFrames.value = []
+  localError.value = ''
   credentialMode.value = 'pin'
+}
+
+function usePasswordFallback(): void {
+  faceFrames.value = []
+  localError.value = ''
+  registerMode.value = false
+  credentialMode.value = 'password'
 }
 
 async function submitCreate(): Promise<void> {
@@ -168,7 +219,9 @@ async function submitCreate(): Promise<void> {
   try {
     await createHouseholdAndEnter(
       householdDraft.name.trim(),
-      householdDraft.members.filter(member => member.displayName.trim()),
+      householdDraft.members
+        .filter(member => member.displayName.trim())
+        .map(member => ({ ...member, actorId: member.actorId.trim() })),
     )
     pushToast('success', '家庭已创建，欢迎回家。')
   } catch (cause) {
@@ -257,7 +310,7 @@ async function submitCreate(): Promise<void> {
             本地账号
             <input v-model="actorId" autocomplete="username" placeholder="例如 parent-1" required />
           </label>
-          <label v-else class="field">
+          <label v-if="credentialMode === 'pin'" class="field">
             家庭
             <select v-if="loginHouseholds.length > 0" v-model="householdId" autocomplete="off" required>
               <option v-for="household in loginHouseholds" :key="household.id" :value="household.id">
@@ -275,7 +328,16 @@ async function submitCreate(): Promise<void> {
             <small v-else-if="householdsError">家庭列表加载失败，可手动填写家庭唯一编号。</small>
             <small v-else>家庭名称仅用于展示，提交时使用系统唯一编号。</small>
           </label>
-          <label v-if="credentialMode === 'pin' || credentialMode === 'face'" class="field">
+          <div v-else class="face-family-summary" role="status">
+            <AppIcon :name="faceBindingReady ? 'home' : 'lock'" :size="18" />
+            <div>
+              <strong>{{ faceBindingReady ? faceHouseholdLabel : '本机还没有绑定家庭' }}</strong>
+              <small v-if="faceBindingReady">人脸只会在这个家庭的成员中匹配，不会跨家庭搜索。</small>
+              <small v-else>首次使用请先用账号密码进入一次，在“人脸凭证”页面完成家庭绑定。</small>
+              <button v-if="!faceBindingReady" type="button" class="btn btn-ghost btn-small" @click="usePasswordFallback">先用账号密码进入</button>
+            </div>
+          </div>
+          <label v-if="credentialMode === 'pin'" class="field">
             家庭成员身份
             <input v-model="actorId" autocomplete="username" placeholder="例如 parent-1" required />
           </label>
@@ -287,22 +349,29 @@ async function submitCreate(): Promise<void> {
             六位数字 PIN
             <input v-model="pin" type="password" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required />
           </label>
-          <FaceLoginCapture
+          <FaceVideoCapture
             v-if="credentialMode === 'face'"
-            :disabled="connecting || !actorId.trim() || !householdId.trim()"
+            :disabled="connecting || !faceBindingReady || !accessPurposeValid"
             @captured="onFaceCaptured"
             @fallback="usePinFallback"
           />
           <label class="field">
             访问用途代码
-            <input v-model="accessPurpose" autocomplete="off" placeholder="family-care" aria-label="访问用途代码" />
+            <input
+              v-model="accessPurpose"
+              autocomplete="off"
+              placeholder="family-care"
+              aria-label="访问用途代码"
+              :aria-invalid="accessPurpose.trim().length > 0 && !accessPurposeValid"
+            />
+            <small>使用小写字母开头，例如 family-care。</small>
           </label>
           <p v-if="credentialMode === 'pin'" class="form-sub">PIN 只用于当前家庭和所选身份，连续输错会暂时锁定。</p>
-          <p v-if="session.error" class="notice error" role="alert">
+          <p v-if="localError || session.error" class="notice error" role="alert">
             <AppIcon name="alert" :size="16" />
-            {{ session.error }}
+            {{ localError || session.error }}
           </p>
-          <button v-if="credentialMode !== 'face'" type="submit" class="btn btn-primary" :disabled="!actorId.trim() || (credentialMode === 'password' ? password.length < 8 : !householdId.trim() || !/^\d{6}$/.test(pin)) || connecting">
+          <button v-if="credentialMode !== 'face'" type="submit" class="btn btn-primary" :disabled="!accessPurposeValid || !actorId.trim() || (credentialMode === 'password' ? password.length < 8 : !householdId.trim() || !/^\d{6}$/.test(pin)) || connecting">
             {{ connecting ? '正在建立会话' : credentialMode === 'pin' ? '使用 PIN 登录' : registerMode ? '注册并登录' : '登录' }}
             <AppIcon v-if="!connecting" name="arrow-right" :size="17" />
           </button>
@@ -330,9 +399,19 @@ async function submitCreate(): Promise<void> {
             <input v-model="householdDraft.members[0]!.displayName" autocomplete="off" placeholder="成员称呼，例如 爷爷" />
           </label>
           <label class="field">
+            成员一登录账号
+            <input v-model="householdDraft.members[0]!.actorId" autocomplete="username" placeholder="例如 parent-1" />
+            <small>这个账号用于密码、PIN 或人脸快速登录，默认填当前身份。</small>
+          </label>
+          <label class="field">
             成员二（可选）
             <input v-model="householdDraft.members[1]!.displayName" autocomplete="off" placeholder="成员称呼，例如 奶奶" />
           </label>
+          <label class="field">
+            成员二登录账号（填写成员二时必填）
+            <input v-model="householdDraft.members[1]!.actorId" autocomplete="username" placeholder="例如 grandma-1" />
+          </label>
+          <p class="form-sub">后续到“人脸凭证”页面，为每个登录账号采集一段动态视频；系统只保存加密特征，不保存视频原片。</p>
           <p v-if="createError" class="notice error" role="alert">
             <AppIcon name="alert" :size="16" />
             {{ createError }}

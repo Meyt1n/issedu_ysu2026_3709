@@ -44,14 +44,18 @@ from app.auth import (
     check_face_rate_limit,
     clear_face_failures,
     consume_face_challenge,
+    consume_family_face_challenge,
     consume_pin_challenge,
     create_face_challenge,
     create_face_session,
+    create_family_face_challenge,
+    family_face_rate_actor,
     generate_pin_challenge,
     introspect_session,
     logout,
     record_face_failure,
     register_account,
+    revoke_household_sessions,
     set_account_pin,
     verify_pin_challenge,
 )
@@ -77,10 +81,13 @@ from app.event_service import (
 from app.face_credentials import (
     FACE_CONSENT_VERSION,
     FACE_MATCH_THRESHOLD,
+    FAMILY_FACE_MATCH_MARGIN,
+    LEGACY_FACE_ALGORITHM_VERSION,
     check_face_liveness,
     decrypt_template,
     encrypt_template,
     extract_face_template,
+    extract_legacy_face_template,
     face_template_similarity,
 )
 from app.file_upload import (
@@ -149,6 +156,7 @@ from app.schemas import (
     FaceChallengeRead,
     FaceChallengeRequest,
     FaceCredentialRead,
+    FamilyFaceChallengeRequest,
     HardSampleCreate,
     HardSampleRead,
     HardSampleUpdate,
@@ -164,6 +172,7 @@ from app.schemas import (
     KnowledgeDocumentRead,
     KnowledgeRetrieveRequest,
     KnowledgeRetrieveResponse,
+    MemberAccountBindingUpdate,
     MemberCreate,
     MemberRead,
     MemberStateRead,
@@ -412,9 +421,31 @@ def list_households(
         if authorized_ids
         else []
     )
+    # A member account is a first-class local family identity.  It does not
+    # need a separate CareAuthorization just to discover its own household.
+    member_household_ids = set(
+        session.scalars(
+            select(Member.household_id).where(
+                Member.actor_id == actor_id,
+                Member.deleted_at.is_(None),
+            )
+        ).all()
+    )
+    member_households = (
+        list(
+            session.scalars(
+                select(Household).where(
+                    Household.id.in_(member_household_ids),
+                    Household.deleted_at.is_(None),
+                )
+            ).all()
+        )
+        if member_household_ids
+        else []
+    )
     seen: set[str] = set()
     result: list[Household] = []
-    for h in list(owned) + authorized:
+    for h in list(owned) + authorized + member_households:
         if h.id not in seen:
             seen.add(h.id)
             result.append(h)
@@ -507,15 +538,95 @@ def create_member(
     session: Session = Depends(get_session),
 ) -> Member:
     household = require_household_owner(session, household_id, actor_id)
+    target_actor_id = payload.actor_id.strip() if payload.actor_id else None
+    if target_actor_id:
+        duplicate = session.scalar(
+            select(Member.id).where(
+                Member.household_id == household.id,
+                Member.actor_id == target_actor_id,
+                Member.deleted_at.is_(None),
+            )
+        )
+        if duplicate is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="ACCOUNT_ID_EXISTS")
+        if target_actor_id == household.created_by and payload.role != "SELF":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="ACCOUNT_ID_EXISTS")
     member = Member(
         household_id=household.id,
         display_name=payload.display_name,
         role=payload.role,
-        actor_id=payload.actor_id,
+        actor_id=target_actor_id,
     )
     session.add(member)
     session.commit()
     session.refresh(member)
+    return member
+
+
+@router.patch(
+    "/households/{household_id}/members/{member_id}/account",
+    response_model=MemberRead,
+)
+def bind_member_account(
+    household_id: str,
+    member_id: str,
+    payload: MemberAccountBindingUpdate,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> Member:
+    """Give an existing family member the actor id used for local login."""
+    household = require_household_owner(session, household_id, actor_id)
+    member = _require_household_member(session, household.id, member_id)
+    target_actor_id = payload.actor_id.strip()
+    duplicate = session.scalar(
+        select(Member.id).where(
+            Member.household_id == household.id,
+            Member.id != member.id,
+            Member.actor_id == target_actor_id,
+            Member.deleted_at.is_(None),
+        )
+    )
+    if duplicate is not None or (
+        target_actor_id == household.created_by and member.role != "SELF"
+    ):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="ACCOUNT_ID_EXISTS")
+
+    previous_actor_id = member.actor_id
+    if previous_actor_id != target_actor_id:
+        now = datetime.now(UTC)
+        active_credentials = list(
+            session.scalars(
+                select(FaceCredential).where(
+                    FaceCredential.household_id == household.id,
+                    FaceCredential.actor_id == previous_actor_id,
+                    FaceCredential.status == "ACTIVE",
+                )
+            ).all()
+        ) if previous_actor_id else []
+        for credential in active_credentials:
+            credential.status = "REVOKED"
+            credential.revoked_at = now
+            credential.encrypted_template = b""
+        if previous_actor_id:
+            revoke_household_sessions(household.id, {previous_actor_id})
+        member.actor_id = target_actor_id
+        session.add(
+            AccessAudit(
+                household_id=household.id,
+                authorization_id=None,
+                actor_id=actor_id,
+                operation="MEMBER_ACCOUNT",
+                action="BIND" if previous_actor_id is None else "REPLACE",
+                data_field="member_actor_id",
+                purpose="family-account-binding",
+                outcome="SUCCESS",
+                reason=None,
+                before_version=None,
+                after_version=None,
+            )
+        )
+        session.commit()
+        session.refresh(member)
     return member
 
 
@@ -1415,6 +1526,12 @@ def auth_face_challenge(payload: FaceChallengeRequest) -> dict[str, Any]:
     return create_face_challenge(payload.actor_id, payload.household_id)
 
 
+@router.post("/auth/family-face-challenge", response_model=FaceChallengeRead)
+def auth_family_face_challenge(payload: FamilyFaceChallengeRequest) -> dict[str, Any]:
+    """Issue a household-scoped challenge; actor identity is resolved later."""
+    return create_family_face_challenge(payload.household_id)
+
+
 @router.post("/auth/face-login", response_model=AuthSessionRead)
 async def auth_face_login(
     household_id: str = Form(..., min_length=1, max_length=120),
@@ -1491,7 +1608,12 @@ async def auth_face_login(
             )
             if not quality["allow_downstream"]:
                 failed("FRAME_QUALITY_INVALID")
-            template, _ = extract_face_template(data)
+            extractor = (
+                extract_legacy_face_template
+                if credential.algorithm_version == LEGACY_FACE_ALGORITHM_VERSION
+                else extract_face_template
+            )
+            template, _ = extractor(data)
             templates.append(template)
         try:
             check_face_liveness(templates)
@@ -1554,6 +1676,174 @@ async def auth_face_login(
         "actor_id": actor_id,
         "household_id": household_id,
         **create_face_session(actor_id, household_id),
+    }
+
+
+@router.post("/auth/family-face-login", response_model=AuthSessionRead)
+async def auth_family_face_login(
+    household_id: str = Form(..., min_length=1, max_length=120),
+    challenge_id: str = Form(..., min_length=16, max_length=128),
+    frames: list[UploadFile] = File(...),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    """Identify one member inside the already bound household (1:N)."""
+    rate_actor = family_face_rate_actor()
+    try:
+        rate_key = check_face_rate_limit(household_id, rate_actor)
+    except HTTPException:
+        _record_authentication_audit(
+            session,
+            household_id=household_id,
+            actor_id=rate_actor,
+            method="FACE",
+            outcome="FAILED",
+            reason="RATE_LIMITED",
+        )
+        raise
+
+    def failed(reason: str = "FACE_AUTH_FAILED") -> NoReturn:
+        record_face_failure(rate_key)
+        _record_authentication_audit(
+            session,
+            household_id=household_id,
+            actor_id=rate_actor,
+            method="FACE",
+            outcome="FAILED",
+            reason=reason,
+        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="FACE_AUTH_FAILED")
+
+    try:
+        consume_family_face_challenge(challenge_id, household_id)
+    except HTTPException:
+        failed("CHALLENGE_INVALID")
+
+    credentials = list(
+        session.scalars(
+            select(FaceCredential).where(
+                FaceCredential.household_id == household_id,
+                FaceCredential.status == "ACTIVE",
+            )
+        ).all()
+    )
+    credentials = [
+        credential
+        for credential in credentials
+        if credential.encrypted_template
+        and _actor_belongs_to_household(session, household_id, credential.actor_id)
+    ]
+    if not credentials:
+        failed("CREDENTIAL_UNAVAILABLE")
+
+    frame_bytes: list[bytes] = []
+    templates_by_algorithm: dict[str, list[bytes]] = {}
+    try:
+        if len(frames) < 2 or len(frames) > 3:
+            failed("FRAME_COUNT_INVALID")
+        for upload in frames:
+            if upload.content_type not in {"image/jpeg", "image/png"}:
+                failed("FRAME_TYPE_INVALID")
+            data = await upload.read(2 * 1024 * 1024 + 1)
+            if not data or len(data) > 2 * 1024 * 1024:
+                failed("FRAME_SIZE_INVALID")
+            if upload.content_type == "image/jpeg" and not data.startswith(b"\xff\xd8\xff"):
+                failed("FRAME_MAGIC_INVALID")
+            if upload.content_type == "image/png" and not data.startswith(b"\x89PNG\r\n\x1a\n"):
+                failed("FRAME_MAGIC_INVALID")
+            frame_bytes.append(data)
+            from ai.vision.quality_gate import assess_image, decode_image
+
+            quality = assess_image(
+                decode_image(data),
+                source_id="family-face-login",
+                thresholds=settings.vision_quality_thresholds(),
+            )
+            if not quality["allow_downstream"]:
+                failed("FRAME_QUALITY_INVALID")
+
+        # A household may contain legacy v1 and current v2 credentials during
+        # migration, so derive each feature representation only once per
+        # algorithm version and keep all raw frames in memory only.
+        for algorithm_version in {credential.algorithm_version for credential in credentials}:
+            extractor = (
+                extract_legacy_face_template
+                if algorithm_version == LEGACY_FACE_ALGORITHM_VERSION
+                else extract_face_template
+            )
+            extracted = [extractor(data)[0] for data in frame_bytes]
+            try:
+                check_face_liveness(extracted)
+            except ValueError as exc:
+                if str(exc) == "FACE_LIVENESS_FAILED":
+                    failed("LIVENESS_FAILED")
+                failed("FACE_MATCH_FAILED")
+            templates_by_algorithm[algorithm_version] = extracted
+
+        candidates: list[tuple[float, str]] = []
+        decrypt_failures = 0
+        for credential in credentials:
+            try:
+                stored_template = decrypt_template(credential.encrypted_template)
+                templates = templates_by_algorithm[credential.algorithm_version]
+                score = max(
+                    face_template_similarity(template, stored_template)
+                    for template in templates
+                )
+            except (HTTPException, ValueError, KeyError):
+                decrypt_failures += 1
+                continue
+            candidates.append((score, credential.actor_id))
+        if not candidates:
+            if decrypt_failures:
+                raise RuntimeError("FACE_CREDENTIALS_UNAVAILABLE")
+            failed("CREDENTIAL_UNAVAILABLE")
+
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        best_score, best_actor_id = candidates[0]
+        second_score = candidates[1][0] if len(candidates) > 1 else None
+        if best_score < FACE_MATCH_THRESHOLD:
+            failed("NO_MATCH")
+        if second_score is not None and best_score - second_score < FAMILY_FACE_MATCH_MARGIN:
+            # A close race between two family members is not safe to resolve
+            # automatically; the UI falls back to PIN/explicit account login.
+            failed("AMBIGUOUS_MATCH")
+    except HTTPException:
+        raise
+    except ValueError:
+        failed("FACE_MATCH_FAILED")
+    except RuntimeError as exc:
+        _record_authentication_audit(
+            session,
+            household_id=household_id,
+            actor_id=rate_actor,
+            method="FACE",
+            outcome="FAILED",
+            reason="FACE_SERVICE_UNAVAILABLE",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="FACE_AUTH_UNAVAILABLE",
+        ) from exc
+    finally:
+        for index in range(len(frame_bytes)):
+            frame_bytes[index] = b""
+        for templates in templates_by_algorithm.values():
+            templates.clear()
+        templates_by_algorithm.clear()
+
+    clear_face_failures(rate_key)
+    _record_authentication_audit(
+        session,
+        household_id=household_id,
+        actor_id=best_actor_id,
+        method="FACE",
+        outcome="SUCCESS",
+        reason="FAMILY_MATCH_AUTHENTICATED",
+    )
+    return {
+        "actor_id": best_actor_id,
+        "household_id": household_id,
+        **create_face_session(best_actor_id, household_id),
     }
 
 
@@ -1696,7 +1986,8 @@ def list_face_credentials(
 )
 async def register_face_credential(
     household_id: str,
-    file: UploadFile = File(...),
+    frames: list[UploadFile] = File(default=[]),
+    file: UploadFile | None = File(default=None),
     consent: bool = Form(default=False),
     target_actor_id: str | None = Form(default=None, max_length=120),
     replace_existing: bool = Form(default=False),
@@ -1731,29 +2022,60 @@ async def register_face_credential(
     if active is not None and not replace_existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="FACE_CREDENTIAL_EXISTS")
 
-    filename = validate_filename(file.filename or "unknown")
-    extension = validate_extension(filename)
-    if extension not in {".jpg", ".jpeg", ".png"} or file.content_type not in {
-        "image/jpeg", "image/png"
-    }:
+    # ``file`` remains accepted for one release so old local clients do not
+    # break. The web UI always sends a 2–3 frame dynamic sequence.
+    uploads = list(frames)
+    if not uploads and file is not None:
+        uploads = [file]
+    if len(uploads) < 2 or len(uploads) > 3:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="FACE_IMAGE_INVALID",
+            detail="FACE_LIVENESS_FAILED",
         )
-    validate_magic(file.file, extension)
-    validate_size(file.file)
-    image_bytes = await file.read()
+    templates: list[bytes] = []
+    metadata: dict[str, Any] | None = None
     try:
         from ai.vision.quality_gate import assess_image, decode_image
 
-        quality = assess_image(
-            decode_image(image_bytes),
-            source_id="face-registration",
-            thresholds=settings.vision_quality_thresholds(),
+        for upload in uploads:
+            filename = validate_filename(upload.filename or "unknown")
+            extension = validate_extension(filename)
+            if extension not in {".jpg", ".jpeg", ".png"} or upload.content_type not in {
+                "image/jpeg", "image/png"
+            }:
+                raise ValueError("FACE_IMAGE_INVALID")
+            validate_magic(upload.file, extension)
+            validate_size(upload.file)
+            image_bytes = await upload.read(2 * 1024 * 1024 + 1)
+            if not image_bytes or len(image_bytes) > 2 * 1024 * 1024:
+                raise ValueError("FACE_FRAME_SIZE_INVALID")
+            quality = assess_image(
+                decode_image(image_bytes),
+                source_id="face-registration",
+                thresholds=settings.vision_quality_thresholds(),
+            )
+            if not quality["allow_downstream"]:
+                raise ValueError("FACE_FRAME_LOW_QUALITY")
+            template, frame_metadata = extract_face_template(image_bytes)
+            templates.append(template)
+            metadata = frame_metadata
+            image_bytes = b""
+        try:
+            check_face_liveness(templates)
+        except ValueError as exc:
+            raise ValueError("FACE_LIVENESS_FAILED") from exc
+        # Store the sequence's most representative frame, not a potentially
+        # extreme turn. This keeps the encrypted schema compact and stable.
+        representative_index = max(
+            range(len(templates)),
+            key=lambda index: sum(
+                face_template_similarity(templates[index], other)
+                for other in templates
+                if other is not templates[index]
+            )
+            / max(1, len(templates) - 1),
         )
-        if not quality["allow_downstream"]:
-            raise ValueError("FACE_FRAME_LOW_QUALITY")
-        template, metadata = extract_face_template(image_bytes)
+        template = templates[representative_index]
     except RuntimeError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1765,8 +2087,14 @@ async def register_face_credential(
             detail=str(exc),
         ) from exc
     finally:
-        # Drop the decoded registration frame before touching the database.
-        image_bytes = b""
+        # Drop all decoded registration frames before touching the database.
+        templates.clear()
+
+    if metadata is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="FACE_FRAME_INVALID",
+        )
 
     _confirm_face_registration(
         actor_id=actor_id,

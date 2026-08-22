@@ -20,12 +20,16 @@ from fastapi import HTTPException, status
 
 from app.config import get_settings
 
-FACE_ALGORITHM_VERSION = "opencv-haar-grayscale-v1"
-FACE_FEATURE_VERSION = "face-template-v1"
+FACE_ALGORITHM_VERSION = "opencv-haar-grayscale-v2"
+FACE_FEATURE_VERSION = "face-template-v2"
+LEGACY_FACE_ALGORITHM_VERSION = "opencv-haar-grayscale-v1"
+LEGACY_FACE_FEATURE_VERSION = "face-template-v1"
 FACE_CONSENT_VERSION = "face-registration-consent-v1"
 FACE_LIVENESS_VERSION = "motion-sequence-v1"
-_FEATURE_SIZE = 32
+_FEATURE_SIZE = 64
+_LEGACY_FEATURE_SIZE = 32
 FACE_MATCH_THRESHOLD = 0.82
+FAMILY_FACE_MATCH_MARGIN = 0.06
 _FACE_CASCADE_FILENAME = "haarcascade_frontalface_default.xml"
 
 
@@ -81,8 +85,7 @@ def _load_face_cascade() -> cv2.CascadeClassifier:
     return cascade
 
 
-def extract_face_template(image_bytes: bytes) -> tuple[bytes, dict[str, Any]]:
-    """Detect exactly one face and derive a normalized, versioned template."""
+def _decode_face_image(image_bytes: bytes) -> np.ndarray:
     encoded = np.frombuffer(image_bytes, dtype=np.uint8)
     try:
         image = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
@@ -90,7 +93,10 @@ def extract_face_template(image_bytes: bytes) -> tuple[bytes, dict[str, Any]]:
         raise ValueError("FACE_FRAME_DECODE_FAILED") from exc
     if image is None:
         raise ValueError("FACE_FRAME_DECODE_FAILED")
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    return image
+
+
+def _detect_single_face(gray: np.ndarray) -> tuple[int, int, int, int]:
     cascade = _load_face_cascade()
     if cascade.empty():
         raise RuntimeError("FACE_DETECTOR_UNAVAILABLE")
@@ -104,19 +110,42 @@ def extract_face_template(image_bytes: bytes) -> tuple[bytes, dict[str, Any]]:
         raise ValueError("FACE_NOT_FOUND")
     if len(faces) > 1:
         raise ValueError("FACE_MULTIPLE_SUBJECTS")
+    return tuple(int(value) for value in faces[0])
 
-    x, y, width, height = [int(value) for value in faces[0]]
-    crop = gray[y : y + height, x : x + width]
+
+def _normalize_crop(crop: np.ndarray, feature_size: int, *, robust: bool) -> bytes:
     if crop.size == 0:
         raise ValueError("FACE_CROP_INVALID")
-    normalized = cv2.equalizeHist(crop)
+    if robust:
+        # A padded crop is less sensitive to a Haar box moving by a few pixels
+        # between registration and login. CLAHE keeps indoor lighting changes
+        # from dominating the local template without sending pixels anywhere.
+        normalized = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(crop)
+    else:
+        normalized = cv2.equalizeHist(crop)
     normalized = cv2.resize(
         normalized,
-        (_FEATURE_SIZE, _FEATURE_SIZE),
+        (feature_size, feature_size),
         interpolation=cv2.INTER_AREA,
     ).astype(np.float32)
     normalized = (normalized - float(normalized.mean())) / (float(normalized.std()) + 1e-6)
-    template = normalized.astype("<f4").tobytes()
+    return normalized.astype("<f4").tobytes()
+
+
+def extract_face_template(image_bytes: bytes) -> tuple[bytes, dict[str, Any]]:
+    """Detect one face and derive a lighting/box-tolerant v2 template."""
+    image = _decode_face_image(image_bytes)
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    x, y, width, height = _detect_single_face(gray)
+
+    pad_x = int(width * 0.24)
+    pad_top = int(height * 0.26)
+    pad_bottom = int(height * 0.34)
+    left = max(0, x - pad_x)
+    top = max(0, y - pad_top)
+    right = min(gray.shape[1], x + width + pad_x)
+    bottom = min(gray.shape[0], y + height + pad_bottom)
+    template = _normalize_crop(gray[top:bottom, left:right], _FEATURE_SIZE, robust=True)
     return template, {
         "face_count": 1,
         "feature_dimensions": [_FEATURE_SIZE, _FEATURE_SIZE],
@@ -125,10 +154,31 @@ def extract_face_template(image_bytes: bytes) -> tuple[bytes, dict[str, Any]]:
     }
 
 
+def extract_legacy_face_template(image_bytes: bytes) -> tuple[bytes, dict[str, Any]]:
+    """Keep already registered v1 credentials usable until the user rebinds."""
+    image = _decode_face_image(image_bytes)
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    x, y, width, height = _detect_single_face(gray)
+    template = _normalize_crop(
+        gray[y : y + height, x : x + width],
+        _LEGACY_FEATURE_SIZE,
+        robust=False,
+    )
+    return template, {
+        "face_count": 1,
+        "feature_dimensions": [_LEGACY_FEATURE_SIZE, _LEGACY_FEATURE_SIZE],
+        "algorithm_version": LEGACY_FACE_ALGORITHM_VERSION,
+        "feature_version": LEGACY_FACE_FEATURE_VERSION,
+    }
+
+
 def face_template_similarity(left: bytes, right: bytes) -> float:
     """Return cosine similarity for two local, versioned face templates."""
-    expected = _FEATURE_SIZE * _FEATURE_SIZE * 4
-    if len(left) != expected or len(right) != expected:
+    valid_sizes = {
+        _FEATURE_SIZE * _FEATURE_SIZE * 4,
+        _LEGACY_FEATURE_SIZE * _LEGACY_FEATURE_SIZE * 4,
+    }
+    if len(left) not in valid_sizes or len(right) not in valid_sizes or len(left) != len(right):
         raise ValueError("FACE_TEMPLATE_INVALID")
     left_values = np.frombuffer(left, dtype="<f4").astype(np.float32)
     right_values = np.frombuffer(right, dtype="<f4").astype(np.float32)

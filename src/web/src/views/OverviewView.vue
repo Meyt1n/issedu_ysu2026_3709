@@ -266,7 +266,7 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
       <div style="align-items: center; display: flex; gap: 18px">
         <span class="seal" aria-hidden="true"><i>家</i><i>的</i><i>温</i><i>度</i></span>
         <div>
-          <h2 class="hero-greeting"><span class="gradient-text">{{ greeting }}</span>，{{ session.actorId }}</h2>
+          <h2 class="hero-greeting"><span class="gradient-text">{{ greeting }}</span>，{{ selectedMember?.display_name ?? session.actorId }}</h2>
           <svg class="brush-underline" viewBox="0 0 220 12" aria-hidden="true">
             <path d="M4 8 C 46 3, 92 11, 128 6 S 196 4, 216 7" />
           </svg>

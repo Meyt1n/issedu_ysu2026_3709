@@ -68,6 +68,10 @@ export interface CreateMemberInput {
   actor_id?: string | null
 }
 
+export interface MemberAccountBindingInput {
+  actor_id: string
+}
+
 export interface Authorization {
   id: string
   household_id: string

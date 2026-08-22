@@ -4,7 +4,17 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { apiClient } from '../api/client'
 import type { FaceCredential } from '../api/types'
 import AppIcon from '../components/AppIcon.vue'
-import { formatError, pushToast, requestOptions, session } from '../store'
+import FaceVideoCapture from '../components/FaceVideoCapture.vue'
+import {
+  bindFaceHousehold,
+  clearBoundFaceHousehold,
+  formatError,
+  getBoundFaceHouseholdId,
+  pushToast,
+  refreshMembers,
+  requestOptions,
+  session,
+} from '../store'
 import { askConfirm } from '../ui/confirm'
 import { formatDateTime } from '../ui/labels'
 
@@ -13,7 +23,7 @@ const visibleCredentials = computed(() => credentials.value.filter(credential =>
 const selectedActorId = ref('')
 const confirmationMethod = ref<'pin' | 'password'>('pin')
 const confirmationCode = ref('')
-const selectedFile = ref<File | null>(null)
+const selectedFrames = ref<File[]>([])
 const consent = ref(false)
 const replaceExisting = ref(false)
 const loading = ref(false)
@@ -24,6 +34,32 @@ const pinConfirmation = ref('')
 const pinSaving = ref(false)
 const pinError = ref('')
 const pinSuccess = ref('')
+const accountMemberId = ref('')
+const accountActorId = ref('')
+const accountBindingSaving = ref(false)
+const accountBindingError = ref('')
+const boundFaceHouseholdId = ref(getBoundFaceHouseholdId())
+const boundFaceHouseholdLabel = computed(() => {
+  const household = session.households.find(item => item.id === boundFaceHouseholdId.value)
+  return household?.name ?? boundFaceHouseholdId.value
+})
+
+const unboundMembers = computed(() => session.members.filter(member => !member.actor_id))
+
+function bindCurrentHouseholdToDevice(): void {
+  const householdId = session.selectedHouseholdId
+  if (!householdId) return
+  const household = session.households.find(item => item.id === householdId)
+  bindFaceHousehold(householdId, household?.name ?? '')
+  boundFaceHouseholdId.value = householdId
+  pushToast('success', '本机人脸登录家庭已绑定，只会在这个家庭内自动识别成员。')
+}
+
+function clearDeviceFaceHousehold(): void {
+  clearBoundFaceHousehold()
+  boundFaceHouseholdId.value = ''
+  pushToast('info', '已解除本机人脸登录家庭绑定。')
+}
 
 const actorOptions = computed(() => {
   const household = session.households.find(item => item.id === session.selectedHouseholdId)
@@ -39,7 +75,7 @@ const actorOptions = computed(() => {
 function resetForm(): void {
   selectedActorId.value = actorOptions.value[0]?.id ?? session.actorId
   confirmationCode.value = ''
-  selectedFile.value = null
+  selectedFrames.value = []
   consent.value = false
   replaceExisting.value = false
   error.value = ''
@@ -100,8 +136,32 @@ async function loadCredentials(): Promise<boolean> {
   }
 }
 
-function chooseFile(event: Event): void {
-  selectedFile.value = (event.target as HTMLInputElement).files?.[0] ?? null
+function onFramesCaptured(frames: File[]): void {
+  selectedFrames.value = frames
+  error.value = ''
+}
+
+async function bindMemberAccount(): Promise<void> {
+  const householdId = session.selectedHouseholdId
+  const memberId = accountMemberId.value
+  const actorId = accountActorId.value.trim()
+  accountBindingError.value = ''
+  if (!householdId || !memberId || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(actorId)) {
+    accountBindingError.value = '请选择成员，并填写字母、数字、点、下划线或短横线组成的账号 ID。'
+    return
+  }
+  accountBindingSaving.value = true
+  try {
+    await apiClient.bindMemberAccount(householdId, memberId, { actor_id: actorId }, requestOptions.value)
+    await refreshMembers()
+    accountActorId.value = ''
+    accountMemberId.value = ''
+    pushToast('success', '成员登录账号已绑定，现在可以为他采集动态人脸凭证。')
+  } catch (cause) {
+    accountBindingError.value = formatError(cause)
+  } finally {
+    accountBindingSaving.value = false
+  }
 }
 
 async function registerCredential(): Promise<void> {
@@ -110,8 +170,8 @@ async function registerCredential(): Promise<void> {
     error.value = '人脸凭证注册需要正式账号会话，请先切换到“正式账号登录”。'
     return
   }
-  if (!householdId || !selectedFile.value || !selectedActorId.value || !consent.value) {
-    error.value = '请选择账号、图片并确认生物特征处理同意。'
+  if (!householdId || selectedFrames.value.length < 2 || !selectedActorId.value || !consent.value) {
+    error.value = '请选择账号，完成三帧动态采集，并确认生物特征处理同意。'
     return
   }
   saving.value = true
@@ -119,7 +179,7 @@ async function registerCredential(): Promise<void> {
   try {
     await apiClient.registerFaceCredential(
       householdId,
-      selectedFile.value,
+      selectedFrames.value,
       {
         consent: true,
         targetActorId: selectedActorId.value,
@@ -186,7 +246,7 @@ onMounted(() => {
       <div>
         <p class="eyebrow">家庭账号安全</p>
         <h1>人脸凭证注册</h1>
-        <p class="page-subtitle">仅保存加密特征与版本元数据；本页面不实现人脸登录匹配或活体检测。</p>
+        <p class="page-subtitle">为家庭成员采集三帧动态画面；后端完成活体检查，只保存加密特征，不保存视频原片。</p>
       </div>
       <button type="button" class="btn btn-ghost" :disabled="loading" @click="loadCredentials"><AppIcon name="refresh" :size="15" /> 刷新</button>
     </div>
@@ -196,16 +256,44 @@ onMounted(() => {
 
     <div v-if="session.isOwnerView" class="grid-main-side">
       <section class="card">
+        <div class="card-heading"><div><p class="eyebrow">本机登录范围</p><h3 class="card-title">绑定一个家庭</h3></div><AppIcon name="home" :size="20" style="color: var(--sky)" /></div>
+        <p class="card-note">人脸自动识别只在绑定家庭的成员中进行，不会跨家庭搜索。绑定后，欢迎页可以直接识别爷爷、奶奶等成员并进入对应小账号。</p>
+          <p class="notice" :class="boundFaceHouseholdId === session.selectedHouseholdId ? 'ok' : 'warn'" role="status">
+            <AppIcon :name="boundFaceHouseholdId ? 'check' : 'info'" :size="16" />
+          {{ boundFaceHouseholdId ? `当前绑定家庭：${boundFaceHouseholdLabel}` : '本机尚未绑定家庭' }}
+          </p>
+        <div class="row-actions">
+          <button type="button" class="btn btn-primary btn-small" :disabled="!session.selectedHouseholdId || boundFaceHouseholdId === session.selectedHouseholdId" @click="bindCurrentHouseholdToDevice">绑定当前家庭</button>
+          <button v-if="boundFaceHouseholdId" type="button" class="btn btn-ghost btn-small" @click="clearDeviceFaceHousehold">解除绑定</button>
+        </div>
+      </section>
+      <section v-if="unboundMembers.length > 0" class="card">
+        <div class="card-heading"><div><p class="eyebrow">先绑定家庭账号</p><h3 class="card-title">给成员分配登录账号</h3></div><AppIcon name="members" :size="20" style="color: var(--sky)" /></div>
+        <p class="card-note">当前家庭有成员还没有登录账号。先绑定一个账号 ID，成员才能用人脸或 PIN 快速进入自己的家庭账号。</p>
+        <form class="section-stack" @submit.prevent="bindMemberAccount">
+          <label class="field">成员<select v-model="accountMemberId" required><option value="" disabled>请选择成员</option><option v-for="member in unboundMembers" :key="member.id" :value="member.id">{{ member.display_name }}</option></select></label>
+          <label class="field">登录账号 ID<input v-model="accountActorId" autocomplete="username" required placeholder="例如 grandpa-1" /><small>只用于本地家庭登录，不是姓名，也不要填密码。</small></label>
+          <p v-if="accountBindingError" class="notice error" role="alert"><AppIcon name="alert" :size="16" /> {{ accountBindingError }}</p>
+          <button type="submit" class="btn btn-primary" :disabled="accountBindingSaving || !accountMemberId || !accountActorId.trim()"><AppIcon name="key" :size="15" /> {{ accountBindingSaving ? '正在绑定' : '绑定登录账号' }}</button>
+        </form>
+      </section>
+      <section class="card">
         <div class="card-heading"><div><p class="eyebrow">明确同意与二次确认</p><h3 class="card-title">注册或重新绑定</h3></div></div>
         <p v-if="session.authMode !== 'session'" class="notice warn" role="status"><AppIcon name="lock" :size="16" /> 开发演示身份只能读取家庭数据；注册人脸凭证需要正式账号会话。</p>
         <form class="section-stack" @submit.prevent="registerCredential">
           <label class="field">家庭账号<select v-model="selectedActorId" required><option v-for="option in actorOptions" :key="option.id" :value="option.id">{{ option.label }} · {{ option.id }}</option></select></label>
-          <label class="field">注册图片<input type="file" accept="image/jpeg,image/png" required @change="chooseFile" /><small>请上传至少 640×480 的 JPG/PNG 正面照片：只保留一张人脸，光线均匀、避免反光和模糊，不要裁切脸部；处理完成后不保存原图。</small></label>
+          <FaceVideoCapture
+            mode="registration"
+            :disabled="saving || !selectedActorId"
+            :show-fallback="false"
+            @captured="onFramesCaptured"
+          />
+          <p v-if="selectedFrames.length > 0" class="notice ok" role="status"><AppIcon name="check" :size="16" /> 已准备 {{ selectedFrames.length }} 帧动态画面，点击注册后才会提交到本地 API。</p>
           <fieldset><legend>二次确认方式</legend><label class="check-row"><input v-model="confirmationMethod" type="radio" value="pin" /> 家庭 PIN</label><label class="check-row"><input v-model="confirmationMethod" type="radio" value="password" /> 账号密码</label></fieldset>
           <label class="field">{{ confirmationMethod === 'pin' ? '六位 PIN' : '账号密码' }}<input v-model="confirmationCode" type="password" :inputmode="confirmationMethod === 'pin' ? 'numeric' : 'text'" autocomplete="off" required /></label>
           <label class="check-row"><input v-model="replaceExisting" type="checkbox" /> 已有凭证时重新绑定</label>
           <label class="check-row"><input v-model="consent" type="checkbox" required /> 我已获得本人明确同意，允许为所选家庭账号注册人脸凭证。</label>
-          <button type="submit" class="btn btn-primary" :disabled="session.authMode !== 'session' || saving || !selectedFile || !consent"><AppIcon name="shield" :size="15" /> {{ saving ? '处理中…' : '注册凭证' }}</button>
+          <button type="submit" class="btn btn-primary" :disabled="session.authMode !== 'session' || saving || selectedFrames.length < 2 || !consent"><AppIcon name="shield" :size="15" /> {{ saving ? '正在校验动态画面…' : '注册动态人脸凭证' }}</button>
         </form>
       </section>
 
