@@ -291,6 +291,7 @@ dependencies = [
     { name = "bcrypt" },
     { name = "cryptography" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "numpy" },
     { name = "opencv-python-headless" },
     { name = "psutil" },
@@ -303,7 +304,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "httpx" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "requests" },
@@ -316,6 +316,7 @@ requires-dist = [
     { name = "bcrypt", specifier = ">=4.2,<5" },
     { name = "cryptography", specifier = ">=43,<46" },
     { name = "fastapi", specifier = ">=0.115,<0.116" },
+    { name = "httpx", specifier = ">=0.28,<0.29" },
     { name = "numpy", specifier = ">=2,<3" },
     { name = "opencv-python-headless", specifier = ">=4.10,<5" },
     { name = "psutil", specifier = ">=6.1,<8" },
@@ -328,7 +329,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx", specifier = ">=0.28,<0.29" },
     { name = "pytest", specifier = ">=8.3,<9" },
     { name = "pytest-cov", specifier = ">=6,<7" },
     { name = "requests", specifier = ">=2.32,<3" },

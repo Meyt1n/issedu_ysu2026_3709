@@ -109,7 +109,10 @@ body::after {
   z-index: 95;
 }
 
-#app { min-height: 100vh; }
+#app {
+  height: 100dvh;
+  min-height: 100dvh;
+}
 
 ::selection { background: rgba(194, 103, 68, 0.22); }
 
@@ -263,7 +266,8 @@ button:focus-visible, a:focus-visible {
 .app-frame {
   display: grid;
   grid-template-columns: 248px minmax(0, 1fr);
-  min-height: 100vh;
+  height: 100dvh;
+  min-height: 100dvh;
 }
 
 .sidebar {
@@ -279,7 +283,7 @@ button:focus-visible, a:focus-visible {
   padding: 26px 16px 18px;
   position: sticky;
   top: 0;
-  height: 100vh;
+  height: 100dvh;
   overflow-y: auto;
 }
 
@@ -390,7 +394,14 @@ button:focus-visible, a:focus-visible {
 
 /* ---------- 主区域 ---------- */
 
-.main-area { display: flex; flex-direction: column; min-width: 0; overflow-x: hidden; }
+.main-area {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
 
 .topbar {
   align-items: center;
@@ -477,16 +488,80 @@ button:focus-visible, a:focus-visible {
 .view-container {
   display: grid;
   gap: 22px;
+  flex: 1 1 auto;
+  height: 100%;
+  min-height: 0;
   margin: 0 auto;
   max-width: 1180px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 30px 34px 46px;
+  scrollbar-gutter: stable;
+  min-width: 0;
   width: 100%;
 }
 
-.view-stage { perspective: 1400px; }
+.view-stage {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  perspective: 1400px;
+}
+
+/*
+ * 页面统一使用“视口内布局”：主窗口不再把 body 撑高，内容超出时由
+ * .view-container 自己滚动。这样浏览器缩放只会改变可用视口，页面不会
+ * 产生一层额外的全局纵向滚动条。
+ */
+.view-container.view-assistant {
+  align-content: stretch;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: clamp(10px, 1.6vh, 22px);
+  overflow: hidden;
+  padding: clamp(14px, 2.8vh, 30px) clamp(16px, 2.5vw, 34px) clamp(12px, 2.4vh, 30px);
+}
+
+.view-assistant > .page-hero { flex: 0 0 auto; }
+
+.view-assistant > .card {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  padding: clamp(14px, 2vh, 24px) clamp(16px, 2vw, 26px);
+}
+
+.view-assistant .session-bar {
+  margin: calc(-1 * clamp(14px, 2vh, 24px)) calc(-1 * clamp(16px, 2vw, 26px)) clamp(10px, 1.6vh, 20px);
+}
+
+.view-assistant .agent-workflow-panel {
+  flex: 0 0 auto;
+  margin-bottom: clamp(8px, 1.4vh, 18px);
+}
+
+.view-assistant .chat-window {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: clamp(120px, 17vh, 260px);
+  max-height: none;
+}
+
+.view-assistant .chat-compose,
+.view-assistant .agent-network-toggle,
+.view-assistant .voice-session-panel,
+.view-assistant > .card > .text-faint {
+  flex: 0 0 auto;
+}
 
 .app-footer {
   color: var(--ink-faint);
+  flex: 0 0 auto;
   font-size: 12.5px;
   margin-top: auto;
   padding: 18px 34px 26px;
@@ -1254,9 +1329,9 @@ button:focus-visible, a:focus-visible {
 .chat-window {
   display: grid;
   gap: 15px;
-  height: clamp(460px, calc(100vh - 300px), 720px);
-  min-height: 460px;
-  max-height: 72vh;
+  height: clamp(180px, 34vh, 720px);
+  min-height: 180px;
+  max-height: none;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 2px 8px 2px 2px;
@@ -1524,8 +1599,10 @@ button:focus-visible, a:focus-visible {
 }
 
 .chat-compose-actions > .btn {
+  flex: 1 1 0;
   height: 52px;
   min-width: 112px;
+  width: clamp(112px, 9vw, 132px);
   white-space: nowrap;
 }
 
@@ -1603,7 +1680,7 @@ button:focus-visible, a:focus-visible {
 }
 
 @media (max-height: 700px) and (min-width: 641px) {
-  .chat-window { height: 430px; min-height: 430px; }
+  .chat-window { height: auto; min-height: 120px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1678,7 +1755,8 @@ button:focus-visible, a:focus-visible {
   66% { transform: translate(-36px, 26px) scale(0.94); }
 }
 
-.app-frame, .welcome-stage, .toast-region { position: relative; z-index: 1; }
+.app-frame, .welcome-stage { position: relative; z-index: 1; }
+.toast-region { position: fixed; z-index: 90; }
 
 @media (prefers-reduced-motion: reduce) {
   .aurora span, .view-container, .view-container > *, .toast { animation: none !important; }
@@ -4246,7 +4324,10 @@ button:focus-visible, a:focus-visible {
 }
 
 @media (max-width: 860px) {
-  .app-frame { grid-template-columns: 1fr; }
+  .app-frame {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
 
   .sidebar {
     flex-direction: row;
@@ -4266,6 +4347,23 @@ button:focus-visible, a:focus-visible {
   .topbar { flex-wrap: wrap; padding: 12px 18px; }
   .view-container { padding: 20px 18px 40px; }
   .chat-bubble { max-width: 92%; }
+}
+
+/* 短视口、系统缩放或浏览器缩放后的紧凑档；不改变页面信息层级。 */
+@media (max-height: 820px) and (min-width: 861px) {
+  .view-container { padding-bottom: 20px; padding-top: 18px; }
+
+  .view-container.view-assistant { gap: 10px; }
+  .view-assistant .page-hero .hero-greeting { font-size: clamp(24px, 3.4vh, 30px); }
+  .view-assistant .page-hero .hero-sub { font-size: 13px; line-height: 1.4; }
+  .view-assistant > .card { padding-bottom: 12px; padding-top: 12px; }
+  .view-assistant .agent-workflow-panel { padding: 10px 12px 8px; }
+  .view-assistant .agent-workflow-heading { margin-bottom: 8px; }
+  .view-assistant .agent-stage { gap: 2px; min-height: 78px; padding: 7px 8px; }
+  .view-assistant .agent-stage-icon { height: 23px; width: 23px; }
+  .view-assistant .agent-flow-rail { top: 42px; }
+  .view-assistant .agent-workflow-note { margin-top: 7px; }
+  .view-assistant .chat-window { min-height: 100px; }
 }
 
 .segmented-control {

@@ -8,6 +8,7 @@ dependencies = [
   "bcrypt>=4.2,<5",
   "cryptography>=43,<46",
   "fastapi>=0.115,<0.116",
+  "httpx>=0.28,<0.29",
   "numpy>=2,<3",
   "opencv-python-headless>=4.10,<5",
   "pydantic-settings>=2.7,<3",
@@ -20,7 +21,6 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-  "httpx>=0.28,<0.29",
   "pytest>=8.3,<9",
   "pytest-cov>=6,<7",
   "requests>=2.32,<3",

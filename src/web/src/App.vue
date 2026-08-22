@@ -362,7 +362,11 @@ onBeforeUnmount(() => {
           @before-leave="transitioning = true"
           @after-enter="transitioning = false"
         >
-          <div class="view-container" :key="session.currentView">
+          <div
+            class="view-container"
+            :class="`view-${session.currentView}`"
+            :key="session.currentView"
+          >
             <Suspense>
               <component :is="currentComponent" />
               <template #fallback>
