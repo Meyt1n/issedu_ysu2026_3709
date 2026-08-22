@@ -279,6 +279,53 @@ test('助手和知识文档链路显示本地依据，并保留受控检索结�
   await expect(page.getByRole('button', { name: '这条证据来自哪个版本？' })).toBeVisible()
 })
 
+test('助手和业务页面把纵向滚动收进视口内容区，并随视口尺寸自适应', async ({ page }) => {
+  await installSyntheticApi(page)
+  await enterFamilySpace(page)
+  await navItem(page, '本地助手').click()
+  await expect(page.getByRole('heading', { name: '本地证据助手' })).toBeVisible()
+
+  for (const viewport of [
+    { width: 1440, height: 900 },
+    { width: 1280, height: 720 },
+    { width: 1024, height: 768 },
+  ]) {
+    await page.setViewportSize(viewport)
+    const metrics = await page.evaluate(() => {
+      const app = document.querySelector<HTMLElement>('.app-frame')
+      const view = document.querySelector<HTMLElement>('.view-container.view-assistant')
+      const chat = document.querySelector<HTMLElement>('.view-assistant .chat-window')
+      return {
+        viewportHeight: window.innerHeight,
+        documentHeight: document.documentElement.scrollHeight,
+        bodyHeight: document.body.scrollHeight,
+        appHeight: app?.getBoundingClientRect().height ?? 0,
+        viewHeight: view?.getBoundingClientRect().height ?? 0,
+        viewScrollHeight: view?.scrollHeight ?? 0,
+        chatHeight: chat?.getBoundingClientRect().height ?? 0,
+      }
+    })
+
+    expect(metrics.documentHeight).toBeLessThanOrEqual(metrics.viewportHeight + 1)
+    expect(metrics.bodyHeight).toBeLessThanOrEqual(metrics.viewportHeight + 1)
+    expect(metrics.appHeight).toBeCloseTo(metrics.viewportHeight, 0)
+    expect(metrics.viewHeight).toBeGreaterThan(0)
+    expect(metrics.viewScrollHeight).toBeLessThanOrEqual(metrics.viewHeight + 1)
+    expect(metrics.chatHeight).toBeGreaterThan(0)
+  }
+
+  // 共享外壳也必须约束普通业务页；普通页内容过长时只允许内容区滚动。
+  await navItem(page, '家庭总览').click()
+  await expect(page.getByRole('heading', { name: '家庭总览' })).toBeVisible()
+  const overviewMetrics = await page.evaluate(() => ({
+    viewportHeight: window.innerHeight,
+    documentHeight: document.documentElement.scrollHeight,
+    bodyHeight: document.body.scrollHeight,
+  }))
+  expect(overviewMetrics.documentHeight).toBeLessThanOrEqual(overviewMetrics.viewportHeight + 1)
+  expect(overviewMetrics.bodyHeight).toBeLessThanOrEqual(overviewMetrics.viewportHeight + 1)
+})
+
 test('模型实验室展示发布阻断，不把候选版本伪装成已发布', async ({ page }) => {
   await installSyntheticApi(page)
   await enterFamilySpace(page)
