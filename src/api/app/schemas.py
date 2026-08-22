@@ -2,7 +2,9 @@ from datetime import datetime
 from typing import Any, Literal
 
 from ai.vision.candidate_fusion import CandidateFusionResult
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from app.time_zone import validate_iana_time_zone
 
 PURPOSE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$"
 
@@ -120,6 +122,21 @@ class CapabilityResponse(BaseModel):
 
 class HouseholdCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
+    time_zone: str | None = Field(default=None, min_length=1, max_length=64)
+
+    @field_validator("time_zone")
+    @classmethod
+    def validate_time_zone(cls, value: str | None) -> str | None:
+        return None if value is None else validate_iana_time_zone(value)
+
+
+class HouseholdUpdate(BaseModel):
+    time_zone: str = Field(min_length=1, max_length=64)
+
+    @field_validator("time_zone")
+    @classmethod
+    def validate_time_zone(cls, value: str) -> str:
+        return validate_iana_time_zone(value)
 
 
 class HouseholdRead(BaseModel):
@@ -128,6 +145,7 @@ class HouseholdRead(BaseModel):
     id: str
     name: str
     created_by: str
+    time_zone: str
     created_at: datetime
 
 
