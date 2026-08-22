@@ -24,6 +24,29 @@ describe('演示数据 provider', () => {
     expect(snapshot.recentEvents.length).toBeGreaterThan(0)
   })
 
+  it('环境行动卡仅在已授权的演示成员上显示虚构且可追溯的内容', async () => {
+    const snapshot = await demoProvider.getTodaySnapshot('m-wang')
+
+    expect(snapshot.environmentAction).toMatchObject({
+      availability: 'AVAILABLE',
+      card: {
+        id: 'demo-environment-m-wang',
+        source: '家庭服务器环境行动（演示）',
+        ruleVersion: 'environment-rules-demo-1',
+        configVersion: 'weather-adapter-demo-1',
+      },
+    })
+    expect(snapshot.environmentAction.card?.action).toContain('演示')
+    expect(snapshot.environmentAction.card?.generatedAt).toBeTruthy()
+    expect(snapshot.environmentAction.card?.validUntil).toBeTruthy()
+  })
+
+  it('未获环境行动授权的演示成员不返回卡片', async () => {
+    const snapshot = await demoProvider.getTodaySnapshot('m-li')
+
+    expect(snapshot.environmentAction).toMatchObject({ availability: 'UNAUTHORIZED', card: null })
+  })
+
   it('确认任务后状态变化，重复处理会被拒绝', async () => {
     const task = await demoProvider.submitTaskAction('t-am-med', 'confirm')
     expect(task.status).toBe('CONFIRMED')

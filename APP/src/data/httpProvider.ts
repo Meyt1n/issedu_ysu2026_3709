@@ -1,8 +1,10 @@
 import { ApiClient, ApiClientError } from '@/api/client'
+import { CAPABILITY_IDS, hasCapability } from '@/stores/capabilities'
 import type { HealthEvent, Member, RequestOptions, UploadedFile, VisionTask } from '@/api/types'
 import type {
   CareTask,
   DataProvider,
+  EnvironmentActionState,
   HouseholdOption,
   MemberDetail,
   MemberSummary,
@@ -51,6 +53,14 @@ const PLAN_FACT_TYPES = new Set(['plan_created', 'plan_updated'])
 const PLAN_ACTION_TYPES = new Set(['plan_confirmed', 'plan_deferred', 'plan_skipped'])
 const TASK_LEVELS: TaskLevel[] = ['INFO', 'GENERAL', 'HIGH', 'URGENT']
 const RISK_ORDER: Record<string, number> = { SEVERE: 0, WARNING: 1, INFO: 2, TIP: 3 }
+
+/** HCT-305 lacks a member-scoped, audited action-card contract, so do not call it from mobile. */
+export function environmentActionUnavailable(): EnvironmentActionState {
+  if (!hasCapability(CAPABILITY_IDS.environmentActionCard)) {
+    return { availability: 'UNAVAILABLE', reason: '环境行动服务当前未提供；应用不会使用旧天气或本地推断代替实时结果。', card: null }
+  }
+  return { availability: 'UNAVAILABLE', reason: '环境行动服务尚未提供成员授权、来源、有效期和版本证据；当前无法安全展示。', card: null }
+}
 
 function textOf(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
@@ -462,6 +472,7 @@ export class HttpDataProvider implements DataProvider {
       tasks,
       risks,
       recentEvents: [...events].reverse().slice(0, 4).map(toTimelineItem),
+      environmentAction: environmentActionUnavailable(),
     }
   }
 

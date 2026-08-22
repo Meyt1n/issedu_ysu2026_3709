@@ -5,6 +5,7 @@ import AppIcon from '@/components/AppIcon.vue'
 import ConfettiBurst from '@/components/ConfettiBurst.vue'
 import ErrorNotice from '@/components/ErrorNotice.vue'
 import EmptyState from '@/components/EmptyState.vue'
+import EnvironmentActionCard from '@/components/EnvironmentActionCard.vue'
 import LevelTag from '@/components/LevelTag.vue'
 import PrivacyBadge from '@/components/PrivacyBadge.vue'
 import ProgressRing from '@/components/ProgressRing.vue'
@@ -316,6 +317,8 @@ onMounted(reload)
     </template>
 
     <template v-else-if="snapshot">
+      <EnvironmentActionCard :state="snapshot.environmentAction" />
+
       <section aria-labelledby="tasks-title">
         <div class="section-heading">
           <h2 id="tasks-title"><span class="heading-dot" aria-hidden="true"></span>今日照护任务</h2>

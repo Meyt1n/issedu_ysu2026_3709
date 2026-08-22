@@ -4,6 +4,7 @@ import { formatDay } from '@/utils/format'
 import type {
   CareTask,
   DataProvider,
+  EnvironmentActionState,
   HouseholdOption,
   MemberDetail,
   MemberSummary,
@@ -39,6 +40,24 @@ function daysFromNow(days: number, hours = 9): string {
 }
 
 const EXPIRED_DATE = daysFromNow(-12)
+
+function demoEnvironmentAction(memberId: string): EnvironmentActionState {
+  if (memberId === 'm-li') {
+    return { availability: 'UNAUTHORIZED', reason: '当前授权范围不包含环境行动标签，因此不会请求或展示该成员的环境提示。', card: null }
+  }
+  const generatedAt = new Date().toISOString()
+  const validUntil = new Date(Date.now() + 4 * 3_600_000).toISOString()
+  return {
+    availability: 'AVAILABLE', reason: '',
+    card: {
+      id: `demo-environment-${memberId}`,
+      action: '演示：外出前留意当地环境变化，并根据实际情况安排衣物和出行时间。',
+      source: '家庭服务器环境行动（演示）', generatedAt, validUntil,
+      ruleVersion: 'environment-rules-demo-1', configVersion: 'weather-adapter-demo-1',
+      deduplicationKey: `demo-environment-${memberId}-${new Date().toISOString().slice(0, 13)}`,
+    },
+  }
+}
 
 interface DemoState {
   tasks: CareTask[]
@@ -422,6 +441,7 @@ export const demoProvider: DataProvider = {
       tasks: clone(state.tasks.filter(t => t.memberId === memberId)),
       risks: clone(state.risks.filter(r => r.memberId === memberId && !r.acknowledged)),
       recentEvents: clone((state.recentEvents[memberId] ?? []).slice(0, 4)),
+      environmentAction: demoEnvironmentAction(memberId),
     }
   },
 
