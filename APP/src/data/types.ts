@@ -142,11 +142,33 @@ export interface ReviewHandoff {
   nextStep: string
 }
 
+export type EnvironmentActionAvailability = 'AVAILABLE' | 'UNAVAILABLE' | 'UNAUTHORIZED'
+
+/** A server-produced, display-only low-risk environment arrangement. */
+export interface EnvironmentActionCard {
+  id: string
+  action: string
+  source: string
+  generatedAt: string
+  validUntil: string
+  ruleVersion: string
+  configVersion: string
+  deduplicationKey: string
+}
+
+/** Fail-closed result for the optional environment-action dependency. */
+export interface EnvironmentActionState {
+  availability: EnvironmentActionAvailability
+  reason: string
+  card: EnvironmentActionCard | null
+}
+
 export interface TodaySnapshot {
   memberId: string
   tasks: CareTask[]
   risks: RiskCard[]
   recentEvents: TimelineItem[]
+  environmentAction: EnvironmentActionState
 }
 
 /** 近 7 天任务完成趋势中的一天。 */

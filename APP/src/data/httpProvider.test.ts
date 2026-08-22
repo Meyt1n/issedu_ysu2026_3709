@@ -4,7 +4,8 @@ import { ApiClient } from '@/api/client'
 import type { HealthEvent } from '@/api/types'
 import type { CareTask } from './types'
 
-import { deriveTasksFromEvents, deriveWeeklyTrendFromEvents, HttpDataProvider } from './httpProvider'
+import { deriveTasksFromEvents, deriveWeeklyTrendFromEvents, environmentActionUnavailable, HttpDataProvider } from './httpProvider'
+import { clearCapabilities, setCapabilities } from '@/stores/capabilities'
 
 let sequence = 0
 
@@ -383,5 +384,18 @@ describe('多家庭选择与隔离（MOB-158）', () => {
     }))
 
     await expect(provider.listHouseholds()).resolves.toEqual([{ id: 'hh-1', name: '王家' }])
+  })
+})
+
+describe('环境行动卡的受控降级（MOB-157）', () => {
+  it('服务端未声明能力时不把旧环境数据或本地推断显示为行动卡', () => {
+    clearCapabilities()
+    expect(environmentActionUnavailable()).toMatchObject({ availability: 'UNAVAILABLE', card: null })
+  })
+
+  it('即使声明能力，缺少成员授权和审计元数据契约时仍拒绝请求天气接口', () => {
+    setCapabilities({ phase: 'test', available: ['environment-action-card'], unavailable: [] })
+    expect(environmentActionUnavailable()).toMatchObject({ availability: 'UNAVAILABLE', card: null })
+    clearCapabilities()
   })
 })

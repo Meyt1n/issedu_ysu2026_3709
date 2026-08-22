@@ -25,6 +25,7 @@ export const CAPABILITY_IDS = {
   llmCloud: 'llm-cloud',
   externalWeb: 'external-web',
   riskAcknowledgement: 'risk-acknowledgement',
+  environmentActionCard: 'environment-action-card',
 } as const
 
 export type CapabilityId = (typeof CAPABILITY_IDS)[keyof typeof CAPABILITY_IDS] | (string & {})
@@ -50,6 +51,7 @@ const CAPABILITY_META: Record<string, CapabilityMeta> = {
   [CAPABILITY_IDS.llmCloud]: { label: '云端语言模型', description: '访问外部云端语言模型服务。' },
   [CAPABILITY_IDS.externalWeb]: { label: '外部网络', description: '访问家庭可信域之外的网络服务。' },
   [CAPABILITY_IDS.riskAcknowledgement]: { label: '风险知晓回写', description: '把“我已知晓”状态写回家庭服务器。' },
+  [CAPABILITY_IDS.environmentActionCard]: { label: '环境行动卡', description: '由家庭服务器按最小化城市或区县编码生成的低风险生活安排提示。' },
 }
 
 const state = reactive<{ snapshot: CapabilitySnapshot | null }>({ snapshot: null })
