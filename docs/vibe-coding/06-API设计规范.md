@@ -53,6 +53,7 @@
 | PATCH | `/api/v1/households/{id}/authorizations/{auth_id}` | 按版本修改授权 | ✅ |
 | POST | `/api/v1/households/{id}/authorizations/{auth_id}/revoke` | 撤销授权 | ✅ |
 | GET | `/api/v1/households/{id}/authorization-audits` | Owner 查询授权与访问审计 | ✅ |
+| GET | `/api/v1/households/{id}/authorization-audits/page` | Owner 按签名游标分页查询审计，可按 `request_id` 过滤 | ✅ |
 | POST | `/api/v1/households/{id}/events` | 追加健康事件 | ✅ |
 | GET | `/api/v1/households/{id}/events` | 查询事件列表 | ✅ |
 | POST | `/api/v1/households/{id}/events/{event_id}/compensations` | 追加补偿事件 | ✅ |

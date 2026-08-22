@@ -219,6 +219,12 @@ class AccessAuditRead(BaseModel):
     created_at: datetime
 
 
+class AccessAuditPageRead(BaseModel):
+    items: list[AccessAuditRead]
+    next_cursor: str | None = None
+    has_more: bool = False
+
+
 class HealthEventCreate(BaseModel):
     member_id: str
     event_type: str = Field(min_length=1, max_length=80)
