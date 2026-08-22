@@ -16,6 +16,8 @@ export interface CareTask {
   status: TaskStatus
   /** 联机模式对应主仓库计划事件 ID，用于 confirm/defer/skip API */
   planEventId?: string
+  /** Server-authorized reminder metadata. UI-only dueAt must never be scheduled without this evidence. */
+  reminder?: ReminderPolicy
   lastActionAt?: string
   skipReason?: string
 }
@@ -154,6 +156,15 @@ export interface EnvironmentActionCard {
   ruleVersion: string
   configVersion: string
   deduplicationKey: string
+}
+
+export interface ReminderPolicy {
+  authorization: 'AUTHORIZED'
+  planVersion: string
+  deduplicationKey: string
+  firstReminderAt: string
+  repeatReminderAt?: string
+  maxReminders: 1 | 2
 }
 
 /** Fail-closed result for the optional environment-action dependency. */

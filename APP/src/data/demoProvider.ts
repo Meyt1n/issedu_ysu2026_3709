@@ -113,6 +113,10 @@ function buildInitialState(): DemoState {
         dueAt: todayAt(8, 0),
         status: 'PENDING',
         planEventId: 'EVT-PLAN-101',
+        reminder: {
+          authorization: 'AUTHORIZED', planVersion: 'demo-plan-101-v1', deduplicationKey: 'demo-plan-101-v1',
+          firstReminderAt: todayAt(8, 0), repeatReminderAt: todayAt(8, 15), maxReminders: 2,
+        },
       },
       {
         id: 't-bp',
@@ -135,6 +139,10 @@ function buildInitialState(): DemoState {
         dueAt: todayAt(19, 0),
         status: 'PENDING',
         planEventId: 'EVT-PLAN-103',
+        reminder: {
+          authorization: 'AUTHORIZED', planVersion: 'demo-plan-103-v1', deduplicationKey: 'demo-plan-103-v1',
+          firstReminderAt: todayAt(19, 0), repeatReminderAt: todayAt(19, 15), maxReminders: 2,
+        },
       },
       {
         id: 't-walk',
