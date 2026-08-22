@@ -17,6 +17,9 @@ const emit = defineEmits<{
     <span class="error-copy">
       <strong>请求未完成</strong>
       <span>{{ error.message }}</span>
+      <span class="meta-line error-request-id">
+        请求标识：{{ error.requestId ?? '回执信息不可用（服务端未返回请求 ID）' }}
+      </span>
     </span>
     <RouterLink v-if="error.action === 'settings'" class="error-action btn btn-quiet" to="/me">
       {{ error.actionLabel }}
@@ -53,6 +56,7 @@ const emit = defineEmits<{
 }
 
 .error-copy strong { font-size: 0.9rem; }
+.error-request-id { font-size: 0.78rem; word-break: break-all; color: var(--c-ink-faint); }
 .error-copy span { line-height: 1.45; }
 
 .error-action {

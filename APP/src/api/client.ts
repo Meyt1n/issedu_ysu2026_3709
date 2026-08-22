@@ -14,6 +14,7 @@ import type {
   VisionTask,
 } from './types'
 import type { AuthSession } from './auth'
+import { recordRequestTrace } from './requestLog'
 import { validateServerBaseUrl } from '@/utils/serverUrl'
 
 /** 与主仓库 web 端 ApiClient 相同的错误封装与请求头约定。 */
@@ -30,6 +31,9 @@ export class ApiClientError extends Error {
     this.requestId = options.requestId ?? null
   }
 }
+
+/** 默认请求超时；用于区分"超时"与"网络不可达"（MOB-144）。 */
+const DEFAULT_TIMEOUT_MS = 15_000
 
 function fallbackErrorCode(status: number): ApiErrorCode {
   if (status === 401) return 'UNAUTHENTICATED'
@@ -96,41 +100,87 @@ export class ApiClient {
     }
     if (options.idempotencyKey) headers.set('Idempotency-Key', options.idempotencyKey)
 
-    const requestInit: RequestInit = { ...init, headers, signal: options.signal }
+    // MOB-144：15s 超时让"超时"与"网络不可达"可区分；外部传入 signal 时尊重外部控制。
+    const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
+    const timeoutController = (typeof AbortController !== 'undefined' && timeoutMs > 0)
+      ? new AbortController()
+      : null
+    const timeoutTimer = timeoutController
+      ? setTimeout(() => timeoutController.abort(), timeoutMs)
+      : null
+    const onExternalAbort = () => timeoutController?.abort()
+    options.signal?.addEventListener('abort', onExternalAbort)
+    const requestInit: RequestInit = {
+      ...init,
+      headers,
+      signal: options.signal ?? timeoutController?.signal,
+    }
     if (authSession?.transport === 'cookie' && requestInit.credentials === undefined) {
       requestInit.credentials = 'include'
     }
 
+    const traceBase = {
+      method: init.method ?? 'GET',
+      path,
+      idempotencyKey: options.idempotencyKey,
+    }
+
     let response: Response
-    try {
-      response = await this.fetcher(`${this.baseUrl}${path}`, requestInit)
-    } catch {
-      throw new ApiClientError('家庭服务器暂时无法访问', { status: 0, code: 'DEPENDENCY_UNAVAILABLE' })
-    }
-
-    const requestId = response.headers.get('x-request-id')
-    const text = await response.text()
     let body: unknown = null
-    if (text) {
+    try {
       try {
-        body = JSON.parse(text) as unknown
+        response = await this.fetcher(`${this.baseUrl}${path}`, requestInit)
       } catch {
-        body = { detail: text }
+        const aborted = timeoutController?.signal.aborted === true
+        recordRequestTrace({
+          ...traceBase,
+          outcome: aborted ? 'timeout' : 'unreachable',
+        })
+        if (aborted) {
+          throw new ApiClientError('请求超时，服务器没有在限定时间内响应', { status: 0, code: 'REQUEST_TIMEOUT' })
+        }
+        throw new ApiClientError('家庭服务器暂时无法访问', { status: 0, code: 'DEPENDENCY_UNAVAILABLE' })
       }
-    }
 
-    if (!response.ok) {
-      const envelope = (body ?? {}) as ApiErrorEnvelope
-      throw new ApiClientError(
-        envelope.error?.message ?? envelope.detail ?? `请求失败（HTTP ${response.status}）`,
-        {
-          status: response.status,
-          code: envelope.error?.code ?? fallbackErrorCode(response.status),
-          requestId: envelope.error?.request_id ?? envelope.request_id ?? requestId,
-        },
-      )
+      const requestId = response.headers.get('x-request-id')
+      const text = await response.text()
+      if (text) {
+        try {
+          body = JSON.parse(text) as unknown
+        } catch {
+          body = { detail: text }
+        }
+      }
+
+      // 成功与失败都记录可定位回执；响应体若携带事件/任务 ID 一并关联。
+      const receiptId = body !== null && typeof body === 'object' && body !== null
+        && typeof (body as { id?: unknown }).id === 'string'
+        ? (body as { id: string }).id
+        : undefined
+      recordRequestTrace({
+        ...traceBase,
+        outcome: response.ok ? 'success' : response.status >= 500 ? 'server-error' : 'client-error',
+        status: response.status,
+        requestId,
+        receiptId,
+      })
+
+      if (!response.ok) {
+        const envelope = (body ?? {}) as ApiErrorEnvelope
+        throw new ApiClientError(
+          envelope.error?.message ?? envelope.detail ?? `请求失败（HTTP ${response.status}）`,
+          {
+            status: response.status,
+            code: envelope.error?.code ?? fallbackErrorCode(response.status),
+            requestId: envelope.error?.request_id ?? envelope.request_id ?? requestId,
+          },
+        )
+      }
+      return body as T
+    } finally {
+      if (timeoutTimer) clearTimeout(timeoutTimer)
+      options.signal?.removeEventListener('abort', onExternalAbort)
     }
-    return body as T
   }
 
   getHealth(options?: RequestOptions): Promise<HealthResponse> {

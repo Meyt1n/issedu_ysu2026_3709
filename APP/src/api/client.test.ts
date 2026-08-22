@@ -164,3 +164,67 @@ describe('视觉任务状态回查（MOB-132）', () => {
     expect(new Headers(request?.headers).get('Authorization')).toBe('Bearer test-only-token')
   })
 })
+
+describe('请求回执追踪与超时区分（MOB-144）', () => {
+  it('成功响应记录请求标识、状态与响应体回执对象 ID', async () => {
+    const client = new ApiClient({
+      fetcher: async _input => ({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'x-request-id': 'req-success-1' }),
+        text: async () => JSON.stringify({ id: 'event-77', ok: true }),
+      }) as unknown as Response,
+    })
+
+    await client.getVisionTask('t1', { idempotencyKey: 'k1' })
+
+    const { requestTraces, clearRequestTraces } = await import('./requestLog')
+    clearRequestTraces()
+    await client.getVisionTask('t1', { idempotencyKey: 'k1' })
+    const entries = requestTraces()
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      method: 'GET',
+      path: '/api/v1/vision-tasks/t1',
+      outcome: 'success',
+      status: 200,
+      requestId: 'req-success-1',
+      idempotencyKey: 'k1',
+      receiptId: 'event-77',
+    })
+  })
+
+  it('失败响应记录 client-error/server-error，并保留请求标识到错误对象', async () => {
+    const { requestTraces, clearRequestTraces } = await import('./requestLog')
+    clearRequestTraces()
+    const client = new ApiClient({
+      fetcher: async () => ({
+        ok: false,
+        status: 409,
+        headers: new Headers({ 'x-request-id': 'req-conflict-1' }),
+        text: async () => JSON.stringify({ detail: 'EVENT_ALREADY_SUPERSEDED' }),
+      }) as unknown as Response,
+    })
+
+    await expect(client.getVisionTask('t1')).rejects.toMatchObject({ requestId: 'req-conflict-1', status: 409 })
+    expect(requestTraces()[0]).toMatchObject({ outcome: 'client-error', status: 409, requestId: 'req-conflict-1' })
+  })
+
+  it('内部超时抛 REQUEST_TIMEOUT 并记录 timeout；其它网络错误仍是 DEPENDENCY_UNAVAILABLE', async () => {
+    const { requestTraces, clearRequestTraces } = await import('./requestLog')
+
+    const neverResolves = (_input: unknown, init?: RequestInit) =>
+      new Promise<Response>((_, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
+      })
+    const timeoutClient = new ApiClient({ fetcher: neverResolves })
+    clearRequestTraces()
+    await expect(timeoutClient.getHealth({ timeoutMs: 20 })).rejects.toMatchObject({ code: 'REQUEST_TIMEOUT', status: 0 })
+    expect(requestTraces()[0]).toMatchObject({ outcome: 'timeout', requestId: null })
+
+    const rejectClient = new ApiClient({ fetcher: async () => { throw new TypeError('fetch failed') } })
+    clearRequestTraces()
+    await expect(rejectClient.getHealth({ timeoutMs: 20 })).rejects.toMatchObject({ code: 'DEPENDENCY_UNAVAILABLE' })
+    expect(requestTraces()[0]).toMatchObject({ outcome: 'unreachable' })
+  })
+})

@@ -7,6 +7,7 @@ import ErrorNotice from '@/components/ErrorNotice.vue'
 import { createSpeaker } from '@/composables/useSpeech'
 import { ApiClient, ApiClientError } from '@/api/client'
 import { presentApiError, type ErrorPresentation } from '@/api/errors'
+import { requestOutcomeLabel, requestTraces, type RequestTraceEntry } from '@/api/requestLog'
 import { resetDemoData } from '@/data/demoProvider'
 import { activeProvider, clearHouseholdSelection, selectHousehold } from '@/data'
 import type { HouseholdOption } from '@/data/types'
@@ -39,6 +40,17 @@ const connectionState = ref<'idle' | 'testing' | 'ok' | 'failed'>('idle')
 const connectionMessage = ref('')
 const connectionError = ref<ErrorPresentation | null>(null)
 const capabilityProbeError = ref<ErrorPresentation | null>(null)
+/** MOB-144：最近请求与回执（本机诊断，只读内存，不落盘）。 */
+const traceView = ref<RequestTraceEntry[]>([])
+function refreshTraceView(): void {
+  traceView.value = [...requestTraces()].slice(0, 10)
+}
+
+function formatTraceTime(iso: string): string {
+  const time = new Date(iso)
+  return Number.isNaN(time.getTime()) ? iso : time.toLocaleTimeString('zh-CN', { hour12: false })
+}
+
 const demoResetMessage = ref('')
 const caregiverNameDraft = ref(session.caregiverName)
 const caregiverPhoneDraft = ref(session.caregiverPhone)
@@ -389,6 +401,7 @@ function restoreDemoData(): void {
 }
 
 onMounted(() => {
+  refreshTraceView()
   // 联机且已具备取数条件时预读家庭列表，让选择器一进页面就能用。
   if (session.dataMode !== 'live') return
   if (usesRealAuth.value && !signedIn.value) return
@@ -778,6 +791,34 @@ onMounted(() => {
         <li>药盒识别永远需要人工确认；冲突与未知不会自动入库。</li>
         <li>风险等级由确定性规则决定；应用不做诊断、处方或剂量判断。</li>
         <li>没有购药、问诊、广告或任何健康消费导流。</li>
+      </ul>
+    </section>
+
+    <section class="card" aria-labelledby="trace-title">
+      <div class="h-icon-row">
+        <span class="row-icon" data-tone="info" aria-hidden="true"><AppIcon name="refresh" :size="16" /></span>
+        <h2 id="trace-title">最近请求与回执</h2>
+        <button type="button" class="btn btn-quiet" style="margin-left:auto" @click="refreshTraceView">刷新</button>
+      </div>
+      <p class="meta-line">
+        本机诊断信息：只记录请求方法、路径（不含查询串）、结局、状态、服务端请求标识与时间，不包含健康正文，也不会上传；切换身份或退出登录后自动清空。
+      </p>
+      <p v-if="traceView.length === 0" class="meta-line" role="status">
+        暂无记录；进行任何联机操作后点击“刷新”查看。
+      </p>
+      <ul v-else class="divided-list">
+        <li v-for="entry in traceView" :key="entry.seq">
+          <div class="card-title-row">
+            <strong>{{ entry.method }} {{ entry.path }}</strong>
+            <span class="tag" :data-tone="entry.outcome === 'success' ? 'calm' : entry.outcome === 'client-error' ? 'warn' : 'danger'">
+              {{ requestOutcomeLabel(entry.outcome) }}{{ entry.status !== null ? `（${entry.status}）` : '' }}
+            </span>
+          </div>
+          <span class="meta-line">请求标识：{{ entry.requestId ?? '回执信息不可用（服务端未返回请求 ID）' }}</span>
+          <span class="meta-line">时间：{{ formatTraceTime(entry.at) }}</span>
+          <span v-if="entry.idempotencyKey" class="meta-line">幂等键：{{ entry.idempotencyKey }}（同一键多次出现表示重试，服务端只落一条）</span>
+          <span v-if="entry.receiptId" class="meta-line">回执对象：{{ entry.receiptId }}</span>
+        </li>
       </ul>
     </section>
 
