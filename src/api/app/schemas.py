@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from app.time_zone import validate_iana_time_zone
 
 PURPOSE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$"
+ACTOR_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$"
 
 
 class HealthResponse(BaseModel):
@@ -29,6 +30,10 @@ class PinLoginCredentials(BaseModel):
 class FaceChallengeRequest(BaseModel):
     household_id: str = Field(min_length=1, max_length=120)
     actor_id: str = Field(min_length=1, max_length=120)
+
+
+class FamilyFaceChallengeRequest(BaseModel):
+    household_id: str = Field(min_length=1, max_length=120)
 
 
 class FaceChallengeRead(BaseModel):
@@ -152,7 +157,13 @@ class HouseholdRead(BaseModel):
 class MemberCreate(BaseModel):
     display_name: str = Field(min_length=1, max_length=120)
     role: Literal["SELF", "DEPENDENT", "CAREGIVER"] = "DEPENDENT"
-    actor_id: str | None = Field(default=None, max_length=120)
+    actor_id: str | None = Field(default=None, max_length=120, pattern=ACTOR_ID_PATTERN)
+
+
+class MemberAccountBindingUpdate(BaseModel):
+    """Bind a local family member to the actor used at login."""
+
+    actor_id: str = Field(min_length=1, max_length=120, pattern=ACTOR_ID_PATTERN)
 
 
 class MemberRead(BaseModel):

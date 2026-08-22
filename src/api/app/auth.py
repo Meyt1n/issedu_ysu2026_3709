@@ -21,6 +21,7 @@ LOCKOUT_SECONDS = 300
 SESSION_TTL_SECONDS = 3600
 PIN_TTL_SECONDS = 300
 FACE_CHALLENGE_TTL_SECONDS = 120
+FAMILY_FACE_ACTOR_SENTINEL = "__family_face__"
 
 # In-memory stores (replace with DB-backed stores in production)
 _password_hashes: dict[str, str] = {}  # actor_id → bcrypt hash
@@ -126,6 +127,21 @@ def consume_face_challenge(challenge_id: str, actor_id: str, household_id: str) 
         _face_challenges.pop(challenge_id, None)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="FACE_AUTH_FAILED")
     challenge["used"] = True
+
+
+def create_family_face_challenge(household_id: str) -> dict[str, Any]:
+    """Create a challenge for one bound household without naming a member."""
+    return create_face_challenge(FAMILY_FACE_ACTOR_SENTINEL, household_id)
+
+
+def consume_family_face_challenge(challenge_id: str, household_id: str) -> None:
+    """Consume a family-scoped challenge; member identity is resolved by matching."""
+    consume_face_challenge(challenge_id, FAMILY_FACE_ACTOR_SENTINEL, household_id)
+
+
+def family_face_rate_actor() -> str:
+    """Stable non-user value used only to bucket family-scope rate limits."""
+    return FAMILY_FACE_ACTOR_SENTINEL
 
 
 def check_face_rate_limit(household_id: str, actor_id: str) -> str:
