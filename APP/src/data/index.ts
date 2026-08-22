@@ -1,4 +1,5 @@
 import { ApiClient, ApiClientError } from '@/api/client'
+import { clearRequestTraces } from '@/api/requestLog'
 import {
   getAuthSession,
   handleAuthFailure,
@@ -31,6 +32,8 @@ function dropLiveProvider(): void {
 /** 会话或上下文变化时丢弃联机缓存；身份变化时连能力探测快照一起作废。 */
 registerSessionCleanup(scope => {
   dropLiveProvider()
+  // MOB-144：会话/上下文变化时清空请求回执追踪，旧身份的标识不残留。
+  clearRequestTraces()
   if (scope === 'session') clearCapabilities()
 })
 

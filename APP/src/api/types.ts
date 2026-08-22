@@ -139,4 +139,6 @@ export interface RequestOptions {
   authSession?: AuthSession | null
   idempotencyKey?: string
   signal?: AbortSignal
+  /** 请求超时毫秒数；0 表示不启用内部超时。默认 15s（MOB-144 区分超时与不可达）。 */
+  timeoutMs?: number
 }

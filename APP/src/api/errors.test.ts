@@ -10,6 +10,7 @@ describe('移动端 API 错误用户文案', () => {
       message: '家庭服务器暂时无法访问，请检查网络或服务器状态后重试。',
       action: 'retry',
       actionLabel: '重试',
+      requestId: null,
     })
   })
 
@@ -40,6 +41,7 @@ describe('移动端 API 错误用户文案', () => {
       message: '当前身份尚未关联可访问的家庭，请到“我的”检查身份，或联系家庭管理员。',
       action: 'settings',
       actionLabel: '检查设置',
+      requestId: null,
     })
   })
 
@@ -117,5 +119,21 @@ describe('多家庭选择的错误文案（MOB-158）', () => {
     )
     expect(presented.message).toContain('不会自动')
     expect(presented.message).not.toMatch(/其它家庭名|hh-/)
+  })
+})
+
+
+describe('请求标识与超时文案（MOB-144）', () => {
+  it('ApiClientError 的请求标识透传到展示对象，缺失时为 null', () => {
+    expect(presentApiError(new ApiClientError('conflict', { status: 409, code: 'VERSION_CONFLICT', requestId: 'req-42' })).requestId).toBe('req-42')
+    expect(presentApiError(new ApiClientError('x', { status: 409, code: 'VERSION_CONFLICT' })).requestId).toBeNull()
+  })
+
+  it('超时给出"结果未知、重试复用幂等键"的可恢复提示', () => {
+    const presentation = presentApiError(new ApiClientError('timeout', { status: 0, code: 'REQUEST_TIMEOUT', requestId: 'req-43' }))
+    expect(presentation.action).toBe('retry')
+    expect(presentation.message).toContain('超时')
+    expect(presentation.message).toContain('幂等键')
+    expect(presentation.requestId).toBe('req-43')
   })
 })

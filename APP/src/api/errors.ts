@@ -7,16 +7,18 @@ export interface ErrorPresentation {
   message: string
   action: ErrorAction
   actionLabel: string
+  /** 服务端 X-Request-ID（MOB-144）；缺失时为 null，展示层标注“回执信息不可用”。 */
+  requestId: string | null
 }
 
 const GENERIC_MESSAGE = '请求未能完成，页面不会显示未经授权的健康数据。'
 
-function retry(message: string): ErrorPresentation {
-  return { message, action: 'retry', actionLabel: '重试' }
+function retry(message: string, requestId: string | null = null): ErrorPresentation {
+  return { message, action: 'retry', actionLabel: '重试', requestId }
 }
 
-function settings(message: string): ErrorPresentation {
-  return { message, action: 'settings', actionLabel: '检查设置' }
+function settings(message: string, requestId: string | null = null): ErrorPresentation {
+  return { message, action: 'settings', actionLabel: '检查设置', requestId }
 }
 
 /**
@@ -59,7 +61,7 @@ function presentAuthCode(code: string): ErrorPresentation | null {
  * `ApiClientError` 与 `AuthAdapterError` 走错误码映射；普通 Error 保留本地业务
  * 校验提示（例如“跳过前请填写原因”），未知异常则使用统一兜底文案。
  */
-export function presentApiError(cause: unknown): ErrorPresentation {
+function presentApiErrorInternal(cause: unknown): ErrorPresentation {
   if (cause instanceof AuthAdapterError) {
     return presentAuthCode(cause.code) ?? retry(cause.message.trim() || GENERIC_MESSAGE)
   }
@@ -99,8 +101,12 @@ export function presentApiError(cause: unknown): ErrorPresentation {
     return settings('授权可能已到期、被撤回或访问范围已变化。为保护隐私，已清除本地页面数据；请到“我的”重新验证身份与访问目的。')
   }
 
+  if (code === 'REQUEST_TIMEOUT') {
+    return retry('请求超时，服务器没有在限定时间内响应；结果未知，请稍后重试（重试会复用幂等键，不会重复写入）。', cause.requestId)
+  }
+
   if (code === 'DEPENDENCY_UNAVAILABLE' || cause.status === 0) {
-    return retry('家庭服务器暂时无法访问，请检查网络或服务器状态后重试。')
+    return retry('家庭服务器暂时无法访问，请检查网络或服务器状态后重试。', cause.requestId)
   }
 
   if (cause.status === 401 || code === 'UNAUTHENTICATED') {
@@ -139,6 +145,18 @@ export function presentApiError(cause: unknown): ErrorPresentation {
   }
 
   return retry(GENERIC_MESSAGE)
+}
+
+/**
+ * MOB-144：任何 ApiClientError 的展示都携带服务端请求标识，
+ * 供用户报障时定位服务端日志；缺失时保持 null，展示层如实标注。
+ */
+export function presentApiError(cause: unknown): ErrorPresentation {
+  const presentation = presentApiErrorInternal(cause)
+  if (presentation.requestId === null && cause instanceof ApiClientError && cause.requestId) {
+    return { ...presentation, requestId: cause.requestId }
+  }
+  return presentation
 }
 
 export function errorMessage(cause: unknown): string {
