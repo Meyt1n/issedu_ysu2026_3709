@@ -19,8 +19,16 @@ import { createSpeaker, useSpeech } from '@/composables/useSpeech'
 import { showToast } from '@/composables/useToast'
 import { presentApiError, type ErrorPresentation } from '@/api/errors'
 import { activeProvider } from '@/data'
-import { eventStatusLabel, riskLevelLabel, riskLevelTone, taskLevelLabel } from '@/data/labels'
-import type { CareTask, MemberSummary, TaskAction, TaskActionPayload, TodaySnapshot, TrendPoint } from '@/data/types'
+import { eventStatusLabel, riskLevelLabel, riskLevelTone, taskLevelLabel, taskStatusLabel } from '@/data/labels'
+import type {
+  CareTask,
+  MemberSummary,
+  TaskAction,
+  TaskActionHistoryEntry,
+  TaskActionPayload,
+  TodaySnapshot,
+  TrendPoint,
+} from '@/data/types'
 import { useA11y } from '@/stores/accessibility'
 import { cancelScheduledReminders, reminderState, synchronizeReminders } from '@/notifications/reminderService'
 import { sessionContextKey, useSession } from '@/stores/session'
@@ -46,6 +54,103 @@ const announced = ref(false)
 const confetti = ref<InstanceType<typeof ConfettiBurst> | null>(null)
 const sessionKey = computed(() => sessionContextKey(session))
 let reloadGeneration = 0
+
+/** MOB-135：任务操作历史。服务端条目按需加载；本地待确认/失败条目只存内存。 */
+const historyOpen = ref(false)
+const historyLoading = ref(false)
+const historyError = ref<ErrorPresentation | null>(null)
+const serverHistory = ref<TaskActionHistoryEntry[]>([])
+const localHistory = ref<TaskActionHistoryEntry[]>([])
+let localHistorySeq = 0
+const historyEntries = computed(() => [...localHistory.value, ...serverHistory.value])
+
+const RECEIPT_LABELS: Record<TaskActionHistoryEntry['receipt'], string> = {
+  RECEIPTED: '有效回执',
+  SUPERSEDED: '已被覆盖',
+  LOCAL_PENDING: '本地待确认',
+  LOCAL_FAILED: '未获回执',
+}
+const RECEIPT_TONES: Record<TaskActionHistoryEntry['receipt'], 'calm' | 'neutral' | 'warn' | 'danger'> = {
+  RECEIPTED: 'calm',
+  SUPERSEDED: 'neutral',
+  LOCAL_PENDING: 'warn',
+  LOCAL_FAILED: 'danger',
+}
+
+async function loadHistory(): Promise<void> {
+  const expectedKey = sessionKey.value
+  const memberId = session.currentMemberId
+  if (!memberId) {
+    serverHistory.value = []
+    return
+  }
+  historyLoading.value = true
+  historyError.value = null
+  try {
+    const entries = await activeProvider().listTaskActionHistory(memberId)
+    if (expectedKey !== sessionKey.value || memberId !== session.currentMemberId) return
+    serverHistory.value = entries
+  } catch (cause) {
+    if (expectedKey !== sessionKey.value || memberId !== session.currentMemberId) return
+    historyError.value = presentApiError(cause)
+  } finally {
+    if (expectedKey === sessionKey.value) historyLoading.value = false
+  }
+}
+
+function toggleHistory(): void {
+  historyOpen.value = !historyOpen.value
+  if (historyOpen.value) void loadHistory()
+}
+
+function pushLocalHistoryEntry(taskId: string, action: TaskAction): string {
+  localHistorySeq += 1
+  const localId = `local-${localHistorySeq}`
+  const task = snapshot.value?.tasks.find(t => t.id === taskId)
+  localHistory.value.unshift({
+    eventId: localId,
+    action,
+    actionLabel: action === 'confirm' ? '确认' : action === 'defer' ? '延期' : '跳过',
+    taskTitle: task?.title ?? '任务',
+    memberName: currentMember.value?.name ?? '当前成员',
+    memberId: session.currentMemberId,
+    serverTime: new Date().toISOString(),
+    finalStatus: '待回执',
+    receipt: 'LOCAL_PENDING',
+    note: '已提交，等待服务端回执；未获回执前不当作成功。',
+  })
+  return localId
+}
+
+function settleLocalHistoryEntry(localId: string, receipt: 'LOCAL_PENDING' | 'LOCAL_FAILED', note?: string): void {
+  const index = localHistory.value.findIndex(entry => entry.eventId === localId)
+  if (index === -1) return
+  if (receipt === 'LOCAL_PENDING') {
+    // 成功：本地条目退场，由服务端事件回执接管展示
+    localHistory.value.splice(index, 1)
+    if (historyOpen.value) void loadHistory()
+    return
+  }
+  localHistory.value[index] = {
+    ...localHistory.value[index]!,
+    receipt,
+    finalStatus: '未确认',
+    note: note ?? '未获服务端回执（网络失败或请求被拒），不当作成功；可安全重试，服务端幂等不会重复记录。',
+  }
+}
+
+function clearHistory(): void {
+  serverHistory.value = []
+  localHistory.value = []
+  historyError.value = null
+}
+
+const KNOWN_FINAL_STATUSES = new Set(['PENDING', 'CONFIRMED', 'DEFERRED', 'SKIPPED', 'ESCALATED'])
+function historyFinalStatusLabel(status: string): string {
+  return KNOWN_FINAL_STATUSES.has(status)
+    ? taskStatusLabel(status as CareTask['status'])
+    : status
+}
 
 const greeting = computed(() => greetingByHour(new Date().getHours()))
 const dateLine = computed(() => {
@@ -182,21 +287,26 @@ async function onTaskAction(taskId: string, action: TaskAction, payload: TaskAct
   actionError.value = null
   failedAction.value = null
   const hadPending = pendingTasks.value.length
+  const localId = pushLocalHistoryEntry(taskId, action)
   let task: CareTask
   try {
     task = await activeProvider().submitTaskAction(taskId, action, payload)
   } catch (cause) {
     actionError.value = presentApiError(cause)
     failedAction.value = { taskId, action, payload }
+    settleLocalHistoryEntry(localId, 'LOCAL_FAILED')
     busyTaskId.value = ''
     return
   }
 
   // 会话或当前成员已切换时，丢弃旧上下文的回执，避免把旧家庭结果写进新页面。
   if (expectedKey !== sessionKey.value || expectedMemberId !== session.currentMemberId) {
+    settleLocalHistoryEntry(localId, 'LOCAL_FAILED', '提交期间切换了成员或会话，本次回执已按旧上下文丢弃；请在新上下文中重试。')
     busyTaskId.value = ''
     return
   }
+
+  settleLocalHistoryEntry(localId, 'LOCAL_PENDING')
 
   const label = action === 'confirm' ? '已确认' : action === 'defer' ? '已延期' : '已记录跳过'
   tapFeedback(action === 'confirm' ? [12, 60, 18] : 12)
@@ -237,6 +347,8 @@ watch(
     announced.value = true
     actionError.value = null
     failedAction.value = null
+    // 会话/成员/数据源切换：旧上下文的历史（含本地待确认条目）立即清空
+    clearHistory()
     void reload()
   },
 )
@@ -356,6 +468,51 @@ onMounted(reload)
             </li>
           </ul>
         </details>
+      </section>
+
+      <section aria-labelledby="history-title">
+        <div class="section-heading">
+          <h2 id="history-title"><span class="heading-dot" data-tone="info" aria-hidden="true"></span>任务操作历史</h2>
+          <button type="button" class="section-link" @click="toggleHistory">
+            {{ historyOpen ? '收起' : '查看' }}
+          </button>
+        </div>
+        <div v-if="historyOpen" class="card" style="margin-top: 10px">
+          <p v-if="historyLoading" class="meta-line" role="status">正在加载服务端操作历史…</p>
+          <ErrorNotice v-else-if="historyError" :error="historyError" @retry="loadHistory" />
+          <template v-else>
+            <p
+              v-if="historyEntries.length === 0"
+              class="meta-line"
+              role="status"
+            >
+              当前成员还没有确认、延期或跳过的操作记录；确认、延期、跳过后会在这里显示服务端回执。
+            </p>
+            <ul v-else class="divided-list">
+              <li v-for="entry in historyEntries" :key="entry.eventId">
+                <div class="card-title-row">
+                  <strong>{{ entry.actionLabel }}：{{ entry.taskTitle }}</strong>
+                  <span class="tag" :data-tone="RECEIPT_TONES[entry.receipt]">{{ RECEIPT_LABELS[entry.receipt] }}</span>
+                </div>
+                <span class="meta-line">{{ entry.memberName }} · {{ entry.serverTime ? `服务端时间 ${formatDateTime(entry.serverTime)}` : '本机提交时间未知' }}</span>
+                <span class="meta-line">最终状态：{{ historyFinalStatusLabel(entry.finalStatus) }}</span>
+                <span class="meta-line">回执标识：{{ entry.eventId }}</span>
+                <p v-if="entry.note" class="meta-line">{{ entry.note }}</p>
+                <button
+                  v-if="entry.receipt === 'LOCAL_FAILED'"
+                  type="button"
+                  class="btn btn-quiet"
+                  @click="retryTaskAction"
+                >
+                  安全重试（服务端幂等，不会重复记录）
+                </button>
+              </li>
+            </ul>
+            <p class="meta-line">
+              历史来自家庭服务器的事件时间线（脱敏摘要）；本地待确认条目只在本机内存中展示，不会写入存储。
+            </p>
+          </template>
+        </div>
       </section>
 
       <section aria-labelledby="trend-title">

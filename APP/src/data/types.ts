@@ -168,6 +168,32 @@ export interface VisionTaskStatusSnapshot {
 
 export type EnvironmentActionAvailability = 'AVAILABLE' | 'UNAVAILABLE' | 'UNAUTHORIZED'
 
+/**
+ * MOB-135：任务操作历史的回执状态。
+ * - RECEIPTED：服务端已落库的事件回执（历史事实）；
+ * - SUPERSEDED：服务端幂等保留的更早动作，已被同一计划的后续动作覆盖；
+ * - LOCAL_PENDING / LOCAL_FAILED：仅存在于内存展示层的本地尝试，
+ *   未获服务端回执前一律不当作成功，切换会话/成员即丢弃。
+ */
+export type TaskActionReceipt = 'RECEIPTED' | 'SUPERSEDED' | 'LOCAL_PENDING' | 'LOCAL_FAILED'
+
+export interface TaskActionHistoryEntry {
+  /** 服务端事件 ID（回执标识）；本地条目使用临时标记。 */
+  eventId: string
+  action: TaskAction | 'unknown'
+  actionLabel: string
+  taskTitle: string
+  memberName: string
+  memberId: string
+  /** 服务端记录的时间（occurred_at），本地条目为本机提交时间。 */
+  serverTime: string
+  /** 该计划当前最终状态（CONFIRMED/DEFERRED/SKIPPED/PENDING…）。 */
+  finalStatus: string
+  receipt: TaskActionReceipt
+  /** 覆盖/失败等补充说明。 */
+  note?: string
+}
+
 /** A server-produced, display-only low-risk environment arrangement. */
 export interface EnvironmentActionCard {
   id: string
@@ -240,6 +266,8 @@ export interface DataProvider {
   recognizeMedicine(file: File, memberId: string): Promise<RecognitionCandidate>
   /** 回查视觉任务状态；只读，重试必须复用同一 taskId，不得重新创建任务。 */
   fetchVisionTaskStatus(taskId: string): Promise<VisionTaskStatusSnapshot>
+  /** 任务操作历史：服务端时间线动作事件的只读脱敏摘要，不建立第二份事实库。 */
+  listTaskActionHistory(memberId: string): Promise<TaskActionHistoryEntry[]>
   /** 近 7 天任务完成趋势（含今天，共 7 项，时间升序）。 */
   getWeeklyTrend(memberId: string): Promise<TrendPoint[]>
 }
