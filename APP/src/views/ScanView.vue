@@ -6,9 +6,17 @@ import ErrorNotice from '@/components/ErrorNotice.vue'
 import LevelTag from '@/components/LevelTag.vue'
 import PrivacyBadge from '@/components/PrivacyBadge.vue'
 import { useSpeech } from '@/composables/useSpeech'
+import { createVisionTaskPolling, visionTaskStatusLabel } from '@/composables/useVisionTaskPolling'
 import { activeProvider, canSubmitWrites } from '@/data'
 import { recognitionStatusLabel } from '@/data/labels'
 import type { MemberSummary, QualityCheckResult, RecognitionCandidate } from '@/data/types'
+import { formatDateTime } from '@/utils/format'
+import {
+  notifyVisionTaskTerminal,
+  requestVisionNoticePermission,
+  visionNoticeSupport,
+  type VisionNoticeSupport,
+} from '@/utils/localNotice'
 import { imageInputUnavailableMessage, validateMedicineImage } from '@/utils/uploadInput'
 import { CAPABILITY_IDS, useCapabilities } from '@/stores/capabilities'
 import { sessionContextKey, useSession } from '@/stores/session'
@@ -49,6 +57,38 @@ const handoff = computed(() => candidate.value?.handoff ?? {
   nextStep: '请在网页端人工复核中心确认识别候选。',
 })
 
+/** MOB-132：任务状态回查。退避轮询在 composable 内，页面只负责接线与清理。 */
+const polling = createVisionTaskPolling(taskId => activeProvider().fetchVisionTaskStatus(taskId))
+const noticeState = ref<VisionNoticeSupport>(visionNoticeSupport())
+/** 每个任务只提醒一次，避免"重试回查"再次触发通知。 */
+const notifiedTaskId = ref('')
+const statusTagTone = computed(() => {
+  const status = polling.state.value.snapshot?.status
+  if (status === 'succeeded') return 'calm' as const
+  if (status === 'failed' || status === 'timeout') return 'danger' as const
+  return 'info' as const
+})
+
+async function enableNotice(): Promise<void> {
+  noticeState.value = await requestVisionNoticePermission()
+}
+
+watch(() => polling.state.value.phase, (phase) => {
+  const snapshot = polling.state.value.snapshot
+  if (phase !== 'terminal' || !snapshot) return
+  speech.speak(`视觉任务${visionTaskStatusLabel(snapshot.status)}。${snapshot.nextStep}`)
+  if (notifiedTaskId.value === snapshot.taskId) return
+  notifiedTaskId.value = snapshot.taskId
+  if (noticeState.value === 'granted') {
+    notifyVisionTaskTerminal(snapshot.status === 'succeeded' ? 'succeeded' : 'failed')
+  }
+})
+
+function startStatusPolling(): void {
+  notifiedTaskId.value = ''
+  if (handoff.value.taskId) polling.start(handoff.value.taskId)
+}
+
 const steps = [
   { key: 'shoot', label: '拍摄' },
   { key: 'quality', label: '质量检查' },
@@ -71,6 +111,7 @@ function releasePreview(): void {
 }
 
 function reset(): void {
+  polling.stop()
   releasePreview()
   file.value = null
   quality.value = null
@@ -152,6 +193,8 @@ async function recognize(): Promise<void> {
     candidate.value = nextCandidate
     stage.value = 'result'
     speech.speak(`识别结果：${recognitionStatusLabel(candidate.value.status)}。${candidate.value.notice}`)
+    // MOB-132：任务创建成功后立即开始状态回查（同一任务，绝不重复创建）。
+    startStatusPolling()
   } catch (cause) {
     if (expectedKey !== sessionContextKey(session)) return
     error.value = presentApiError(cause)
@@ -194,11 +237,16 @@ async function retry(): Promise<void> {
 
 onMounted(loadMembers)
 watch(() => sessionContextKey(session), () => {
+  // 会话/家庭/成员切换：丢弃旧上下文并停止上一任务的回查。
+  polling.stop()
   reset()
   void loadMembers()
 })
 
-onBeforeUnmount(releasePreview)
+onBeforeUnmount(() => {
+  polling.dispose()
+  releasePreview()
+})
 </script>
 
 <template>
@@ -385,6 +433,66 @@ onBeforeUnmount(releasePreview)
         <p>{{ handoff.nextStep }}</p>
         <p v-if="handoff.source === 'DEMO'" class="meta-line">演示模式不会创建真实复核任务。</p>
       </section>
+      <section
+        v-if="polling.state.value.phase !== 'idle'"
+        class="task-status"
+        aria-labelledby="task-status-title"
+        aria-live="polite"
+      >
+        <div class="card-title-row">
+          <h3 id="task-status-title">任务状态回查</h3>
+          <span class="tag" :data-tone="statusTagTone">
+            {{ visionTaskStatusLabel(polling.state.value.snapshot?.status ?? 'queued') }}
+          </span>
+        </div>
+        <p v-if="polling.state.value.phase === 'polling'" class="meta-line" role="status">
+          正在按退避节奏回查家庭服务器（已回查 {{ polling.state.value.attempts }} 次<template v-if="polling.state.value.nextDelayMs !== null">，下次约 {{ Math.round(polling.state.value.nextDelayMs / 1000) }} 秒后</template>）；排队中不会当作识别完成。
+        </p>
+        <p v-if="polling.state.value.lastCheckedAt" class="meta-line">
+          最近回查：{{ formatDateTime(polling.state.value.lastCheckedAt) }}
+        </p>
+        <p v-if="polling.state.value.lastError" class="notice" data-tone="warn" role="status">
+          上次回查失败：{{ polling.state.value.lastError }}；会继续按退避重试同一任务。
+        </p>
+        <p v-if="polling.state.value.snapshot">{{ polling.state.value.snapshot.nextStep }}</p>
+        <p v-if="polling.state.value.snapshot?.errorCode" class="notice" data-tone="error">
+          服务端错误码：{{ polling.state.value.snapshot.errorCode }}
+          <template v-if="polling.state.value.snapshot.errorMessage">（{{ polling.state.value.snapshot.errorMessage }}）</template>
+        </p>
+        <p v-if="polling.state.value.phase === 'exhausted'" class="notice" data-tone="warn" role="status">
+          已达到回查次数上限，停止自动轮询。可点击“重试回查”继续查询同一任务；不会重复创建任务或重新上传照片。
+        </p>
+        <div class="btn-row">
+          <button
+            v-if="polling.state.value.phase === 'exhausted'"
+            type="button"
+            class="btn btn-quiet"
+            @click="polling.checkNow()"
+          >
+            重试回查
+          </button>
+          <button
+            v-else-if="polling.state.value.phase === 'polling'"
+            type="button"
+            class="btn btn-quiet"
+            @click="polling.checkNow()"
+          >
+            立即回查
+          </button>
+          <button
+            v-if="noticeState !== 'granted'"
+            type="button"
+            class="btn btn-quiet"
+            :data-disabled="noticeState === 'unsupported' || noticeState === 'denied'"
+            @click="enableNotice"
+          >
+            {{ noticeState === 'unsupported' ? '此环境不支持本地通知' : noticeState === 'denied' ? '通知已被系统拒绝' : '开启完成提醒（本地通知）' }}
+          </button>
+        </div>
+        <p class="meta-line">
+          本地提醒只在应用内触发、不含健康数据；未开启或被拒绝时仅保留本页状态，不会发送远程推送。
+        </p>
+      </section>
       <p class="meta-line">
         版本：<template v-for="(version, key) in candidate.versions" :key="key">{{ key }} {{ version }}　</template>
       </p>
@@ -496,5 +604,8 @@ html[data-contrast='high'] .vf-line { background: #000; box-shadow: none; }
 .metric-grid strong[data-passed='false'] { color: var(--c-danger-deep); }
 .handoff { margin-top: 12px; padding: 12px; border: 1px solid var(--c-border); border-radius: var(--r-card); }
 .handoff p { margin-top: 6px; }
+.task-status { margin-top: 12px; padding: 12px; border: 1px solid var(--c-border); border-radius: var(--r-card); }
+.task-status p { margin-top: 6px; }
+html[data-contrast='high'] .task-status { border: 2px solid #000; background: #fff; }
 html[data-contrast='high'] .metric-grid li { border: 2px solid #000; background: #fff; }
 </style>

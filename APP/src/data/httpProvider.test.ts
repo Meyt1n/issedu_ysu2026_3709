@@ -421,3 +421,68 @@ describe('环境行动卡的受控降级（MOB-157）', () => {
     clearCapabilities()
   })
 })
+
+describe('视觉任务状态回查（MOB-132）', () => {
+  function visionTask(patch: Record<string, unknown> = {}) {
+    return {
+      id: 'vision-1',
+      household_id: 'h1',
+      member_id: 'm1',
+      file_id: 'stored.jpg',
+      task_type: 'ocr',
+      status: 'running',
+      error_code: null,
+      error_message: null,
+      result: null,
+      model_version: 'fusion-v1',
+      created_by: 'actor-1',
+      created_at: '2026-08-22T08:00:00Z',
+      ...patch,
+    }
+  }
+
+  it('回查走 GET 单任务端点并映射状态、终态与下一步说明', async () => {
+    const getVisionTask = vi.fn().mockResolvedValue(visionTask({ status: 'SUCCEEDED' }))
+    const client = { getVisionTask } as unknown as ApiClient
+    const provider = new HttpDataProvider(client, () => ({ actorId: 'actor-1', accessPurpose: 'family-care', householdId: 'h1' }))
+
+    const snapshot = await provider.fetchVisionTaskStatus('vision-1')
+
+    expect(getVisionTask).toHaveBeenCalledWith('vision-1', expect.objectContaining({ actorId: 'actor-1' }))
+    expect(snapshot).toMatchObject({
+      taskId: 'vision-1',
+      status: 'succeeded',
+      terminal: true,
+      modelVersion: 'fusion-v1',
+    })
+    expect(snapshot.nextStep).toContain('人工复核中心')
+  })
+
+  it('failed/timeout 带出服务端错误码；queued/running 非终态', async () => {
+    const failed = visionTask({ status: 'failed', error_code: 'OCR_UNAVAILABLE', error_message: 'engine offline' })
+    const provider = new HttpDataProvider(
+      { getVisionTask: vi.fn().mockResolvedValueOnce(failed).mockResolvedValueOnce(visionTask({ status: 'queued' })) } as unknown as ApiClient,
+      () => ({ actorId: 'actor-1', accessPurpose: 'family-care', householdId: 'h1' }),
+    )
+
+    const failedSnapshot = await provider.fetchVisionTaskStatus('vision-1')
+    expect(failedSnapshot.terminal).toBe(true)
+    expect(failedSnapshot.errorCode).toBe('OCR_UNAVAILABLE')
+    expect(failedSnapshot.errorMessage).toBe('engine offline')
+
+    const queuedSnapshot = await provider.fetchVisionTaskStatus('vision-1')
+    expect(queuedSnapshot.terminal).toBe(false)
+    expect(queuedSnapshot.nextStep).toContain('不会重复创建任务')
+  })
+
+  it('未知状态停止自动回查且不当作成功', async () => {
+    const provider = new HttpDataProvider(
+      { getVisionTask: vi.fn().mockResolvedValue(visionTask({ status: 'paused-by-admin' })) } as unknown as ApiClient,
+      () => ({ actorId: 'actor-1', accessPurpose: 'family-care', householdId: 'h1' }),
+    )
+    const snapshot = await provider.fetchVisionTaskStatus('vision-1')
+    expect(snapshot.terminal).toBe(true)
+    expect(snapshot.status).toBe('paused-by-admin')
+    expect(snapshot.nextStep).toContain('未定义的状态')
+  })
+})

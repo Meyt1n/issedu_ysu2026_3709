@@ -139,3 +139,20 @@ describe('演示数据 provider', () => {
     })
   })
 })
+
+describe('演示模式视觉任务状态回查（MOB-132）', () => {
+  it('按回查次数演示排队→处理→完成，文案明确标注演示且不冒充服务器', async () => {
+    const first = await demoProvider.fetchVisionTaskStatus('demo-review-pending')
+    const second = await demoProvider.fetchVisionTaskStatus('demo-review-pending')
+    const third = await demoProvider.fetchVisionTaskStatus('demo-review-pending')
+
+    expect(first.status).toBe('queued')
+    expect(first.terminal).toBe(false)
+    expect(second.status).toBe('running')
+    expect(second.terminal).toBe(false)
+    expect(third.status).toBe('succeeded')
+    expect(third.terminal).toBe(true)
+    expect(third.nextStep).toContain('演示')
+    expect(third.nextStep).toContain('不会创建真实复核任务')
+  })
+})

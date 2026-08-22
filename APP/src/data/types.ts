@@ -144,6 +144,28 @@ export interface ReviewHandoff {
   nextStep: string
 }
 
+/** 服务端视觉任务状态（HCT-204 契约）；未知状态原样保留，不猜测为成功。 */
+export type VisionTaskServerStatus =
+  | 'queued'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+  | 'timeout'
+  | (string & {})
+
+/** 移动端视角的任务状态快照：只做展示映射，不承载健康数据。 */
+export interface VisionTaskStatusSnapshot {
+  taskId: string
+  status: VisionTaskServerStatus
+  terminal: boolean
+  errorCode: string | null
+  errorMessage: string | null
+  modelVersion: string | null
+  createdAt: string
+  nextStep: string
+}
+
 export type EnvironmentActionAvailability = 'AVAILABLE' | 'UNAVAILABLE' | 'UNAUTHORIZED'
 
 /** A server-produced, display-only low-risk environment arrangement. */
@@ -216,6 +238,8 @@ export interface DataProvider {
   submitTaskAction(taskId: string, action: TaskAction, payload?: TaskActionPayload): Promise<CareTask>
   checkImageQuality(file: File): Promise<QualityCheckResult>
   recognizeMedicine(file: File, memberId: string): Promise<RecognitionCandidate>
+  /** 回查视觉任务状态；只读，重试必须复用同一 taskId，不得重新创建任务。 */
+  fetchVisionTaskStatus(taskId: string): Promise<VisionTaskStatusSnapshot>
   /** 近 7 天任务完成趋势（含今天，共 7 项，时间升序）。 */
   getWeeklyTrend(memberId: string): Promise<TrendPoint[]>
 }

@@ -21,6 +21,7 @@ import type {
   TimelineItem,
   TodaySnapshot,
   TrendPoint,
+  VisionTaskStatusSnapshot,
 } from './types'
 
 /**
@@ -637,6 +638,50 @@ export class HttpDataProvider implements DataProvider {
     )
     draft.task = task
     return recognitionCandidateFromTask(task)
+  }
+
+  async fetchVisionTaskStatus(taskId: string): Promise<VisionTaskStatusSnapshot> {
+    // 只读回查：重试必须复用同一 taskId；这里绝不创建任务或重新上传照片。
+    const task = await this.client.getVisionTask(taskId, this.options())
+    return visionTaskStatusSnapshotFromTask(task)
+  }
+}
+
+/** HCT-204 状态全集；集合之外的状态按"停止自动回查+原样展示"处理，不猜测为成功。 */
+const KNOWN_VISION_TASK_STATUSES = new Set(['queued', 'running', 'succeeded', 'failed', 'cancelled', 'timeout'])
+const VISION_TASK_TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled', 'timeout'])
+
+function visionTaskNextStep(status: string): string {
+  switch (status) {
+    case 'queued':
+      return '任务已排队，等待家庭服务器处理；下方会按退避节奏继续回查，不会重复创建任务。'
+    case 'running':
+      return '家庭服务器正在提取 OCR、条码与包装特征证据；到达终态后这里会展示结果与下一步。'
+    case 'succeeded':
+      return '识别已完成，请到网页端“人工复核中心”查看证据并人工确认识别候选；确认前不会写入健康档案。'
+    case 'failed':
+      return '识别未完成。可点击“重试回查”确认状态，或回到上一步重新拍摄；重试回查不会重复创建任务。'
+    case 'cancelled':
+      return '任务已被取消，不会再有结果；如需识别请重新拍摄并创建新任务。'
+    case 'timeout':
+      return '任务在服务端超时未完成。可点击“重试回查”确认状态，或重新拍摄。'
+    default:
+      return `服务端返回了移动端未定义的状态“${status}”；已停止自动轮询，请到网页端人工复核中心核实，不以猜测代替结论。`
+  }
+}
+
+export function visionTaskStatusSnapshotFromTask(task: VisionTask): VisionTaskStatusSnapshot {
+  const status = task.status.toLowerCase()
+  return {
+    taskId: task.id,
+    status,
+    // 终态或未知状态都停止自动回查：未知状态绝不能被猜测为成功。
+    terminal: VISION_TASK_TERMINAL_STATUSES.has(status) || !KNOWN_VISION_TASK_STATUSES.has(status),
+    errorCode: task.error_code,
+    errorMessage: task.error_message,
+    modelVersion: task.model_version,
+    createdAt: task.created_at,
+    nextStep: visionTaskNextStep(status),
   }
 }
 

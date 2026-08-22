@@ -17,6 +17,7 @@ import type {
   TimelineItem,
   TodaySnapshot,
   TrendPoint,
+  VisionTaskStatusSnapshot,
 } from './types'
 
 const WEEKDAY_LABELS = ['日', '一', '二', '三', '四', '五', '六']
@@ -610,4 +611,28 @@ export const demoProvider: DataProvider = {
       notice: '未能在本地药品主数据中找到匹配项。未知药品不会自动入库，可补拍更清晰的照片或转人工复核。',
     }
   },
+
+  async fetchVisionTaskStatus(taskId: string): Promise<VisionTaskStatusSnapshot> {
+    // 演示模式按调用次数模拟排队→处理→完成，让状态回查流程可教学；
+    // 每个任务独立计数，状态文案明确标注“演示”，不冒充真实服务器回查。
+    const counters = demoVisionTaskPollCounters
+    const count = (counters.get(taskId) ?? 0) + 1
+    counters.set(taskId, count)
+    await delay(120)
+    const status = count <= 1 ? 'queued' : count === 2 ? 'running' : 'succeeded'
+    return {
+      taskId,
+      status,
+      terminal: status === 'succeeded',
+      errorCode: null,
+      errorMessage: null,
+      modelVersion: 'demo-vision-0.1',
+      createdAt: new Date().toISOString(),
+      nextStep: status === 'succeeded'
+        ? '（演示）识别已完成；演示模式不会创建真实复核任务，网页端复核中心流程在联机模式下体验。'
+        : `（演示）任务${status === 'queued' ? '已排队' : '处理中'}；下方会按退避节奏继续回查。`,
+    }
+  },
 }
+
+const demoVisionTaskPollCounters = new Map<string, number>()
