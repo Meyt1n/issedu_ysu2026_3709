@@ -159,6 +159,7 @@ from app.schemas import (
     HealthResponse,
     HouseholdCreate,
     HouseholdRead,
+    HouseholdUpdate,
     KnowledgeDocumentCreate,
     KnowledgeDocumentRead,
     KnowledgeRetrieveRequest,
@@ -469,8 +470,26 @@ def create_household(
     actor_id: str = Depends(get_actor_id),
     session: Session = Depends(get_session),
 ) -> Household:
-    household = Household(name=payload.name, created_by=actor_id)
+    household = Household(
+        name=payload.name,
+        created_by=actor_id,
+        time_zone=payload.time_zone or settings.default_household_time_zone,
+    )
     session.add(household)
+    session.commit()
+    session.refresh(household)
+    return household
+
+
+@router.patch("/households/{household_id}", response_model=HouseholdRead)
+def update_household(
+    household_id: str,
+    payload: HouseholdUpdate,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> Household:
+    household = require_household_owner(session, household_id, actor_id)
+    household.time_zone = payload.time_zone
     session.commit()
     session.refresh(household)
     return household
