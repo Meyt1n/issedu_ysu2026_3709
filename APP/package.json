@@ -18,7 +18,10 @@
     "verify:linkage": "node scripts/verify-web-linkage.mjs",
     "audit:pwa": "npm run build && node scripts/audit-pwa.mjs",
     "verify:controlled-release": "node scripts/verify-controlled-release.mjs",
-    "test:controlled-release": "node scripts/verify-controlled-release.test.mjs"
+    "test:controlled-release": "node scripts/verify-controlled-release.test.mjs",
+    "privacy:scan": "node scripts/privacy-scan.mjs",
+    "release:manifest": "node scripts/release-manifest.mjs",
+    "test:privacy-scan": "node scripts/privacy-scan.test.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.0",
