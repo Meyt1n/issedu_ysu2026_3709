@@ -22,6 +22,7 @@ import type {
   TodaySnapshot,
   TrendPoint,
   VisionTaskStatusSnapshot,
+  TaskActionHistoryEntry,
 } from './types'
 
 /**
@@ -173,6 +174,67 @@ export function deriveTasksFromEvents(
     }
     return task
   })
+}
+
+const PLAN_ACTION_LABELS: Record<string, { action: TaskAction; label: string; finalStatus: string }> = {
+  plan_confirmed: { action: 'confirm', label: '确认', finalStatus: 'CONFIRMED' },
+  plan_deferred: { action: 'defer', label: '延期', finalStatus: 'DEFERRED' },
+  plan_skipped: { action: 'skip', label: '跳过', finalStatus: 'SKIPPED' },
+}
+
+/**
+ * MOB-135：从时间线事件推导任务操作历史。
+ *
+ * 只读脱敏摘要：动作、任务标题、成员、服务端时间、事件 ID、最终状态。
+ * 同一 plan_event_id 的动作里只有最新一条是"有效回执"，更早的同类动作
+ * 标注 SUPERSEDED（服务端幂等保留），不重复计数。
+ */
+export function deriveTaskActionHistory(
+  events: HealthEvent[],
+  memberId: string,
+  memberName: string,
+): TaskActionHistoryEntry[] {
+  const planTitles = new Map<string, string>()
+  for (const plan of events.filter(e => PLAN_FACT_TYPES.has(e.event_type))) {
+    planTitles.set(plan.id, eventTitle(plan))
+  }
+
+  const grouped = new Map<string, HealthEvent[]>()
+  for (const event of events) {
+    const mapping = PLAN_ACTION_LABELS[event.event_type]
+    if (!mapping) continue
+    const planEventId = textOf((event.payload ?? {})['plan_event_id']) || event.id
+    const bucket = grouped.get(planEventId) ?? []
+    bucket.push(event)
+    grouped.set(planEventId, bucket)
+  }
+
+  const entries: TaskActionHistoryEntry[] = []
+  for (const [planEventId, bucket] of grouped) {
+    // 时间线升序：最后一条是当前有效动作
+    const sorted = [...bucket].sort((a, b) => eventTime(a) - eventTime(b))
+    const latest = sorted[sorted.length - 1]!
+    const latestMapping = PLAN_ACTION_LABELS[latest.event_type]!
+    sorted.forEach((event, index) => {
+      const mapping = PLAN_ACTION_LABELS[event.event_type]!
+      const isLatest = index === sorted.length - 1
+      entries.push({
+        eventId: event.id,
+        action: mapping.action,
+        actionLabel: mapping.label,
+        taskTitle: planTitles.get(planEventId) ?? '计划任务（标题未知）',
+        memberName,
+        memberId,
+        serverTime: event.occurred_at ?? event.created_at,
+        // 最终状态取该计划最新动作的结果，覆盖条目同样显示最新终态便于理解
+        finalStatus: latestMapping.finalStatus,
+        receipt: isLatest ? 'RECEIPTED' : 'SUPERSEDED',
+        note: isLatest ? undefined : '该计划的后续操作已覆盖此动作（服务端幂等保留历史）',
+      })
+    })
+  }
+
+  return entries.sort((a, b) => Date.parse(b.serverTime) - Date.parse(a.serverTime))
 }
 
 const TREND_WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六']
@@ -644,6 +706,14 @@ export class HttpDataProvider implements DataProvider {
     // 只读回查：重试必须复用同一 taskId；这里绝不创建任务或重新上传照片。
     const task = await this.client.getVisionTask(taskId, this.options())
     return visionTaskStatusSnapshotFromTask(task)
+  }
+
+  async listTaskActionHistory(memberId: string): Promise<TaskActionHistoryEntry[]> {
+    // 只读脱敏摘要，直接来自服务端时间线；不缓存、不在本地建第二份事实库。
+    const householdId = await this.resolveHouseholdId()
+    const memberName = await this.memberName(memberId)
+    const events = await this.client.listMemberTimeline(householdId, memberId, this.options())
+    return deriveTaskActionHistory(events, memberId, memberName)
   }
 }
 

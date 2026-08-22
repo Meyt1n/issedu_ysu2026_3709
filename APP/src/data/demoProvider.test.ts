@@ -156,3 +156,29 @@ describe('演示模式视觉任务状态回查（MOB-132）', () => {
     expect(third.nextStep).toContain('不会创建真实复核任务')
   })
 })
+
+describe('演示模式任务操作历史（MOB-135）', () => {
+  beforeEach(async () => {
+    resetDemoData()
+    await demoProvider.submitTaskAction('t-am-med', 'confirm')
+    await demoProvider.submitTaskAction('t-bp', 'skip', { reason: '外出（演示）' })
+  })
+
+  it('操作写入内存日志并按成员过滤、倒序展示回执', async () => {
+    const wang = await demoProvider.listTaskActionHistory('m-wang')
+    const li = await demoProvider.listTaskActionHistory('m-li')
+
+    expect(wang).toHaveLength(2)
+    expect(wang[0]).toMatchObject({ action: 'skip', actionLabel: '跳过', receipt: 'RECEIPTED', finalStatus: 'SKIPPED' })
+    expect(wang[0]!.taskTitle).toContain('血压')
+    expect(wang[1]).toMatchObject({ action: 'confirm', actionLabel: '确认', finalStatus: 'CONFIRMED' })
+    expect(wang[1]!.note).toContain('演示')
+    // 其他成员看不到别人的操作
+    expect(li).toHaveLength(0)
+  })
+
+  it('恢复演示数据后历史清空', async () => {
+    resetDemoData()
+    expect(await demoProvider.listTaskActionHistory('m-wang')).toHaveLength(0)
+  })
+})

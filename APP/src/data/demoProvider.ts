@@ -18,6 +18,7 @@ import type {
   TodaySnapshot,
   TrendPoint,
   VisionTaskStatusSnapshot,
+  TaskActionHistoryEntry,
 } from './types'
 
 const WEEKDAY_LABELS = ['日', '一', '二', '三', '四', '五', '六']
@@ -65,6 +66,8 @@ interface DemoState {
   risks: RiskCard[]
   membersBase: Omit<MemberSummary, 'pendingTaskCount' | 'severeRiskCount' | 'warningRiskCount'>[]
   recentEvents: Record<string, TimelineItem[]>
+  /** 演示模式的任务操作日志（内存态，随演示数据重置）；条目用于操作历史展示。 */
+  actionLog: { eventId: string; taskId: string; memberId: string; action: TaskAction; at: string }[]
 }
 
 function buildInitialState(): DemoState {
@@ -316,6 +319,7 @@ function buildInitialState(): DemoState {
         },
       ],
     },
+    actionLog: [],
   }
 }
 
@@ -500,7 +504,33 @@ export const demoProvider: DataProvider = {
       task.skipReason = reason
     }
     task.lastActionAt = now
+    state.actionLog.push({ eventId: `demo-action-${state.actionLog.length + 1}`, taskId, memberId: task.memberId, action, at: now })
     return clone(task)
+  },
+
+  async listTaskActionHistory(memberId: string): Promise<TaskActionHistoryEntry[]> {
+    await delay(120)
+    const member = state.membersBase.find(m => m.id === memberId)
+    return state.actionLog
+      .filter(entry => entry.memberId === memberId)
+      .slice()
+      .reverse()
+      .map(entry => {
+        const task = state.tasks.find(t => t.id === entry.taskId)
+        return {
+          eventId: entry.eventId,
+          action: entry.action,
+          actionLabel: entry.action === 'confirm' ? '确认' : entry.action === 'defer' ? '延期' : '跳过',
+          taskTitle: task?.title ?? '演示任务',
+          memberName: member?.name ?? '演示成员',
+          memberId,
+          serverTime: entry.at,
+          // 演示模式没有幂等覆盖场景：同一任务重复提交会被上面拦截，最终状态即任务当前状态
+          finalStatus: task?.status ?? 'PENDING',
+          receipt: 'RECEIPTED' as const,
+          note: '（演示）演示模式操作只写内存日志，随"恢复演示数据"重置。',
+        }
+      })
   },
 
   async checkImageQuality(file: File): Promise<QualityCheckResult> {

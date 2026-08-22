@@ -4,7 +4,7 @@ import { ApiClient } from '@/api/client'
 import type { HealthEvent } from '@/api/types'
 import type { CareTask } from './types'
 
-import { deriveTasksFromEvents, deriveWeeklyTrendFromEvents, environmentActionUnavailable, HttpDataProvider } from './httpProvider'
+import { deriveTaskActionHistory, deriveTasksFromEvents, deriveWeeklyTrendFromEvents, environmentActionUnavailable, HttpDataProvider } from './httpProvider'
 import { clearCapabilities, setCapabilities } from '@/stores/capabilities'
 
 let sequence = 0
@@ -484,5 +484,71 @@ describe('视觉任务状态回查（MOB-132）', () => {
     expect(snapshot.terminal).toBe(true)
     expect(snapshot.status).toBe('paused-by-admin')
     expect(snapshot.nextStep).toContain('未定义的状态')
+  })
+})
+
+describe('任务操作历史推导（MOB-135）', () => {
+  it('动作事件带任务/成员/服务端时间/回执标识与最终状态', () => {
+    const events = [
+      makeEvent({
+        id: 'p1',
+        event_type: 'plan_created',
+        payload: { drug: '氨氯地平片', schedule: '每日早餐后' },
+      }),
+      makeEvent({
+        id: 'a1',
+        event_type: 'plan_confirmed',
+        payload: { plan_event_id: 'p1' },
+        occurred_at: '2026-08-22T01:00:00Z',
+      }),
+    ]
+    const entries = deriveTaskActionHistory(events, 'm1', '王秀兰（演示）')
+
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      eventId: 'a1',
+      action: 'confirm',
+      actionLabel: '确认',
+      taskTitle: '氨氯地平片：每日早餐后',
+      memberName: '王秀兰（演示）',
+      memberId: 'm1',
+      serverTime: '2026-08-22T01:00:00Z',
+      finalStatus: 'CONFIRMED',
+      receipt: 'RECEIPTED',
+    })
+  })
+
+  it('同一计划重复动作只计一条有效回执，更早动作标注覆盖且不重复计数', () => {
+    const events = [
+      makeEvent({ id: 'p1', event_type: 'plan_created', payload: { drug: 'A药', schedule: '每日' } }),
+      makeEvent({ id: 'a1', event_type: 'plan_deferred', payload: { plan_event_id: 'p1', delay_hours: 1 }, occurred_at: '2026-08-22T01:00:00Z' }),
+      makeEvent({ id: 'a2', event_type: 'plan_confirmed', payload: { plan_event_id: 'p1' }, occurred_at: '2026-08-22T02:00:00Z' }),
+    ]
+    const entries = deriveTaskActionHistory(events, 'm1', '成员')
+
+    expect(entries).toHaveLength(2)
+    expect(entries.filter(e => e.receipt === 'RECEIPTED')).toHaveLength(1)
+    expect(entries[0]).toMatchObject({ eventId: 'a2', receipt: 'RECEIPTED', finalStatus: 'CONFIRMED' })
+    expect(entries[1]).toMatchObject({ eventId: 'a1', receipt: 'SUPERSEDED', finalStatus: 'CONFIRMED' })
+    expect(entries[1]!.note).toContain('覆盖')
+    // 按服务端时间倒序
+    expect(Date.parse(entries[0]!.serverTime)).toBeGreaterThan(Date.parse(entries[1]!.serverTime))
+  })
+
+  it('无动作事件时返回空数组；列表TaskActionHistory走时间线端点', async () => {
+    expect(deriveTaskActionHistory([makeEvent({ id: 'p1', event_type: 'plan_created', payload: {} })], 'm1', '成员')).toEqual([])
+
+    const listMemberTimeline = vi.fn().mockResolvedValue([
+      makeEvent({ id: 'p1', event_type: 'plan_created', payload: { drug: 'B药', schedule: '每晚' } }),
+      makeEvent({ id: 'a1', event_type: 'plan_skipped', payload: { plan_event_id: 'p1', reason: '外出' } }),
+    ])
+    const listMembers = vi.fn().mockResolvedValue([{ id: 'm1', display_name: '成员', role: 'DEPENDENT' }])
+    const client = { listMemberTimeline, listMembers, listHouseholds: vi.fn().mockResolvedValue([{ id: 'h1' }]) } as unknown as ApiClient
+    const provider = new HttpDataProvider(client, () => ({ actorId: 'actor-1', accessPurpose: 'family-care', householdId: 'h1' }))
+
+    const entries = await provider.listTaskActionHistory('m1')
+    expect(listMemberTimeline).toHaveBeenCalledWith('h1', 'm1', expect.anything())
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({ action: 'skip', actionLabel: '跳过', finalStatus: 'SKIPPED', receipt: 'RECEIPTED' })
   })
 })
