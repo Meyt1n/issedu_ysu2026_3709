@@ -3,6 +3,7 @@ import { watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import AppTabBar from '@/components/AppTabBar.vue'
+import PwaUpdateNotice from '@/components/PwaUpdateNotice.vue'
 import ToastHost from '@/components/ToastHost.vue'
 import {
   clearSpeechGuidance,
@@ -65,6 +66,7 @@ watch(
       <component :is="Component" />
     </Transition>
   </RouterView>
+  <PwaUpdateNotice />
   <ToastHost />
 
   <div v-if="speechGuidance" class="speech-guidance" role="status">
