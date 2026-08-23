@@ -3,6 +3,7 @@ import { computed, reactive, readonly } from 'vue'
 import { ApiClientError, apiClient } from './api/client'
 import { clearChatSessionsForActor } from './assistant/chatSession'
 import type {
+  AuthSession,
   CapabilityResponse,
   Household,
   Member,
@@ -27,6 +28,12 @@ export type ViewName =
 export type SessionStatus = 'signed-out' | 'loading' | 'ready' | 'empty' | 'error'
 
 export const HEALTH_DATA_REFRESH_EVENT = 'hct:health-data-refresh'
+export const FACE_FAMILY_STORAGE_KEY = 'hct:face-family-household'
+
+interface BoundFaceHousehold {
+  id: string
+  name: string
+}
 
 export interface Toast {
   id: number
@@ -120,6 +127,7 @@ export function formatError(cause: unknown): string {
       if (cause.message === 'FACE_CREDENTIAL_EXISTS') {
         return '当前身份已经有有效的人脸凭证；如需替换，请勾选“已有凭证时重新绑定”。'
       }
+      if (cause.message === 'ACCOUNT_ID_EXISTS') return '这个登录账号已经在当前家庭使用，请换一个账号 ID。'
       if (cause.message === 'PIN_NOT_CONFIGURED') return '当前家庭账号尚未配置 PIN，请改用账号密码确认。'
       if (cause.message === 'STEP_UP_EXPIRED' || cause.message === 'STEP_UP_REPLAY') {
         return '二次确认已过期或已使用，请重新发起确认。'
@@ -132,6 +140,7 @@ export function formatError(cause: unknown): string {
       }
       if (cause.message === 'FACE_NOT_FOUND') return '图片中没有检测到清晰人脸，请重新拍摄正面照片。'
       if (cause.message === 'FACE_MULTIPLE_SUBJECTS') return '图片中检测到多张人脸，请只保留要绑定的一个人。'
+      if (cause.message === 'FACE_LIVENESS_FAILED') return '动态采集没有形成有效变化，请看向镜头后缓慢转动头部，再重新采集。'
       return `请求内容未通过校验：${cause.message}`
     }
     if (cause.status === 503 && cause.message === 'FACE_DETECTOR_UNAVAILABLE') {
@@ -254,6 +263,77 @@ export async function connect(actorId: string, accessPurpose: string): Promise<v
   }
 }
 
+function readBoundFaceHousehold(): BoundFaceHousehold | null {
+  try {
+    const raw = globalThis.localStorage?.getItem(FACE_FAMILY_STORAGE_KEY)?.trim() ?? ''
+    if (!raw) return null
+    if (raw.startsWith('{')) {
+      const parsed = JSON.parse(raw) as Partial<BoundFaceHousehold>
+      if (typeof parsed.id === 'string' && parsed.id.trim()) {
+        return { id: parsed.id.trim(), name: typeof parsed.name === 'string' ? parsed.name.trim() : '' }
+      }
+    }
+    // Keep old plain household ids readable after upgrading the web client.
+    return { id: raw, name: '' }
+  } catch {
+    return null
+  }
+}
+
+export function getBoundFaceHouseholdId(): string {
+  return readBoundFaceHousehold()?.id ?? ''
+}
+
+export function getBoundFaceHouseholdName(): string {
+  return readBoundFaceHousehold()?.name ?? ''
+}
+
+export function bindFaceHousehold(householdId: string, householdName = ''): void {
+  const id = householdId.trim()
+  if (!id) return
+  try {
+    const previous = readBoundFaceHousehold()
+    globalThis.localStorage?.setItem(
+      FACE_FAMILY_STORAGE_KEY,
+      JSON.stringify({ id, name: householdName.trim() || (previous?.id === id ? previous.name : '') }),
+    )
+  } catch {
+    // Private browsing may disable storage; the API still supports manual entry.
+  }
+}
+
+export function clearBoundFaceHousehold(): void {
+  try {
+    globalThis.localStorage?.removeItem(FACE_FAMILY_STORAGE_KEY)
+  } catch {
+    // Ignore storage cleanup failures; no authentication state is persisted here.
+  }
+}
+
+async function enterAuthenticatedSession(
+  sessionResult: AuthSession,
+  preferredHouseholdId = '',
+): Promise<void> {
+  state.sessionToken = sessionResult.session_token
+  state.sessionExpiresAt = sessionResult.expires_at
+  scheduleSessionExpiry(state.sessionToken, state.sessionExpiresAt)
+  state.actorId = sessionResult.actor_id
+  state.households = await apiClient.listHouseholds(requestOptions.value)
+  if (state.households.length === 0) {
+    state.status = 'empty'
+    return
+  }
+
+  const requestedHouseholdId = sessionResult.household_id || preferredHouseholdId
+  state.selectedHouseholdId =
+    requestedHouseholdId && state.households.some(item => item.id === requestedHouseholdId)
+      ? requestedHouseholdId
+      : state.households[0]?.id ?? ''
+  await loadHouseholdScope()
+  if (sessionIsSignedOut()) return
+  state.status = 'ready'
+}
+
 export async function connectWithPassword(
   actorId: string,
   password: string,
@@ -274,20 +354,7 @@ export async function connectWithPassword(
   state.error = ''
   try {
     if (register) await apiClient.registerAccount(state.actorId, password)
-    const sessionResult = await apiClient.login(state.actorId, password)
-    state.sessionToken = sessionResult.session_token
-    state.sessionExpiresAt = sessionResult.expires_at
-    scheduleSessionExpiry(state.sessionToken, state.sessionExpiresAt)
-    state.actorId = sessionResult.actor_id
-    state.households = await apiClient.listHouseholds(requestOptions.value)
-    if (state.households.length === 0) {
-      state.status = 'empty'
-      return
-    }
-    state.selectedHouseholdId = state.households[0]?.id ?? ''
-    await loadHouseholdScope()
-    if (sessionIsSignedOut()) return
-    state.status = 'ready'
+    await enterAuthenticatedSession(await apiClient.login(state.actorId, password))
   } catch (cause) {
     const sessionExpired = sessionIsSignedOut() && state.error.includes('会话已过期')
     if (!sessionExpired) clearSessionContext()
@@ -317,23 +384,10 @@ export async function connectWithPin(
   state.status = 'loading'
   state.error = ''
   try {
-    const sessionResult = await apiClient.loginWithPin(householdId.trim(), state.actorId, pin)
-    state.sessionToken = sessionResult.session_token
-    state.sessionExpiresAt = sessionResult.expires_at
-    scheduleSessionExpiry(state.sessionToken, state.sessionExpiresAt)
-    state.actorId = sessionResult.actor_id
-    state.households = await apiClient.listHouseholds(requestOptions.value)
-    if (state.households.length === 0) {
-      state.status = 'empty'
-      return
-    }
-    state.selectedHouseholdId =
-      sessionResult.household_id && state.households.some(item => item.id === sessionResult.household_id)
-        ? sessionResult.household_id
-        : state.households[0]?.id ?? ''
-    await loadHouseholdScope()
-    if (sessionIsSignedOut()) return
-    state.status = 'ready'
+    await enterAuthenticatedSession(
+      await apiClient.loginWithPin(householdId.trim(), state.actorId, pin),
+      householdId.trim(),
+    )
   } catch (cause) {
     const sessionExpired = sessionIsSignedOut() && state.error.includes('会话已过期')
     if (!sessionExpired) clearSessionContext()
@@ -364,41 +418,69 @@ export async function connectWithFace(
   state.error = ''
   try {
     const challenge = await apiClient.createFaceChallenge(householdId.trim(), state.actorId)
-    const sessionResult = await apiClient.loginWithFace(
+    await enterAuthenticatedSession(
+      await apiClient.loginWithFace(
+        householdId.trim(),
+        state.actorId,
+        challenge.challenge_id,
+        frames,
+      ),
       householdId.trim(),
-      state.actorId,
-      challenge.challenge_id,
-      frames,
     )
-    state.sessionToken = sessionResult.session_token
-    state.sessionExpiresAt = sessionResult.expires_at
-    scheduleSessionExpiry(state.sessionToken, state.sessionExpiresAt)
-    state.actorId = sessionResult.actor_id
-    state.households = await apiClient.listHouseholds(requestOptions.value)
-    if (state.households.length === 0) {
-      state.status = 'empty'
-      return
-    }
-    state.selectedHouseholdId =
-      sessionResult.household_id && state.households.some(item => item.id === sessionResult.household_id)
-        ? sessionResult.household_id
-        : state.households[0]?.id ?? ''
-    await loadHouseholdScope()
-    if (sessionIsSignedOut()) return
-    state.status = 'ready'
   } catch (cause) {
     const sessionExpired = sessionIsSignedOut() && state.error.includes('会话已过期')
     if (!sessionExpired) clearSessionContext()
     state.authMode = 'session'
     state.status = 'signed-out'
     if (sessionExpired) return
-    state.error = formatError(cause)
+    state.error = cause instanceof ApiClientError && cause.status === 401
+      ? '人脸验证未通过。请确认这个家庭账号已经绑定人脸，并保持正面、光线均匀；也可以改用 PIN 或密码登录。'
+      : formatError(cause)
+  }
+}
+
+export async function connectWithFamilyFace(
+  householdId: string,
+  frames: File[],
+  accessPurpose: string,
+): Promise<void> {
+  clearSessionContext()
+  state.authMode = 'session'
+  state.accessPurpose = accessPurpose.trim()
+  if (!householdId.trim() || frames.length < 2) {
+    state.status = 'signed-out'
+    state.error = '需要先绑定家庭，并完成摄像头动态采集。'
+    return
+  }
+
+  state.status = 'loading'
+  state.error = ''
+  try {
+    const household = householdId.trim()
+    const challenge = await apiClient.createFamilyFaceChallenge(household)
+    const sessionResult = await apiClient.loginWithFamilyFace(
+      household,
+      challenge.challenge_id,
+      frames,
+    )
+    await enterAuthenticatedSession(sessionResult, household)
+    const matchedHousehold = state.households.find(item => item.id === state.selectedHouseholdId)
+    bindFaceHousehold(household, matchedHousehold?.name ?? '')
+  } catch (cause) {
+    const sessionExpired = sessionIsSignedOut() && state.error.includes('会话已过期')
+    if (!sessionExpired) clearSessionContext()
+    state.authMode = 'session'
+    state.status = 'signed-out'
+    if (sessionExpired) return
+    state.error = cause instanceof ApiClientError && cause.status === 401
+      ? '没有在这个家庭中找到明确的人脸匹配。请重新采集，或改用 PIN/账号登录。'
+      : formatError(cause)
   }
 }
 
 export async function createHouseholdAndEnter(
   householdName: string,
-  memberDrafts: Array<{ displayName: string; role: 'SELF' | 'DEPENDENT' | 'CAREGIVER' }>,
+  memberDrafts: Array<{ displayName: string; role: 'SELF' | 'DEPENDENT' | 'CAREGIVER'; actorId?: string }>,
 ): Promise<void> {
   const created = await apiClient.createHousehold(
     { name: householdName },
@@ -408,7 +490,11 @@ export async function createHouseholdAndEnter(
     if (!draft.displayName.trim()) continue
     await apiClient.createMember(
       created.id,
-      { display_name: draft.displayName.trim(), role: draft.role },
+      {
+        display_name: draft.displayName.trim(),
+        role: draft.role,
+        actor_id: draft.actorId?.trim() || undefined,
+      },
       { ...requestOptions.value, idempotencyKey: createIdempotencyKey() },
     )
   }
@@ -440,7 +526,13 @@ export async function loadHouseholdScope(): Promise<void> {
   state.isOwnerView = false
   try {
     state.members = await apiClient.listMembers(householdId, requestOptions.value)
-    state.selectedMemberId = state.members[0]?.id ?? ''
+    // A family-face session already tells us which small account was matched.
+    // Keep that member selected when the scope loads instead of silently
+    // falling back to the first member in the household.
+    state.selectedMemberId =
+      state.members.find(member => member.actor_id === state.actorId)?.id ??
+      state.members[0]?.id ??
+      ''
 
     try {
       await apiClient.listAuthorizations(householdId, requestOptions.value)

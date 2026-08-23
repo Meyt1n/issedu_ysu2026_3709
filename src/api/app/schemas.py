@@ -2,9 +2,12 @@ from datetime import datetime
 from typing import Any, Literal
 
 from ai.vision.candidate_fusion import CandidateFusionResult
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from app.time_zone import validate_iana_time_zone
 
 PURPOSE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$"
+ACTOR_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$"
 
 
 class HealthResponse(BaseModel):
@@ -27,6 +30,10 @@ class PinLoginCredentials(BaseModel):
 class FaceChallengeRequest(BaseModel):
     household_id: str = Field(min_length=1, max_length=120)
     actor_id: str = Field(min_length=1, max_length=120)
+
+
+class FamilyFaceChallengeRequest(BaseModel):
+    household_id: str = Field(min_length=1, max_length=120)
 
 
 class FaceChallengeRead(BaseModel):
@@ -120,6 +127,21 @@ class CapabilityResponse(BaseModel):
 
 class HouseholdCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
+    time_zone: str | None = Field(default=None, min_length=1, max_length=64)
+
+    @field_validator("time_zone")
+    @classmethod
+    def validate_time_zone(cls, value: str | None) -> str | None:
+        return None if value is None else validate_iana_time_zone(value)
+
+
+class HouseholdUpdate(BaseModel):
+    time_zone: str = Field(min_length=1, max_length=64)
+
+    @field_validator("time_zone")
+    @classmethod
+    def validate_time_zone(cls, value: str) -> str:
+        return validate_iana_time_zone(value)
 
 
 class HouseholdRead(BaseModel):
@@ -128,13 +150,20 @@ class HouseholdRead(BaseModel):
     id: str
     name: str
     created_by: str
+    time_zone: str
     created_at: datetime
 
 
 class MemberCreate(BaseModel):
     display_name: str = Field(min_length=1, max_length=120)
     role: Literal["SELF", "DEPENDENT", "CAREGIVER"] = "DEPENDENT"
-    actor_id: str | None = Field(default=None, max_length=120)
+    actor_id: str | None = Field(default=None, max_length=120, pattern=ACTOR_ID_PATTERN)
+
+
+class MemberAccountBindingUpdate(BaseModel):
+    """Bind a local family member to the actor used at login."""
+
+    actor_id: str = Field(min_length=1, max_length=120, pattern=ACTOR_ID_PATTERN)
 
 
 class MemberRead(BaseModel):

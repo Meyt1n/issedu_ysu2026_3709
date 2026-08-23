@@ -8,6 +8,7 @@ import SkeletonList from './components/SkeletonList.vue'
 import {
   dismissToast,
   selectHousehold,
+  selectedMember,
   session,
   setView,
   signOut,
@@ -102,6 +103,11 @@ const navGroups = computed(() => {
 
 const activeNav = computed(
   () => NAV_ITEMS.find(item => item.view === session.currentView) ?? NAV_ITEMS[0]!,
+)
+
+const currentMemberLabel = computed(() => selectedMember.value?.display_name ?? '当前成员')
+const currentHouseholdLabel = computed(
+  () => session.households.find(item => item.id === session.selectedHouseholdId)?.name ?? '家庭空间',
 )
 
 const currentComponent = computed(() => VIEW_COMPONENTS[session.currentView])
@@ -343,8 +349,12 @@ onBeforeUnmount(() => {
               </button>
             </div>
           </div>
-          <span class="identity-chip">
-            {{ session.actorId }}
+          <span class="identity-chip" :title="`${currentHouseholdLabel} · 登录账号 ${session.actorId}`">
+            <AppIcon name="members" :size="16" />
+            <span class="identity-person">
+              <strong>{{ currentMemberLabel }}</strong>
+              <small>{{ session.actorId }}</small>
+            </span>
             <span class="role-tag" :class="{ caregiver: !session.isOwnerView }">
               {{ session.isOwnerView ? '家庭管理员' : '授权照护者' }}
             </span>
@@ -362,7 +372,11 @@ onBeforeUnmount(() => {
           @before-leave="transitioning = true"
           @after-enter="transitioning = false"
         >
-          <div class="view-container" :key="session.currentView">
+          <div
+            class="view-container"
+            :class="`view-${session.currentView}`"
+            :key="session.currentView"
+          >
             <Suspense>
               <component :is="currentComponent" />
               <template #fallback>

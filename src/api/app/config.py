@@ -1,7 +1,9 @@
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.time_zone import validate_iana_time_zone
 
 
 class Settings(BaseSettings):
@@ -15,6 +17,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+pysqlite:///./homecare-dev.sqlite3"
     request_id_header: str = "X-Request-ID"
     cursor_signing_key: str = "dev-only-change-me"
+    default_household_time_zone: str = "UTC"
     outbox_poll_seconds: float = 2.0
     outbox_batch_size: int = 100
     outbox_stale_seconds: int = 300
@@ -76,6 +79,14 @@ class Settings(BaseSettings):
     log_mask_enabled: bool = True
     upload_allowed_extensions: str = ".jpg,.jpeg,.png,.pdf,.mp4,.mov"
     upload_max_size_bytes: int = 10 * 1024 * 1024
+
+    @field_validator("default_household_time_zone")
+    @classmethod
+    def validate_default_household_time_zone(cls, value: str) -> str:
+        try:
+            return validate_iana_time_zone(value)
+        except ValueError as exc:
+            raise ValueError("DEFAULT_HOUSEHOLD_TIME_ZONE_INVALID") from exc
 
     @property
     def upload_allowed_ext_set(self) -> set[str]:
