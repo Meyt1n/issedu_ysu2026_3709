@@ -114,6 +114,8 @@ HCT-103 事件写入支持最长 128 位 `Idempotency-Key`。家庭、key、操�
 | POST | `/risks/evaluate` | 重算风险 |
 | POST | `/plans/{id}/optimize` | 生成提醒建议 |
 | POST | `/plans/{id}/approve` | 人工批准计划 |
+| GET | `/households/{household_id}/members/{member_id}/plan-workbench` | 按家庭时区读取计划、动作历史、逾期和疗程结束状态 |
+| POST | `/households/{household_id}/members/{member_id}/plans/evaluate` | Owner 对明确授权的计划执行幂等漏服、疗程结束与照护升级评估 |
 | GET | `/environment/actions` | 环境行动卡 |
 | POST | `/assistant/chat` | 本地助手 |
 | POST | `/models/retrain` | 追加训练 |

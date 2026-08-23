@@ -185,6 +185,7 @@ from app.schemas import (
     OutboxRead,
     PinLoginCredentials,
     PinSetRequest,
+    PlanAutomationRead,
     PlanWorkbenchRead,
     ProjectionCheckpointRead,
     ProjectionReplayRead,
@@ -2294,7 +2295,10 @@ def get_plan_workbench(
     return PlanWorkbenchRead(
         member_id=member_id,
         generated_at=datetime.now(UTC),
-        plans=build_plan_workbench(get_timeline(session, member_id)),
+        plans=build_plan_workbench(
+            get_timeline(session, member_id),
+            time_zone=household.time_zone,
+        ),
     )
 
 
@@ -2485,7 +2489,12 @@ def confirm_plan_endpoint(
                 detail="IDEMPOTENCY_KEY_CONFLICT",
             )
         return HealthEventRead.model_validate(existing)
-    validate_plan_confirmation_window(get_timeline(session, member_id), plan_event_id, now)
+    validate_plan_confirmation_window(
+        get_timeline(session, member_id),
+        plan_event_id,
+        now,
+        time_zone=household.time_zone,
+    )
     event = _append_care_plan_action(
         session,
         household=household,
@@ -2615,6 +2624,51 @@ def miss_plan_endpoint(
         idempotency_key=f"miss:{plan_event_id}:{datetime.now(UTC).date().isoformat()}",
     )
     return HealthEventRead.model_validate(event)
+
+
+@router.post(
+    "/households/{household_id}/members/{member_id}/plans/evaluate",
+    response_model=PlanAutomationRead,
+)
+def evaluate_plan_automation_endpoint(
+    household_id: str,
+    member_id: str,
+    request: Request,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> PlanAutomationRead:
+    """Evaluate explicitly authorized reminder automation for one member.
+
+    This endpoint is owner-only because it can append health and notification
+    events. Existing plans remain read-only unless their payload explicitly
+    opts into automation.
+    """
+    household = require_household_owner(session, household_id, actor_id)
+    member = _require_household_member(session, household_id, member_id)
+    if _is_erased(household, member):
+        _raise_resource_not_found()
+
+    evaluated_at = datetime.now(UTC)
+    correlation_id = getattr(request.state, "request_id", None) or request.headers.get(
+        settings.request_id_header, ""
+    )
+    from app.care_plan import execute_plan_automation
+
+    created_events, notified_actor_ids = execute_plan_automation(
+        session,
+        household=household,
+        member=member,
+        actor_id=actor_id,
+        correlation_id=correlation_id,
+        now=evaluated_at,
+    )
+
+    return PlanAutomationRead(
+        member_id=member.id,
+        evaluated_at=evaluated_at,
+        created_events=[HealthEventRead.model_validate(item) for item in created_events],
+        notified_caregiver_actor_ids=notified_actor_ids,
+    )
 
 
 # ── HCT-401: Knowledge store & RAG ──────────────────────────────────

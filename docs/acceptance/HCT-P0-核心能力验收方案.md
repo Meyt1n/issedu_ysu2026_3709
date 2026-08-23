@@ -19,7 +19,7 @@
 | HCT-205 OCR/条码/主数据 | `scripts/hct205_accuracy_report.py` | 冻结结果 JSONL、真实批准范围、字段/条码/状态准确率达到阈值、失败原因和阈值版本齐全 | 阻塞，只有契约和合成链路 |
 | HCT-203 YOLO/QLoRA | `scripts/hct203_release_gate.py` | 独立评估、hard-negative、模型/报告哈希、盲测或真实 test、回滚演练齐全 | 阻塞，当前仍是实验/候选状态 |
 | HCT-302 规则 | `scripts/hct302_acceptance_report.py` | 重复成分、过敏、有限相互作用和严重案例均有批准案例、来源、规则版本、主数据版本 | 代码已有，正式案例包未关闭 |
-| HCT-308 提醒 | `scripts/hct308_acceptance_report.py` | 确认、延期、漏服、疗程结束、逾期升级、照护者升级六条本地 API 证据完整 | 单元测试已有，连续 API/通知证据待跑 |
+| HCT-308 提醒 | `scripts/hct308_acceptance_report.py` | 确认、延期、漏服、疗程结束、逾期升级、照护者升级六条本地 API 证据完整 | 服务端自动生命周期、家庭时区、重启幂等和本地通知契约已完成；Android/PWA 系统通知与真实连续证据待跑 |
 | HCT-403 助手 | `scripts/hct403_assistant_acceptance_gate.py` | QLoRA 真实盲测、红队、无证据拒答、Ollama 断连降级全部通过 | 本地工具链已有，正式盲测和完整安全证据未完成 |
 | HCT-305 天气 | `scripts/hct305_provider_preflight.py` | HTTPS 域名白名单、行政区划白名单、真实提供方一次联调、响应归一化通过 | UAPIS 适配已写，部署白名单和真实联调待配置 |
 | HCT-405 连续主线 | `scripts/hct405_acceptance_gate.py` | 登录→成员上下文→扫描→人工确认→健康事件→规则提醒→助手解释→离线重启链路通过 | 合成 E2E 较全，发布模型/离线演练/R3 未完成 |

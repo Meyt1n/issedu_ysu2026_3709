@@ -12,10 +12,15 @@ import logging
 from datetime import UTC, date, datetime, timedelta
 from datetime import time as clock_time
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-from app.models import HealthEvent
+from app.event_service import append_health_event_transaction
+from app.models import CareAuthorization, HealthEvent, Household, Member
+from app.schemas import HealthEventCreate
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +70,8 @@ def validate_plan_confirmation_window(
     events: list[HealthEvent],
     plan_event_id: str,
     proposed_time: datetime,
+    *,
+    time_zone: str = "UTC",
 ) -> None:
     """Validate a confirmation against the plan's server-side safety policy.
 
@@ -90,6 +97,7 @@ def validate_plan_confirmation_window(
         )
 
     proposed = _as_utc(proposed_time)
+    zone = ZoneInfo(time_zone)
     payload = plan.payload or {}
     minimum_hours = _positive_int(
         _policy_value(payload, "min_interval_hours"),
@@ -109,9 +117,9 @@ def validate_plan_confirmation_window(
 
     maximum_daily = _positive_int(_policy_value(payload, "max_daily_doses"))
     if maximum_daily is not None:
-        local_date = proposed.astimezone().date()
+        local_date = proposed.astimezone(zone).date()
         confirmations_today = sum(
-            _as_utc(event.occurred_at).astimezone().date() == local_date
+            _as_utc(event.occurred_at).astimezone(zone).date() == local_date
             for event in confirmations
         )
         if confirmations_today >= maximum_daily:
@@ -127,7 +135,7 @@ def validate_plan_confirmation_window(
     earliest = earliest_values[0] if earliest_values else None
     latest = latest_values[0] if latest_values else None
     if earliest is not None or latest is not None:
-        current = proposed.astimezone().time().replace(second=0, microsecond=0)
+        current = proposed.astimezone(zone).time().replace(second=0, microsecond=0)
         outside = False
         if earliest is not None and latest is not None:
             if earliest <= latest:
@@ -222,13 +230,15 @@ def _next_action_at(
     *,
     reference_time: datetime,
     now: datetime,
+    time_zone: str,
 ) -> datetime:
     """Use explicit local clock times when available, otherwise keep HCT-304's 24h fallback."""
     times = _parse_plan_times(payload.get("times"))
     if not times:
         return reference_time + timedelta(hours=DEFAULT_MAX_INTERVAL_HOURS)
 
-    local_now = now.astimezone()
+    zone = ZoneInfo(time_zone)
+    local_now = now.astimezone(zone)
     start_date = _parse_plan_date(payload.get("start_date"))
     end_date = _parse_plan_date(payload.get("end_date"))
     lower_bound = max(reference_time, now)
@@ -246,7 +256,12 @@ def _next_action_at(
     return reference_time + timedelta(hours=DEFAULT_MAX_INTERVAL_HOURS)
 
 
-def build_plan_workbench(events: list[HealthEvent]) -> list[dict[str, Any]]:
+def build_plan_workbench(
+    events: list[HealthEvent],
+    *,
+    time_zone: str = "UTC",
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
     """Build a read-only, server-authoritative plan workbench from confirmed events."""
     compensated = {
         event.compensates_event_id
@@ -254,6 +269,7 @@ def build_plan_workbench(events: list[HealthEvent]) -> list[dict[str, Any]]:
         if event.event_type == "COMPENSATION" and event.compensates_event_id
     }
     actions_by_plan: dict[str, list[HealthEvent]] = {}
+    lifecycle_by_plan: dict[str, list[HealthEvent]] = {}
     plans: list[HealthEvent] = []
 
     for event in events:
@@ -268,6 +284,16 @@ def build_plan_workbench(events: list[HealthEvent]) -> list[dict[str, Any]]:
             "plan_skipped",
             "plan_missed",
         }:
+            if event.event_type not in {
+                "course_ended",
+                "plan_completed",
+                "care_escalated",
+                "care_level_escalated",
+            }:
+                continue
+            plan_event_id = str((event.payload or {}).get("plan_event_id") or "")
+            if plan_event_id:
+                lifecycle_by_plan.setdefault(plan_event_id, []).append(event)
             continue
         plan_event_id = str((event.payload or {}).get("plan_event_id") or "")
         if plan_event_id:
@@ -276,11 +302,13 @@ def build_plan_workbench(events: list[HealthEvent]) -> list[dict[str, Any]]:
     def as_utc(value: datetime) -> datetime:
         return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
-    now = datetime.now(UTC)
+    current_time = _as_utc(now or datetime.now(UTC))
+    local_today = current_time.astimezone(ZoneInfo(time_zone)).date()
     workbench: list[dict[str, Any]] = []
     for plan in plans:
         payload = plan.payload or {}
-        action_history = actions_by_plan.get(plan.id, [])
+        action_history = sorted(actions_by_plan.get(plan.id, []), key=lambda item: item.occurred_at)
+        lifecycle = sorted(lifecycle_by_plan.get(plan.id, []), key=lambda item: item.occurred_at)
         last_action = action_history[-1] if action_history else None
         reference_time = as_utc(plan.occurred_at)
         deferred_until: datetime | None = None
@@ -292,10 +320,40 @@ def build_plan_workbench(events: list[HealthEvent]) -> list[dict[str, Any]]:
             else:
                 reference_time = as_utc(last_action.occurred_at)
 
-        due_at = deferred_until or _next_action_at(payload, reference_time=reference_time, now=now)
-        if now < due_at:
+        due_at = deferred_until or _next_action_at(
+            payload,
+            reference_time=reference_time,
+            now=current_time,
+            time_zone=time_zone,
+        )
+        completed = next(
+            (
+                item
+                for item in reversed(lifecycle)
+                if item.event_type in {"course_ended", "plan_completed"}
+            ),
+            None,
+        )
+        escalated = next(
+            (
+                item
+                for item in reversed(lifecycle)
+                if item.event_type in {"care_escalated", "care_level_escalated"}
+                and (
+                    last_action is None
+                    or _as_utc(item.occurred_at) >= _as_utc(last_action.occurred_at)
+                )
+            ),
+            None,
+        )
+        configured_end = _parse_plan_date(payload.get("end_date"))
+        if completed is not None or (configured_end is not None and configured_end < local_today):
+            status_label = "COMPLETED"
+        elif escalated is not None:
+            status_label = "ESCALATED"
+        elif current_time < due_at:
             status_label = "NORMAL"
-        elif now < due_at + timedelta(hours=GRACE_PERIOD_HOURS):
+        elif current_time < due_at + timedelta(hours=GRACE_PERIOD_HOURS):
             status_label = "REMINDER"
         else:
             status_label = "ESCALATED"
@@ -340,10 +398,201 @@ def build_plan_workbench(events: list[HealthEvent]) -> list[dict[str, Any]]:
                     }
                     for event in action_history
                 ],
-                "allowed_actions": ["CONFIRM", "DEFER", "SKIP", "MISS"],
+                "allowed_actions": []
+                if status_label == "COMPLETED"
+                else ["CONFIRM", "DEFER", "SKIP", "MISS"],
             }
         )
     return workbench
+
+
+def plan_automation_decisions(
+    events: list[HealthEvent],
+    *,
+    time_zone: str,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Return authorized lifecycle transitions without writing data.
+
+    The caller persists these decisions transactionally. Plans without an
+    explicit automation authorization are intentionally ignored.
+    """
+    current_time = _as_utc(now or datetime.now(UTC))
+    plan_events = {
+        event.id: event
+        for event in events
+        if event.event_type in {"plan_created", "plan_updated"}
+    }
+    existing_keys = {
+        str((event.payload or {}).get("automation_key") or "")
+        for event in events
+        if (event.payload or {}).get("automation_key")
+    }
+    decisions: list[dict[str, Any]] = []
+    for item in build_plan_workbench(events, time_zone=time_zone, now=current_time):
+        plan = plan_events[item["plan_event_id"]]
+        payload = plan.payload or {}
+        automation = payload.get("automation")
+        if not isinstance(automation, dict) or automation.get("authorization") != "AUTHORIZED":
+            continue
+        if item["status"] == "COMPLETED":
+            key = f"course-end:{plan.id}:{payload.get('end_date') or 'unspecified'}"
+            if key not in existing_keys:
+                decisions.append(
+                    {
+                        "event_type": "course_ended",
+                        "plan_event_id": plan.id,
+                        "automation_key": key,
+                        "occurred_at": current_time,
+                        "reason": "COURSE_END_DATE_REACHED",
+                    }
+                )
+            continue
+        due_at = _as_utc(item["next_action_at"])
+        if (
+            item["status"] != "ESCALATED"
+            or current_time < due_at + timedelta(hours=GRACE_PERIOD_HOURS)
+        ):
+            continue
+        slot = due_at.strftime("%Y%m%dT%H%MZ")
+        missed_key = f"missed:{plan.id}:{slot}"
+        escalation_key = f"escalated:{plan.id}:{slot}"
+        if missed_key not in existing_keys:
+            decisions.append(
+                {
+                    "event_type": "plan_missed",
+                    "plan_event_id": plan.id,
+                    "automation_key": missed_key,
+                    "occurred_at": current_time,
+                    "reason": "OVERDUE_AFTER_GRACE_PERIOD",
+                    "due_at": due_at,
+                }
+            )
+        if escalation_key not in existing_keys:
+            decisions.append(
+                {
+                    "event_type": "care_escalated",
+                    "plan_event_id": plan.id,
+                    "automation_key": escalation_key,
+                    "occurred_at": current_time,
+                    "reason": "MISSED_DOSE_ESCALATION",
+                    "due_at": due_at,
+                    "notify_caregivers": isinstance(payload.get("caregiver_notification"), dict)
+                    and payload["caregiver_notification"].get("authorization") == "AUTHORIZED",
+                }
+            )
+    return decisions
+
+
+def execute_plan_automation(
+    session: Session,
+    *,
+    household: Household,
+    member: Member,
+    actor_id: str,
+    correlation_id: str,
+    now: datetime | None = None,
+) -> tuple[list[HealthEvent], list[str]]:
+    """Persist one idempotent, explicitly authorized automation cycle."""
+    from app.projection import get_timeline
+
+    evaluated_at = _as_utc(now or datetime.now(UTC))
+    decisions = plan_automation_decisions(
+        get_timeline(session, member.id),
+        time_zone=household.time_zone,
+        now=evaluated_at,
+    )
+    created_events: list[HealthEvent] = []
+    notified_actor_ids: list[str] = []
+
+    def append_once(
+        *,
+        event_type: str,
+        payload: dict[str, object],
+        automation_key: str,
+        occurred_at: datetime,
+    ) -> HealthEvent | None:
+        idempotency_key = f"hct308:{automation_key}"
+        existing = session.scalar(
+            select(HealthEvent).where(
+                HealthEvent.household_id == household.id,
+                HealthEvent.idempotency_key == idempotency_key,
+            )
+        )
+        if existing is not None:
+            return None
+        return append_health_event_transaction(
+            session,
+            household=household,
+            member=member,
+            actor_id=actor_id,
+            idempotency_key=idempotency_key,
+            correlation_id=correlation_id,
+            payload=HealthEventCreate(
+                member_id=member.id,
+                event_type=event_type,
+                confirmation_status="CONFIRMED",
+                payload={**payload, "automation_key": automation_key},
+                occurred_at=occurred_at,
+            ),
+        )
+
+    for decision in decisions:
+        automation_key = str(decision["automation_key"])
+        event_payload: dict[str, object] = {
+            "plan_event_id": str(decision["plan_event_id"]),
+            "reason": str(decision["reason"]),
+            "evaluated_at": evaluated_at.isoformat(),
+        }
+        due_at = decision.get("due_at")
+        if isinstance(due_at, datetime):
+            event_payload["due_at"] = due_at.isoformat()
+        created = append_once(
+            event_type=str(decision["event_type"]),
+            payload=event_payload,
+            automation_key=automation_key,
+            occurred_at=decision["occurred_at"],
+        )
+        if created is not None:
+            created_events.append(created)
+
+        if decision.get("notify_caregivers") is not True:
+            continue
+        authorizations = session.scalars(
+            select(CareAuthorization).where(
+                CareAuthorization.household_id == household.id,
+                CareAuthorization.member_id == member.id,
+                CareAuthorization.revoked_at.is_(None),
+            )
+        ).all()
+        for authorization in authorizations:
+            valid_from = _as_utc(authorization.valid_from)
+            valid_until = _as_utc(authorization.valid_until)
+            if not (valid_from <= evaluated_at <= valid_until):
+                continue
+            if "health_events" not in authorization.data_fields:
+                continue
+            if "READ_EVENTS" not in authorization.actions:
+                continue
+            notify_key = f"notified:{automation_key}:{authorization.id}"
+            notification = append_once(
+                event_type="caregiver_notified",
+                payload={
+                    "plan_event_id": str(decision["plan_event_id"]),
+                    "escalation_automation_key": automation_key,
+                    "recipient_actor_id": authorization.grantee_actor_id,
+                    "authorization_id": authorization.id,
+                    "channel": "LOCAL_EVENT_INBOX",
+                    "delivery_status": "QUEUED",
+                },
+                automation_key=notify_key,
+                occurred_at=evaluated_at,
+            )
+            if notification is not None:
+                created_events.append(notification)
+                notified_actor_ids.append(authorization.grantee_actor_id)
+
+    return created_events, sorted(set(notified_actor_ids))
 
 
 # ── Confirmation actions ───────────────────────────────────────────
