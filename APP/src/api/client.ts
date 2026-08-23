@@ -278,10 +278,14 @@ export class ApiClient {
     )
   }
 
-  checkVisionQuality(file: File, options?: RequestOptions): Promise<VisionQualityResponse> {
+  checkVisionQuality(
+    file: File,
+    mediaType: 'image' | 'video' = 'image',
+    options?: RequestOptions,
+  ): Promise<VisionQualityResponse> {
     const body = new FormData()
     body.append('file', file)
-    body.append('media_type', 'image')
+    body.append('media_type', mediaType)
     return this.request('/api/v1/vision-quality/check', { method: 'POST', body }, options)
   }
 
@@ -292,7 +296,13 @@ export class ApiClient {
   }
 
   createVisionTask(
-    input: { file_id: string; member_id?: string; quality_receipt: string; idempotency_key?: string },
+    input: {
+      file_id: string
+      member_id?: string
+      quality_receipt: string
+      idempotency_key?: string
+      media_type?: 'image' | 'video'
+    },
     options?: RequestOptions,
   ): Promise<VisionTask> {
     return this.request('/api/v1/vision-tasks', { method: 'POST', body: JSON.stringify(input) }, options)

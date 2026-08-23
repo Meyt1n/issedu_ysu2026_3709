@@ -204,6 +204,103 @@ describe('联机写请求的幂等与重试', () => {
     expect(second?.[0].idempotency_key).toBe(first?.[0].idempotency_key)
     expect(second?.[1]).toMatchObject({ idempotencyKey: first?.[0].idempotency_key })
   })
+
+  it('MOB-149：视频质量门映射帧统计并返回抽帧摘要', async () => {
+    const client = {
+      checkVisionQuality: vi.fn().mockResolvedValue({
+        decision: 'PASS',
+        reasons: [],
+        retake_prompts: [],
+        metrics: { decoded_frames: 90, sampled_frames: 3, selected_frames: 3, usable_frames: 3 },
+        quality_receipt: 'video-receipt',
+        media_type: 'video',
+      }),
+    } as unknown as ApiClient
+    const provider = new HttpDataProvider(client, () => ({ actorId: 'actor-1', accessPurpose: 'family-care', householdId: '' }))
+    const file = new File([new Uint8Array(40_000)], 'clip.mp4', { type: 'video/mp4' })
+
+    const quality = await provider.checkVideoQuality(file)
+
+    expect(client.checkVisionQuality).toHaveBeenCalledWith(file, 'video', expect.anything())
+    expect(quality.decision).toBe('PASS')
+    expect(quality.framesSummary).toMatchObject({ mediaType: 'video', sampledFrames: 3, selectedFrames: 3, usableFrames: 3 })
+    const labels = quality.metrics.map(metric => metric.label)
+    expect(labels).toContain('采样帧数')
+    expect(quality.metrics.every(metric => metric.passed)).toBe(true)
+  })
+
+  it('MOB-149：recognizeMedicine 视频路径携带 media_type 且幂等键带视频前缀', async () => {
+    const createVisionTask = vi.fn().mockResolvedValue({
+      id: 'vision-video-1',
+      household_id: 'h1',
+      member_id: 'm1',
+      file_id: 'stored.mp4',
+      media_type: 'video',
+      task_type: 'ocr',
+      status: 'QUEUED',
+      error_code: null,
+      error_message: null,
+      result: null,
+      model_version: null,
+      created_by: 'actor-1',
+      created_at: '2026-08-23T08:00:00Z',
+    })
+    const uploadFile = vi.fn().mockResolvedValue({
+      original_name: 'clip.mp4',
+      storage_key: 'stored.mp4',
+      size_bytes: 42,
+      hash_algo: 'sha256',
+      hash: 'hash',
+      extension: '.mp4',
+    })
+    const client = {
+      checkVisionQuality: vi.fn().mockResolvedValue({
+        decision: 'PASS',
+        reasons: [],
+        retake_prompts: [],
+        metrics: { sampled_frames: 2, selected_frames: 2, usable_frames: 2 },
+        quality_receipt: 'video-receipt',
+      }),
+      uploadFile,
+      createVisionTask,
+    } as unknown as ApiClient
+    const provider = new HttpDataProvider(client, () => ({ actorId: 'actor-1', accessPurpose: 'family-care', householdId: '' }))
+    const file = new File([new Uint8Array(40_000)], 'clip.mp4', { type: 'video/mp4' })
+
+    const result = await provider.recognizeMedicine(file, 'm1', 'video')
+
+    expect(client.checkVisionQuality).toHaveBeenCalledWith(file, 'video', expect.anything())
+    expect(createVisionTask.mock.calls[0]?.[0]).toMatchObject({
+      file_id: 'stored.mp4',
+      media_type: 'video',
+      quality_receipt: 'video-receipt',
+    })
+    expect(String(createVisionTask.mock.calls[0]?.[0].idempotency_key)).toMatch(/^vision-video:/)
+    expect(result.handoff?.taskId).toBe('vision-video-1')
+    expect(result.fields.some(field => field.label === '媒体类型' && field.value === 'video')).toBe(true)
+  })
+
+  it('MOB-149：视频未过质量门时不创建任务不上传', async () => {
+    const uploadFile = vi.fn()
+    const createVisionTask = vi.fn()
+    const client = {
+      checkVisionQuality: vi.fn().mockResolvedValue({
+        decision: 'RETAKE',
+        reasons: ['没有可用证据帧'],
+        retake_prompts: ['请保持药盒稳定'],
+        metrics: { usable_frames: 0 },
+        quality_receipt: null,
+      }),
+      uploadFile,
+      createVisionTask,
+    } as unknown as ApiClient
+    const provider = new HttpDataProvider(client, () => ({ actorId: 'actor-1', accessPurpose: 'family-care', householdId: '' }))
+    const file = new File([new Uint8Array(40_000)], 'clip.mp4', { type: 'video/mp4' })
+
+    await expect(provider.recognizeMedicine(file, 'm1', 'video')).rejects.toThrow('视频未通过抽帧质量门控')
+    expect(uploadFile).not.toHaveBeenCalled()
+    expect(createVisionTask).not.toHaveBeenCalled()
+  })
 })
 
 describe('近 7 天完成趋势推导', () => {
