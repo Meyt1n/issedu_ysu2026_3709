@@ -6,6 +6,7 @@ import SwitchRow from '@/components/SwitchRow.vue'
 import ErrorNotice from '@/components/ErrorNotice.vue'
 import { createSpeaker } from '@/composables/useSpeech'
 import { ApiClient, ApiClientError } from '@/api/client'
+import { buildInfoLine } from '@/buildInfo'
 import { presentApiError, type ErrorPresentation } from '@/api/errors'
 import { requestOutcomeLabel, requestTraces, type RequestTraceEntry } from '@/api/requestLog'
 import { resetDemoData } from '@/data/demoProvider'
@@ -827,7 +828,7 @@ onMounted(() => {
         <span class="row-icon" data-tone="accent" aria-hidden="true"><AppIcon name="heart" :size="16" /></span>
         <h2 id="about-title">关于</h2>
       </div>
-      <p class="meta-line">家健镜随身版 v0.1.0 · 教学演示，不用于诊断或治疗</p>
+      <p class="meta-line">家健镜随身版 {{ buildInfoLine() }} · 教学演示，不用于诊断或治疗</p>
       <p class="meta-line">
         配套网页端与后端：
         <a href="https://github.com/Meyt1n/issedu_ysu2026_3709" rel="noreferrer">issedu_ysu2026_3709</a>
