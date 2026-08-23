@@ -21,9 +21,20 @@ MAGIC_BYTES: dict[str, list[bytes]] = {
     ".jpeg": [b"\xff\xd8\xff"],
     ".png": [b"\x89PNG\r\n\x1a\n"],
     ".pdf": [b"%PDF"],
-    ".mp4": [b"\x00\x00\x00\x18ftyp", b"\x00\x00\x00\x20ftyp"],
-    ".mov": [b"\x00\x00\x00\x14ftyp", b"\x00\x00\x00\x18ftyp"],
 }
+
+# ISO-BMFF containers (mp4/mov) open with a 4-byte big-endian box size
+# followed by the "ftyp" brand box.  The size varies across recorder vendors
+# and OpenCV's own writer, so a fixed-prefix list would reject valid files;
+# HCT-414-D2 validates the structure instead.
+FTYP_EXTENSIONS = frozenset({".mp4", ".mov"})
+
+
+def _has_ftyp_magic(start: bytes) -> bool:
+    if len(start) < 8 or start[4:8] != b"ftyp":
+        return False
+    box_size = int.from_bytes(start[:4], "big")
+    return 8 <= box_size <= 256
 
 BUF_SIZE = 8192
 MAX_FILENAME = 255
@@ -60,11 +71,18 @@ def validate_extension(filename: str) -> str:
 
 def validate_magic(file: BinaryIO, ext: str, max_read: int = BUF_SIZE) -> None:
     """Check file magic bytes match the claimed extension."""
+    start = file.read(max_read)
+    file.seek(0)
+    if ext in FTYP_EXTENSIONS:
+        if not _has_ftyp_magic(start):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="UPLOAD_MAGIC_MISMATCH",
+            )
+        return
     expected = MAGIC_BYTES.get(ext)
     if not expected:
         return  # unknown magic list → skip
-    start = file.read(max_read)
-    file.seek(0)
     if not any(start.startswith(m) for m in expected):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

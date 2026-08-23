@@ -342,24 +342,29 @@ def database_health(session: Session = Depends(get_session)) -> HealthResponse:
 
 @router.get("/meta/capabilities", response_model=CapabilityResponse)
 def capabilities() -> CapabilityResponse:
-    return CapabilityResponse(
-        phase="P0-foundation",
-        available=[
-            "manual-health-event",
-            "household-member",
-            "field-authorization",
-            "audit-outbox",
-            "event-compensation-replay",
-            "outbox-recovery-worker",
-            "review-task",
-            "vision-task",
-            "knowledge-store",
-            "local-assistant",
-            "llm",
-            "risk-acknowledgement",
-        ],
-        unavailable=["vision-inference", "llm-cloud", "external-web"],
-    )
+    available = [
+        "manual-health-event",
+        "household-member",
+        "field-authorization",
+        "audit-outbox",
+        "event-compensation-replay",
+        "outbox-recovery-worker",
+        "review-task",
+        "vision-task",
+        "knowledge-store",
+        "local-assistant",
+        "llm",
+        "risk-acknowledgement",
+    ]
+    unavailable = ["vision-inference", "llm-cloud", "external-web"]
+    # HCT-414-D2 (DEMO_ONLY until the HCT-201 fixed quality set is signed off):
+    # the video task capability is declarative so mobile clients can hide the
+    # video entry when the server does not provide it.
+    if settings.vision_video_tasks_enabled:
+        available.append("vision-task-video")
+    else:
+        unavailable.append("vision-task-video")
+    return CapabilityResponse(phase="P0-foundation", available=available, unavailable=unavailable)
 
 
 def _valid_authorizations(
@@ -2993,6 +2998,7 @@ async def check_vision_quality(
                     sample_interval_ms=sample_interval_ms,
                     max_selected_frames=max_selected_frames,
                     thresholds=thresholds,
+                    max_duration_ms=settings.vision_video_max_duration_seconds * 1000,
                 )
             finally:
                 if temporary_path is not None:
