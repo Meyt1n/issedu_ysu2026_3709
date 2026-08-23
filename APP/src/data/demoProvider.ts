@@ -423,19 +423,36 @@ export const demoProvider: DataProvider = {
       memberId === 'm-wang'
         ? [
             {
-              granteeName: '王芳（我）',
+              id: 'demo-auth-wang-1',
+              memberId,
+              granteeActorId: 'demo-family-owner',
+              granteeName: '王芳（我·演示）',
               fields: ['已确认健康事件', '用药与计划'],
+              actions: ['read'],
               purpose: 'family-care',
+              validFrom: new Date(Date.now() - 24 * 3_600_000).toISOString(),
               validUntil: daysFromNow(28),
+              revokedAt: null,
+              version: 1,
+              status: 'ACTIVE' as const,
             },
           ]
         : memberId === 'm-li'
           ? [
               {
-                granteeName: '王芳（我）',
+                id: 'demo-auth-li-1',
+                memberId,
+                granteeActorId: 'demo-family-owner',
+                granteeName: '王芳（我·演示）',
                 fields: ['已确认健康事件'],
+                actions: ['read'],
                 purpose: 'family-care',
+                validFrom: new Date(Date.now() - 24 * 3_600_000).toISOString(),
                 validUntil: daysFromNow(9),
+                revokedAt: null,
+                version: 1,
+                // 9 天后到期：仍有效但进入"即将到期"提示窗口（7 天阈值）
+                status: 'EXPIRING' as const,
               },
             ]
           : []

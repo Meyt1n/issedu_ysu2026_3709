@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { ApiClient } from '@/api/client'
+import { ApiClient, ApiClientError } from '@/api/client'
 import type { HealthEvent } from '@/api/types'
 import type { CareTask } from './types'
 
-import { deriveTaskActionHistory, deriveTasksFromEvents, deriveWeeklyTrendFromEvents, environmentActionUnavailable, HttpDataProvider } from './httpProvider'
+import { authorizationStatus, deriveTaskActionHistory, deriveTasksFromEvents, deriveWeeklyTrendFromEvents, environmentActionUnavailable, HttpDataProvider } from './httpProvider'
 import { clearCapabilities, setCapabilities } from '@/stores/capabilities'
 
 let sequence = 0
@@ -551,4 +551,98 @@ describe('任务操作历史推导（MOB-135）', () => {
     expect(entries).toHaveLength(1)
     expect(entries[0]).toMatchObject({ action: 'skip', actionLabel: '跳过', finalStatus: 'SKIPPED', receipt: 'RECEIPTED' })
   })
+})
+
+describe('授权范围只读呈现（MOB-136）', () => {
+  const now = new Date('2026-08-23T12:00:00Z')
+
+  it('授权状态只由服务端时间/撤回字段推导，解析失败按已到期 fail-closed', () => {
+    const base = { valid_from: '2026-08-01T00:00:00Z', valid_until: '2026-09-01T00:00:00Z', revoked_at: null as string | null }
+    expect(authorizationStatus(base, now)).toBe('ACTIVE')
+    expect(authorizationStatus({ ...base, valid_until: '2026-08-28T00:00:00Z' }, now)).toBe('EXPIRING')
+    expect(authorizationStatus({ ...base, valid_until: '2026-08-20T00:00:00Z' }, now)).toBe('EXPIRED')
+    expect(authorizationStatus({ ...base, revoked_at: '2026-08-22T00:00:00Z' }, now)).toBe('REVOKED')
+    expect(authorizationStatus({ ...base, valid_from: '2026-09-01T00:00:00Z', valid_until: '2026-10-01T00:00:00Z' }, now)).toBe('PENDING')
+    expect(authorizationStatus({ ...base, valid_until: 'not-a-date' }, now)).toBe('EXPIRED')
+  })
+
+  function authRead(patch: Record<string, unknown> = {}) {
+    return {
+      id: 'auth-1',
+      household_id: 'h1',
+      member_id: 'm1',
+      grantor_actor_id: 'owner-1',
+      grantee_actor_id: 'care-1',
+      data_fields: ['health_events'],
+      actions: ['READ_EVENTS'],
+      purpose: 'family-care',
+      valid_from: '2026-08-01T00:00:00Z',
+      valid_until: '2099-01-01T00:00:00Z',
+      revoked_at: null,
+      version: 3,
+      created_at: '2026-08-01T00:00:00Z',
+      updated_at: '2026-08-01T00:00:00Z',
+      ...patch,
+    }
+  }
+
+  it('Owner 视角映射完整字段并按成员过滤', async () => {
+    const provider = new HttpDataProvider(
+      {
+        listHouseholds: vi.fn().mockResolvedValue([{ id: 'h1' }]),
+        listMembers: vi.fn().mockResolvedValue([
+          { id: 'm1', display_name: '王秀兰', role: 'DEPENDENT' },
+          { id: 'm2', display_name: '李建国', role: 'DEPENDENT' },
+        ]),
+        listMemberTimeline: vi.fn().mockResolvedValue([]),
+        listAuthorizations: vi.fn().mockResolvedValue([authRead(), authRead({ id: 'auth-2', member_id: 'm2' })]),
+      } as unknown as ApiClient,
+      () => ({ actorId: 'owner-1', accessPurpose: 'family-care', householdId: 'h1' }),
+    )
+
+    const detail = await provider.getMemberDetail('m1')
+    expect(detail.authorizations).not.toBe('UNAUTHORIZED')
+    expect(detail.authorizations).toHaveLength(1)
+    expect(detail.authorizations![0]).toMatchObject({
+      id: 'auth-1',
+      granteeActorId: 'care-1',
+      granteeName: 'care-1',
+      fields: ['health_events'],
+      actions: ['READ_EVENTS'],
+      purpose: 'family-care',
+      version: 3,
+      status: 'ACTIVE',
+    })
+    expect(listAuthCall(provider)).toHaveBeenCalledWith('h1', expect.anything())
+  })
+
+  it('非 Owner 的 403/404 是隐藏式拒绝 → UNAUTHORIZED，与"暂无授权"区分；其他异常如实抛出', async () => {
+    const unauthorized = new HttpDataProvider(
+      {
+        listHouseholds: vi.fn().mockResolvedValue([{ id: 'h1' }]),
+        listMembers: vi.fn().mockResolvedValue([{ id: 'm1', display_name: '王秀兰', role: 'DEPENDENT' }]),
+        listMemberTimeline: vi.fn().mockResolvedValue([]),
+        listAuthorizations: vi.fn().mockRejectedValue(new ApiClientError('no', { status: 404, code: 'NOT_FOUND' })),
+      } as unknown as ApiClient,
+      () => ({ actorId: 'care-1', accessPurpose: 'family-care', householdId: 'h1' }),
+    )
+    const detail = await unauthorized.getMemberDetail('m1')
+    expect(detail.authorizations).toBe('UNAUTHORIZED')
+
+    const broken = new HttpDataProvider(
+      {
+        listHouseholds: vi.fn().mockResolvedValue([{ id: 'h1' }]),
+        listMembers: vi.fn().mockResolvedValue([{ id: 'm1', display_name: '王秀兰', role: 'DEPENDENT' }]),
+        listMemberTimeline: vi.fn().mockResolvedValue([]),
+        listAuthorizations: vi.fn().mockRejectedValue(new ApiClientError('boom', { status: 502, code: 'HTTP_ERROR' })),
+      } as unknown as ApiClient,
+      () => ({ actorId: 'owner-1', accessPurpose: 'family-care', householdId: 'h1' }),
+    )
+    await expect(broken.getMemberDetail('m1')).rejects.toMatchObject({ status: 502 })
+  })
+
+  function listAuthCall(provider: HttpDataProvider) {
+    const client = (provider as unknown as { client: { listAuthorizations: ReturnType<typeof vi.fn> } }).client
+    return client.listAuthorizations
+  }
 })

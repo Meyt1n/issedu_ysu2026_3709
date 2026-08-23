@@ -132,6 +132,24 @@ export interface VisionTask {
   created_at: string
 }
 
+/** HCT-102 授权对象（GET /households/{id}/authorizations，仅 Owner）。 */
+export interface AuthorizationRead {
+  id: string
+  household_id: string
+  member_id: string
+  grantor_actor_id: string
+  grantee_actor_id: string
+  data_fields: string[]
+  actions: string[]
+  purpose: string
+  valid_from: string
+  valid_until: string
+  revoked_at: string | null
+  version: number
+  created_at: string
+  updated_at: string
+}
+
 export interface RequestOptions {
   actorId?: string
   accessPurpose?: string
