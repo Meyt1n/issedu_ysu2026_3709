@@ -21,7 +21,10 @@
     "test:controlled-release": "node scripts/verify-controlled-release.test.mjs",
     "privacy:scan": "node scripts/privacy-scan.mjs",
     "release:manifest": "node scripts/release-manifest.mjs",
-    "test:privacy-scan": "node scripts/privacy-scan.test.mjs"
+    "test:privacy-scan": "node scripts/privacy-scan.test.mjs",
+    "perf:budget": "npm run build && node scripts/perf-budget.mjs",
+    "perf:budget:low-end": "npm run build && node scripts/perf-budget.mjs --cpu 4 --network Slow 3G --target low-end-sim",
+    "test:perf-budget": "node scripts/perf-budget-lib.test.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.0",
