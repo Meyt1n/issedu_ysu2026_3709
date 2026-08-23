@@ -93,6 +93,9 @@ Browser coverage against a real local API is now automated by `tests/browser/hct
 
 Final HCT-405 acceptance still requires a deployment restart/offline drill, released-model fixed-set evidence, and project-lead/two-group-lead R3 review. Household erasure now returns a cleanup task covering database tombstones, files, vectors, cache, hard samples, and backup skip markers; confirmed events remain physically immutable and are only hidden. Until the remaining facts exist, this Story remains `In progress` and Issue #70 must not be closed.
 
+2026-08-22 新增 `scripts/hct405_acceptance_gate.py`，将成员上下文、扫描人工确认、规则提醒、助手解释和离线重启纳入一条
+可复现 trace；仍强制检查批准发布模型、部署演练和跨组 R3，合成 E2E 不能单独关闭本 Story。
+
 ## Rollback
 
 Revert the focused API/application/test changes, then downgrade `0011_hct405_erasure` only when no `erasure_task` rows exist; the migration refuses to discard erasure audit. Downgrade `0010_hct405_review_wiring` only when no new review audit context/fingerprints/version transitions and no `REVIEW` rows exist. On upgrade, the review-wiring migration repairs historical vision-task household IDs from their assigned members and cancels active legacy tasks with no valid member scope; these safety corrections are intentionally not reversed. The erasure migration adds nullable `deleted_at` tombstones and the cleanup-task table. All test inputs are generated in temporary stores, with no external health-data dependency.
