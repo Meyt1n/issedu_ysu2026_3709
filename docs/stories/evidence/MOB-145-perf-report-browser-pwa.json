@@ -1,0 +1,115 @@
+{
+  "generatedAt": "2026-08-23T02:15:13.322Z",
+  "target": "browser-pwa",
+  "base": "http://127.0.0.1:4173",
+  "cpuThrottle": 1,
+  "networkPreset": null,
+  "measurements": {
+    "coldStart": {
+      "firstContentfulPaintMs": 124,
+      "interactiveMs": 162
+    },
+    "routeSwitchWorstMs": 37,
+    "weakNetwork": {
+      "offlineShellMs": 9,
+      "recoveryMs": 53
+    },
+    "bundle": {
+      "jsGzipTotalKiB": 117.4111328125,
+      "cssGzipTotalKiB": 12.9697265625,
+      "imageTotalKiB": 112.3759765625,
+      "fontTotalKiB": 0,
+      "largestFileKiB": 126.9345703125
+    }
+  },
+  "routeSwitches": [
+    {
+      "to": "提醒",
+      "ms": 37
+    },
+    {
+      "to": "拍药盒",
+      "ms": 31
+    },
+    {
+      "to": "我的",
+      "ms": 33
+    }
+  ],
+  "budget": {
+    "ok": true,
+    "checks": [
+      {
+        "name": "冷启动首次内容绘制",
+        "value": 124,
+        "limit": 3000,
+        "unit": "ms",
+        "status": "PASS"
+      },
+      {
+        "name": "冷启动可交互",
+        "value": 162,
+        "limit": 5000,
+        "unit": "ms",
+        "status": "PASS"
+      },
+      {
+        "name": "路由切换（最慢）",
+        "value": 37,
+        "limit": 1200,
+        "unit": "ms",
+        "status": "PASS"
+      },
+      {
+        "name": "断网外壳可用（SW 缓存）",
+        "value": 9,
+        "limit": 6000,
+        "unit": "ms",
+        "status": "PASS"
+      },
+      {
+        "name": "断网恢复后可交互",
+        "value": 53,
+        "limit": 15000,
+        "unit": "ms",
+        "status": "PASS"
+      },
+      {
+        "name": "JS 体积（gzip）",
+        "value": 117.41,
+        "limit": 260,
+        "unit": "KiB",
+        "status": "PASS"
+      },
+      {
+        "name": "CSS 体积（gzip）",
+        "value": 12.97,
+        "limit": 40,
+        "unit": "KiB",
+        "status": "PASS"
+      },
+      {
+        "name": "图片体积",
+        "value": 112.38,
+        "limit": 900,
+        "unit": "KiB",
+        "status": "PASS"
+      },
+      {
+        "name": "字体体积",
+        "value": 0,
+        "limit": 20,
+        "unit": "KiB",
+        "status": "PASS"
+      },
+      {
+        "name": "单文件体积",
+        "value": 126.93,
+        "limit": 3072,
+        "unit": "KiB",
+        "status": "PASS"
+      }
+    ],
+    "failedCount": 0
+  }
+}
