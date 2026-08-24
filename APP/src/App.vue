@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import AppTabBar from '@/components/AppTabBar.vue'
+import PwaLifecycleNotice from '@/components/PwaLifecycleNotice.vue'
 import ToastHost from '@/components/ToastHost.vue'
 import {
   clearSpeechGuidance,
@@ -42,6 +43,7 @@ const speech = useSpeech()
     </Transition>
   </RouterView>
   <ToastHost />
+  <PwaLifecycleNotice />
 
   <div v-if="speechGuidance" class="speech-guidance" role="status">
     <span>{{ speechGuidance }}</span>
