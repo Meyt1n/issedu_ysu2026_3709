@@ -39,6 +39,13 @@
 
 ## 测试与证据
 
+2026-08-24 基于最新 `master`（源码提交 `345b5b2`）复核：
+
+- `npm run check` 通过；
+- `src/api/errors.test.ts` 定向测试 18 项全部通过，覆盖网络失败、401/403/404/409/422、错误码映射、脱敏和本地业务错误保留；
+- `npm run build` 通过；
+- 真实后端连接失败、身份失效、权限变化和重试入口仍需维护者在部署/设备环境人工验收，不能仅凭单元测试关闭 Issue。
+
 - `cd APP; npm run check`
 - `cd APP; npm run test`
 - `cd APP; npm run build`
