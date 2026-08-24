@@ -781,6 +781,8 @@ export interface ModelVersionBinding {
   release_status: string
   safety_thresholds: Record<string, unknown>
   comparison_report_hash: string | null
+  release_evidence_hash: string | null
+  rollback_evidence_hash: string | null
   approved_by: string | null
   approved_at: string | null
   revoked_by: string | null
@@ -797,11 +799,14 @@ export interface CreateModelVersionBindingInput {
   fixed_set_hash: string
   safety_thresholds?: Record<string, unknown>
   comparison_report_hash?: string
+  release_evidence_hash?: string
 }
 
 export interface ModelBindingComparison {
   binding_id: string
   comparison_report_hash: string | null
+  release_evidence_hash: string | null
+  rollback_evidence_hash: string | null
   model_id: string
   dataset_version: string
   fixed_set_hash: string

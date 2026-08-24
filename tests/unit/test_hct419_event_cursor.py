@@ -15,12 +15,20 @@ def test_cursor_round_trip_contains_only_sort_key() -> None:
         sequence_no=4,
         event_id="event-1",
         secret="test-secret",
+        event_type="MEDICATION",
+        confirmation_status="CONFIRMED",
+        occurred_from=datetime(2026, 8, 20, tzinfo=UTC),
+        occurred_until=datetime(2026, 8, 21, tzinfo=UTC),
     )
 
     decoded = decode_event_cursor(cursor, secret="test-secret")
 
     assert decoded.household_id == "household-1"
     assert decoded.member_id == "member-1"
+    assert decoded.event_type == "MEDICATION"
+    assert decoded.confirmation_status == "CONFIRMED"
+    assert decoded.occurred_from == datetime(2026, 8, 20, tzinfo=UTC)
+    assert decoded.occurred_until == datetime(2026, 8, 21, tzinfo=UTC)
     assert decoded.created_at == datetime(2026, 8, 20, 12, 30, tzinfo=UTC)
     assert decoded.sequence_no == 4
     assert decoded.event_id == "event-1"

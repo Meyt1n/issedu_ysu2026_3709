@@ -19,6 +19,10 @@ _CURSOR_RESOURCE = "health-events"
 class EventCursor:
     household_id: str
     member_id: str | None
+    event_type: str | None
+    confirmation_status: str | None
+    occurred_from: datetime | None
+    occurred_until: datetime | None
     created_at: datetime
     sequence_no: int
     event_id: str
@@ -48,14 +52,29 @@ def encode_event_cursor(
     sequence_no: int,
     event_id: str,
     secret: str,
+    event_type: str | None = None,
+    confirmation_status: str | None = None,
+    occurred_from: datetime | None = None,
+    occurred_until: datetime | None = None,
 ) -> str:
     """Encode only the stable sort key and query scope; never include event payload."""
     timestamp = created_at if created_at.tzinfo is not None else created_at.replace(tzinfo=UTC)
+
+    def serialize_optional(value: datetime | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+        return normalized.astimezone(UTC).isoformat()
+
     payload = {
         "v": _CURSOR_VERSION,
         "resource": _CURSOR_RESOURCE,
         "household_id": household_id,
         "member_id": member_id,
+        "event_type": event_type,
+        "confirmation_status": confirmation_status,
+        "occurred_from": serialize_optional(occurred_from),
+        "occurred_until": serialize_optional(occurred_until),
         "created_at": timestamp.astimezone(UTC).isoformat(),
         "sequence_no": sequence_no,
         "event_id": event_id,
@@ -81,6 +100,10 @@ def decode_event_cursor(cursor: str, *, secret: str) -> EventCursor:
             raise ValueError
         household_id = payload.get("household_id")
         member_id = payload.get("member_id")
+        event_type = payload.get("event_type")
+        confirmation_status = payload.get("confirmation_status")
+        occurred_from_raw = payload.get("occurred_from")
+        occurred_until_raw = payload.get("occurred_until")
         event_id = payload.get("event_id")
         created_at = payload.get("created_at")
         sequence_no = payload.get("sequence_no")
@@ -88,6 +111,10 @@ def decode_event_cursor(cursor: str, *, secret: str) -> EventCursor:
             not isinstance(household_id, str)
             or not household_id
             or (member_id is not None and not isinstance(member_id, str))
+            or (event_type is not None and not isinstance(event_type, str))
+            or (confirmation_status is not None and not isinstance(confirmation_status, str))
+            or (occurred_from_raw is not None and not isinstance(occurred_from_raw, str))
+            or (occurred_until_raw is not None and not isinstance(occurred_until_raw, str))
             or not isinstance(event_id, str)
             or not event_id
             or not isinstance(created_at, str)
@@ -99,9 +126,22 @@ def decode_event_cursor(cursor: str, *, secret: str) -> EventCursor:
         timestamp = datetime.fromisoformat(created_at)
         if timestamp.tzinfo is None:
             timestamp = timestamp.replace(tzinfo=UTC)
+
+        def parse_optional(value: str | None) -> datetime | None:
+            if value is None:
+                return None
+            parsed = datetime.fromisoformat(value)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=UTC)
+            return parsed.astimezone(UTC)
+
         return EventCursor(
             household_id=household_id,
             member_id=member_id,
+            event_type=event_type,
+            confirmation_status=confirmation_status,
+            occurred_from=parse_optional(occurred_from_raw),
+            occurred_until=parse_optional(occurred_until_raw),
             created_at=timestamp.astimezone(UTC),
             sequence_no=sequence_no,
             event_id=event_id,

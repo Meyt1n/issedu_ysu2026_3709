@@ -468,7 +468,7 @@ export const demoProvider: DataProvider = {
     await delay(200)
     return {
       memberId,
-      tasks: clone(state.tasks.filter(t => t.memberId === memberId)),
+      tasks: clone(state.tasks.filter(t => t.memberId === memberId)).map(task => ({ ...task, actionPolicy: { planVersion: 'demo-plan-v1', source: 'FAMILY_SERVER', allowedActions: ['confirm', 'defer', 'skip'], nextAllowedAt: null, windowLabel: '（演示）由家庭服务器提供的当前允许操作范围' } })),
       risks: clone(state.risks.filter(r => r.memberId === memberId && !r.acknowledged)),
       recentEvents: clone((state.recentEvents[memberId] ?? []).slice(0, 4)),
       environmentAction: demoEnvironmentAction(memberId),

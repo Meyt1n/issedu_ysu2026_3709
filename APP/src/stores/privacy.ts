@@ -8,7 +8,7 @@ import { ref } from 'vue'
  * 不声称已确认——下次启动会再次展示（fail-closed）。
  */
 
-export const PRIVACY_NOTICE_VERSION = '2026-08-23.1'
+export const PRIVACY_NOTICE_VERSION = '2026-08-24'
 export const PRIVACY_ACK_STORAGE_KEY = 'hct-mobile.privacy-ack.v1'
 
 export interface PrivacyNoticeSection {
@@ -122,4 +122,19 @@ export function privacyNoticeSpeechText(): string {
   return PRIVACY_NOTICE_SECTIONS
     .map(section => `${section.title}。${section.lines.join('。')}`)
     .join('。\n')
+}
+
+/** 只允许跳转到受控 HTTPS 家庭网页端，并移除 URL 中的 token/查询参数。 */
+export function controlledWebHandoff(baseUrl: string): string {
+  const trimmed = baseUrl.trim()
+  if (!trimmed) return '/'
+  try {
+    const url = new URL(trimmed)
+    if (url.protocol !== 'https:') return ''
+    url.search = ''
+    url.hash = ''
+    return url.toString().replace(/\/$/, '')
+  } catch {
+    return ''
+  }
 }
