@@ -7,6 +7,7 @@ import ConfirmDialog from './components/ConfirmDialog.vue'
 import SkeletonList from './components/SkeletonList.vue'
 import {
   dismissToast,
+  MEMBER_VIEWS,
   selectHousehold,
   selectedMember,
   session,
@@ -31,6 +32,10 @@ function lazyView(loader: () => Promise<{ default: Component }>) {
 
 const VIEW_LOADERS = {
   overview: () => import('./views/OverviewView.vue'),
+  'member-home': () => import('./views/MemberHomeView.vue'),
+  'member-capture': () => import('./views/MemberCaptureView.vue'),
+  'member-plans': () => import('./views/MemberPlansView.vue'),
+  'member-records': () => import('./views/MemberRecordsView.vue'),
   members: () => import('./views/MembersView.vue'),
   plans: () => import('./views/PlansView.vue'),
   scan: () => import('./views/ScanView.vue'),
@@ -58,8 +63,16 @@ const AuthView = lazyView(VIEW_LOADERS.authorizations)
 const KnowledgeView = lazyView(VIEW_LOADERS.knowledge)
 const ModelLabView = lazyView(VIEW_LOADERS.modellab)
 const FaceCredentialView = lazyView(VIEW_LOADERS['face-credentials'])
+const MemberHomeView = lazyView(VIEW_LOADERS['member-home'])
+const MemberCaptureView = lazyView(VIEW_LOADERS['member-capture'])
+const MemberPlansView = lazyView(VIEW_LOADERS['member-plans'])
+const MemberRecordsView = lazyView(VIEW_LOADERS['member-records'])
 
 const NAV_ITEMS: Array<{ view: ViewName; label: string; icon: string; group: string }> = [
+  { view: 'member-home', label: '我的家庭', icon: 'home', group: '我的照护' },
+  { view: 'member-capture', label: '拍照录药', icon: 'scan', group: '我的照护' },
+  { view: 'member-plans', label: '服药提醒', icon: 'plan', group: '我的照护' },
+  { view: 'member-records', label: '我的记录', icon: 'compass', group: '我的照护' },
   { view: 'overview', label: '家庭总览', icon: 'home', group: '日常照护' },
   { view: 'members', label: '成员档案', icon: 'members', group: '日常照护' },
   { view: 'plans', label: '健康计划', icon: 'plan', group: '日常照护' },
@@ -76,6 +89,10 @@ const NAV_ITEMS: Array<{ view: ViewName; label: string; icon: string; group: str
 ]
 
 const VIEW_COMPONENTS: Record<ViewName, unknown> = {
+  'member-home': MemberHomeView,
+  'member-capture': MemberCaptureView,
+  'member-plans': MemberPlansView,
+  'member-records': MemberRecordsView,
   overview: OverviewView,
   members: MembersView,
   plans: PlansView,
@@ -91,9 +108,15 @@ const VIEW_COMPONENTS: Record<ViewName, unknown> = {
   'face-credentials': FaceCredentialView,
 }
 
+const visibleNavItems = computed(() =>
+  session.portal === 'member'
+    ? NAV_ITEMS.filter(item => MEMBER_VIEWS.includes(item.view))
+    : NAV_ITEMS.filter(item => !MEMBER_VIEWS.includes(item.view)),
+)
+
 const navGroups = computed(() => {
   const groups: Array<{ name: string; items: typeof NAV_ITEMS }> = []
-  for (const item of NAV_ITEMS) {
+  for (const item of visibleNavItems.value) {
     const group = groups.find(entry => entry.name === item.group)
     if (group) group.items.push(item)
     else groups.push({ name: item.group, items: [item] })
@@ -102,7 +125,7 @@ const navGroups = computed(() => {
 })
 
 const activeNav = computed(
-  () => NAV_ITEMS.find(item => item.view === session.currentView) ?? NAV_ITEMS[0]!,
+  () => visibleNavItems.value.find(item => item.view === session.currentView) ?? visibleNavItems.value[0]!,
 )
 
 const currentMemberLabel = computed(() => selectedMember.value?.display_name ?? '当前成员')
@@ -254,13 +277,17 @@ onBeforeUnmount(() => {
       </template>
 
       <div class="sidebar-foot">
-        <p class="privacy-note">
-          <AppIcon name="lock" :size="16" />
-          <span>家庭健康数据默认不出网，全部保存在本地可信域。</span>
-        </p>
-        <p class="privacy-note">
+            <p class="privacy-note">
+              <AppIcon name="lock" :size="16" />
+              <span>家庭健康数据默认不出网，全部保存在本地可信域。</span>
+            </p>
+        <p v-if="session.portal === 'admin'" class="privacy-note">
           <AppIcon name="leaf" :size="16" />
-          <span>教学演示系统，不提供诊断、处方或用药决策。</span>
+          <span>管理后台只负责复核、授权和记录，不替代医生判断。</span>
+        </p>
+        <p v-else class="privacy-note">
+          <AppIcon name="leaf" :size="16" />
+          <span>拍照后交给家庭管理员复核，确认后才会出现在家庭记录里。</span>
         </p>
         <button type="button" class="sidebar-collapse" :title="sidebarMini ? '展开导航' : '收起导航'" @click="toggleSidebar">
           <AppIcon name="arrow-right" :size="15" style="transform: rotate(180deg)" />
@@ -306,7 +333,7 @@ onBeforeUnmount(() => {
             </select>
           </label>
           <button
-            v-if="session.currentView !== 'members'"
+            v-if="session.portal === 'admin' && session.currentView !== 'members'"
             v-magnet="3"
             type="button"
             class="btn btn-clay btn-small"
@@ -356,7 +383,7 @@ onBeforeUnmount(() => {
               <small>{{ session.actorId }}</small>
             </span>
             <span class="role-tag" :class="{ caregiver: !session.isOwnerView }">
-              {{ session.isOwnerView ? '家庭管理员' : '授权照护者' }}
+              {{ session.isOwnerView ? '家庭管理员后台' : '家庭成员前台' }}
             </span>
             <button type="button" class="icon-button" title="退出当前身份" @click="signOut">
               <AppIcon name="signout" :size="17" />
@@ -388,13 +415,13 @@ onBeforeUnmount(() => {
       </main>
 
       <footer class="app-footer">
-        家健镜 HomeCare Twin · 教学演示，不用于诊断或治疗 · 紧急情况请联系医生或当地急救服务
+        {{ session.portal === 'admin' ? '家庭管理后台 · ' : '家庭成员前台 · ' }}健康信息仅供家庭记录参考 · 紧急情况请联系医生或当地急救服务
       </footer>
     </div>
   </div>
 
   <ConfirmDialog />
-  <CommandPalette v-if="session.status === 'ready'" ref="paletteRef" :nav-items="NAV_ITEMS" />
+  <CommandPalette v-if="session.status === 'ready'" ref="paletteRef" :nav-items="visibleNavItems" />
 
   <div class="toast-region" role="status" aria-live="polite">
     <div v-for="toast in session.toasts" :key="toast.id" class="toast" :class="toast.kind">

@@ -49,7 +49,17 @@ async function loadPlans(): Promise<void> {
   loading.value = true
   loadError.value = ''
   try {
-    workbench.value = await apiClient.getPlanWorkbench(householdId, memberId, requestOptions.value)
+    const result = await apiClient.getPlanWorkbench(householdId, memberId, requestOptions.value)
+    // Older local API/demo fixtures may omit optional display arrays.  Keep
+    // the admin workbench readable while the server rolls forward its schema.
+    workbench.value = {
+      ...result,
+      plans: result.plans.map(plan => ({
+        ...plan,
+        times: plan.times ?? [],
+        action_history: plan.action_history ?? [],
+      })),
+    }
   } catch (cause) {
     workbench.value = null
     loadError.value = formatError(cause)

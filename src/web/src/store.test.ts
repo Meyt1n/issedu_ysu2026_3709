@@ -109,5 +109,7 @@ describe('family face entry context', () => {
     expect(session.selectedHouseholdId).toBe('household-family')
     expect(session.selectedMemberId).toBe('grandma-member')
     expect(selectedMember.value?.display_name).toBe('奶奶')
+    expect(session.portal).toBe('member')
+    expect(session.currentView).toBe('member-home')
   })
 })

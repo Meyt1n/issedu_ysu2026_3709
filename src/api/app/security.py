@@ -194,3 +194,95 @@ def has_authorized_action(
         reason=denied_reason,
     )
     return False
+
+
+def is_self_member(
+    session: Session,
+    household: Household,
+    member_id: str,
+    actor_id: str,
+) -> bool:
+    """Return whether the caller is the household member represented by ``member_id``.
+
+    A member account is allowed to see its own member context, but this must not
+    silently become a general household authorization.  The portal uses this
+    narrow identity check for self-service reads and for submitting a photo to
+    the review queue; health-event writes remain owner/authorization scoped.
+    """
+    if household.deleted_at is not None:
+        return False
+    member = session.get(Member, member_id)
+    return bool(
+        member is not None
+        and member.household_id == household.id
+        and member.deleted_at is None
+        and member.actor_id == actor_id
+    )
+
+
+def has_member_read_access(
+    session: Session,
+    household: Household,
+    member_id: str,
+    actor_id: str,
+    purpose: str | None = None,
+) -> bool:
+    """Allow an account to read its own scope without granting family-wide access."""
+    if household.created_by == actor_id:
+        return True
+    if is_self_member(session, household, member_id, actor_id):
+        _record_access_decision(
+            session,
+            household_id=household.id,
+            authorization_id=None,
+            actor_id=actor_id,
+            action="READ_EVENTS",
+            data_field="health_events",
+            purpose=purpose,
+            outcome="ALLOWED",
+            reason="SELF_MEMBER_SCOPE",
+        )
+        return True
+    return has_authorized_action(
+        session,
+        household,
+        member_id,
+        actor_id,
+        "READ_EVENTS",
+        "health_events",
+        purpose,
+    )
+
+
+def has_vision_capture_access(
+    session: Session,
+    household: Household,
+    member_id: str,
+    actor_id: str,
+    purpose: str | None = None,
+) -> bool:
+    """Allow a member to submit evidence for their own review queue only."""
+    if household.created_by == actor_id:
+        return True
+    if is_self_member(session, household, member_id, actor_id):
+        _record_access_decision(
+            session,
+            household_id=household.id,
+            authorization_id=None,
+            actor_id=actor_id,
+            action="WRITE_EVIDENCE",
+            data_field="vision_evidence",
+            purpose=purpose,
+            outcome="ALLOWED",
+            reason="SELF_MEMBER_CAPTURE",
+        )
+        return True
+    return has_authorized_action(
+        session,
+        household,
+        member_id,
+        actor_id,
+        "WRITE_EVENTS",
+        "health_events",
+        purpose,
+    )

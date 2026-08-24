@@ -11,6 +11,10 @@ import type {
 } from './api/types'
 
 export type ViewName =
+  | 'member-home'
+  | 'member-capture'
+  | 'member-plans'
+  | 'member-records'
   | 'overview'
   | 'members'
   | 'scan'
@@ -24,6 +28,15 @@ export type ViewName =
   | 'knowledge'
   | 'modellab'
   | 'face-credentials'
+
+export type PortalName = 'member' | 'admin'
+
+export const MEMBER_VIEWS: readonly ViewName[] = [
+  'member-home',
+  'member-capture',
+  'member-plans',
+  'member-records',
+]
 
 export type SessionStatus = 'signed-out' | 'loading' | 'ready' | 'empty' | 'error'
 
@@ -50,6 +63,7 @@ interface SessionState {
   status: SessionStatus
   error: string
   currentView: ViewName
+  portal: PortalName
   households: Household[]
   selectedHouseholdId: string
   members: Member[]
@@ -69,6 +83,7 @@ const state = reactive<SessionState>({
   status: 'signed-out',
   error: '',
   currentView: 'overview',
+  portal: 'member',
   households: [],
   selectedHouseholdId: '',
   members: [],
@@ -166,6 +181,14 @@ export function dismissToast(id: number): void {
 }
 
 export function setView(view: ViewName): void {
+  if (state.portal === 'member' && !MEMBER_VIEWS.includes(view)) {
+    state.currentView = 'member-home'
+    return
+  }
+  if (state.portal === 'admin' && MEMBER_VIEWS.includes(view)) {
+    state.currentView = 'overview'
+    return
+  }
   state.currentView = view
 }
 
@@ -206,6 +229,7 @@ function clearSessionContext(): void {
   state.status = 'signed-out'
   state.error = ''
   state.currentView = 'overview'
+  state.portal = 'member'
   state.households = []
   state.selectedHouseholdId = ''
   state.members = []
@@ -247,6 +271,7 @@ export async function connect(actorId: string, accessPurpose: string): Promise<v
   state.members = []
   state.selectedMemberId = ''
   state.isOwnerView = false
+  state.portal = 'member'
   try {
     state.households = await apiClient.listHouseholds(requestOptions.value)
     if (state.households.length === 0) {
@@ -534,15 +559,18 @@ export async function loadHouseholdScope(): Promise<void> {
       state.members[0]?.id ??
       ''
 
-    try {
-      await apiClient.listAuthorizations(householdId, requestOptions.value)
-      state.isOwnerView = true
-    } catch (cause) {
-      if (cause instanceof ApiClientError && cause.status === 404) {
-        state.isOwnerView = false
-      } else {
-        throw cause
-      }
+    // The household owner is explicit in the household scope.  Do not probe
+    // the owner-only authorization endpoint to infer a portal: a member login
+    // should never need to touch an admin route.
+    state.isOwnerView =
+      state.households.find(item => item.id === householdId)?.created_by === state.actorId
+
+    state.portal = state.isOwnerView ? 'admin' : 'member'
+    const allowedViews = state.portal === 'admin' ? undefined : MEMBER_VIEWS
+    if (allowedViews && !allowedViews.includes(state.currentView)) {
+      state.currentView = 'member-home'
+    } else if (!allowedViews && MEMBER_VIEWS.includes(state.currentView)) {
+      state.currentView = 'overview'
     }
 
     try {
