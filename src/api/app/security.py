@@ -1,12 +1,13 @@
 import re
 from datetime import UTC, datetime
 
-from fastapi import Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth import validate_session
 from app.config import get_settings
+from app.db import get_session
 from app.models import AccessAudit, CareAuthorization, Household, Member
 from app.request_context import current_request_id
 
@@ -16,12 +17,13 @@ PURPOSE_CODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
 def get_actor_id(
     x_actor_id: str | None = Header(default=None),
     authorization: str | None = Header(default=None),
+    session: Session = Depends(get_session),
 ) -> str:
     if authorization is not None:
         scheme, _, token = authorization.partition(" ")
         if scheme.lower() != "bearer" or not token.strip():
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="AUTH_REQUIRED")
-        return validate_session(token.strip())
+        return validate_session(token.strip(), session)
 
     settings = get_settings()
     if settings.app_env == "production" or not settings.allow_dev_actor_header:
@@ -36,6 +38,7 @@ def get_actor_id(
 
 def require_session_token(
     authorization: str | None = Header(default=None),
+    session: Session = Depends(get_session),
 ) -> str:
     """Return the caller's live session token.
 
@@ -52,7 +55,7 @@ def require_session_token(
     token = raw_token.strip()
     if scheme.lower() != "bearer" or not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="AUTH_REQUIRED")
-    validate_session(token)
+    validate_session(token, session)
     return token
 
 

@@ -150,7 +150,7 @@ def test_alembic_has_a_single_head() -> None:
 
     assert len(scripts.get_heads()) == 1
     head = scripts.get_heads()[0]
-    assert head == "0017_hct429_household_timezone"
+    assert head == "0018_hct428_auth_persistence"
     assert len(head) <= 64
 
 
