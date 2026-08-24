@@ -11,7 +11,7 @@ from sqlalchemy import create_engine, inspect, text
 from app.config import get_settings
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CURRENT_HEAD = "0018_hct428_auth_persistence"
+CURRENT_HEAD = "0019_hct404_release_evidence"
 RESTORED_TABLES = {
     "projection_checkpoint",
     "review_task",
@@ -97,6 +97,10 @@ def test_existing_schema_branch_can_upgrade_to_merged_head(
             index["name"] == "uq_review_vision_task" and index["unique"]
             for index in schema.get_indexes("review_task")
         )
+        assert {
+            "release_evidence_hash",
+            "rollback_evidence_hash",
+        } <= {column["name"] for column in schema.get_columns("model_version_binding")}
 
         with engine.connect() as connection:
             current_revision = connection.execute(

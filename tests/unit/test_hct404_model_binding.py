@@ -144,6 +144,115 @@ class TestActivateBinding:
         activate_binding(db_session, b, approved_by="bob")
         assert b.release_status == "active"
 
+    def test_hct404_formal_binding_requires_real_release_evidence(self, db_session: Session):
+        b = create_binding(
+            db_session,
+            model_id="hct404-vision-v2",
+            dataset_version="approved-fixed-v2",
+            export_manifest_id=None,
+            fixed_set_hash="a" * 64,
+            comparison_report_hash="b" * 64,
+            created_by="alice",
+        )
+        db_session.commit()
+        with pytest.raises(ValueError, match="HCT404_FORMAL_RELEASE_REQUIRED"):
+            activate_binding(db_session, b, approved_by="bob")
+
+    def test_hct404_formal_binding_with_hash_chain_allows_activation(
+        self, db_session: Session
+    ):
+        hashes = {
+            key: value * 64
+            for key, value in (
+                ("evidence", "a"),
+                ("gate", "b"),
+                ("model", "c"),
+                ("fixed", "d"),
+                ("comparison", "e"),
+                ("rollback", "f"),
+                ("approval", "0"),
+            )
+        }
+        thresholds = {
+            "hct404_release_evidence_required": True,
+            "hct404_release_evidence_schema": "hct404-model-release-evidence/v1",
+            "hct404_release_status": "ALLOW_FORMAL_RELEASE",
+            "hct404_release_evidence_sha256": hashes["evidence"],
+            "hct404_release_gate_sha256": hashes["gate"],
+            "hct404_model_artifact_sha256": hashes["model"],
+            "hct404_fixed_set_sha256": hashes["fixed"],
+            "hct404_comparison_report_sha256": hashes["comparison"],
+            "hct404_rollback_evidence_sha256": hashes["rollback"],
+            "hct404_approval_sha256": hashes["approval"],
+        }
+        b = create_binding(
+            db_session,
+            model_id="hct404-vision-v2",
+            dataset_version="approved-fixed-v2",
+            export_manifest_id=None,
+            fixed_set_hash=hashes["fixed"],
+            safety_thresholds=thresholds,
+            comparison_report_hash=hashes["comparison"],
+            release_evidence_hash=hashes["evidence"],
+            created_by="alice",
+        )
+        db_session.commit()
+        activate_binding(db_session, b, approved_by="bob")
+        assert b.release_status == "active"
+
+    def test_hct404_formal_rollback_requires_reason_and_evidence(
+        self, db_session: Session
+    ):
+        hashes = {
+            key: value * 64
+            for key, value in (
+                ("evidence", "a"),
+                ("gate", "b"),
+                ("model", "c"),
+                ("fixed", "d"),
+                ("comparison", "e"),
+                ("rollback", "f"),
+                ("approval", "0"),
+            )
+        }
+        thresholds = {
+            "hct404_release_evidence_required": True,
+            "hct404_release_evidence_schema": "hct404-model-release-evidence/v1",
+            "hct404_release_status": "ALLOW_FORMAL_RELEASE",
+            "hct404_release_evidence_sha256": hashes["evidence"],
+            "hct404_release_gate_sha256": hashes["gate"],
+            "hct404_model_artifact_sha256": hashes["model"],
+            "hct404_fixed_set_sha256": hashes["fixed"],
+            "hct404_comparison_report_sha256": hashes["comparison"],
+            "hct404_rollback_evidence_sha256": hashes["rollback"],
+            "hct404_approval_sha256": hashes["approval"],
+        }
+        b = create_binding(
+            db_session,
+            model_id="hct404-vision-v2",
+            dataset_version="approved-fixed-v2",
+            export_manifest_id=None,
+            fixed_set_hash=hashes["fixed"],
+            safety_thresholds=thresholds,
+            comparison_report_hash=hashes["comparison"],
+            release_evidence_hash=hashes["evidence"],
+            created_by="alice",
+        )
+        db_session.commit()
+        activate_binding(db_session, b, approved_by="bob")
+        db_session.commit()
+        with pytest.raises(ValueError, match="HCT404_ROLLBACK_REASON_REQUIRED"):
+            rollback_binding(db_session, b, actor_id="admin")
+        rollback_binding(
+            db_session,
+            b,
+            actor_id="admin",
+            reason="release drill",
+            evidence_hash=hashes["rollback"],
+        )
+        assert b.release_status == "revoked"
+        assert b.rollback_evidence_hash == hashes["rollback"]
+
     def test_activate_deactivates_previous(self, db_session: Session):
         b1 = self._setup(db_session)
         activate_binding(db_session, b1, approved_by="bob")

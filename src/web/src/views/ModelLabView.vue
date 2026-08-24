@@ -196,7 +196,7 @@ async function rollbackBinding(binding: ModelVersionBinding): Promise<void> {
   }
   busyId.value = binding.id
   try {
-    await apiClient.rollbackModelBinding(binding.id, reason, requestOptions.value)
+    await apiClient.rollbackModelBinding(binding.id, reason, undefined, requestOptions.value)
     pushToast('info', '已回滚；系统尝试自动恢复上一个候选版本。')
     rollbackReasonById[binding.id] = ''
     await loadLab()

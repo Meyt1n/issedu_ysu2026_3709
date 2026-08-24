@@ -25,6 +25,7 @@ DEFAULT_SAFETY_THRESHOLDS: dict[str, Any] = {
     "require_comparison_report": True,
 }
 HCT203_MODEL_PREFIX = "hct-yolo"
+HCT404_MODEL_PREFIX = "hct404-"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -44,6 +45,44 @@ def _validate_hct203_publication(binding: "ModelVersionBinding") -> None:
         value = thresholds.get(field)
         if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None:
             raise ValueError(f"HCT203_PUBLICATION_HASH_REQUIRED:{field}")
+
+
+def _requires_hct404_release_evidence(binding: "ModelVersionBinding") -> bool:
+    thresholds = binding.safety_thresholds or {}
+    return binding.model_id.startswith(HCT404_MODEL_PREFIX) or thresholds.get(
+        "hct404_release_evidence_required"
+    ) is True
+
+
+def _validate_hct404_release_evidence(binding: "ModelVersionBinding") -> None:
+    """Require a real HCT-404 release gate before formal model activation."""
+
+    if not _requires_hct404_release_evidence(binding):
+        return
+    thresholds = binding.safety_thresholds or {}
+    if thresholds.get("hct404_release_status") != "ALLOW_FORMAL_RELEASE":
+        raise ValueError("HCT404_FORMAL_RELEASE_REQUIRED")
+    if thresholds.get("hct404_release_evidence_schema") != "hct404-model-release-evidence/v1":
+        raise ValueError("HCT404_RELEASE_EVIDENCE_SCHEMA_REQUIRED")
+    required_hashes = {
+        "release_evidence_hash": binding.release_evidence_hash,
+        "hct404_release_evidence_sha256": thresholds.get("hct404_release_evidence_sha256"),
+        "hct404_release_gate_sha256": thresholds.get("hct404_release_gate_sha256"),
+        "hct404_model_artifact_sha256": thresholds.get("hct404_model_artifact_sha256"),
+        "hct404_fixed_set_sha256": thresholds.get("hct404_fixed_set_sha256"),
+        "hct404_comparison_report_sha256": thresholds.get("hct404_comparison_report_sha256"),
+        "hct404_rollback_evidence_sha256": thresholds.get("hct404_rollback_evidence_sha256"),
+        "hct404_approval_sha256": thresholds.get("hct404_approval_sha256"),
+    }
+    for field, value in required_hashes.items():
+        if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None:
+            raise ValueError(f"HCT404_RELEASE_EVIDENCE_HASH_REQUIRED:{field}")
+    if binding.release_evidence_hash != thresholds.get("hct404_release_evidence_sha256"):
+        raise ValueError("HCT404_RELEASE_EVIDENCE_HASH_MISMATCH")
+    if binding.fixed_set_hash != thresholds.get("hct404_fixed_set_sha256"):
+        raise ValueError("HCT404_FIXED_SET_HASH_MISMATCH")
+    if binding.comparison_report_hash != thresholds.get("hct404_comparison_report_sha256"):
+        raise ValueError("HCT404_COMPARISON_HASH_MISMATCH")
 
 
 # ── Model ────────────────────────────────────────────────────────────────
@@ -69,6 +108,8 @@ class ModelVersionBinding(Base):
     release_status: Mapped[str] = mapped_column(String(32), nullable=False, default="inactive")
     safety_thresholds: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     comparison_report_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    release_evidence_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    rollback_evidence_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     approved_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
@@ -97,6 +138,7 @@ def create_binding(
     fixed_set_hash: str,
     safety_thresholds: dict[str, Any] | None = None,
     comparison_report_hash: str | None = None,
+    release_evidence_hash: str | None = None,
     created_by: str,
 ) -> ModelVersionBinding:
     """Create a new model version binding (inactive)."""
@@ -108,6 +150,7 @@ def create_binding(
         release_status="inactive",
         safety_thresholds=safety_thresholds or DEFAULT_SAFETY_THRESHOLDS,
         comparison_report_hash=comparison_report_hash,
+        release_evidence_hash=release_evidence_hash,
         created_by=created_by,
     )
     session.add(binding)
@@ -155,6 +198,7 @@ def activate_binding(
         raise ValueError("BINDING_ALREADY_ACTIVE")
 
     _validate_hct203_publication(binding)
+    _validate_hct404_release_evidence(binding)
 
     thresholds = binding.safety_thresholds or {}
     if thresholds.get("require_comparison_report", True) and not binding.comparison_report_hash:
@@ -181,6 +225,7 @@ def rollback_binding(
     *,
     actor_id: str,
     reason: str = "",
+    evidence_hash: str | None = None,
 ) -> ModelVersionBinding:
     """Revoke a binding. Tries to reactivate the chronologically previous binding.
 
@@ -188,11 +233,18 @@ def rollback_binding(
     """
     if binding.release_status != "active":
         raise ValueError("BINDING_NOT_ACTIVE")
+    if _requires_hct404_release_evidence(binding):
+        if not reason.strip():
+            raise ValueError("HCT404_ROLLBACK_REASON_REQUIRED")
+        if not isinstance(evidence_hash, str) or SHA256_RE.fullmatch(evidence_hash) is None:
+            raise ValueError("HCT404_ROLLBACK_EVIDENCE_REQUIRED")
 
     now = datetime.now(UTC)
     binding.release_status = "revoked"
     binding.revoked_by = actor_id
     binding.revoked_at = now
+    if evidence_hash is not None:
+        binding.rollback_evidence_hash = evidence_hash
     session.flush()
 
     # Try to reactivate the previous binding for this model_id
@@ -208,6 +260,8 @@ def rollback_binding(
 
     reactivated = None
     if previous is not None:
+        _validate_hct203_publication(previous)
+        _validate_hct404_release_evidence(previous)
         previous.release_status = "active"
         previous.approved_by = actor_id
         previous.approved_at = now

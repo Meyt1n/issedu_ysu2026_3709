@@ -1,0 +1,64 @@
+{
+  "schema_version": "hct404-model-release-evidence/v1",
+  "template_only": true,
+  "release_status": "CANDIDATE_REVIEW",
+  "model_id": "",
+  "models": {
+    "v1": {
+      "model_id": "",
+      "weights_sha256": "",
+      "model_card_sha256": "",
+      "training_config_sha256": ""
+    },
+    "v2": {
+      "model_id": "",
+      "weights_sha256": "",
+      "model_card_sha256": "",
+      "training_config_sha256": ""
+    }
+  },
+  "dataset": {
+    "scope": "approved_real_fixed_set",
+    "fixed_set_sha256": "",
+    "dataset_yaml_sha256": "",
+    "test_set_sha256": "",
+    "train_export_manifest_sha256": "",
+    "export_manifest_version": "",
+    "export_manifest_status": "active",
+    "license": "",
+    "group_key": "",
+    "train_test_disjoint_verified": false
+  },
+  "evaluation": {
+    "label_review_sha256": "",
+    "train_test_disjoint_verified": false,
+    "unknown_set": {
+      "reviewed": false,
+      "false_positive_count": null,
+      "report_sha256": ""
+    }
+  },
+  "release_controls": {
+    "decision": "",
+    "safety_thresholds_passed": false,
+    "manual_confirmation_coverage": null,
+    "manual_confirmation_coverage_threshold": null,
+    "manual_confirmation_coverage_complete": false,
+    "mismatch_impact_reviewed": false,
+    "missed_detection_impact_reviewed": false,
+    "r3_reviewed": false,
+    "approved_by": "",
+    "approved_at": "",
+    "bundle_version": "",
+    "approval_record_sha256": ""
+  },
+  "rollback": {
+    "previous_model_id": "",
+    "rollback_tested": false,
+    "restored_previous_version": false,
+    "new_tasks_use_previous_version": false,
+    "historical_results_preserved": false,
+    "evidence_sha256": ""
+  },
+  "comparison_report_sha256": ""
+}
