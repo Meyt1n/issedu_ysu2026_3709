@@ -12,6 +12,8 @@ def test_audit_cursor_round_trip_preserves_scope_and_sort_key() -> None:
     cursor = encode_audit_cursor(
         household_id="household-432",
         request_id="request-432",
+        action="READ_EVENTS",
+        outcome="ALLOWED",
         created_at=created_at,
         audit_id="audit-432",
         secret="test-secret",
@@ -21,6 +23,8 @@ def test_audit_cursor_round_trip_preserves_scope_and_sort_key() -> None:
 
     assert decoded.household_id == "household-432"
     assert decoded.request_id == "request-432"
+    assert decoded.action == "READ_EVENTS"
+    assert decoded.outcome == "ALLOWED"
     assert decoded.created_at == created_at
     assert decoded.audit_id == "audit-432"
 
@@ -29,6 +33,8 @@ def test_audit_cursor_rejects_tampering_or_wrong_secret() -> None:
     cursor = encode_audit_cursor(
         household_id="household-432",
         request_id=None,
+        action=None,
+        outcome=None,
         created_at=datetime.now(UTC),
         audit_id="audit-432",
         secret="test-secret",

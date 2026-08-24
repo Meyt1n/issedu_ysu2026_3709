@@ -935,6 +935,8 @@ def list_authorization_audits(
 def page_authorization_audits(
     household_id: str,
     request_id: str | None = Query(default=None, min_length=1, max_length=120),
+    action: str | None = Query(default=None, min_length=1, max_length=80),
+    outcome: str | None = Query(default=None, min_length=1, max_length=32),
     cursor: str | None = Query(default=None, min_length=1),
     limit: int = Query(default=50, ge=1, le=100),
     actor_id: str = Depends(get_actor_id),
@@ -950,7 +952,12 @@ def page_authorization_audits(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=str(exc),
             ) from exc
-        if decoded_cursor.household_id != household.id or decoded_cursor.request_id != request_id:
+        if (
+            decoded_cursor.household_id != household.id
+            or decoded_cursor.request_id != request_id
+            or decoded_cursor.action != action
+            or decoded_cursor.outcome != outcome
+        ):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="AUDIT_CURSOR_INVALID",
@@ -959,6 +966,10 @@ def page_authorization_audits(
     query = select(AccessAudit).where(AccessAudit.household_id == household.id)
     if request_id is not None:
         query = query.where(AccessAudit.request_id == request_id)
+    if action is not None:
+        query = query.where(AccessAudit.action == action)
+    if outcome is not None:
+        query = query.where(AccessAudit.outcome == outcome)
     if decoded_cursor is not None:
         query = query.where(
             (AccessAudit.created_at > decoded_cursor.created_at)
@@ -980,6 +991,8 @@ def page_authorization_audits(
         next_cursor = encode_audit_cursor(
             household_id=household.id,
             request_id=request_id,
+            action=action,
+            outcome=outcome,
             created_at=last.created_at,
             audit_id=last.id,
             secret=settings.cursor_signing_key,
