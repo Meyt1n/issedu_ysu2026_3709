@@ -3,9 +3,11 @@ import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import AppIcon from '@/components/AppIcon.vue'
+import { signOut } from '@/stores/auth'
+import { clearCapabilities } from '@/stores/capabilities'
 import { clearLocalData, localDataInventory } from '@/stores/localData'
 import { controlledWebHandoff, PRIVACY_NOTICE_VERSION } from '@/stores/privacy'
-import { useSession } from '@/stores/session'
+import { resetSession, useSession } from '@/stores/session'
 
 const router = useRouter()
 const { session } = useSession()
@@ -32,6 +34,10 @@ function cancelClear(): void {
 }
 
 function confirmClear(): void {
+  // 先失效内存态和正式会话，再逐键清理持久设置；不触碰服务端健康事实。
+  resetSession()
+  clearCapabilities()
+  void signOut(null)
   const result = clearLocalData()
   clearConfirmOpen.value = false
   clearError.value = !result.ok
