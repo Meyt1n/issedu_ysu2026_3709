@@ -19,6 +19,8 @@ _CURSOR_RESOURCE = "authorization-audits"
 class AuditCursor:
     household_id: str
     request_id: str | None
+    action: str | None
+    outcome: str | None
     created_at: datetime
     audit_id: str
 
@@ -46,6 +48,8 @@ def encode_audit_cursor(
     created_at: datetime,
     audit_id: str,
     secret: str,
+    action: str | None = None,
+    outcome: str | None = None,
 ) -> str:
     """Encode only the stable sort key and query scope, never audit contents."""
     timestamp = created_at if created_at.tzinfo is not None else created_at.replace(tzinfo=UTC)
@@ -54,6 +58,8 @@ def encode_audit_cursor(
         "resource": _CURSOR_RESOURCE,
         "household_id": household_id,
         "request_id": request_id,
+        "action": action,
+        "outcome": outcome,
         "created_at": timestamp.astimezone(UTC).isoformat(),
         "audit_id": audit_id,
     }
@@ -78,12 +84,16 @@ def decode_audit_cursor(cursor: str, *, secret: str) -> AuditCursor:
             raise ValueError
         household_id = payload.get("household_id")
         request_id = payload.get("request_id")
+        action = payload.get("action")
+        outcome = payload.get("outcome")
         created_at = payload.get("created_at")
         audit_id = payload.get("audit_id")
         if (
             not isinstance(household_id, str)
             or not household_id
             or (request_id is not None and not isinstance(request_id, str))
+            or (action is not None and not isinstance(action, str))
+            or (outcome is not None and not isinstance(outcome, str))
             or not isinstance(created_at, str)
             or not isinstance(audit_id, str)
             or not audit_id
@@ -95,6 +105,8 @@ def decode_audit_cursor(cursor: str, *, secret: str) -> AuditCursor:
         return AuditCursor(
             household_id=household_id,
             request_id=request_id,
+            action=action,
+            outcome=outcome,
             created_at=timestamp.astimezone(UTC),
             audit_id=audit_id,
         )
