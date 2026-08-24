@@ -45,6 +45,13 @@
 
 ## 测试与证据
 
+2026-08-24 基于最新 `master`（源码提交 `345b5b2`）复核：
+
+- `npm run audit:pwa` 通过：9 个外壳资源、5 个图标资源均存在，非 GET/跨源/`/api`/`/health` 均不会进入缓存；
+- `npm run test -- --run src/stores/pwa.test.ts` 通过（12 项）；
+- `node scripts/pwa-lifecycle.mjs` 通过：安装资源、离线冷启动、外壳缓存丢失安全回退、更新提示和用户确认接管均完成浏览器证据；
+- 修正 `audit-pwa.mjs` 对 Service Worker 注册的检查，使其识别当前 `initPwaLifecycle()` 封装，同时继续校验实际 `.register('/sw.js')` 调用。
+
 - 单元测试 `APP/src/stores/pwa.test.ts`（12 项）：installed+控制器判定、
   updatefound 流、SKIP_WAITING 派发与一次性刷新护栏、重复确认忽略、
   recoverShellCaches 仅清外壳前缀、安装提示一次性可用与关闭、能力说明。
