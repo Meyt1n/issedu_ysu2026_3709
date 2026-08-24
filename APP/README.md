@@ -151,7 +151,6 @@ npm run dev
 ## 安卓应用（Capacitor）
 
 同一套代码通过 Capacitor 打包为原生 Android 应用，WebView 内置打包产物，联机数据走"我的 → 数据来源"里配置的家庭服务器地址。Release/Main Manifest 和网络安全配置拒绝全部明文流量；Android Debug 通过独立 Manifest 保留家庭局域网 HTTP 联调能力，并继续由 APP 地址校验拒绝公网 HTTP。
-
 Android 平台安全基线：
 
 - `allowBackup=false`，Android 11 及以下 full-backup 与 Android 12+ cloud-backup/device-transfer 规则均排除应用全部私有域；联系人、开发身份、服务器地址和本地偏好不得进入系统云备份或设备迁移；

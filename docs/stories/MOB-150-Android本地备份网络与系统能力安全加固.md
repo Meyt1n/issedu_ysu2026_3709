@@ -33,6 +33,13 @@ Android 静态网络配置无法表达“任意 RFC1918/ULA 地址可明文、�
 
 ## 自动与构建证据
 
+### 2026-08-24 最新 `master` 复核
+
+- `npm run audit:android-security` 通过：Release 禁止明文流量，Debug 仅开放受控明文，备份/设备迁移排除，主 Manifest 仅声明 `android.permission.INTERNET`；
+- `npm run check` 通过；`npm run test` 通过（26 个文件 / 219 个测试）；
+- `npm run build`、`npm run android:sync` 与 `npm run android:sync:debug` 均通过；
+- 本次复核未生成或提交 APK、签名材料、备份数据或日志；Android 真机备份/迁移/拒权和安装验收仍需维护者在目标设备完成。
+
 - `npm run audit:android-security`：静态 Manifest、网络、备份、设备迁移和权限白名单审计。
 - `npm run check`、`npm run test`、`npm run build`、`npm run android:sync`、`npm run android:sync:debug`。
 - `gradlew processDebugMainManifest` / `processReleaseMainManifest`：检查合并后的 Debug/Release Manifest。
