@@ -1581,9 +1581,8 @@ def auth_register(
     session: Session = Depends(get_session),
 ) -> dict:
     register_account(payload.actor_id, payload.password, session)
-    # ``get_session`` deliberately leaves transaction ownership to the route.
     # Commit before the browser follows registration with a separate login
-    # request; otherwise the new account is invisible to that request.
+    # request; the dependency also commits successful requests at the boundary.
     session.commit()
     return {"status": "registered", "actor_id": payload.actor_id}
 
@@ -1595,7 +1594,7 @@ def auth_login(
 ) -> dict:
     authentication = authenticate(payload.actor_id, payload.password, session)
     # Persist the session before the frontend immediately loads its household
-    # scope in a new HTTP request.
+    # scope in a new HTTP request; the dependency commits again at the boundary.
     session.commit()
     return {
         "actor_id": payload.actor_id,
