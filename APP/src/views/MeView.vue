@@ -15,6 +15,15 @@ import type { HouseholdOption } from '@/data/types'
 import { currentAuthAdapter, familyAuthAdapter } from '@/data/authAdapter'
 import { useA11y } from '@/stores/accessibility'
 import {
+  canPromptInstall,
+  dismissInstallEntry,
+  installDismissed,
+  pwaSupportSpeechText,
+  recoverShellCaches,
+  serviceWorkerSupported,
+  triggerInstallPrompt,
+} from '@/stores/pwa'
+import {
   capabilityDescription,
   capabilityLabel,
   useCapabilities,
@@ -53,6 +62,57 @@ function formatTraceTime(iso: string): string {
 }
 
 const demoResetMessage = ref('')
+/** MOB-151：安装入口与外壳缓存恢复（只清 shell 前缀缓存，不碰任何健康数据）。 */
+const installPromptAvailable = ref(false)
+const installMessage = ref('')
+const recoveryArmed = ref(false)
+const recoveryMessage = ref('')
+let recoveryArmTimer: ReturnType<typeof setTimeout> | null = null
+
+function refreshInstallAvailability(): void {
+  installPromptAvailable.value = canPromptInstall()
+}
+
+async function onInstallClick(): Promise<void> {
+  const outcome = await triggerInstallPrompt()
+  installMessage.value = outcome === 'prompted'
+    ? '已请求系统安装引导；若浏览器未弹出，请使用浏览器菜单里的“安装应用/添加到主屏幕”。'
+    : '当前浏览器暂未提供安装引导，请使用浏览器菜单里的“安装应用/添加到主屏幕”。'
+  refreshInstallAvailability()
+}
+
+function onDismissInstall(): void {
+  dismissInstallEntry()
+  installMessage.value = ''
+}
+
+async function onRecoverShellClick(): Promise<void> {
+  if (!recoveryArmed.value) {
+    recoveryArmed.value = true
+    recoveryMessage.value = '将只清理本机的离线外壳缓存并刷新，不影响服务端健康数据。再次点击确认执行。'
+    if (recoveryArmTimer) clearTimeout(recoveryArmTimer)
+    recoveryArmTimer = setTimeout(() => {
+      recoveryArmed.value = false
+    }, 6000)
+    return
+  }
+  if (recoveryArmTimer) clearTimeout(recoveryArmTimer)
+  recoveryArmed.value = false
+  recoveryMessage.value = ''
+  try {
+    const removed = await recoverShellCaches(caches)
+    recoveryMessage.value = `已清理 ${removed.length} 个外壳缓存，正在刷新以加载受控版本…`
+  } catch {
+    recoveryMessage.value = '清理外壳缓存失败；请检查浏览器存储权限后重试。'
+    return
+  }
+  setTimeout(() => window.location.reload(), 400)
+}
+
+onMounted(() => {
+  refreshInstallAvailability()
+  window.addEventListener('beforeinstallprompt', refreshInstallAvailability)
+})
 const caregiverNameDraft = ref(session.caregiverName)
 const caregiverPhoneDraft = ref(session.caregiverPhone)
 const contactError = ref('')
@@ -469,6 +529,37 @@ onMounted(() => {
       >
         测试拨号（需再次确认）
       </button>
+    </section>
+
+    <section class="card" aria-labelledby="pwa-title">
+      <div class="h-icon-row">
+        <span class="row-icon" data-tone="info" aria-hidden="true"><AppIcon name="shield" :size="16" /></span>
+        <h2 id="pwa-title">安装与离线恢复</h2>
+      </div>
+      <p class="meta-line">{{ pwaSupportSpeechText() }}</p>
+      <template v-if="serviceWorkerSupported()">
+        <div v-if="!installDismissed" class="pwa-install-row">
+          <button type="button" :disabled="!installPromptAvailable" @click="onInstallClick">
+            {{ installPromptAvailable ? '安装到主屏幕' : '安装入口待系统就绪' }}
+          </button>
+          <button type="button" class="secondary" @click="onDismissInstall">不再提示</button>
+        </div>
+        <p v-if="!installDismissed && !installPromptAvailable" class="meta-line">
+          当前浏览器未触发安装引导：请使用浏览器菜单中的“安装应用 / 添加到主屏幕”，安装后可获得离线外壳与全屏体验。
+        </p>
+        <p v-if="installMessage" class="notice" data-tone="info" role="status">{{ installMessage }}</p>
+        <div class="pwa-recovery-row">
+          <button type="button" :class="['recovery-button', { armed: recoveryArmed }]" @click="onRecoverShellClick">
+            {{ recoveryArmed ? '确认清理并刷新' : '清理离线外壳缓存' }}
+          </button>
+        </div>
+        <p class="meta-line">
+          外壳缓存异常、版本回滚后打不开或页面显示旧外壳时使用；只清理本机离线外壳，不会影响服务端健康数据。
+        </p>
+        <p v-if="recoveryMessage" class="notice" :data-tone="recoveryMessage.includes('失败') ? 'error' : 'info'" role="status">
+          {{ recoveryMessage }}
+        </p>
+      </template>
     </section>
 
     <section class="card" aria-labelledby="source-title">
@@ -916,4 +1007,36 @@ html[data-contrast='high'] .mode-option { border-color: #000; background: #fff; 
 }
 .capability-list li > span:last-child { display: grid; gap: 2px; }
 .capability-list .tag { margin-top: 1px; }
+
+.pwa-install-row,
+.pwa-recovery-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 10px 0 4px;
+}
+
+.pwa-install-row button,
+.pwa-recovery-row .recovery-button {
+  border: 1px solid #2f6d5a;
+  background: #2f6d5a;
+  color: #fff;
+  border-radius: 10px;
+  padding: 8px 14px;
+  font-size: 0.9rem;
+}
+
+.pwa-install-row button.secondary {
+  background: transparent;
+  color: #2f6d5a;
+}
+
+.pwa-install-row button:disabled {
+  opacity: 0.55;
+}
+
+.pwa-recovery-row .recovery-button.armed {
+  background: #b3541e;
+  border-color: #b3541e;
+}
 </style>

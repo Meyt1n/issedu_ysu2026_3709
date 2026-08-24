@@ -52,3 +52,9 @@ PR Required Checks、Relay Review 和维护者 merge 属于仓库合并门禁，
 - 当前 API 只接收本地适配器已经产生的 OCR/条码/YOLO 结果，尚未绑定具体 PaddleOCR、ZXing 或 YOLO 推理进程；生产部署必须由本地受控适配器持有签名密钥，不能使用示例默认值。
 - 当前仓库没有批准的药品主数据快照，默认 `master_data_version=unavailable`，返回 `MASTER_DATA_UNAVAILABLE`；不可据此确认药品。测试使用的主数据仅为运行时 synthetic fixture，未提交真实记录。
 - 回滚时移除证据提交入口并将视觉任务降级为 `REVIEW`，保留既有任务结果和版本审计，不删除原上传文件。
+
+## 2026-08-22 验收补充
+
+新增 `scripts/hct205_accuracy_report.py`，从仓库外的冻结 JSONL 计算 OCR、条码、主数据和四状态准确率，保留失败原因、
+置信度、阈值版本、来源引用和输入哈希。脚本只对 `approved_real_fixed_set` 输出正式接受结果；合成夹具即使全部预测正确，
+也只能说明报告格式和计算逻辑可用，不能关闭本 Story。

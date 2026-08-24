@@ -1,18 +1,33 @@
 /* 家健镜随身版离线 Service Worker（本地优先）：
    - 预缓存应用外壳；带 hash 的静态资产 cache-first；
    - 页面导航 network-first、离线回退外壳；
-   - /api 与 /health 永不缓存（健康数据不落缓存）。 */
+   - /api 与 /health 永不缓存（健康数据不落缓存）；
+   - MOB-151：新版本默认等待（不静默切换），仅当页面在用户确认后
+     发送 SKIP_WAITING 消息才接管，避免写操作中途换版本。 */
 
-const CACHE_NAME = 'hct-mobile-shell-v2'
-const SHELL = ['/', '/manifest.webmanifest', '/icons/icon.svg', '/bg/ambient-light.jpg', '/bg/ambient-dark.jpg']
+const CACHE_NAME = 'hct-mobile-shell-v3'
+const SHELL = [
+  '/',
+  '/manifest.webmanifest',
+  '/icons/icon.svg',
+  '/icons/icon-192.png',
+  '/icons/icon-512.png',
+  '/icons/icon-maskable-192.png',
+  '/icons/icon-maskable-512.png',
+  '/bg/ambient-light.jpg',
+  '/bg/ambient-dark.jpg',
+]
 
 self.addEventListener('install', event => {
   event.waitUntil(
     caches
       .open(CACHE_NAME)
-      .then(cache => cache.addAll(SHELL))
-      .then(() => self.skipWaiting()),
+      .then(cache => cache.addAll(SHELL)),
   )
+})
+
+self.addEventListener('message', event => {
+  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting()
 })
 
 self.addEventListener('activate', event => {

@@ -508,7 +508,27 @@ def _add_confirmed_medication_fixture(
             event_type="medication_added",
             source="VISION_REVIEW",
             confirmation_status="CONFIRMED",
-            payload={"drug": drug, "ingredient": ingredient, "private": "must-not-leak"},
+            payload={
+                "drug": drug,
+                "ingredient": ingredient,
+                "candidate_id": (
+                    "rec-amoxicillin-cn" if drug == "阿莫西林" else "rec-ibuprofen-en"
+                ),
+                "interaction_warnings": (
+                    [
+                        {
+                            "with_record_id": "rec-ibuprofen-en",
+                            "level": "INFO",
+                            "message": (
+                                "本地主数据要求核对当前医嘱和说明书；系统不判断是否可以同用。"
+                            ),
+                        }
+                    ]
+                    if drug == "阿莫西林"
+                    else []
+                ),
+                "private": "must-not-leak",
+            },
             evidence={"raw": "must-not-leak"},
             created_by="assistant-owner",
             confirmed_by="assistant-owner",
@@ -759,4 +779,3 @@ def test_medication_safety_without_reviewed_knowledge_degrades(
     assert result["degrade_reason"] in {"NO_AUTHORISED_DOCUMENTS", "EVIDENCE_REQUIRED"}
     assert result["query_type"] == "MEDICATION_SAFETY"
     assert result["sources"] == []
-

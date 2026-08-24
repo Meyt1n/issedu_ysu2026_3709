@@ -78,3 +78,8 @@ allocated 69,124,096 bytes。报告只保存在受控训练机并登记哈希；
 主要风险是高 mAP 被误读成正式能力。缓解方式是审计器禁止发布状态、模型卡保留失败样例，
 并明确 YOLO 只建议 OCR 裁剪区域。回滚时删除本次登记、脚本和文档；运行端继续使用
 `vision_model_version=unavailable`，不加载任何外置权重。
+
+## 2026-08-22 验收补充
+
+新增 `scripts/hct203_release_gate.py`，把 HCT-201 批准固定集、独立评估、hard-negative、报告哈希和回滚演练收成
+`READY_FOR_R3_REVIEW` 门禁。该脚本不会修改 registry 或发布权重；当前实验登记仍因数据集未批准而阻塞。

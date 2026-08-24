@@ -81,10 +81,16 @@ def _can_transition(current: str, next_: str) -> bool:
 
 
 def _file_digest(path: str) -> str:
-    """SHA-256 of the first 8 KB of the file (fast integrity check)."""
+    """SHA-256 of the whole file (integrity check + receipt binding).
+
+    HCT-414-D2: previously only the first 8 KiB were hashed, which silently
+    disagreed with the quality-check receipt (full-file sha256) for any media
+    larger than 8 KiB and made task creation reject valid uploads with
+    QUALITY_RECEIPT_MISMATCH before this fix.
+    """
     h = hashlib.sha256()
     with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b""):
+        for chunk in iter(lambda: f.read(65536), b""):
             h.update(chunk)
     return h.hexdigest()
 

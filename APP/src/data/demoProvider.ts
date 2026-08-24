@@ -423,19 +423,36 @@ export const demoProvider: DataProvider = {
       memberId === 'm-wang'
         ? [
             {
-              granteeName: '王芳（我）',
+              id: 'demo-auth-wang-1',
+              memberId,
+              granteeActorId: 'demo-family-owner',
+              granteeName: '王芳（我·演示）',
               fields: ['已确认健康事件', '用药与计划'],
+              actions: ['read'],
               purpose: 'family-care',
+              validFrom: new Date(Date.now() - 24 * 3_600_000).toISOString(),
               validUntil: daysFromNow(28),
+              revokedAt: null,
+              version: 1,
+              status: 'ACTIVE' as const,
             },
           ]
         : memberId === 'm-li'
           ? [
               {
-                granteeName: '王芳（我）',
+                id: 'demo-auth-li-1',
+                memberId,
+                granteeActorId: 'demo-family-owner',
+                granteeName: '王芳（我·演示）',
                 fields: ['已确认健康事件'],
+                actions: ['read'],
                 purpose: 'family-care',
+                validFrom: new Date(Date.now() - 24 * 3_600_000).toISOString(),
                 validUntil: daysFromNow(9),
+                revokedAt: null,
+                version: 1,
+                // 9 天后到期：仍有效但进入"即将到期"提示窗口（7 天阈值）
+                status: 'EXPIRING' as const,
               },
             ]
           : []
@@ -564,6 +581,34 @@ export const demoProvider: DataProvider = {
     }
   },
 
+  async checkVideoQuality(file: File): Promise<QualityCheckResult> {
+    await delay(420)
+    // 演示模式同样保留门控语义（极小文件视为无可用帧）。视频入口在演示
+    // 模式下隐藏（没有真实抽帧链路），此实现只满足 Provider 契约与测试。
+    if (file.size < 30_000) {
+      return {
+        decision: 'RETAKE',
+        reasons: ['没有可用证据帧'],
+        retakePrompts: ['请保持药盒稳定、居中并在均匀光线下重拍'],
+        metrics: [
+          { label: '可用帧数', value: '0', passed: false },
+        ],
+        qualityReceipt: null,
+      }
+    }
+    return {
+      decision: 'PASS',
+      reasons: [],
+      retakePrompts: [],
+      metrics: [
+        { label: '采样帧数', value: '4', passed: true },
+        { label: '可用帧数', value: '4', passed: true },
+      ],
+      qualityReceipt: `demo-video-receipt-${Date.now()}`,
+      framesSummary: { mediaType: 'video', sampledFrames: 4, selectedFrames: 4, usableFrames: 4 },
+    }
+  },
+
   async getWeeklyTrend(memberId: string): Promise<TrendPoint[]> {
     await delay(160)
     // 前 6 天为稳定的虚构数据（按成员区分），今天与当前任务状态联动。
@@ -592,7 +637,7 @@ export const demoProvider: DataProvider = {
     return points
   },
 
-  async recognizeMedicine(file: File): Promise<RecognitionCandidate> {
+  async recognizeMedicine(file: File, _memberId?: string, _mediaKind?: 'image' | 'video'): Promise<RecognitionCandidate> {
     await delay(700)
     const versions = {
       ocr: 'paddleocr-demo-0.1',
