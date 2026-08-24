@@ -2,7 +2,7 @@
 
 - Issue：[#297](https://github.com/Meyt1n/issedu_ysu2026_3709/issues/297)
 - 需求：FR-01；NFR-01、NFR-03、NFR-04
-- 状态：进行中（Ready 后开始实现；尚无合并或验收证据）
+- 状态：实现完成，待 PR 审核
 - 负责人：Shen-huang-123
 - 复核人：仓库维护者（R3 认证/迁移变更，merge 即代表人工复核完成）
 - 风险：R3（会话固定、凭据泄漏、跨进程限流绕过或迁移丢失会造成越权）
@@ -58,8 +58,15 @@
 - 预期命令：`uv run ruff check src/api tests migrations`、定向认证/迁移测试、`uv run pytest`、`git diff --check`、`docker compose config --quiet`。
 - 人工验收：至少两个 API worker、重启前后登录与会话、撤销后 401、迁移/回滚记录和脱敏日志抽查；不需要 Android 设备。
 
+### 本地验收证据（2026-08-24）
+
+- `tests/safety/test_hct428_persistent_auth.py`：跨 Session 持久化、Bearer 摘要、PIN challenge、限流和密码登录轮换通过。
+- HCT-107、HCT-427 及人脸/擦除相关契约测试通过。
+- `uv run alembic upgrade head` 成功，`0018_hct428_auth_persistence` 为单一 migration head。
+- `uv run ruff check ...` 通过；全套测试仅剩既有审计游标断言和 GitHub/云端 SHA 同步环境失败，均与本 Story 无关。
+
 ## 部署、回滚与已知限制
 
 - 发布前登记代码、迁移、配置和数据库备份版本；先在教学库演练前滚与回滚，再进入受控部署。
 - 回滚优先使用迁移向下路径；若发现会话一致性或凭据暴露问题，停止正式登录入口、撤销活跃会话并恢复上一版已验证组合。不得把内存认证重新当作正式部署能力。
-- 当前基线仍使用进程内认证字典；本 Story 未合并前只能用于本地教学演示，不能宣称已支持多进程或正式部署。
+- 本分支已移除账号、PIN、会话、失败计数和 PIN challenge 的生产权威内存存储；合并前仍需按部署清单演练真实数据库备份、回滚和脱敏日志检查。
