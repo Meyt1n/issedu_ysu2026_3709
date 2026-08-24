@@ -18,6 +18,7 @@ from typing import Any
 REQUIRED_REPORTS = {
     "HCT-201": ("hct201-fixed-set.json", {"ALLOW_APPROVED_FIXED_SET"}),
     "HCT-205": ("hct205-accuracy.json", {"ACCEPT_OCR_BARCODE_MASTER_DATA"}),
+    "HCT-206": ("hct206-release.json", {"READY_FOR_R3_REVIEW"}),
     "HCT-203-YOLO": ("hct203-yolo.json", {"READY_FOR_R3_REVIEW"}),
     "HCT-203-QLoRA": ("hct203-qlora.json", {"READY_FOR_R3_REVIEW"}),
     "HCT-302": ("hct302-rules.json", {"ACCEPT_RULES"}),

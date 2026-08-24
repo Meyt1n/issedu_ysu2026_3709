@@ -1,4 +1,6 @@
+import sys
 from collections.abc import Generator
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -6,10 +8,19 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.config import get_settings
-from app.db import get_session
-from app.main import app
-from app.models import Base
+# Pytest's optional ``pythonpath`` configuration is not present in every
+# locked runner.  Keep test imports deterministic without changing runtime
+# package configuration or production import paths.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+for source_path in (REPO_ROOT / "src/api", REPO_ROOT / "src", REPO_ROOT / "scripts"):
+    source = str(source_path)
+    if source not in sys.path:
+        sys.path.insert(0, source)
+
+from app.config import get_settings  # noqa: E402
+from app.db import get_session  # noqa: E402
+from app.main import app  # noqa: E402
+from app.models import Base  # noqa: E402
 
 
 @pytest.fixture()
