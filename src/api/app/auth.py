@@ -370,7 +370,12 @@ def validate_session(token: str, session: Session | None = None) -> str:
 def introspect_session(token: str, session: Session | None = None) -> dict[str, Any]:
     with _session_scope(session) as db:
         record = _session_record(db, token)
-        return {"actor_id": record.actor_id, "expires_at": _as_utc(record.expires_at).timestamp()}
+        return {
+            "actor_id": record.actor_id,
+            "household_id": record.household_id,
+            "issued_at": _as_utc(record.created_at).timestamp(),
+            "expires_at": _as_utc(record.expires_at).timestamp(),
+        }
 
 
 def logout(token: str, session: Session | None = None) -> None:

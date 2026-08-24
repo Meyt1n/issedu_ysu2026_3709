@@ -65,7 +65,10 @@ def test_session_endpoint_reports_the_live_session(client: TestClient) -> None:
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["actor_id"] == ACTOR
+    assert body["household_id"] is None
+    assert body["issued_at"] > 0
     assert body["expires_at"] > 0
+    assert body["issued_at"] < body["expires_at"]
     # 续验响应不得回传任何凭据。
     assert "session_token" not in body
 

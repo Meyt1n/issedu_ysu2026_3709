@@ -44,6 +44,7 @@
 | POST | `/api/v1/auth/register` | 使用 JSON 请求体注册本地账号 | ✅ |
 | POST | `/api/v1/auth/login` | 使用 JSON 请求体建立短期 Bearer 会话 | ✅ |
 | POST | `/api/v1/auth/logout` | 撤销当前短期会话 | ✅ |
+| POST | `/api/v1/auth/session` | Bearer 会话续验，返回操作者、家庭范围、签发时间和到期时间；不返回令牌 | ✅ |
 | GET | `/api/v1/households` | 列出当前用户可见的家庭 | ✅ |
 | POST | `/api/v1/households` | 创建家庭 | ✅ |
 | PATCH | `/api/v1/households/{id}` | Owner 修改家庭业务时区 | ✅ |
