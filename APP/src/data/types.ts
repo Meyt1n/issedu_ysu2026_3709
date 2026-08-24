@@ -67,18 +67,31 @@ export interface MedicationItem {
   confirmed: boolean
 }
 
+/** MOB-136：授权状态只按服务端时间字段推导，不由 APP 猜测。 */
+export type AuthorizationStatus = 'PENDING' | 'ACTIVE' | 'EXPIRING' | 'EXPIRED' | 'REVOKED'
+
 export interface AuthorizationView {
+  id: string
+  memberId: string
+  /** 服务端只返回身份标识（actor id）；移动端不做姓名映射猜测。 */
+  granteeActorId: string
   granteeName: string
   fields: string[]
+  actions: string[]
   purpose: string
+  validFrom: string
   validUntil: string
+  revokedAt: string | null
+  version: number
+  status: AuthorizationStatus
 }
 
 export interface MemberDetail {
   summary: MemberSummary
   medications: MedicationItem[] | 'UNAUTHORIZED'
   timeline: TimelineItem[] | 'UNAUTHORIZED'
-  authorizations: AuthorizationView[]
+  /** 'UNAUTHORIZED'：当前身份无权查看授权管理（隐藏式拒绝），不等于"暂无授权"。 */
+  authorizations: AuthorizationView[] | 'UNAUTHORIZED'
 }
 
 export interface RiskSourceEvent {

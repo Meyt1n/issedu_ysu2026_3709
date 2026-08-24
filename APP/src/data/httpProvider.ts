@@ -1,6 +1,6 @@
 import { ApiClient, ApiClientError } from '@/api/client'
 import { CAPABILITY_IDS, hasCapability } from '@/stores/capabilities'
-import type { HealthEvent, Member, RequestOptions, UploadedFile, VisionTask } from '@/api/types'
+import type { AuthorizationRead, HealthEvent, Member, RequestOptions, UploadedFile, VisionTask } from '@/api/types'
 import type {
   CareTask,
   DataProvider,
@@ -23,6 +23,7 @@ import type {
   TrendPoint,
   VisionTaskStatusSnapshot,
   TaskActionHistoryEntry,
+  AuthorizationView,
 } from './types'
 
 /**
@@ -174,6 +175,42 @@ export function deriveTasksFromEvents(
     }
     return task
   })
+}
+
+/** 即将到期阈值：7 天内提示但不改变语义。 */
+const EXPIRING_SOON_MS = 7 * 24 * 3_600_000
+
+/** MOB-136：授权状态只由服务端时间/撤回字段推导；解析失败按已到期处理（fail-closed）。 */
+export function authorizationStatus(
+  auth: { valid_from: string; valid_until: string; revoked_at: string | null },
+  now: Date = new Date(),
+): AuthorizationView['status'] {
+  if (auth.revoked_at) return 'REVOKED'
+  const from = Date.parse(auth.valid_from)
+  const until = Date.parse(auth.valid_until)
+  const nowMs = now.getTime()
+  if (Number.isFinite(from) && nowMs < from) return 'PENDING'
+  if (!Number.isFinite(until) || nowMs > until) return 'EXPIRED'
+  if (nowMs > until - EXPIRING_SOON_MS) return 'EXPIRING'
+  return 'ACTIVE'
+}
+
+function authorizationViewFromRead(read: AuthorizationRead, now: Date = new Date()): AuthorizationView {
+  return {
+    id: read.id,
+    memberId: read.member_id,
+    granteeActorId: read.grantee_actor_id,
+    // 服务端不返回姓名；原样展示身份标识，不做猜测映射。
+    granteeName: read.grantee_actor_id,
+    fields: [...read.data_fields],
+    actions: [...read.actions],
+    purpose: read.purpose,
+    validFrom: read.valid_from,
+    validUntil: read.valid_until,
+    revokedAt: read.revoked_at,
+    version: read.version,
+    status: authorizationStatus(read, now),
+  }
 }
 
 const PLAN_ACTION_LABELS: Record<string, { action: TaskAction; label: string; finalStatus: string }> = {
@@ -533,12 +570,27 @@ export class HttpDataProvider implements DataProvider {
       medications = 'UNAUTHORIZED'
     }
 
+    // MOB-136：授权列表只读展示。仅 Owner 可读；非 Owner 的 403/404 是
+    // 隐藏式拒绝，映射为 'UNAUTHORIZED'（与"暂无授权"区分），其余异常如实抛出。
+    let authorizations: MemberDetail['authorizations']
+    try {
+      const reads = await this.client.listAuthorizations(householdId, this.options())
+      authorizations = reads
+        .filter(read => read.member_id === memberId)
+        .map(read => authorizationViewFromRead(read))
+    } catch (cause) {
+      if (cause instanceof ApiClientError && (cause.status === 403 || cause.status === 404)) {
+        authorizations = 'UNAUTHORIZED'
+      } else {
+        throw cause
+      }
+    }
+
     return {
       summary,
       medications,
       timeline,
-      // 授权列表接口仅家庭 owner 可读，移动端暂不展示（在网页端管理）。
-      authorizations: [],
+      authorizations,
     }
   }
 

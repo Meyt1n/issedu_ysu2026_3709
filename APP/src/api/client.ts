@@ -9,6 +9,7 @@ import type {
   RequestOptions,
   RiskDetailResponse,
   RiskListResponse,
+  AuthorizationRead,
   UploadedFile,
   VisionQualityResponse,
   VisionTask,
@@ -215,8 +216,8 @@ export class ApiClient {
     return this.request(`/api/v1/households/${householdId}/members/${memberId}/timeline`, undefined, options)
   }
 
-  /** 仅家庭 owner 可读；非 owner 返回 404（用于区分照护者视角）。 */
-  listAuthorizations(householdId: string, options?: RequestOptions): Promise<unknown[]> {
+  /** 授权列表（HCT-102，仅 Owner；非 Owner 服务端隐藏式拒绝 403/404）。 */
+  listAuthorizations(householdId: string, options?: RequestOptions): Promise<AuthorizationRead[]> {
     return this.request(`/api/v1/households/${householdId}/authorizations`, undefined, options)
   }
 
