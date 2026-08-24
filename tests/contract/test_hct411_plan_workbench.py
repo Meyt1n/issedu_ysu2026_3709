@@ -3,6 +3,11 @@
 from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.care_plan_worker import automation_cycle
+from app.models import HealthEvent
 
 OWNER_HEADERS = {"X-Actor-Id": "owner"}
 
@@ -27,6 +32,7 @@ def _append_plan(
     member_id: str,
     *,
     payload: dict | None = None,
+    occurred_at: datetime | None = None,
 ) -> dict:
     response = client.post(
         f"/api/v1/households/{household_id}/events",
@@ -36,7 +42,7 @@ def _append_plan(
             "event_type": "plan_created",
             "confirmation_status": "CONFIRMED",
             "payload": payload or {"drug": "Synthetic medicine", "schedule": "每日一次"},
-            "occurred_at": (datetime.now(UTC) - timedelta(hours=25)).isoformat(),
+            "occurred_at": (occurred_at or datetime.now(UTC) - timedelta(hours=25)).isoformat(),
         },
     )
     assert response.status_code == 201, response.text
@@ -227,3 +233,143 @@ def test_plan_workbench_records_missed_dose_separately(client: TestClient) -> No
     assert item["last_action"]["action"] == "MISS"
     assert item["last_action"]["reason"] == "忘记服用"
     assert item["action_history"][-1]["action"] == "MISS"
+
+
+def test_authorized_overdue_plan_escalates_once_and_notifies_active_caregiver(
+    client: TestClient,
+) -> None:
+    household_id, member_id = _create_household_and_member(client)
+    plan = _append_plan(
+        client,
+        household_id,
+        member_id,
+        occurred_at=datetime.now(UTC) - timedelta(hours=30),
+        payload={
+            "drug": "Synthetic medicine",
+            "schedule": "每日一次",
+            "automation": {"authorization": "AUTHORIZED"},
+            "caregiver_notification": {"authorization": "AUTHORIZED"},
+        },
+    )
+    grant = client.post(
+        f"/api/v1/households/{household_id}/authorizations",
+        headers=OWNER_HEADERS,
+        json={
+            "member_id": member_id,
+            "grantee_actor_id": "caregiver",
+            "data_fields": ["health_events"],
+            "actions": ["READ_EVENTS"],
+            "purpose": "plan-care",
+            "valid_until": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+        },
+    )
+    assert grant.status_code == 201, grant.text
+
+    denied = client.post(
+        f"/api/v1/households/{household_id}/members/{member_id}/plans/evaluate",
+        headers={"X-Actor-Id": "caregiver", "X-Access-Purpose": "plan-care"},
+    )
+    assert denied.status_code == 404
+
+    first = client.post(
+        f"/api/v1/households/{household_id}/members/{member_id}/plans/evaluate",
+        headers=OWNER_HEADERS,
+    )
+
+    assert first.status_code == 200, first.text
+    body = first.json()
+    assert [item["event_type"] for item in body["created_events"]] == [
+        "plan_missed",
+        "care_escalated",
+        "caregiver_notified",
+    ]
+    assert body["notified_caregiver_actor_ids"] == ["caregiver"]
+    notification = body["created_events"][-1]
+    assert notification["payload"]["plan_event_id"] == plan["id"]
+    assert notification["payload"]["recipient_actor_id"] == "caregiver"
+    assert notification["payload"]["channel"] == "LOCAL_EVENT_INBOX"
+
+    retry = client.post(
+        f"/api/v1/households/{household_id}/members/{member_id}/plans/evaluate",
+        headers=OWNER_HEADERS,
+    )
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["created_events"] == []
+    assert retry.json()["notified_caregiver_actor_ids"] == []
+
+
+def test_plan_evaluation_is_fail_closed_and_records_course_end(client: TestClient) -> None:
+    household_id, member_id = _create_household_and_member(client)
+    unapproved = _append_plan(
+        client,
+        household_id,
+        member_id,
+        occurred_at=datetime.now(UTC) - timedelta(hours=30),
+        payload={"drug": "No automation", "schedule": "每日一次"},
+    )
+    approved = _append_plan(
+        client,
+        household_id,
+        member_id,
+        payload={
+            "drug": "Finished course",
+            "schedule": "每日一次",
+            "end_date": (datetime.now(UTC).date() - timedelta(days=1)).isoformat(),
+            "automation": {"authorization": "AUTHORIZED"},
+        },
+    )
+
+    response = client.post(
+        f"/api/v1/households/{household_id}/members/{member_id}/plans/evaluate",
+        headers=OWNER_HEADERS,
+    )
+
+    assert response.status_code == 200, response.text
+    events = response.json()["created_events"]
+    assert [item["event_type"] for item in events] == ["course_ended"]
+    assert events[0]["payload"]["plan_event_id"] == approved["id"]
+    assert all(item["payload"]["plan_event_id"] != unapproved["id"] for item in events)
+
+    workbench = client.get(
+        f"/api/v1/households/{household_id}/members/{member_id}/plan-workbench",
+        headers=OWNER_HEADERS,
+    )
+    assert workbench.status_code == 200, workbench.text
+    completed = next(
+        item
+        for item in workbench.json()["plans"]
+        if item["plan_event_id"] == approved["id"]
+    )
+    assert completed["status"] == "COMPLETED"
+    assert completed["allowed_actions"] == []
+
+
+def test_care_plan_worker_retry_does_not_duplicate_lifecycle_events(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    household_id, member_id = _create_household_and_member(client)
+    plan = _append_plan(
+        client,
+        household_id,
+        member_id,
+        payload={
+            "drug": "Finished course",
+            "schedule": "每日一次",
+            "end_date": (datetime.now(UTC).date() - timedelta(days=1)).isoformat(),
+            "automation": {"authorization": "AUTHORIZED"},
+        },
+    )
+    first = automation_cycle(db_session)
+    second = automation_cycle(db_session, now=datetime.now(UTC) + timedelta(minutes=1))
+
+    assert first.created_events == 1
+    assert second.created_events == 0
+    lifecycle = db_session.scalars(
+        select(HealthEvent).where(
+            HealthEvent.member_id == member_id,
+            HealthEvent.event_type == "course_ended",
+        )
+    ).all()
+    assert len(lifecycle) == 1
+    assert lifecycle[0].payload["plan_event_id"] == plan["id"]

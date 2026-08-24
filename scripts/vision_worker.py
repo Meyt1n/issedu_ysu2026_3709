@@ -28,6 +28,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+import cv2
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 for entry in (REPO_ROOT / "src", REPO_ROOT / "scripts"):
     if str(entry) not in sys.path:
@@ -43,6 +45,10 @@ from ai.vision.local_ocr import (  # noqa: E402
     LocalBarcodeDecoder,
     LocalPaddleOCR,
 )
+from ai.vision.video_frames import (  # noqa: E402
+    decode_video_frames,
+    merge_frame_requests,
+)
 
 from run_local_adapter import build_request  # noqa: E402
 
@@ -50,6 +56,9 @@ SUFFIX_BY_MIME = {
     "image/jpeg": ".jpg",
     "image/png": ".png",
     "image/webp": ".webp",
+    "video/mp4": ".mp4",
+    "video/quicktime": ".mov",
+    "video/x-quicktime": ".mov",
 }
 
 
@@ -59,10 +68,20 @@ def log(message: str) -> None:
 
 
 class Worker:
-    def __init__(self, api: str, actors: list[str], signing_key: str) -> None:
+    def __init__(
+        self,
+        api: str,
+        actors: list[str],
+        signing_key: str,
+        *,
+        video_sample_interval_ms: int = 1000,
+        video_max_frames: int = 8,
+    ) -> None:
         self.api = api.rstrip("/")
         self.actors = actors
         self.signing_key = signing_key
+        self.video_sample_interval_ms = video_sample_interval_ms
+        self.video_max_frames = video_max_frames
         self.http = requests.Session()
         self.http.trust_env = False  # ignore system proxies for localhost calls
         # Polling is sparse; uvicorn drops idle keep-alive sockets which makes
@@ -115,35 +134,74 @@ class Worker:
                     log(f"task {task_id[:8]} failed ({self.failures[task_id]}/3): {exc}")
         return processed
 
+    def _run_video_engines(self, media_path: Path, run_id: str):
+        """HCT-414-D2: sample frames, run the engines per frame, merge once."""
+        frames = decode_video_frames(
+            media_path,
+            sample_interval_ms=self.video_sample_interval_ms,
+            max_frames=self.video_max_frames,
+        )
+        frame_requests = []
+        with tempfile.TemporaryDirectory() as frame_dir:
+            for position, frame in enumerate(frames):
+                frame_path = Path(frame_dir) / f"frame-{position:02d}.png"
+                cv2.imwrite(str(frame_path), frame.image)
+                frame_requests.append(
+                    build_request(
+                        yolo=self.yolo,
+                        extractor=self.extractor,
+                        image=frame_path,
+                        ocr_rows=[],
+                        barcode_rows=[],
+                        run_id=f"{run_id}-f{position + 1}",
+                        local_ocr=self.ocr,
+                        local_barcode=self.barcode,
+                    )
+                )
+        log(
+            f"video frames processed={len(frame_requests)} "
+            f"(interval={self.video_sample_interval_ms}ms cap={self.video_max_frames})"
+        )
+        return merge_frame_requests(frame_requests, run_id=f"{run_id}-video")
+
     def process(self, actor: str, task: dict) -> None:
         task_id = task["id"]
         headers = {"X-Actor-ID": actor}
-        log(f"task {task_id[:8]} ({actor}): downloading image {task['file_id'][:16]}...")
+        media_type = task.get("media_type", "image")
+        log(
+            f"task {task_id[:8]} ({actor}): downloading {media_type} "
+            f"{task['file_id'][:16]}..."
+        )
         download = self.http.get(
             f"{self.api}/files/{task['file_id']}", headers=headers, timeout=60
         )
         download.raise_for_status()
         suffix = SUFFIX_BY_MIME.get(
-            download.headers.get("content-type", "").split(";")[0].strip(), ".jpg"
+            download.headers.get("content-type", "").split(";")[0].strip(),
+            ".mp4" if media_type == "video" else ".jpg",
         )
 
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as handle:
             handle.write(download.content)
-            image_path = Path(handle.name)
+            media_path = Path(handle.name)
         try:
             log(f"task {task_id[:8]}: running local engines...")
-            request = build_request(
-                yolo=self.yolo,
-                extractor=self.extractor,
-                image=image_path,
-                ocr_rows=[],
-                barcode_rows=[],
-                run_id=f"worker-{os.getpid()}-{task_id[:8]}",
-                local_ocr=self.ocr,
-                local_barcode=self.barcode,
-            )
+            run_id = f"worker-{os.getpid()}-{task_id[:8]}"
+            if media_type == "video":
+                request = self._run_video_engines(media_path, run_id)
+            else:
+                request = build_request(
+                    yolo=self.yolo,
+                    extractor=self.extractor,
+                    image=media_path,
+                    ocr_rows=[],
+                    barcode_rows=[],
+                    run_id=run_id,
+                    local_ocr=self.ocr,
+                    local_barcode=self.barcode,
+                )
         finally:
-            image_path.unlink(missing_ok=True)
+            media_path.unlink(missing_ok=True)
 
         receipt = issue_adapter_receipt(
             task_id, task.get("input_digest") or "", request, self.signing_key
@@ -178,6 +236,18 @@ def main() -> int:
     )
     parser.add_argument("--interval", type=float, default=5.0)
     parser.add_argument("--once", action="store_true", help="single poll pass then exit")
+    parser.add_argument(
+        "--video-sample-interval-ms",
+        type=int,
+        default=1000,
+        help="sampling interval between video frames fed to the local engines",
+    )
+    parser.add_argument(
+        "--video-max-frames",
+        type=int,
+        default=8,
+        help="upper bound of sampled frames processed per video task",
+    )
     args = parser.parse_args()
 
     actors = [item.strip() for item in args.actors.split(",") if item.strip()]
@@ -185,7 +255,13 @@ def main() -> int:
         raise SystemExit("no actors configured")
     signing_key = os.environ.get("HCT_ADAPTER_SIGNING_KEY", "dev-only-change-me")
 
-    worker = Worker(args.api, actors, signing_key)
+    worker = Worker(
+        args.api,
+        actors,
+        signing_key,
+        video_sample_interval_ms=args.video_sample_interval_ms,
+        video_max_frames=args.video_max_frames,
+    )
     log(f"watching queued tasks for actors={actors} api={args.api}")
     while True:
         processed = worker.poll_once()

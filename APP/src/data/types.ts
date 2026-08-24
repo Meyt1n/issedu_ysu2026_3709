@@ -67,18 +67,31 @@ export interface MedicationItem {
   confirmed: boolean
 }
 
+/** MOB-136：授权状态只按服务端时间字段推导，不由 APP 猜测。 */
+export type AuthorizationStatus = 'PENDING' | 'ACTIVE' | 'EXPIRING' | 'EXPIRED' | 'REVOKED'
+
 export interface AuthorizationView {
+  id: string
+  memberId: string
+  /** 服务端只返回身份标识（actor id）；移动端不做姓名映射猜测。 */
+  granteeActorId: string
   granteeName: string
   fields: string[]
+  actions: string[]
   purpose: string
+  validFrom: string
   validUntil: string
+  revokedAt: string | null
+  version: number
+  status: AuthorizationStatus
 }
 
 export interface MemberDetail {
   summary: MemberSummary
   medications: MedicationItem[] | 'UNAUTHORIZED'
   timeline: TimelineItem[] | 'UNAUTHORIZED'
-  authorizations: AuthorizationView[]
+  /** 'UNAUTHORIZED'：当前身份无权查看授权管理（隐藏式拒绝），不等于"暂无授权"。 */
+  authorizations: AuthorizationView[] | 'UNAUTHORIZED'
 }
 
 export interface RiskSourceEvent {
@@ -117,6 +130,13 @@ export interface QualityCheckResult {
   retakePrompts: string[]
   metrics: QualityMetricView[]
   qualityReceipt: string | null
+  /** MOB-149：视频质量门的帧级摘要（选中/可用帧数）；图片为空。 */
+  framesSummary?: {
+    mediaType: 'video'
+    selectedFrames: number
+    usableFrames: number
+    sampledFrames: number
+  }
 }
 
 export interface EvidenceFieldView {
@@ -263,7 +283,9 @@ export interface DataProvider {
   acknowledgeRisk(memberId: string, ruleId: string): Promise<RiskCard>
   submitTaskAction(taskId: string, action: TaskAction, payload?: TaskActionPayload): Promise<CareTask>
   checkImageQuality(file: File): Promise<QualityCheckResult>
-  recognizeMedicine(file: File, memberId: string): Promise<RecognitionCandidate>
+  /** MOB-149：短视频质量门（帧级摘要）；仅在服务端声明 vision-task-video 时可用。 */
+  checkVideoQuality(file: File): Promise<QualityCheckResult>
+  recognizeMedicine(file: File, memberId: string, mediaKind?: 'image' | 'video'): Promise<RecognitionCandidate>
   /** 回查视觉任务状态；只读，重试必须复用同一 taskId，不得重新创建任务。 */
   fetchVisionTaskStatus(taskId: string): Promise<VisionTaskStatusSnapshot>
   /** 任务操作历史：服务端时间线动作事件的只读脱敏摘要，不建立第二份事实库。 */

@@ -18,6 +18,7 @@ import {
   type VisionNoticeSupport,
 } from '@/utils/localNotice'
 import { imageInputUnavailableMessage, validateMedicineImage } from '@/utils/uploadInput'
+import { probeVideoFile, validateMedicineVideo } from '@/utils/videoInput'
 import { CAPABILITY_IDS, useCapabilities } from '@/stores/capabilities'
 import { sessionContextKey, useSession } from '@/stores/session'
 import { presentApiError, type ErrorPresentation } from '@/api/errors'
@@ -34,6 +35,8 @@ const membersLoading = ref(true)
 const memberId = ref('')
 const stage = ref<Stage>('idle')
 const file = ref<File | null>(null)
+/** MOB-149：当前提交的媒体类型；视频链路仅在服务端声明 vision-task-video 时开放。 */
+const mediaKind = ref<'image' | 'video'>('image')
 const previewUrl = ref('')
 const quality = ref<QualityCheckResult | null>(null)
 const candidate = ref<RecognitionCandidate | null>(null)
@@ -45,6 +48,13 @@ const visionTaskAvailable = computed(() =>
 /** 正式会话失效时禁止上传与创建视觉任务：写操作在页面层就被拦住。 */
 const writesAllowed = computed(() => canSubmitWrites())
 const captureAllowed = computed(() => visionTaskAvailable.value && writesAllowed.value)
+/**
+ * MOB-149：短视频入口只在联机且服务端声明 vision-task-video 时开放（fail-closed）。
+ * 演示模式没有真实抽帧链路，同样隐藏入口并说明限制，保留图片路径。
+ */
+const videoEntryAvailable = computed(() =>
+  session.dataMode === 'live' && hasCapability(CAPABILITY_IDS.visionTaskVideo),
+)
 const isBusy = computed(() => stage.value === 'checking' || stage.value === 'recognizing')
 const cameraAvailable = computed(() => {
   if (typeof navigator === 'undefined') return false
@@ -114,6 +124,7 @@ function reset(): void {
   polling.stop()
   releasePreview()
   file.value = null
+  mediaKind.value = 'image'
   quality.value = null
   candidate.value = null
   error.value = null
@@ -125,11 +136,12 @@ function clearSelection(): void {
   if (isBusy.value) return
   releasePreview()
   file.value = null
+  mediaKind.value = 'image'
   quality.value = null
   candidate.value = null
   error.value = null
   stage.value = 'idle'
-  inputNotice.value = '已取消本次本地图片选择；未发起上传，也未创建视觉任务。'
+  inputNotice.value = '已取消本次本地媒体选择；未发起上传，也未创建视觉任务。'
 }
 
 async function onFilePicked(event: Event): Promise<void> {
@@ -148,6 +160,7 @@ async function onFilePicked(event: Event): Promise<void> {
 
   releasePreview()
   file.value = picked
+  mediaKind.value = 'image'
   previewUrl.value = URL.createObjectURL(picked)
   quality.value = null
   candidate.value = null
@@ -155,19 +168,47 @@ async function onFilePicked(event: Event): Promise<void> {
   await checkQuality(picked)
 }
 
+/** MOB-149：本地先校验格式/时长/大小/方向并展示将上传的媒体摘要，再进入视频质量门。 */
+async function onVideoPicked(event: Event): Promise<void> {
+  if (!videoEntryAvailable.value || !captureAllowed.value || isBusy.value) return
+  const input = event.target as HTMLInputElement
+  const picked = input.files?.[0]
+  input.value = ''
+  if (!picked) return
+
+  const probe = await probeVideoFile(picked)
+  const validation = validateMedicineVideo(picked, probe)
+  if (!validation.ok) {
+    inputNotice.value = validation.message
+    error.value = null
+    return
+  }
+
+  releasePreview()
+  file.value = picked
+  mediaKind.value = 'video'
+  previewUrl.value = URL.createObjectURL(picked)
+  quality.value = null
+  candidate.value = null
+  inputNotice.value = validation.summary
+  await checkQuality(picked)
+}
+
 async function checkQuality(picked: File): Promise<void> {
   const expectedKey = sessionContextKey(session)
   error.value = null
   stage.value = 'checking'
+  const isVideo = mediaKind.value === 'video'
   try {
-    const nextQuality = await activeProvider().checkImageQuality(picked)
+    const provider = activeProvider()
+    const nextQuality = isVideo ? await provider.checkVideoQuality(picked) : await provider.checkImageQuality(picked)
     if (expectedKey !== sessionContextKey(session)) return
     quality.value = nextQuality
     stage.value = 'quality'
     if (quality.value.decision === 'PASS') {
-      speech.speak('照片质量合格，可以开始识别。')
+      speech.speak(isVideo ? '视频抽帧质量合格，可以开始识别。' : '照片质量合格，可以开始识别。')
     } else {
-      speech.speak(`照片需要重拍。${quality.value.retakePrompts.join('，')}`)
+      speech.speak(`${isVideo ? '视频需要重拍' : '照片需要重拍'}。${quality.value.retakePrompts.join('，')}`)
     }
   } catch (cause) {
     if (expectedKey !== sessionContextKey(session)) return
@@ -188,7 +229,7 @@ async function recognize(): Promise<void> {
   stage.value = 'recognizing'
   error.value = null
   try {
-    const nextCandidate = await activeProvider().recognizeMedicine(file.value, memberId.value)
+    const nextCandidate = await activeProvider().recognizeMedicine(file.value, memberId.value, mediaKind.value)
     if (expectedKey !== sessionContextKey(session)) return
     candidate.value = nextCandidate
     stage.value = 'result'
@@ -301,6 +342,12 @@ onBeforeUnmount(() => {
     <p v-if="!cameraAvailable" class="notice" data-tone="warn" role="status">
       {{ imageInputUnavailableMessage() }}
     </p>
+    <p v-if="session.dataMode === 'demo'" class="notice" data-tone="info" role="status">
+      演示模式不提供短视频识别链路（无真实抽帧服务）；短视频入口已隐藏，图片拍摄不受影响。
+    </p>
+    <p v-else-if="!videoEntryAvailable && session.dataMode === 'live' && capabilities.snapshot" class="notice" data-tone="info" role="status">
+      当前家庭服务器未声明短视频任务能力（vision-task-video），短视频入口已隐藏；图片拍摄不受影响。
+    </p>
     <label class="field">
       为哪位成员录入
       <select v-model="memberId" :disabled="membersLoading || members.length === 0">
@@ -316,7 +363,15 @@ onBeforeUnmount(() => {
         :data-scanning="stage === 'checking' || stage === 'recognizing'"
         :data-has-photo="Boolean(previewUrl)"
       >
-        <img v-if="previewUrl" :src="previewUrl" alt="待识别的药盒照片预览" />
+        <img v-if="previewUrl && mediaKind === 'image'" :src="previewUrl" alt="待识别的药盒照片预览" />
+        <video
+          v-else-if="previewUrl && mediaKind === 'video'"
+          :src="previewUrl"
+          controls
+          muted
+          playsinline
+          aria-label="待识别的药盒短视频预览"
+        ></video>
         <div v-else class="vf-hint">
           <AppIcon name="camera" :size="34" />
           <p>把药盒正面放满取景框<br />光线充足、避免反光</p>
@@ -362,6 +417,21 @@ onBeforeUnmount(() => {
             @change="onFilePicked"
           />
         </label>
+        <label
+          v-if="videoEntryAvailable"
+          class="btn btn-quiet btn-lg"
+          :data-disabled="!captureAllowed || membersLoading || members.length === 0"
+          :aria-disabled="!captureAllowed || members.length === 0"
+        >
+          选择短视频
+          <input
+            type="file"
+            accept="video/mp4,video/quicktime,.mp4,.mov"
+            class="visually-hidden-input"
+            :disabled="!captureAllowed || membersLoading || members.length === 0 || stage === 'checking' || stage === 'recognizing'"
+            @change="onVideoPicked"
+          />
+        </label>
       </div>
       <button
         v-if="file && !isBusy"
@@ -375,8 +445,12 @@ onBeforeUnmount(() => {
 
     <p v-if="inputNotice" class="notice" data-tone="warn" role="status">{{ inputNotice }}</p>
     <ErrorNotice v-if="error" :error="error" @retry="retry" />
-    <p v-if="stage === 'checking'" class="notice" role="status">正在进行图片质量检查…</p>
-    <p v-if="stage === 'recognizing'" class="notice" role="status">正在提取 OCR、条码与包装特征证据…</p>
+    <p v-if="stage === 'checking'" class="notice" role="status">
+      {{ mediaKind === 'video' ? '正在进行短视频抽帧质量检查…' : '正在进行图片质量检查…' }}
+    </p>
+    <p v-if="stage === 'recognizing'" class="notice" role="status">
+      {{ mediaKind === 'video' ? '正在上传短视频并创建抽帧识别任务…' : '正在提取 OCR、条码与包装特征证据…' }}
+    </p>
 
     <section v-if="quality && stage !== 'checking'" class="card" aria-labelledby="quality-title" aria-live="polite">
       <div class="card-title-row">
@@ -394,6 +468,9 @@ onBeforeUnmount(() => {
           <strong :data-passed="metric.passed">{{ metric.value }}{{ metric.passed ? '' : '（未达标）' }}</strong>
         </li>
       </ul>
+      <p v-if="quality.framesSummary" class="meta-line">
+        抽帧摘要：采样 {{ quality.framesSummary.sampledFrames }} 帧 · 选中 {{ quality.framesSummary.selectedFrames }} 帧 · 可用 {{ quality.framesSummary.usableFrames }} 帧；可用帧才会进入识别，任一帧都不会被单独当作已确认药品。
+      </p>
       <template v-if="quality.decision === 'RETAKE'">
         <p v-for="prompt in quality.retakePrompts" :key="prompt" class="notice" data-tone="warn">{{ prompt }}</p>
       </template>

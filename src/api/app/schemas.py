@@ -390,7 +390,7 @@ class PlanWorkbenchItemRead(BaseModel):
     times: list[str] = Field(default_factory=list)
     start_date: str | None = None
     end_date: str | None = None
-    status: Literal["NORMAL", "REMINDER", "ESCALATED"]
+    status: Literal["NORMAL", "REMINDER", "ESCALATED", "COMPLETED"]
     next_action_at: datetime
     last_action: PlanWorkbenchActionRead | None = None
     action_history: list[PlanWorkbenchActionRead] = Field(default_factory=list)
@@ -401,6 +401,13 @@ class PlanWorkbenchRead(BaseModel):
     member_id: str
     generated_at: datetime
     plans: list[PlanWorkbenchItemRead]
+
+
+class PlanAutomationRead(BaseModel):
+    member_id: str
+    evaluated_at: datetime
+    created_events: list[HealthEventRead] = Field(default_factory=list)
+    notified_caregiver_actor_ids: list[str] = Field(default_factory=list)
 
 
 class DashboardDayCountRead(BaseModel):

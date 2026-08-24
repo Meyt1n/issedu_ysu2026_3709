@@ -431,19 +431,27 @@ def assess_video_file(
     sample_interval_ms: int = 1000,
     max_selected_frames: int = 60,
     thresholds: QualityThresholds | None = None,
+    max_duration_ms: int | None = None,
 ) -> dict[str, Any]:
     """Decode a local video, sample frames, and return metadata without pixels."""
     capture = cv2.VideoCapture(str(path))
     if not capture.isOpened():
         capture.release()
         raise ValueError("VIDEO_DECODE_FAILED")
+    if max_duration_ms is not None:
+        frame_count = capture.get(cv2.CAP_PROP_FRAME_COUNT)
+        frame_rate = capture.get(cv2.CAP_PROP_FPS)
+        if frame_count > 0 and frame_rate > 0 and frame_count / frame_rate * 1000 > max_duration_ms:
+            capture.release()
+            raise ValueError("VIDEO_DURATION_EXCEEDED")
     decoded_frames = 0
     sampled_count = 0
     max_sampled_frames = max_selected_frames * 4
     next_timestamp = 0
+    last_timestamp_ms = 0
 
     def sampled_frames() -> Iterable[FrameInput]:
-        nonlocal decoded_frames, sampled_count, next_timestamp
+        nonlocal decoded_frames, sampled_count, next_timestamp, last_timestamp_ms
         try:
             while sampled_count < max_sampled_frames:
                 ok, image = capture.read()
@@ -455,6 +463,7 @@ def assess_video_file(
                 if timestamp_ms < next_timestamp:
                     continue
                 sampled_count += 1
+                last_timestamp_ms = max(last_timestamp_ms, timestamp_ms)
                 next_timestamp = timestamp_ms + sample_interval_ms
                 yield FrameInput(
                     index=frame_index,
@@ -476,6 +485,9 @@ def assess_video_file(
         frame_stream.close()
     if decoded_frames == 0:
         raise ValueError("VIDEO_DECODE_FAILED")
+    if max_duration_ms is not None and last_timestamp_ms > max_duration_ms:
+        # Streams without trustworthy metadata still get a hard duration bound.
+        raise ValueError("VIDEO_DURATION_EXCEEDED")
     usable = [frame for frame in selected if frame["allow_downstream"]]
     reasons = [] if usable else ["NO_USABLE_FRAME"]
     return {

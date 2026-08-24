@@ -16,6 +16,19 @@ const route = useRoute()
 const router = useRouter()
 const { session } = useSession()
 
+/** MOB-136：授权状态文字与色调（只读展示，不扩大服务端已授予范围）。 */
+const AUTH_STATUS_LABELS: Record<string, { label: string; tone: 'calm' | 'warn' | 'danger' | 'neutral' }> = {
+  ACTIVE: { label: '有效', tone: 'calm' },
+  EXPIRING: { label: '即将到期', tone: 'warn' },
+  EXPIRED: { label: '已到期', tone: 'danger' },
+  REVOKED: { label: '已撤回', tone: 'neutral' },
+  PENDING: { label: '待生效', tone: 'warn' },
+}
+
+function authStatusLabel(status: string) {
+  return AUTH_STATUS_LABELS[status] ?? { label: `未知状态（${status}）`, tone: 'neutral' as const }
+}
+
 const detail = ref<MemberDetail | null>(null)
 const loading = ref(true)
 const error = ref<ErrorPresentation | null>(null)
@@ -156,15 +169,34 @@ watch(() => sessionContextKey(session), () => void load())
           <h2 id="auth-title">谁可以查看</h2>
         </div>
         <div class="card" style="margin-top: 10px">
-          <EmptyState v-if="detail.authorizations.length === 0" icon="shield" title="暂无对外授权" />
-          <ul v-else class="divided-list">
-            <li v-for="auth in detail.authorizations" :key="auth.granteeName + auth.validUntil">
-              <strong>{{ auth.granteeName }}</strong>
-              <span class="meta-line">可见：{{ auth.fields.join('、') }}</span>
-              <span class="meta-line">用途：{{ auth.purpose }} · 有效期至 {{ formatDay(auth.validUntil) }}</span>
-            </li>
-          </ul>
-          <p class="meta-line">授权的新增、修改与撤回在网页端完成；移动端只读展示。</p>
+          <template v-if="detail.authorizations === 'UNAUTHORIZED'">
+            <p class="notice" data-tone="warn" role="status">
+              当前身份无权查看这个家庭的授权管理（服务端隐藏式拒绝）；这不代表没有授权。授权的新增、修改与撤回由家庭 Owner 在网页端完成。
+            </p>
+          </template>
+          <template v-else>
+            <EmptyState v-if="detail.authorizations.length === 0" icon="shield" title="暂无对外授权" hint="家庭 Owner 可在网页端授权中心新增" />
+            <ul v-else class="divided-list">
+              <li v-for="auth in detail.authorizations" :key="auth.id">
+                <div class="card-title-row">
+                  <strong>{{ auth.granteeName }}</strong>
+                  <span class="tag" :data-tone="authStatusLabel(auth.status).tone">{{ authStatusLabel(auth.status).label }}</span>
+                </div>
+                <span class="meta-line">身份标识：{{ auth.granteeActorId }}</span>
+                <span class="meta-line">可见字段：{{ auth.fields.length > 0 ? auth.fields.join('、') : '（无）' }}</span>
+                <span class="meta-line">允许动作：{{ auth.actions.length > 0 ? auth.actions.join('、') : '（无）' }}</span>
+                <span class="meta-line">用途：{{ auth.purpose }}</span>
+                <span class="meta-line">
+                  有效期：{{ formatDay(auth.validFrom) }} 至 {{ formatDay(auth.validUntil) }}
+                  <template v-if="auth.status === 'EXPIRING'">（即将到期，请到网页端确认续期）</template>
+                  <template v-else-if="auth.status === 'EXPIRED'">（已到期，不再据此展示数据）</template>
+                  <template v-else-if="auth.status === 'REVOKED'">（已撤回，服务端不再接受此授权）</template>
+                </span>
+                <span class="meta-line">服务端版本：v{{ auth.version }}</span>
+              </li>
+            </ul>
+          </template>
+          <p class="meta-line">授权的新增、修改与撤回在网页端完成；移动端只读展示服务端返回的授权状态。</p>
         </div>
       </section>
     </template>
