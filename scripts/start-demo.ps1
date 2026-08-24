@@ -215,6 +215,11 @@ $managed += Start-ManagedProcess "outbox-worker" $uv @(
     "run", "python", "-m", "app.outbox_worker", "--loop"
 )
 
+Write-Host "Starting care plan automation worker..."
+$managed += Start-ManagedProcess "care-plan-worker" $uv @(
+    "run", "python", "-m", "app.care_plan_worker", "--loop"
+)
+
 Write-Host "Starting web..."
 $managed += Start-ManagedProcess "web" $npm @("run", "dev:web")
 Wait-Http "http://127.0.0.1:$WebPort/health" 90

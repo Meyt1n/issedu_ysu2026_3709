@@ -11,7 +11,9 @@ from app.care_plan import (
     confirm_plan,
     defer_plan,
     miss_plan,
+    plan_automation_decisions,
     skip_plan,
+    validate_plan_confirmation_window,
     validate_safety_window,
 )
 from app.models import HealthEvent
@@ -32,6 +34,35 @@ class TestSafetyWindow:
         last = datetime.now(UTC)
         ok_time = last + timedelta(hours=5)
         validate_safety_window(last, ok_time, min_interval=4)
+
+    def test_clock_window_uses_household_time_zone(self):
+        proposed = datetime(2026, 8, 23, 16, 30, tzinfo=UTC)
+        plan = HealthEvent(
+            id="plan-time-zone",
+            event_type="plan_created",
+            occurred_at=proposed - timedelta(days=1),
+            payload={
+                "safety_window": {
+                    "earliest_time": "00:00",
+                    "latest_time": "01:00",
+                }
+            },
+        )
+
+        validate_plan_confirmation_window(
+            [plan],
+            plan.id,
+            proposed,
+            time_zone="Asia/Shanghai",
+        )
+        with pytest.raises(HTTPException) as exc:
+            validate_plan_confirmation_window(
+                [plan],
+                plan.id,
+                proposed,
+                time_zone="UTC",
+            )
+        assert exc.value.detail == "TIME_WINDOW_VIOLATION"
 
 
 class TestEscalation:
@@ -101,3 +132,54 @@ class TestPlanActions:
         assert item["last_action"]["action"] == "MISS"
         assert item["last_action"]["reason"] == "忘记服用"
         assert item["action_history"][0]["action"] == "MISS"
+
+
+class TestPlanAutomation:
+    def test_unapproved_plan_is_never_automatically_written(self):
+        now = datetime(2026, 8, 23, 12, tzinfo=UTC)
+        plan = HealthEvent(
+            id="plan-unapproved",
+            event_type="plan_created",
+            occurred_at=now - timedelta(hours=30),
+            payload={"drug": "演示药", "schedule": "每日一次"},
+        )
+
+        assert plan_automation_decisions([plan], time_zone="Asia/Shanghai", now=now) == []
+
+    def test_overdue_approved_plan_creates_missed_and_escalation_decisions(self):
+        now = datetime(2026, 8, 23, 12, tzinfo=UTC)
+        plan = HealthEvent(
+            id="plan-approved",
+            event_type="plan_created",
+            occurred_at=now - timedelta(hours=30),
+            payload={
+                "drug": "演示药",
+                "schedule": "每日一次",
+                "automation": {"authorization": "AUTHORIZED"},
+                "caregiver_notification": {"authorization": "AUTHORIZED"},
+            },
+        )
+
+        decisions = plan_automation_decisions([plan], time_zone="Asia/Shanghai", now=now)
+
+        assert [item["event_type"] for item in decisions] == ["plan_missed", "care_escalated"]
+        assert decisions[-1]["notify_caregivers"] is True
+
+    def test_course_end_uses_household_local_date(self):
+        # UTC is still Aug 23, while the household local date is already Aug 24.
+        now = datetime(2026, 8, 23, 16, 30, tzinfo=UTC)
+        plan = HealthEvent(
+            id="plan-course",
+            event_type="plan_created",
+            occurred_at=now - timedelta(days=2),
+            payload={
+                "drug": "演示药",
+                "schedule": "每日一次",
+                "end_date": "2026-08-23",
+                "automation": {"authorization": "AUTHORIZED"},
+            },
+        )
+
+        decisions = plan_automation_decisions([plan], time_zone="Asia/Shanghai", now=now)
+
+        assert [item["event_type"] for item in decisions] == ["course_ended"]

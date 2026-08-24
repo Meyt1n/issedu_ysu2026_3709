@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     outbox_poll_seconds: float = 2.0
     outbox_batch_size: int = 100
     outbox_stale_seconds: int = 300
+    care_plan_poll_seconds: float = Field(default=30.0, ge=5, le=3600)
     file_root: str = "./data/files"
     master_data_root: str = "./data/master-data"
     master_data_approved_versions: str = ""
