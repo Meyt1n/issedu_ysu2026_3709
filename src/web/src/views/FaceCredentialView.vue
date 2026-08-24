@@ -39,6 +39,23 @@ const accountActorId = ref('')
 const accountBindingSaving = ref(false)
 const accountBindingError = ref('')
 const boundFaceHouseholdId = ref(getBoundFaceHouseholdId())
+const confirmationCodeValid = computed(() => {
+  const code = confirmationCode.value.trim()
+  return confirmationMethod.value === 'pin' ? /^\d{6}$/.test(code) : code.length >= 8 && code.length <= 256
+})
+const registrationBlockReason = computed(() => {
+  if (session.authMode !== 'session') return '当前是开发演示身份，请返回欢迎页切换到“正式账号登录”。'
+  if (!session.isOwnerView) return '只有家庭管理员可以注册人脸凭证。'
+  if (!session.selectedHouseholdId) return '请先选择一个家庭。'
+  if (!selectedActorId.value) return '请先选择要绑定人脸的家庭账号。'
+  if (selectedFrames.value.length < 2) return '请先点击“开始动态采集”，完成至少两帧画面。'
+  if (!confirmationCodeValid.value) {
+    return confirmationMethod.value === 'pin' ? '请输入已设置的六位家庭 PIN。' : '请输入当前正式账号密码（至少八位）。'
+  }
+  if (!consent.value) return '请先勾选本人明确同意，才能注册人脸凭证。'
+  return ''
+})
+const canRegisterCredential = computed(() => !saving.value && !registrationBlockReason.value)
 const boundFaceHouseholdLabel = computed(() => {
   const household = session.households.find(item => item.id === boundFaceHouseholdId.value)
   return household?.name ?? boundFaceHouseholdId.value
@@ -166,12 +183,8 @@ async function bindMemberAccount(): Promise<void> {
 
 async function registerCredential(): Promise<void> {
   const householdId = session.selectedHouseholdId
-  if (session.authMode !== 'session') {
-    error.value = '人脸凭证注册需要正式账号会话，请先切换到“正式账号登录”。'
-    return
-  }
-  if (!householdId || selectedFrames.value.length < 2 || !selectedActorId.value || !consent.value) {
-    error.value = '请选择账号，完成三帧动态采集，并确认生物特征处理同意。'
+  if (registrationBlockReason.value) {
+    error.value = registrationBlockReason.value
     return
   }
   saving.value = true
@@ -293,7 +306,8 @@ onMounted(() => {
           <label class="field">{{ confirmationMethod === 'pin' ? '六位 PIN' : '账号密码' }}<input v-model="confirmationCode" type="password" :inputmode="confirmationMethod === 'pin' ? 'numeric' : 'text'" autocomplete="off" required /></label>
           <label class="check-row"><input v-model="replaceExisting" type="checkbox" /> 已有凭证时重新绑定</label>
           <label class="check-row"><input v-model="consent" type="checkbox" required /> 我已获得本人明确同意，允许为所选家庭账号注册人脸凭证。</label>
-          <button type="submit" class="btn btn-primary" :disabled="session.authMode !== 'session' || saving || selectedFrames.length < 2 || !consent"><AppIcon name="shield" :size="15" /> {{ saving ? '正在校验动态画面…' : '注册动态人脸凭证' }}</button>
+          <p v-if="registrationBlockReason" class="notice warn" role="status"><AppIcon name="info" :size="16" /> {{ registrationBlockReason }}</p>
+          <button type="submit" class="btn btn-primary" :disabled="!canRegisterCredential"><AppIcon name="shield" :size="15" /> {{ saving ? '正在校验动态画面…' : '注册动态人脸凭证' }}</button>
         </form>
       </section>
 
