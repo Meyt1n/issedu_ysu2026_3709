@@ -9,18 +9,28 @@ import { ApiClient, ApiClientError } from '@/api/client'
 import { buildInfoLine } from '@/buildInfo'
 import { presentApiError, type ErrorPresentation } from '@/api/errors'
 import { requestOutcomeLabel, requestTraces, type RequestTraceEntry } from '@/api/requestLog'
+import { clearLocalData, localDataInventory } from '@/stores/localData'
 import { resetDemoData } from '@/data/demoProvider'
 import { activeProvider, clearHouseholdSelection, selectHousehold } from '@/data'
 import type { HouseholdOption } from '@/data/types'
 import { currentAuthAdapter, familyAuthAdapter } from '@/data/authAdapter'
 import { useA11y } from '@/stores/accessibility'
 import {
+  canPromptInstall,
+  dismissInstallEntry,
+  installDismissed,
+  pwaSupportSpeechText,
+  recoverShellCaches,
+  serviceWorkerSupported,
+  triggerInstallPrompt,
+} from '@/stores/pwa'
+import {
   capabilityDescription,
   capabilityLabel,
   useCapabilities,
 } from '@/stores/capabilities'
 import { getAuthSession, useAuth } from '@/stores/auth'
-import { isDevActorEnabled, useAuthorizationBoundary, useSession, type AuthMode } from '@/stores/session'
+import { isDevActorEnabled, resetSession, useAuthorizationBoundary, useSession, type AuthMode } from '@/stores/session'
 import { tapFeedback } from '@/utils/haptics'
 import { normalizePhoneNumber } from '@/utils/phone'
 import { DEFAULT_SERVER_URL_POLICY, validateServerBaseUrl } from '@/utils/serverUrl'
@@ -47,12 +57,94 @@ function refreshTraceView(): void {
   traceView.value = [...requestTraces()].slice(0, 10)
 }
 
+/** MOB-146：本地数据管理与数据权利。 */
+const localDataItems = localDataInventory()
+const clearArmed = ref(false)
+const clearResult = ref<{ ok: boolean; failures: string[]; cleared: string[] } | null>(null)
+let clearArmTimer: ReturnType<typeof setTimeout> | null = null
+
+function armClearLocalData(): void {
+  if (!clearArmed.value) {
+    clearArmed.value = true
+    clearResult.value = null
+    if (clearArmTimer) clearTimeout(clearArmTimer)
+    clearArmTimer = setTimeout(() => { clearArmed.value = false }, 4000)
+    return
+  }
+  if (clearArmTimer) clearTimeout(clearArmTimer)
+  clearArmed.value = false
+  // 先重置内存态（resetSession 会把默认值持久化），再清理存储键，
+  // 保证清理后两个设置键确实消失、可验证。
+  resetSession()
+  clearCapabilities()
+  void signOut(null)
+  const result = clearLocalData()
+  clearResult.value = result
+}
+
+const dataRightsTarget = computed(() =>
+  session.dataMode === 'live' && session.serverBaseUrl
+    ? `当前联机家庭服务器：${session.serverBaseUrl}`
+    : '当前为演示模式（未连接任何服务器；演示数据为虚构，无需办理）',
+)
+
 function formatTraceTime(iso: string): string {
   const time = new Date(iso)
   return Number.isNaN(time.getTime()) ? iso : time.toLocaleTimeString('zh-CN', { hour12: false })
 }
 
 const demoResetMessage = ref('')
+/** MOB-151：安装入口与外壳缓存恢复（只清 shell 前缀缓存，不碰任何健康数据）。 */
+const installPromptAvailable = ref(false)
+const installMessage = ref('')
+const recoveryArmed = ref(false)
+const recoveryMessage = ref('')
+let recoveryArmTimer: ReturnType<typeof setTimeout> | null = null
+
+function refreshInstallAvailability(): void {
+  installPromptAvailable.value = canPromptInstall()
+}
+
+async function onInstallClick(): Promise<void> {
+  const outcome = await triggerInstallPrompt()
+  installMessage.value = outcome === 'prompted'
+    ? '已请求系统安装引导；若浏览器未弹出，请使用浏览器菜单里的“安装应用/添加到主屏幕”。'
+    : '当前浏览器暂未提供安装引导，请使用浏览器菜单里的“安装应用/添加到主屏幕”。'
+  refreshInstallAvailability()
+}
+
+function onDismissInstall(): void {
+  dismissInstallEntry()
+  installMessage.value = ''
+}
+
+async function onRecoverShellClick(): Promise<void> {
+  if (!recoveryArmed.value) {
+    recoveryArmed.value = true
+    recoveryMessage.value = '将只清理本机的离线外壳缓存并刷新，不影响服务端健康数据。再次点击确认执行。'
+    if (recoveryArmTimer) clearTimeout(recoveryArmTimer)
+    recoveryArmTimer = setTimeout(() => {
+      recoveryArmed.value = false
+    }, 6000)
+    return
+  }
+  if (recoveryArmTimer) clearTimeout(recoveryArmTimer)
+  recoveryArmed.value = false
+  recoveryMessage.value = ''
+  try {
+    const removed = await recoverShellCaches(caches)
+    recoveryMessage.value = `已清理 ${removed.length} 个外壳缓存，正在刷新以加载受控版本…`
+  } catch {
+    recoveryMessage.value = '清理外壳缓存失败；请检查浏览器存储权限后重试。'
+    return
+  }
+  setTimeout(() => window.location.reload(), 400)
+}
+
+onMounted(() => {
+  refreshInstallAvailability()
+  window.addEventListener('beforeinstallprompt', refreshInstallAvailability)
+})
 const caregiverNameDraft = ref(session.caregiverName)
 const caregiverPhoneDraft = ref(session.caregiverPhone)
 const contactError = ref('')
@@ -471,6 +563,37 @@ onMounted(() => {
       </button>
     </section>
 
+    <section class="card" aria-labelledby="pwa-title">
+      <div class="h-icon-row">
+        <span class="row-icon" data-tone="info" aria-hidden="true"><AppIcon name="shield" :size="16" /></span>
+        <h2 id="pwa-title">安装与离线恢复</h2>
+      </div>
+      <p class="meta-line">{{ pwaSupportSpeechText() }}</p>
+      <template v-if="serviceWorkerSupported()">
+        <div v-if="!installDismissed" class="pwa-install-row">
+          <button type="button" :disabled="!installPromptAvailable" @click="onInstallClick">
+            {{ installPromptAvailable ? '安装到主屏幕' : '安装入口待系统就绪' }}
+          </button>
+          <button type="button" class="secondary" @click="onDismissInstall">不再提示</button>
+        </div>
+        <p v-if="!installDismissed && !installPromptAvailable" class="meta-line">
+          当前浏览器未触发安装引导：请使用浏览器菜单中的“安装应用 / 添加到主屏幕”，安装后可获得离线外壳与全屏体验。
+        </p>
+        <p v-if="installMessage" class="notice" data-tone="info" role="status">{{ installMessage }}</p>
+        <div class="pwa-recovery-row">
+          <button type="button" :class="['recovery-button', { armed: recoveryArmed }]" @click="onRecoverShellClick">
+            {{ recoveryArmed ? '确认清理并刷新' : '清理离线外壳缓存' }}
+          </button>
+        </div>
+        <p class="meta-line">
+          外壳缓存异常、版本回滚后打不开或页面显示旧外壳时使用；只清理本机离线外壳，不会影响服务端健康数据。
+        </p>
+        <p v-if="recoveryMessage" class="notice" :data-tone="recoveryMessage.includes('失败') ? 'error' : 'info'" role="status">
+          {{ recoveryMessage }}
+        </p>
+      </template>
+    </section>
+
     <section class="card" aria-labelledby="source-title">
       <div class="h-icon-row">
         <span class="row-icon" data-tone="info" aria-hidden="true"><AppIcon name="refresh" :size="16" /></span>
@@ -781,6 +904,51 @@ onMounted(() => {
       </template>
     </section>
 
+    <section class="card" aria-labelledby="local-data-title">
+      <div class="h-icon-row">
+        <span class="row-icon" data-tone="calm" aria-hidden="true"><AppIcon name="shield" :size="16" /></span>
+        <h2 id="local-data-title">本地数据管理</h2>
+      </div>
+      <ul class="divided-list">
+        <li v-for="item in localDataItems" :key="item.key">
+          <div class="card-title-row">
+            <strong>{{ item.label }}</strong>
+            <span class="tag" :data-tone="item.saved ? 'info' : 'neutral'">{{ item.saved ? '本机保存' : '不保存' }}</span>
+          </div>
+          <span class="meta-line">{{ item.note }}</span>
+        </li>
+      </ul>
+      <button
+        type="button"
+        class="btn btn-quiet btn-block"
+        :data-tone="clearArmed ? 'danger' : undefined"
+        @click="armClearLocalData"
+      >
+        {{ clearArmed ? '再点一次确认：清理本地设置并退出联机' : '清理本地设置并退出联机' }}
+      </button>
+      <p v-if="clearResult && clearResult.ok" class="notice" data-tone="success" role="status">
+        已清理：{{ clearResult.cleared.join('、') }}。已回到演示模式；服务端健康事实不受影响。
+      </p>
+      <p v-else-if="clearResult && !clearResult.ok" class="notice" data-tone="error" role="alert">
+        清理未完成，不声称已删除：{{ clearResult.failures.join('；') }}。请检查浏览器存储设置（隐私模式可能禁用存储）后重试。
+      </p>
+      <p class="meta-line">清理不会删除或伪造服务端健康事实；导出、删除、撤回请在网页端办理（见下方"数据权利"）。</p>
+    </section>
+
+    <section class="card" aria-labelledby="data-rights-title">
+      <div class="h-icon-row">
+        <span class="row-icon" data-tone="warn" aria-hidden="true"><AppIcon name="shield" :size="16" /></span>
+        <h2 id="data-rights-title">数据权利（导出、删除、撤回）</h2>
+      </div>
+      <p class="meta-line">{{ dataRightsTarget }}</p>
+      <p class="meta-line">
+        家庭健康数据的导出、删除与撤回由家庭主人（Owner）在网页端发起：服务端提供导出清单与删除任务流程，完成后数据以服务端记录为准。
+      </p>
+      <p class="meta-line">
+        移动端不在本机复制健康数据；清理本机设置不影响服务端事实。需要办理时，请在家庭服务器的网页端登录 Owner 账号操作。
+      </p>
+    </section>
+
     <section class="card" aria-labelledby="privacy-title">
       <div class="h-icon-row">
         <span class="row-icon" data-tone="calm" aria-hidden="true"><AppIcon name="shield" :size="16" /></span>
@@ -912,4 +1080,36 @@ html[data-contrast='high'] .mode-option { border-color: #000; background: #fff; 
 }
 .capability-list li > span:last-child { display: grid; gap: 2px; }
 .capability-list .tag { margin-top: 1px; }
+
+.pwa-install-row,
+.pwa-recovery-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 10px 0 4px;
+}
+
+.pwa-install-row button,
+.pwa-recovery-row .recovery-button {
+  border: 1px solid #2f6d5a;
+  background: #2f6d5a;
+  color: #fff;
+  border-radius: 10px;
+  padding: 8px 14px;
+  font-size: 0.9rem;
+}
+
+.pwa-install-row button.secondary {
+  background: transparent;
+  color: #2f6d5a;
+}
+
+.pwa-install-row button:disabled {
+  opacity: 0.55;
+}
+
+.pwa-recovery-row .recovery-button.armed {
+  background: #b3541e;
+  border-color: #b3541e;
+}
 </style>

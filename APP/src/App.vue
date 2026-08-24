@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { watch } from 'vue'
+import { ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import AppTabBar from '@/components/AppTabBar.vue'
+import PrivacyNoticeSheet from '@/components/PrivacyNoticeSheet.vue'
+import PwaUpdateNotice from '@/components/PwaUpdateNotice.vue'
 import ToastHost from '@/components/ToastHost.vue'
 import {
   clearSpeechGuidance,
@@ -11,7 +13,18 @@ import {
   useSpeechGuidance,
 } from '@/composables/useSpeech'
 import { useAuth } from '@/stores/auth'
+import { usePrivacyNotice } from '@/stores/privacy'
 import { useSession } from '@/stores/session'
+
+/** MOB-146：首次使用或隐私版本更新时展示告知；确认写入失败会再次展示。 */
+const showPrivacyNotice = ref(false)
+const { required: privacyNoticeRequired, acknowledge: acknowledgePrivacy } = usePrivacyNotice()
+showPrivacyNotice.value = privacyNoticeRequired()
+
+function onPrivacyAcknowledged(): void {
+  const ok = acknowledgePrivacy()
+  showPrivacyNotice.value = !ok
+}
 
 const speakingText = useSpeakingIndicator()
 const speechGuidance = useSpeechGuidance()
@@ -65,6 +78,7 @@ watch(
       <component :is="Component" />
     </Transition>
   </RouterView>
+  <PwaUpdateNotice />
   <ToastHost />
 
   <div v-if="speechGuidance" class="speech-guidance" role="status">
@@ -87,6 +101,11 @@ watch(
   </Transition>
 
   <AppTabBar />
+
+  <PrivacyNoticeSheet
+    v-if="showPrivacyNotice"
+    @acknowledged="onPrivacyAcknowledged"
+  />
 </template>
 
 <style scoped>

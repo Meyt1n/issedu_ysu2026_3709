@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { ApiClient } from '@/api/client'
+import { ApiClient, ApiClientError } from '@/api/client'
 import type { HealthEvent } from '@/api/types'
 import type { CareTask } from './types'
 
-import { deriveTaskActionHistory, deriveTasksFromEvents, deriveWeeklyTrendFromEvents, environmentActionUnavailable, HttpDataProvider } from './httpProvider'
+import { authorizationStatus, deriveTaskActionHistory, deriveTasksFromEvents, deriveWeeklyTrendFromEvents, environmentActionUnavailable, HttpDataProvider } from './httpProvider'
 import { clearCapabilities, setCapabilities } from '@/stores/capabilities'
 
 let sequence = 0
@@ -203,6 +203,103 @@ describe('联机写请求的幂等与重试', () => {
     expect(first?.[0].idempotency_key).toBeTruthy()
     expect(second?.[0].idempotency_key).toBe(first?.[0].idempotency_key)
     expect(second?.[1]).toMatchObject({ idempotencyKey: first?.[0].idempotency_key })
+  })
+
+  it('MOB-149：视频质量门映射帧统计并返回抽帧摘要', async () => {
+    const client = {
+      checkVisionQuality: vi.fn().mockResolvedValue({
+        decision: 'PASS',
+        reasons: [],
+        retake_prompts: [],
+        metrics: { decoded_frames: 90, sampled_frames: 3, selected_frames: 3, usable_frames: 3 },
+        quality_receipt: 'video-receipt',
+        media_type: 'video',
+      }),
+    } as unknown as ApiClient
+    const provider = new HttpDataProvider(client, () => ({ actorId: 'actor-1', accessPurpose: 'family-care', householdId: '' }))
+    const file = new File([new Uint8Array(40_000)], 'clip.mp4', { type: 'video/mp4' })
+
+    const quality = await provider.checkVideoQuality(file)
+
+    expect(client.checkVisionQuality).toHaveBeenCalledWith(file, 'video', expect.anything())
+    expect(quality.decision).toBe('PASS')
+    expect(quality.framesSummary).toMatchObject({ mediaType: 'video', sampledFrames: 3, selectedFrames: 3, usableFrames: 3 })
+    const labels = quality.metrics.map(metric => metric.label)
+    expect(labels).toContain('采样帧数')
+    expect(quality.metrics.every(metric => metric.passed)).toBe(true)
+  })
+
+  it('MOB-149：recognizeMedicine 视频路径携带 media_type 且幂等键带视频前缀', async () => {
+    const createVisionTask = vi.fn().mockResolvedValue({
+      id: 'vision-video-1',
+      household_id: 'h1',
+      member_id: 'm1',
+      file_id: 'stored.mp4',
+      media_type: 'video',
+      task_type: 'ocr',
+      status: 'QUEUED',
+      error_code: null,
+      error_message: null,
+      result: null,
+      model_version: null,
+      created_by: 'actor-1',
+      created_at: '2026-08-23T08:00:00Z',
+    })
+    const uploadFile = vi.fn().mockResolvedValue({
+      original_name: 'clip.mp4',
+      storage_key: 'stored.mp4',
+      size_bytes: 42,
+      hash_algo: 'sha256',
+      hash: 'hash',
+      extension: '.mp4',
+    })
+    const client = {
+      checkVisionQuality: vi.fn().mockResolvedValue({
+        decision: 'PASS',
+        reasons: [],
+        retake_prompts: [],
+        metrics: { sampled_frames: 2, selected_frames: 2, usable_frames: 2 },
+        quality_receipt: 'video-receipt',
+      }),
+      uploadFile,
+      createVisionTask,
+    } as unknown as ApiClient
+    const provider = new HttpDataProvider(client, () => ({ actorId: 'actor-1', accessPurpose: 'family-care', householdId: '' }))
+    const file = new File([new Uint8Array(40_000)], 'clip.mp4', { type: 'video/mp4' })
+
+    const result = await provider.recognizeMedicine(file, 'm1', 'video')
+
+    expect(client.checkVisionQuality).toHaveBeenCalledWith(file, 'video', expect.anything())
+    expect(createVisionTask.mock.calls[0]?.[0]).toMatchObject({
+      file_id: 'stored.mp4',
+      media_type: 'video',
+      quality_receipt: 'video-receipt',
+    })
+    expect(String(createVisionTask.mock.calls[0]?.[0].idempotency_key)).toMatch(/^vision-video:/)
+    expect(result.handoff?.taskId).toBe('vision-video-1')
+    expect(result.fields.some(field => field.label === '媒体类型' && field.value === 'video')).toBe(true)
+  })
+
+  it('MOB-149：视频未过质量门时不创建任务不上传', async () => {
+    const uploadFile = vi.fn()
+    const createVisionTask = vi.fn()
+    const client = {
+      checkVisionQuality: vi.fn().mockResolvedValue({
+        decision: 'RETAKE',
+        reasons: ['没有可用证据帧'],
+        retake_prompts: ['请保持药盒稳定'],
+        metrics: { usable_frames: 0 },
+        quality_receipt: null,
+      }),
+      uploadFile,
+      createVisionTask,
+    } as unknown as ApiClient
+    const provider = new HttpDataProvider(client, () => ({ actorId: 'actor-1', accessPurpose: 'family-care', householdId: '' }))
+    const file = new File([new Uint8Array(40_000)], 'clip.mp4', { type: 'video/mp4' })
+
+    await expect(provider.recognizeMedicine(file, 'm1', 'video')).rejects.toThrow('视频未通过抽帧质量门控')
+    expect(uploadFile).not.toHaveBeenCalled()
+    expect(createVisionTask).not.toHaveBeenCalled()
   })
 })
 
@@ -551,4 +648,110 @@ describe('任务操作历史推导（MOB-135）', () => {
     expect(entries).toHaveLength(1)
     expect(entries[0]).toMatchObject({ action: 'skip', actionLabel: '跳过', finalStatus: 'SKIPPED', receipt: 'RECEIPTED' })
   })
+
+  it('无效服务端时间排在有效时间之后，并以事件 ID 保证稳定顺序', () => {
+    const events = [
+      makeEvent({ id: 'p1', event_type: 'plan_created', payload: { drug: 'C药', schedule: '每日' } }),
+      makeEvent({ id: 'a-invalid', event_type: 'plan_skipped', payload: { plan_event_id: 'p1' }, occurred_at: 'not-a-date' }),
+      makeEvent({ id: 'a-valid', event_type: 'plan_confirmed', payload: { plan_event_id: 'p1' }, occurred_at: '2026-08-22T02:00:00Z' }),
+    ]
+
+    const entries = deriveTaskActionHistory(events, 'm1', '成员')
+    expect(entries.map(entry => entry.eventId)).toEqual(['a-valid', 'a-invalid'])
+    expect(entries[1]?.serverTime).toBe('not-a-date')
+  })
+})
+
+describe('授权范围只读呈现（MOB-136）', () => {
+  const now = new Date('2026-08-23T12:00:00Z')
+
+  it('授权状态只由服务端时间/撤回字段推导，解析失败按已到期 fail-closed', () => {
+    const base = { valid_from: '2026-08-01T00:00:00Z', valid_until: '2026-09-01T00:00:00Z', revoked_at: null as string | null }
+    expect(authorizationStatus(base, now)).toBe('ACTIVE')
+    expect(authorizationStatus({ ...base, valid_until: '2026-08-28T00:00:00Z' }, now)).toBe('EXPIRING')
+    expect(authorizationStatus({ ...base, valid_until: '2026-08-20T00:00:00Z' }, now)).toBe('EXPIRED')
+    expect(authorizationStatus({ ...base, revoked_at: '2026-08-22T00:00:00Z' }, now)).toBe('REVOKED')
+    expect(authorizationStatus({ ...base, valid_from: '2026-09-01T00:00:00Z', valid_until: '2026-10-01T00:00:00Z' }, now)).toBe('PENDING')
+    expect(authorizationStatus({ ...base, valid_until: 'not-a-date' }, now)).toBe('EXPIRED')
+  })
+
+  function authRead(patch: Record<string, unknown> = {}) {
+    return {
+      id: 'auth-1',
+      household_id: 'h1',
+      member_id: 'm1',
+      grantor_actor_id: 'owner-1',
+      grantee_actor_id: 'care-1',
+      data_fields: ['health_events'],
+      actions: ['READ_EVENTS'],
+      purpose: 'family-care',
+      valid_from: '2026-08-01T00:00:00Z',
+      valid_until: '2099-01-01T00:00:00Z',
+      revoked_at: null,
+      version: 3,
+      created_at: '2026-08-01T00:00:00Z',
+      updated_at: '2026-08-01T00:00:00Z',
+      ...patch,
+    }
+  }
+
+  it('Owner 视角映射完整字段并按成员过滤', async () => {
+    const provider = new HttpDataProvider(
+      {
+        listHouseholds: vi.fn().mockResolvedValue([{ id: 'h1' }]),
+        listMembers: vi.fn().mockResolvedValue([
+          { id: 'm1', display_name: '王秀兰', role: 'DEPENDENT' },
+          { id: 'm2', display_name: '李建国', role: 'DEPENDENT' },
+        ]),
+        listMemberTimeline: vi.fn().mockResolvedValue([]),
+        listAuthorizations: vi.fn().mockResolvedValue([authRead(), authRead({ id: 'auth-2', member_id: 'm2' })]),
+      } as unknown as ApiClient,
+      () => ({ actorId: 'owner-1', accessPurpose: 'family-care', householdId: 'h1' }),
+    )
+
+    const detail = await provider.getMemberDetail('m1')
+    expect(detail.authorizations).not.toBe('UNAUTHORIZED')
+    expect(detail.authorizations).toHaveLength(1)
+    expect(detail.authorizations![0]).toMatchObject({
+      id: 'auth-1',
+      granteeActorId: 'care-1',
+      granteeName: 'care-1',
+      fields: ['health_events'],
+      actions: ['READ_EVENTS'],
+      purpose: 'family-care',
+      version: 3,
+      status: 'ACTIVE',
+    })
+    expect(listAuthCall(provider)).toHaveBeenCalledWith('h1', expect.anything())
+  })
+
+  it('非 Owner 的 403/404 是隐藏式拒绝 → UNAUTHORIZED，与"暂无授权"区分；其他异常如实抛出', async () => {
+    const unauthorized = new HttpDataProvider(
+      {
+        listHouseholds: vi.fn().mockResolvedValue([{ id: 'h1' }]),
+        listMembers: vi.fn().mockResolvedValue([{ id: 'm1', display_name: '王秀兰', role: 'DEPENDENT' }]),
+        listMemberTimeline: vi.fn().mockResolvedValue([]),
+        listAuthorizations: vi.fn().mockRejectedValue(new ApiClientError('no', { status: 404, code: 'NOT_FOUND' })),
+      } as unknown as ApiClient,
+      () => ({ actorId: 'care-1', accessPurpose: 'family-care', householdId: 'h1' }),
+    )
+    const detail = await unauthorized.getMemberDetail('m1')
+    expect(detail.authorizations).toBe('UNAUTHORIZED')
+
+    const broken = new HttpDataProvider(
+      {
+        listHouseholds: vi.fn().mockResolvedValue([{ id: 'h1' }]),
+        listMembers: vi.fn().mockResolvedValue([{ id: 'm1', display_name: '王秀兰', role: 'DEPENDENT' }]),
+        listMemberTimeline: vi.fn().mockResolvedValue([]),
+        listAuthorizations: vi.fn().mockRejectedValue(new ApiClientError('boom', { status: 502, code: 'HTTP_ERROR' })),
+      } as unknown as ApiClient,
+      () => ({ actorId: 'owner-1', accessPurpose: 'family-care', householdId: 'h1' }),
+    )
+    await expect(broken.getMemberDetail('m1')).rejects.toMatchObject({ status: 502 })
+  })
+
+  function listAuthCall(provider: HttpDataProvider) {
+    const client = (provider as unknown as { client: { listAuthorizations: ReturnType<typeof vi.fn> } }).client
+    return client.listAuthorizations
+  }
 })

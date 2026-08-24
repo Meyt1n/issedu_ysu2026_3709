@@ -5,6 +5,7 @@ Only one binding can be active per model_id at a time.
 """
 
 import logging
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -23,6 +24,26 @@ DEFAULT_SAFETY_THRESHOLDS: dict[str, Any] = {
     "max_hard_negative_fp": 0,
     "require_comparison_report": True,
 }
+HCT203_MODEL_PREFIX = "hct-yolo"
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _validate_hct203_publication(binding: "ModelVersionBinding") -> None:
+    """Prevent an HCT-203 candidate from bypassing its publication manifest."""
+
+    if not binding.model_id.startswith(HCT203_MODEL_PREFIX):
+        return
+    thresholds = binding.safety_thresholds or {}
+    if thresholds.get("hct203_publication_status") != "PUBLISHED_AUXILIARY_ONLY":
+        raise ValueError("HCT203_PUBLICATION_REQUIRED")
+    authority = thresholds.get("hct203_release_authority")
+    approval_field = (
+        "hct203_waiver_sha256" if authority == "MAINTAINER_WAIVER" else "hct203_r3_review_sha256"
+    )
+    for field in ("hct203_machine_gate_sha256", approval_field):
+        value = thresholds.get(field)
+        if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None:
+            raise ValueError(f"HCT203_PUBLICATION_HASH_REQUIRED:{field}")
 
 
 # ── Model ────────────────────────────────────────────────────────────────
@@ -132,6 +153,8 @@ def activate_binding(
         raise ValueError("BINDING_ALREADY_REVOKED")
     if binding.release_status == "active":
         raise ValueError("BINDING_ALREADY_ACTIVE")
+
+    _validate_hct203_publication(binding)
 
     thresholds = binding.safety_thresholds or {}
     if thresholds.get("require_comparison_report", True) and not binding.comparison_report_hash:

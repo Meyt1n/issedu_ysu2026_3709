@@ -1,6 +1,6 @@
 import { ApiClient, ApiClientError } from '@/api/client'
 import { CAPABILITY_IDS, hasCapability } from '@/stores/capabilities'
-import type { HealthEvent, Member, RequestOptions, UploadedFile, VisionTask } from '@/api/types'
+import type { AuthorizationRead, HealthEvent, Member, RequestOptions, UploadedFile, VisionTask } from '@/api/types'
 import type {
   CareTask,
   DataProvider,
@@ -23,6 +23,7 @@ import type {
   TrendPoint,
   VisionTaskStatusSnapshot,
   TaskActionHistoryEntry,
+  AuthorizationView,
 } from './types'
 
 /**
@@ -176,6 +177,42 @@ export function deriveTasksFromEvents(
   })
 }
 
+/** 即将到期阈值：7 天内提示但不改变语义。 */
+const EXPIRING_SOON_MS = 7 * 24 * 3_600_000
+
+/** MOB-136：授权状态只由服务端时间/撤回字段推导；解析失败按已到期处理（fail-closed）。 */
+export function authorizationStatus(
+  auth: { valid_from: string; valid_until: string; revoked_at: string | null },
+  now: Date = new Date(),
+): AuthorizationView['status'] {
+  if (auth.revoked_at) return 'REVOKED'
+  const from = Date.parse(auth.valid_from)
+  const until = Date.parse(auth.valid_until)
+  const nowMs = now.getTime()
+  if (Number.isFinite(from) && nowMs < from) return 'PENDING'
+  if (!Number.isFinite(until) || nowMs > until) return 'EXPIRED'
+  if (nowMs > until - EXPIRING_SOON_MS) return 'EXPIRING'
+  return 'ACTIVE'
+}
+
+function authorizationViewFromRead(read: AuthorizationRead, now: Date = new Date()): AuthorizationView {
+  return {
+    id: read.id,
+    memberId: read.member_id,
+    granteeActorId: read.grantee_actor_id,
+    // 服务端不返回姓名；原样展示身份标识，不做猜测映射。
+    granteeName: read.grantee_actor_id,
+    fields: [...read.data_fields],
+    actions: [...read.actions],
+    purpose: read.purpose,
+    validFrom: read.valid_from,
+    validUntil: read.valid_until,
+    revokedAt: read.revoked_at,
+    version: read.version,
+    status: authorizationStatus(read, now),
+  }
+}
+
 const PLAN_ACTION_LABELS: Record<string, { action: TaskAction; label: string; finalStatus: string }> = {
   plan_confirmed: { action: 'confirm', label: '确认', finalStatus: 'CONFIRMED' },
   plan_deferred: { action: 'defer', label: '延期', finalStatus: 'DEFERRED' },
@@ -234,14 +271,26 @@ export function deriveTaskActionHistory(
     })
   }
 
-  return entries.sort((a, b) => Date.parse(b.serverTime) - Date.parse(a.serverTime))
+  return entries.sort((a, b) => {
+    const aTime = parseHistoryTime(a.serverTime)
+    const bTime = parseHistoryTime(b.serverTime)
+    if (aTime === bTime) return a.eventId.localeCompare(b.eventId)
+    if (!Number.isFinite(aTime)) return 1
+    if (!Number.isFinite(bTime)) return -1
+    return bTime - aTime
+  })
 }
 
 const TREND_WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六']
 
 function eventTime(event: HealthEvent): number {
-  const time = Date.parse(event.occurred_at ?? event.created_at)
-  return Number.isFinite(time) ? time : Number.NaN
+  return parseHistoryTime(event.occurred_at ?? event.created_at)
+}
+
+/** 无效时间不能改变历史语义；统一排到有效服务端时间之后。 */
+function parseHistoryTime(value: string): number {
+  const time = Date.parse(value)
+  return Number.isFinite(time) ? time : Number.POSITIVE_INFINITY
 }
 
 function stablePlanId(event: HealthEvent): string | null {
@@ -371,16 +420,17 @@ export class HttpDataProvider implements DataProvider {
     return upload
   }
 
-  private visionDraft(file: File, memberId: string): VisionDraft {
+  private visionDraft(file: File, memberId: string, mediaKind: 'image' | 'video' = 'image'): VisionDraft {
     let drafts = this.visionDrafts.get(file)
     if (!drafts) {
       drafts = new Map<string, VisionDraft>()
       this.visionDrafts.set(file, drafts)
     }
-    let draft = drafts.get(memberId)
+    const key = `${memberId}:${mediaKind}`
+    let draft = drafts.get(key)
     if (!draft) {
-      draft = { idempotencyKey: `vision:${createIdempotencyKey()}` }
-      drafts.set(memberId, draft)
+      draft = { idempotencyKey: `vision-${mediaKind}:${createIdempotencyKey()}` }
+      drafts.set(key, draft)
     }
     return draft
   }
@@ -533,12 +583,27 @@ export class HttpDataProvider implements DataProvider {
       medications = 'UNAUTHORIZED'
     }
 
+    // MOB-136：授权列表只读展示。仅 Owner 可读；非 Owner 的 403/404 是
+    // 隐藏式拒绝，映射为 'UNAUTHORIZED'（与"暂无授权"区分），其余异常如实抛出。
+    let authorizations: MemberDetail['authorizations']
+    try {
+      const reads = await this.client.listAuthorizations(householdId, this.options())
+      authorizations = reads
+        .filter(read => read.member_id === memberId)
+        .map(read => authorizationViewFromRead(read))
+    } catch (cause) {
+      if (cause instanceof ApiClientError && (cause.status === 403 || cause.status === 404)) {
+        authorizations = 'UNAUTHORIZED'
+      } else {
+        throw cause
+      }
+    }
+
     return {
       summary,
       medications,
       timeline,
-      // 授权列表接口仅家庭 owner 可读，移动端暂不展示（在网页端管理）。
-      authorizations: [],
+      authorizations,
     }
   }
 
@@ -667,27 +732,59 @@ export class HttpDataProvider implements DataProvider {
   }
 
   async checkImageQuality(file: File): Promise<QualityCheckResult> {
-    const response = await this.client.checkVisionQuality(file, this.options())
+    const response = await this.client.checkVisionQuality(file, 'image', this.options())
     return {
       decision: response.decision,
       reasons: response.reasons,
       retakePrompts: response.retake_prompts,
       metrics: Object.entries(response.metrics).map(([key, metric]) => ({
         label: key,
-        value: `${metric.value}${metric.unit ? ` ${metric.unit}` : ''}`,
-        passed: metric.passed,
+        value: typeof metric === 'number' ? String(metric) : `${metric.value}${metric.unit ? ` ${metric.unit}` : ''}`,
+        passed: typeof metric === 'number' ? true : metric.passed,
       })),
       qualityReceipt: response.quality_receipt,
     }
   }
 
-  async recognizeMedicine(file: File, memberId: string): Promise<RecognitionCandidate> {
-    const quality = await this.checkImageQuality(file)
-    if (quality.decision !== 'PASS' || !quality.qualityReceipt) {
-      throw new Error('图片未通过质量门控，请按提示重拍')
+  /** MOB-149：短视频质量门；metrics 为帧数统计（纯数字），映射为信息型条目。 */
+  async checkVideoQuality(file: File): Promise<QualityCheckResult> {
+    const response = await this.client.checkVisionQuality(file, 'video', this.options())
+    const numeric = (key: string): number => {
+      const value = response.metrics[key]
+      return typeof value === 'number' ? value : Number(value?.value ?? 0)
     }
-    const draft = this.visionDraft(file, memberId)
-    if (draft.task) return recognitionCandidateFromTask(draft.task)
+    return {
+      decision: response.decision,
+      reasons: response.reasons,
+      retakePrompts: response.retake_prompts,
+      metrics: Object.entries(response.metrics).map(([key, metric]) => ({
+        label: QUALITY_METRIC_LABELS[key] ?? key,
+        value: typeof metric === 'number' ? String(metric) : `${metric.value}${metric.unit ? ` ${metric.unit}` : ''}`,
+        passed: typeof metric === 'number' ? true : metric.passed,
+      })),
+      qualityReceipt: response.quality_receipt,
+      framesSummary: {
+        mediaType: 'video',
+        sampledFrames: numeric('sampled_frames'),
+        selectedFrames: numeric('selected_frames'),
+        usableFrames: numeric('usable_frames'),
+      },
+    }
+  }
+
+  async recognizeMedicine(
+    file: File,
+    memberId: string,
+    mediaKind: 'image' | 'video' = 'image',
+  ): Promise<RecognitionCandidate> {
+    const quality = mediaKind === 'video'
+      ? await this.checkVideoQuality(file)
+      : await this.checkImageQuality(file)
+    if (quality.decision !== 'PASS' || !quality.qualityReceipt) {
+      throw new Error(mediaKind === 'video' ? '视频未通过抽帧质量门控，请按提示重拍' : '图片未通过质量门控，请按提示重拍')
+    }
+    const draft = this.visionDraft(file, memberId, mediaKind)
+    if (draft.task) return recognitionCandidateFromTask(draft.task, mediaKind)
     const uploaded = await this.uploadFileOnce(file)
     const task = await this.client.createVisionTask(
       {
@@ -695,11 +792,12 @@ export class HttpDataProvider implements DataProvider {
         member_id: memberId,
         quality_receipt: quality.qualityReceipt,
         idempotency_key: draft.idempotencyKey,
+        media_type: mediaKind,
       },
       this.options({ idempotencyKey: draft.idempotencyKey }),
     )
     draft.task = task
-    return recognitionCandidateFromTask(task)
+    return recognitionCandidateFromTask(task, mediaKind)
   }
 
   async fetchVisionTaskStatus(taskId: string): Promise<VisionTaskStatusSnapshot> {
@@ -755,12 +853,14 @@ export function visionTaskStatusSnapshotFromTask(task: VisionTask): VisionTaskSt
   }
 }
 
-function recognitionCandidateFromTask(task: VisionTask): RecognitionCandidate {
+function recognitionCandidateFromTask(task: VisionTask, mediaKind: 'image' | 'video' = 'image'): RecognitionCandidate {
+  const mediaLabel = mediaKind === 'video' ? '短视频（服务端抽帧）' : '照片'
   return {
     status: 'REVIEW',
     fields: [
       { label: '视觉任务', value: task.id, source: '主数据', confidence: 1 },
       { label: '任务状态', value: task.status, source: '主数据', confidence: 1 },
+      { label: '媒体类型', value: task.media_type ?? mediaKind, source: '主数据', confidence: 1 },
     ],
     conflicts: [],
     versions: { 服务端: task.model_version ?? '等待家庭服务器处理' },
@@ -772,6 +872,16 @@ function recognitionCandidateFromTask(task: VisionTask): RecognitionCandidate {
       nextStep: '请在网页端人工复核中心查看证据并确认识别候选；移动端不会自动写入健康档案。',
     },
     notice:
-      '照片已通过质量门控并创建视觉识别任务。识别与多证据融合在家庭服务器上执行，完成后请在网页端“人工复核中心”确认候选。',
+      `${mediaLabel}已通过质量门控并创建视觉识别任务。识别与多证据融合在家庭服务器上执行（视频先抽帧再逐帧识别），完成后请在网页端“人工复核中心”确认候选；任一帧都不会被单独当作已确认药品。`,
   }
+}
+
+/** MOB-149：视频质量门 metrics 的中文名（帧数统计为信息型，不算通过/失败）。 */
+const QUALITY_METRIC_LABELS: Record<string, string> = {
+  decoded_frames: '解码帧数',
+  sampled_frames: '采样帧数',
+  selected_frames: '选中帧数',
+  usable_frames: '可用帧数',
+  sample_interval_ms: '采样间隔(ms)',
+  sample_limit: '采样上限',
 }

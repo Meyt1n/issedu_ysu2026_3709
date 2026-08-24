@@ -113,6 +113,7 @@ from app.models import (
     RiskAcknowledgement,
     VisionTask,
 )
+from app.request_context import current_request_id
 from app.review import (
     FusionStatus as ReviewFusionStatus,
 )
@@ -335,6 +336,31 @@ def _add_authorization_audit(
     )
 
 
+def _add_household_setting_audit(
+    session: Session,
+    *,
+    household_id: str,
+    actor_id: str,
+    action: str,
+    data_field: str,
+) -> None:
+    """Record only the metadata needed to trace an allowed setting change."""
+    session.add(
+        AccessAudit(
+            household_id=household_id,
+            authorization_id=None,
+            actor_id=actor_id,
+            operation="UPDATE",
+            action=action,
+            data_field=data_field,
+            purpose="household-settings",
+            outcome="ALLOWED",
+            reason=None,
+            request_id=current_request_id(),
+        )
+    )
+
+
 @router.get("/health/db", response_model=HealthResponse)
 def database_health(session: Session = Depends(get_session)) -> HealthResponse:
     session.execute(text("SELECT 1"))
@@ -343,24 +369,29 @@ def database_health(session: Session = Depends(get_session)) -> HealthResponse:
 
 @router.get("/meta/capabilities", response_model=CapabilityResponse)
 def capabilities() -> CapabilityResponse:
-    return CapabilityResponse(
-        phase="P0-foundation",
-        available=[
-            "manual-health-event",
-            "household-member",
-            "field-authorization",
-            "audit-outbox",
-            "event-compensation-replay",
-            "outbox-recovery-worker",
-            "review-task",
-            "vision-task",
-            "knowledge-store",
-            "local-assistant",
-            "llm",
-            "risk-acknowledgement",
-        ],
-        unavailable=["vision-inference", "llm-cloud", "external-web"],
-    )
+    available = [
+        "manual-health-event",
+        "household-member",
+        "field-authorization",
+        "audit-outbox",
+        "event-compensation-replay",
+        "outbox-recovery-worker",
+        "review-task",
+        "vision-task",
+        "knowledge-store",
+        "local-assistant",
+        "llm",
+        "risk-acknowledgement",
+    ]
+    unavailable = ["vision-inference", "llm-cloud", "external-web"]
+    # HCT-414-D2 (DEMO_ONLY until the HCT-201 fixed quality set is signed off):
+    # the video task capability is declarative so mobile clients can hide the
+    # video entry when the server does not provide it.
+    if settings.vision_video_tasks_enabled:
+        available.append("vision-task-video")
+    else:
+        unavailable.append("vision-task-video")
+    return CapabilityResponse(phase="P0-foundation", available=available, unavailable=unavailable)
 
 
 def _valid_authorizations(
@@ -521,7 +552,15 @@ def update_household(
     session: Session = Depends(get_session),
 ) -> Household:
     household = require_household_owner(session, household_id, actor_id)
-    household.time_zone = payload.time_zone
+    if household.time_zone != payload.time_zone:
+        household.time_zone = payload.time_zone
+        _add_household_setting_audit(
+            session,
+            household_id=household.id,
+            actor_id=actor_id,
+            action="UPDATE_TIME_ZONE",
+            data_field="household.time_zone",
+        )
     session.commit()
     session.refresh(household)
     return household
@@ -896,6 +935,8 @@ def list_authorization_audits(
 def page_authorization_audits(
     household_id: str,
     request_id: str | None = Query(default=None, min_length=1, max_length=120),
+    action: str | None = Query(default=None, min_length=1, max_length=80),
+    outcome: str | None = Query(default=None, min_length=1, max_length=32),
     cursor: str | None = Query(default=None, min_length=1),
     limit: int = Query(default=50, ge=1, le=100),
     actor_id: str = Depends(get_actor_id),
@@ -911,7 +952,12 @@ def page_authorization_audits(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=str(exc),
             ) from exc
-        if decoded_cursor.household_id != household.id or decoded_cursor.request_id != request_id:
+        if (
+            decoded_cursor.household_id != household.id
+            or decoded_cursor.request_id != request_id
+            or decoded_cursor.action != action
+            or decoded_cursor.outcome != outcome
+        ):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="AUDIT_CURSOR_INVALID",
@@ -920,6 +966,10 @@ def page_authorization_audits(
     query = select(AccessAudit).where(AccessAudit.household_id == household.id)
     if request_id is not None:
         query = query.where(AccessAudit.request_id == request_id)
+    if action is not None:
+        query = query.where(AccessAudit.action == action)
+    if outcome is not None:
+        query = query.where(AccessAudit.outcome == outcome)
     if decoded_cursor is not None:
         query = query.where(
             (AccessAudit.created_at > decoded_cursor.created_at)
@@ -941,6 +991,8 @@ def page_authorization_audits(
         next_cursor = encode_audit_cursor(
             household_id=household.id,
             request_id=request_id,
+            action=action,
+            outcome=outcome,
             created_at=last.created_at,
             audit_id=last.id,
             secret=settings.cursor_signing_key,
@@ -3047,6 +3099,7 @@ async def check_vision_quality(
                     sample_interval_ms=sample_interval_ms,
                     max_selected_frames=max_selected_frames,
                     thresholds=thresholds,
+                    max_duration_ms=settings.vision_video_max_duration_seconds * 1000,
                 )
             finally:
                 if temporary_path is not None:

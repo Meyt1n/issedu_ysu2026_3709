@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     # this off to make quality metrics advisory while OCR integration is being
     # tuned.
     vision_quality_enforce_retake: bool = True
+    # HCT-414-D2: short-video upper bound and capability switch.  The flag also
+    # drives the /meta/capabilities declaration so mobile clients can fail
+    # closed and hide the video entry when the server lacks the ability.
+    vision_video_max_duration_seconds: int = Field(default=30, gt=0, le=600)
+    vision_video_tasks_enabled: bool = True
     vision_quality_min_width: int = 640
     vision_quality_min_height: int = 480
     vision_quality_min_blur_variance: float = 80.0
