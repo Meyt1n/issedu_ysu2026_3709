@@ -113,6 +113,7 @@ from app.models import (
     RiskAcknowledgement,
     VisionTask,
 )
+from app.request_context import current_request_id
 from app.review import (
     FusionStatus as ReviewFusionStatus,
 )
@@ -335,6 +336,31 @@ def _add_authorization_audit(
     )
 
 
+def _add_household_setting_audit(
+    session: Session,
+    *,
+    household_id: str,
+    actor_id: str,
+    action: str,
+    data_field: str,
+) -> None:
+    """Record only the metadata needed to trace an allowed setting change."""
+    session.add(
+        AccessAudit(
+            household_id=household_id,
+            authorization_id=None,
+            actor_id=actor_id,
+            operation="UPDATE",
+            action=action,
+            data_field=data_field,
+            purpose="household-settings",
+            outcome="ALLOWED",
+            reason=None,
+            request_id=current_request_id(),
+        )
+    )
+
+
 @router.get("/health/db", response_model=HealthResponse)
 def database_health(session: Session = Depends(get_session)) -> HealthResponse:
     session.execute(text("SELECT 1"))
@@ -526,7 +552,15 @@ def update_household(
     session: Session = Depends(get_session),
 ) -> Household:
     household = require_household_owner(session, household_id, actor_id)
-    household.time_zone = payload.time_zone
+    if household.time_zone != payload.time_zone:
+        household.time_zone = payload.time_zone
+        _add_household_setting_audit(
+            session,
+            household_id=household.id,
+            actor_id=actor_id,
+            action="UPDATE_TIME_ZONE",
+            data_field="household.time_zone",
+        )
     session.commit()
     session.refresh(household)
     return household
