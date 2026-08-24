@@ -25,8 +25,9 @@
 ## 4. 实现与证据
 
 - 后端：`src/api/app/routes.py`、`src/api/app/security.py`、`src/api/app/schemas.py`。
+- 请求事务边界：`src/api/app/db.py` 的 `get_session` 在成功请求后提交、异常请求回滚，确保登录/注册产生的持久化会话可被后续 Bearer 请求读取。
 - 前端：`src/web/src/api/client.ts`、`src/web/src/api/types.ts`、`src/web/src/store.ts`、`src/web/src/views/WelcomeView.vue`。
-- 定向测试：`tests/integration/test_hct417_web_session.py`、`src/web/src/api/client.test.ts`，并补充浏览器路径测试。
+- 定向测试：`tests/integration/test_hct417_web_session.py`（含跨请求事务边界回归）、`src/web/src/api/client.test.ts`，并补充浏览器路径测试。
 - 已知限制：当前账号和会话仍为进程内存实现，服务重启会清空账号/会话；这只能用于本地演示，正式部署需接入持久化会话和审计方案。
 
 ## 5. 回滚
