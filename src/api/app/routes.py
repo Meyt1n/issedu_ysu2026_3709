@@ -1224,6 +1224,8 @@ def _authorized_event_member_ids(
 def page_health_events(
     household_id: str,
     member_id: str | None = None,
+    event_type: str | None = Query(default=None, min_length=1, max_length=80),
+    confirmation_status: str | None = Query(default=None, min_length=1, max_length=32),
     cursor: str | None = None,
     limit: int = Query(default=50, ge=1, le=100),
     actor_id: str = Depends(get_actor_id),
@@ -1252,7 +1254,10 @@ def page_health_events(
             detail=str(exc),
         ) from exc
     if decoded_cursor is not None and (
-        decoded_cursor.household_id != household.id or decoded_cursor.member_id != member_id
+        decoded_cursor.household_id != household.id
+        or decoded_cursor.member_id != member_id
+        or decoded_cursor.event_type != event_type
+        or decoded_cursor.confirmation_status != confirmation_status
     ):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -1279,6 +1284,10 @@ def page_health_events(
     )
     if member_id is not None:
         query = query.where(HealthEvent.member_id == member_id)
+    if event_type is not None:
+        query = query.where(HealthEvent.event_type == event_type)
+    if confirmation_status is not None:
+        query = query.where(HealthEvent.confirmation_status == confirmation_status)
     if decoded_cursor is not None:
         query = query.where(
             (HealthEvent.sequence_no > decoded_cursor.sequence_no)
@@ -1304,6 +1313,8 @@ def page_health_events(
             sequence_no=last.sequence_no,
             event_id=last.id,
             secret=settings.cursor_signing_key,
+            event_type=event_type,
+            confirmation_status=confirmation_status,
         )
     return HealthEventPageRead(items=items, next_cursor=next_cursor, has_more=has_more)
 
