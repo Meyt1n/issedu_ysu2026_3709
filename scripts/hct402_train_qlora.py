@@ -22,6 +22,15 @@ APPROVED_DATA_STATUSES = {
     "APPROVED_FOR_TRAINING",
     "RELEASED_FOR_TRAINING",
 }
+APPROVED_MANIFEST_FIELDS = (
+    "approval",
+    "deidentification",
+    "training_consent",
+    "manual_quality_review",
+    "deletion_policy",
+    "output_sha256",
+    "split_sha256",
+)
 
 
 @dataclass(frozen=True)
@@ -93,6 +102,94 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
     return records
 
 
+def _validate_approved_manifest(prepared_dir: Path, manifest: dict[str, Any]) -> None:
+    """Require auditable approval evidence before an external training run."""
+    missing = [field for field in APPROVED_MANIFEST_FIELDS if field not in manifest]
+    if missing:
+        raise ValueError(f"APPROVAL_EVIDENCE_MISSING:{','.join(missing)}")
+
+    approval = manifest["approval"]
+    if not isinstance(approval, dict):
+        raise ValueError("APPROVAL_RECORD_INVALID")
+    if approval.get("approval_status") != manifest.get("status"):
+        raise ValueError("APPROVAL_STATUS_MISMATCH")
+    for field in ("approved_by", "approved_at", "approval_reference", "scope"):
+        if not isinstance(approval.get(field), str) or not approval[field].strip():
+            raise ValueError(f"APPROVAL_FIELD_MISSING:{field}")
+    if approval.get("model_release") != "NOT_APPROVED":
+        raise ValueError("MODEL_RELEASE_APPROVAL_MUST_REMAIN_SEPARATE")
+
+    for field in ("deidentification", "training_consent", "manual_quality_review"):
+        value = manifest[field]
+        if not isinstance(value, dict) or not value.get("status"):
+            raise ValueError(f"{field.upper()}_EVIDENCE_INVALID")
+    if not isinstance(manifest["deletion_policy"], str) or not manifest["deletion_policy"]:
+        raise ValueError("DELETION_POLICY_REQUIRED")
+
+    output_hashes = manifest["output_sha256"]
+    if not isinstance(output_hashes, dict):
+        raise ValueError("OUTPUT_HASHES_INVALID")
+    expected_paths = {
+        "train": prepared_dir / "train.jsonl",
+        "validation": prepared_dir / "validation.jsonl",
+        "blind_inputs": prepared_dir / "blind" / "inputs.jsonl",
+        "blind_labels": prepared_dir / "blind" / "labels.jsonl",
+    }
+    for name, path in expected_paths.items():
+        expected = output_hashes.get(name)
+        if not isinstance(expected, str) or sha256_file(path) != expected:
+            raise ValueError(f"OUTPUT_HASH_MISMATCH:{name}")
+
+    split_hashes = manifest["split_sha256"]
+    if not isinstance(split_hashes, dict) or split_hashes.get("train") != output_hashes.get(
+        "train"
+    ):
+        raise ValueError("SPLIT_HASH_INVALID:train")
+    if split_hashes.get("validation") != output_hashes.get("validation"):
+        raise ValueError("SPLIT_HASH_INVALID:validation")
+    blind_hash = hashlib.sha256(
+        json.dumps(
+            {
+                "inputs": output_hashes.get("blind_inputs"),
+                "labels": output_hashes.get("blind_labels"),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    if split_hashes.get("blind") != blind_hash:
+        raise ValueError("SPLIT_HASH_INVALID:blind")
+
+    blind_files = manifest.get("blind_files")
+    if (
+        not isinstance(blind_files, dict)
+        or blind_files.get("inputs") != "blind/inputs.jsonl"
+        or blind_files.get("labels") != "blind/labels.jsonl"
+    ):
+        raise ValueError("BLIND_FILES_NOT_PINNED")
+    blind_inputs = load_jsonl(expected_paths["blind_inputs"])
+    blind_labels = load_jsonl(expected_paths["blind_labels"])
+    input_ids = {record.get("sample_id") for record in blind_inputs}
+    label_ids = {record.get("sample_id") for record in blind_labels}
+    if not input_ids or input_ids != label_ids:
+        raise ValueError("BLIND_IDS_MISMATCH")
+    if any(
+        message.get("role") == "assistant"
+        for record in blind_inputs
+        for message in record.get("messages", [])
+        if isinstance(message, dict)
+    ):
+        raise ValueError("BLIND_INPUTS_CONTAIN_ASSISTANT_TARGET")
+    sample_ids = manifest.get("sample_ids_by_split")
+    if not isinstance(sample_ids, dict):
+        raise ValueError("SAMPLE_IDS_BY_SPLIT_REQUIRED")
+    train_ids = set(sample_ids.get("train", []))
+    validation_ids = set(sample_ids.get("validation", []))
+    if input_ids & (train_ids | validation_ids):
+        raise ValueError("BLIND_TRAINING_LEAK")
+
+
 def load_and_validate_prepared_dataset(
     prepared_dir: Path,
     *,
@@ -118,6 +215,8 @@ def load_and_validate_prepared_dataset(
         raise ValueError("TRAINING_DATA_NOT_APPROVED:synthetic_fixture_only")
     if not is_synthetic and status not in APPROVED_DATA_STATUSES:
         raise ValueError(f"TRAINING_DATA_NOT_APPROVED:{status or 'missing_status'}")
+    if not is_synthetic:
+        _validate_approved_manifest(prepared_dir, manifest)
 
     training_files = manifest.get("training_files")
     if not isinstance(training_files, dict):
@@ -186,6 +285,11 @@ def build_run_metadata(
             "synthetic_fixture_only"
             if manifest.get("status") == "PREPARED_SYNTHETIC_NOT_RELEASED"
             else "approved_external_dataset"
+        ),
+        "approval_reference": (
+            manifest.get("approval", {}).get("approval_reference")
+            if isinstance(manifest.get("approval"), dict)
+            else None
         ),
         "configuration": config.as_dict(),
         "secrets_and_raw_text": "not recorded",
