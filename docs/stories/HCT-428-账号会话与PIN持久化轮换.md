@@ -61,6 +61,7 @@
 ### 本地验收证据（2026-08-24）
 
 - `tests/safety/test_hct428_persistent_auth.py`：跨 Session 持久化、Bearer 摘要、PIN challenge、限流和密码登录轮换通过。
+- `tests/integration/test_hct417_web_session.py::test_auth_session_is_committed_across_request_boundaries`：文件型 SQLite + 每请求新 Session 验证注册、登录、Bearer 业务请求和登出跨请求提交；修复 FastAPI `get_session` 正常请求未提交导致下一请求误报 `SESSION_INVALID` 的边界。
 - HCT-107、HCT-427 及人脸/擦除相关契约测试通过。
 - `uv run alembic upgrade head` 成功，`0018_hct428_auth_persistence` 为单一 migration head。
 - `uv run ruff check ...` 通过；全套测试仅剩既有审计游标断言和 GitHub/云端 SHA 同步环境失败，均与本 Story 无关。

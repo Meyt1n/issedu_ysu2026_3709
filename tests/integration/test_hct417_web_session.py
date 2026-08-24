@@ -2,49 +2,13 @@
 
 from uuid import uuid4
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
-from app.db import get_session
+from app import db as db_module
 from app.main import app
 from app.models import Base
-
-
-@pytest.fixture()
-def isolated_session_client():
-    """Use a fresh SQLAlchemy session for each HTTP request.
-
-    The shared ``client`` fixture intentionally reuses one session for most
-    contract tests.  This fixture catches missing route commits that only
-    appear in the real web flow, where registration, login and scope loading
-    are separate requests.
-    """
-    engine = create_engine(
-        "sqlite+pysqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(engine)
-    session_factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
-
-    def override_get_session():
-        session = session_factory()
-        try:
-            yield session
-        finally:
-            session.close()
-
-    app.dependency_overrides[get_session] = override_get_session
-    try:
-        with TestClient(app) as test_client:
-            yield test_client
-    finally:
-        app.dependency_overrides.pop(get_session, None)
-        Base.metadata.drop_all(engine)
-        engine.dispose()
 
 
 def test_json_login_uses_bearer_identity_and_logout_revokes_session(client: TestClient):
@@ -85,46 +49,6 @@ def test_json_login_uses_bearer_identity_and_logout_revokes_session(client: Test
     assert denied.status_code == 401
 
 
-def test_registration_login_and_session_revalidation_cross_request(
-    isolated_session_client: TestClient,
-):
-    actor_id = f"web-registration-{uuid4().hex[:10]}"
-    password = "local-password-123"
-
-    registered = isolated_session_client.post(
-        "/api/v1/auth/register",
-        json={"actor_id": actor_id, "password": password},
-    )
-    assert registered.status_code == 201, registered.text
-
-    login = isolated_session_client.post(
-        "/api/v1/auth/login",
-        json={"actor_id": actor_id, "password": password},
-    )
-    assert login.status_code == 200, login.text
-    token = login.json()["session_token"]
-
-    revalidated = isolated_session_client.post(
-        "/api/v1/auth/session",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert revalidated.status_code == 200, revalidated.text
-    assert revalidated.json()["actor_id"] == actor_id
-
-    logged_out = isolated_session_client.post(
-        "/api/v1/auth/logout",
-        json={"session_token": token},
-    )
-    assert logged_out.status_code == 200, logged_out.text
-    assert (
-        isolated_session_client.post(
-            "/api/v1/auth/session",
-            headers={"Authorization": f"Bearer {token}"},
-        ).status_code
-        == 401
-    )
-
-
 def test_malformed_authorization_does_not_fall_back_to_dev_actor(client: TestClient):
     response = client.get(
         "/api/v1/households",
@@ -132,3 +56,63 @@ def test_malformed_authorization_does_not_fall_back_to_dev_actor(client: TestCli
     )
     assert response.status_code == 401
     assert response.json()["detail"] == "AUTH_REQUIRED"
+
+
+
+
+def test_auth_session_is_committed_across_request_boundaries(tmp_path, monkeypatch):
+    """A successful login must survive the dependency session closing.
+
+    The normal test client shares one in-memory SQLAlchemy session, which can
+    hide a missing commit: login and the following request see the same
+    uncommitted row. Use a file-backed SQLite database and a new session per
+    request to reproduce the production boundary.
+    """
+    engine = create_engine(
+        f"sqlite+pysqlite:///{tmp_path / 'auth-boundary.sqlite3'}",
+        connect_args={"check_same_thread": False},
+    )
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+
+    # The production dependency itself owns the commit/rollback boundary.
+    monkeypatch.setattr(db_module, "SessionLocal", session_factory)
+    app.dependency_overrides.clear()
+    try:
+        with TestClient(app) as isolated_client:
+            actor_id = f"boundary-{uuid4().hex[:10]}"
+            password = "local-password-123"
+            registered = isolated_client.post(
+                "/api/v1/auth/register",
+                json={"actor_id": actor_id, "password": password},
+            )
+            assert registered.status_code == 201
+
+            login = isolated_client.post(
+                "/api/v1/auth/login",
+                json={"actor_id": actor_id, "password": password},
+            )
+            assert login.status_code == 200
+            token = login.json()["session_token"]
+
+            created = isolated_client.post(
+                "/api/v1/households",
+                json={"name": "Synthetic auth boundary household"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert created.status_code == 201
+
+            logged_out = isolated_client.post(
+                "/api/v1/auth/logout",
+                json={"session_token": token},
+            )
+            assert logged_out.status_code == 200
+            denied = isolated_client.get(
+                "/api/v1/households",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert denied.status_code == 401
+    finally:
+        app.dependency_overrides.clear()
+        Base.metadata.drop_all(engine)
+        engine.dispose()

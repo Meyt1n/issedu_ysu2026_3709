@@ -12,7 +12,7 @@
 - 关联 NFR：NFR-01 本地优先与权限边界、NFR-03 全链版本与审计、NFR-04 基础档降级可用
 - 风险等级：R2（会话和身份边界）；正式部署前的持久化会话、密钥轮换、CSRF/同源策略仍是 R3 发布阻断项。
 - 注册、登录、登出使用 JSON；密码不进入 URL、持久化缓存、健康事件或业务日志。
-- 正式会话令牌只放在当前页面内存；Bearer 认证优先于开发用 `X-Actor-Id`。生产环境不能依赖开发身份头。
+- 正式会话令牌只放在当前页面内存；账号、会话、限流和 PIN challenge 已由 HCT-428 持久化到数据库。Bearer 认证优先于开发用 `X-Actor-Id`，生产环境不能依赖开发身份头。
 
 ## 3. 验收条件
 
@@ -25,10 +25,11 @@
 ## 4. 实现与证据
 
 - 后端：`src/api/app/routes.py`、`src/api/app/security.py`、`src/api/app/schemas.py`。
+- 请求事务边界：`src/api/app/db.py` 的 `get_session` 在成功请求后提交、异常请求回滚，确保登录/注册产生的持久化会话可被后续 Bearer 请求读取。
 - 前端：`src/web/src/api/client.ts`、`src/web/src/api/types.ts`、`src/web/src/store.ts`、`src/web/src/views/WelcomeView.vue`。
-- 定向测试：`tests/integration/test_hct417_web_session.py`、`src/web/src/api/client.test.ts`，并补充浏览器路径测试。
-- 2026-08-24 修复正式账号注册/登录事务提交：注册后紧接登录、跨请求会话续验和退出撤销均已在独立数据库会话回归；真实本地前端代理验证返回 `register=201`、`login=200`、`session=200`。对应回归用例为 `test_registration_login_and_session_revalidation_cross_request`。
-- 已知限制：账号、会话、限流和 PIN challenge 已由 HCT-428 持久化到数据库；正式部署仍需完成密钥轮换、CSRF/同源策略和人工安全验收。
+- 定向测试：`tests/integration/test_hct417_web_session.py`（含跨请求事务边界回归）、`src/web/src/api/client.test.ts`，并补充浏览器路径测试。
+- 2026-08-24 修复正式账号注册/登录事务提交：注册后紧接登录、跨请求会话续验和退出撤销均已在独立数据库会话回归；真实本地前端代理验证返回 `register=201`、`login=200`、`session=200`。
+- 已知限制：正式部署仍需完成密钥轮换、CSRF/同源策略和人工安全验收。
 - 2026-08-24 增加 `Settings` 的生产配置 fail-closed 校验和 `tests/unit/test_production_configuration_gate.py`：当仍使用内存会话、开发身份头或演示密钥时，`APP_ENV=production` 会拒绝启动，避免把本地演示直接当成正式部署。该闸门不替代数据库会话持久化、密钥轮换、CSRF/同源策略实现。
 
 ## 5. 回滚

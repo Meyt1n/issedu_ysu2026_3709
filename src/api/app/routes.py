@@ -137,6 +137,7 @@ from app.risk_acknowledgement import (
 from app.schemas import (
     AccessAuditPageRead,
     AccessAuditRead,
+    AccessAuditSummaryRead,
     AssistantRequest,
     AssistantResponse,
     AuthCredentials,
@@ -1003,6 +1004,37 @@ def page_authorization_audits(
             secret=settings.cursor_signing_key,
         )
     return AccessAuditPageRead(items=items, next_cursor=next_cursor, has_more=has_more)
+
+
+@router.get(
+    "/households/{household_id}/authorization-audits/summary",
+    response_model=AccessAuditSummaryRead,
+)
+def summarize_authorization_audits(
+    household_id: str,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> AccessAuditSummaryRead:
+    household = require_household_owner(session, household_id, actor_id)
+    grouped = session.execute(
+        select(AccessAudit.action, AccessAudit.outcome, func.count(AccessAudit.id))
+        .where(AccessAudit.household_id == household.id)
+        .group_by(AccessAudit.action, AccessAudit.outcome)
+    ).all()
+    by_action: dict[str, int] = {}
+    by_outcome: dict[str, int] = {}
+    total = 0
+    for action, outcome, count in grouped:
+        normalized_count = int(count)
+        by_action[action] = by_action.get(action, 0) + normalized_count
+        by_outcome[outcome] = by_outcome.get(outcome, 0) + normalized_count
+        total += normalized_count
+    return AccessAuditSummaryRead(
+        total=total,
+        by_action=by_action,
+        by_outcome=by_outcome,
+        generated_at=datetime.now(UTC),
+    )
 
 
 @router.post(
