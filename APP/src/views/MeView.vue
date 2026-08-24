@@ -961,6 +961,10 @@ onMounted(() => {
         <li>风险等级由确定性规则决定；应用不做诊断、处方或剂量判断。</li>
         <li>没有购药、问诊、广告或任何健康消费导流。</li>
       </ul>
+      <RouterLink class="btn btn-quiet btn-block" to="/me/privacy">
+        <AppIcon name="shield" :size="18" />
+        查看本地数据与隐私管理
+      </RouterLink>
     </section>
 
     <section class="card" aria-labelledby="trace-title">
