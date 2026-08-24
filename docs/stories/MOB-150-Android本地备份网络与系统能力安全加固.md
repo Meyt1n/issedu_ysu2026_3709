@@ -38,6 +38,12 @@ Android 静态网络配置无法表达“任意 RFC1918/ULA 地址可明文、�
 - `gradlew processDebugMainManifest` / `processReleaseMainManifest`：检查合并后的 Debug/Release Manifest。
 - `gradlew assembleDebug` / 可用环境下 `assembleRelease`，对产物执行 SHA-256；不提交 APK、签名材料或本机路径。
 
+2026-08-24 基于最新 `master`（源码提交 `345b5b2`）复核：
+
+- `npm run audit:android-security` 通过：Release 禁止明文、Debug 仅受控开放明文、备份与设备迁移排除、主 Manifest 仅声明 `android.permission.INTERNET`；
+- `npm run check`、`src/utils/serverUrl.test.ts` 定向测试（3 项）和 `npm run build` 通过；
+- Android 真机备份/迁移、拒权和 APK 哈希仍需 JDK 21–24 与设备环境，未将静态审计冒充最终真机验收。
+
 本次环境已完成 `aapt2` 对新增 XML 资源的编译和 Debug Web 产物同步；Gradle 首次下载发行包后因本机 JBR 为 25.0.2，而仓库固定 Gradle 8.14.3 只接受 JDK 21–24，`assembleDebug` 在 settings 阶段停止。脚本现已提前检测并给出明确提示；换用 JDK 21–24 后应重新执行原生命令。
 
 ## 交付轨迹（补记）
