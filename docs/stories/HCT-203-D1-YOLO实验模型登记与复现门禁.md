@@ -83,3 +83,13 @@ allocated 69,124,096 bytes。报告只保存在受控训练机并登记哈希；
 
 新增 `scripts/hct203_release_gate.py`，把 HCT-201 批准固定集、独立评估、hard-negative、报告哈希和回滚演练收成
 `READY_FOR_R3_REVIEW` 门禁。该脚本不会修改 registry 或发布权重；当前实验登记仍因数据集未批准而阻塞。
+
+## 2026-08-24 流程补充
+
+HCT-203-D3 新增正式独立评估、回滚快照校验、人工 R3 checklist 和
+`PUBLISHED_AUXILIARY_ONLY` 发布清单。机器门禁通过仍只代表材料可进入 R3；当前仓库没有批准固定集、
+正式外置权重和真实 R3 记录，因此本 Story 的最后一项仍未完成，运行端继续保持
+`vision_model_version=unavailable`。
+
+当前维护者已通过 HCT-203-D3 waiver 批准该候选以 `PUBLISHED_AUXILIARY_ONLY` 形式发布；这不改变本 Story
+对实验登记、候选 test 集和 hard-negative 误检的历史记录，也不代表正式固定集或 R3 验收通过。
