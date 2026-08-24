@@ -1226,6 +1226,8 @@ def page_health_events(
     member_id: str | None = None,
     event_type: str | None = Query(default=None, min_length=1, max_length=80),
     confirmation_status: str | None = Query(default=None, min_length=1, max_length=32),
+    occurred_from: datetime | None = None,
+    occurred_until: datetime | None = None,
     cursor: str | None = None,
     limit: int = Query(default=50, ge=1, le=100),
     actor_id: str = Depends(get_actor_id),
@@ -1233,6 +1235,23 @@ def page_health_events(
     session: Session = Depends(get_session),
 ) -> HealthEventPageRead:
     """Return an authorization-scoped page without exposing event payload in the cursor."""
+    if occurred_from is not None and occurred_from.tzinfo is None:
+        occurred_from = occurred_from.replace(tzinfo=UTC)
+    if occurred_until is not None and occurred_until.tzinfo is None:
+        occurred_until = occurred_until.replace(tzinfo=UTC)
+    if occurred_from is not None:
+        occurred_from = occurred_from.astimezone(UTC)
+    if occurred_until is not None:
+        occurred_until = occurred_until.astimezone(UTC)
+    if (
+        occurred_from is not None
+        and occurred_until is not None
+        and occurred_from > occurred_until
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="EVENT_TIME_RANGE_INVALID",
+        )
     household = session.get(Household, household_id)
     if _is_erased(household):
         _raise_resource_not_found()
@@ -1258,6 +1277,8 @@ def page_health_events(
         or decoded_cursor.member_id != member_id
         or decoded_cursor.event_type != event_type
         or decoded_cursor.confirmation_status != confirmation_status
+        or decoded_cursor.occurred_from != occurred_from
+        or decoded_cursor.occurred_until != occurred_until
     ):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -1288,6 +1309,10 @@ def page_health_events(
         query = query.where(HealthEvent.event_type == event_type)
     if confirmation_status is not None:
         query = query.where(HealthEvent.confirmation_status == confirmation_status)
+    if occurred_from is not None:
+        query = query.where(HealthEvent.occurred_at >= occurred_from)
+    if occurred_until is not None:
+        query = query.where(HealthEvent.occurred_at <= occurred_until)
     if decoded_cursor is not None:
         query = query.where(
             (HealthEvent.sequence_no > decoded_cursor.sequence_no)
@@ -1315,6 +1340,8 @@ def page_health_events(
             secret=settings.cursor_signing_key,
             event_type=event_type,
             confirmation_status=confirmation_status,
+            occurred_from=occurred_from,
+            occurred_until=occurred_until,
         )
     return HealthEventPageRead(items=items, next_cursor=next_cursor, has_more=has_more)
 

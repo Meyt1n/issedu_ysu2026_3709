@@ -84,6 +84,8 @@ class SessionIntrospectRead(BaseModel):
     """Live session behind the caller's Bearer token; no credential is returned."""
 
     actor_id: str
+    household_id: str | None
+    issued_at: float
     expires_at: float
 
 

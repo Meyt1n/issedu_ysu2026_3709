@@ -44,6 +44,7 @@
 | POST | `/api/v1/auth/register` | 使用 JSON 请求体注册本地账号 | ✅ |
 | POST | `/api/v1/auth/login` | 使用 JSON 请求体建立短期 Bearer 会话 | ✅ |
 | POST | `/api/v1/auth/logout` | 撤销当前短期会话 | ✅ |
+| POST | `/api/v1/auth/session` | Bearer 会话续验，返回操作者、家庭范围、签发时间和到期时间；不返回令牌 | ✅ |
 | GET | `/api/v1/households` | 列出当前用户可见的家庭 | ✅ |
 | POST | `/api/v1/households` | 创建家庭 | ✅ |
 | PATCH | `/api/v1/households/{id}` | Owner 修改家庭业务时区 | ✅ |
@@ -57,7 +58,7 @@
 | GET | `/api/v1/households/{id}/authorization-audits/page` | Owner 按签名游标分页查询审计，可按 `request_id`、`action`、`outcome` 过滤；游标绑定全部筛选范围 | ✅ |
 | POST | `/api/v1/households/{id}/events` | 追加健康事件 | ✅ |
 | GET | `/api/v1/households/{id}/events` | 查询事件列表 | ✅ |
-| GET | `/api/v1/households/{id}/events/page` | 按授权范围分页查询事件，可按 `member_id`、`event_type`、`confirmation_status` 过滤；游标绑定全部筛选范围 | ✅ |
+| GET | `/api/v1/households/{id}/events/page` | 按授权范围分页查询事件，可按 `member_id`、`event_type`、`confirmation_status`、`occurred_from`、`occurred_until` 过滤；游标绑定全部筛选范围 | ✅ |
 | POST | `/api/v1/households/{id}/events/{event_id}/compensations` | 追加补偿事件 | ✅ |
 | GET | `/api/v1/households/{id}/members/{mid}/state` | 查询成员状态投影 | ✅ |
 | POST | `/api/v1/households/{id}/members/{mid}/state/checkpoints` | 创建投影 checkpoint | ✅ |

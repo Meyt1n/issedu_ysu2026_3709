@@ -11,6 +11,7 @@ import { activeProvider, canSubmitWrites } from '@/data'
 import { recognitionStatusLabel } from '@/data/labels'
 import type { MemberSummary, QualityCheckResult, RecognitionCandidate } from '@/data/types'
 import { formatDateTime } from '@/utils/format'
+import { trustedReviewTarget } from '@/utils/reviewHandoff'
 import {
   notifyVisionTaskTerminal,
   requestVisionNoticePermission,
@@ -68,6 +69,10 @@ const handoff = computed(() => candidate.value?.handoff ?? {
 })
 
 /** MOB-132：任务状态回查。退避轮询在 composable 内，页面只负责接线与清理。 */
+const reviewTarget = computed(() => trustedReviewTarget(handoff.value.taskId, import.meta.env.VITE_REVIEW_WEB_BASE, window.location.origin))
+const handoffMessage = ref('')
+async function copyReviewTaskId(): Promise<void> { try { await navigator.clipboard.writeText(handoff.value.taskId); handoffMessage.value = '已复制复核任务标识。请在已登录的网页复核中心查询。' } catch { handoffMessage.value = '请记录复核任务标识：' + handoff.value.taskId } }
+function openReview(): void { if (!reviewTarget.value.url) { handoffMessage.value = reviewTarget.value.reason ?? '当前无法打开网页复核。'; return }; window.open(reviewTarget.value.url, '_blank', 'noopener,noreferrer'); handoffMessage.value = '已打开受控网页复核入口。网页端完成后请返回本页刷新任务状态。' }
 const polling = createVisionTaskPolling(taskId => activeProvider().fetchVisionTaskStatus(taskId))
 const noticeState = ref<VisionNoticeSupport>(visionNoticeSupport())
 /** 每个任务只提醒一次，避免"重试回查"再次触发通知。 */
@@ -508,6 +513,12 @@ onBeforeUnmount(() => {
         <p><strong>任务状态：</strong>{{ handoff.taskStatus }}</p>
         <p><strong>任务编号：</strong>{{ handoff.taskId }}</p>
         <p>{{ handoff.nextStep }}</p>
+        <p v-if="reviewTarget.reason" class="notice" data-tone="warn">{{ reviewTarget.reason }}</p>
+        <div class="btn-row">
+          <button type="button" class="btn btn-quiet" @click="copyReviewTaskId">复制任务标识</button>
+          <button type="button" class="btn" :disabled="!reviewTarget.url" @click="openReview">打开网页复核</button>
+        </div>
+        <p v-if="handoffMessage" class="meta-line" role="status">{{ handoffMessage }}</p>
         <p v-if="handoff.source === 'DEMO'" class="meta-line">演示模式不会创建真实复核任务。</p>
       </section>
       <section
