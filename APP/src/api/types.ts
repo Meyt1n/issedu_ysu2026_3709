@@ -32,6 +32,8 @@ export interface Household {
   name: string
   created_by: string
   created_at: string
+  /** IANA household timezone supplied by the server for business-day reporting. */
+  time_zone?: string
 }
 
 export interface Member {
@@ -100,7 +102,8 @@ export interface VisionQualityResponse {
   media_type: 'image' | 'video'
   decision: 'PASS' | 'RETAKE'
   allow_downstream: boolean
-  metrics: Record<string, VisionQualityMetric>
+  /** 图片响应为逐项指标；视频响应为帧数统计等纯数字（MOB-149）。 */
+  metrics: Record<string, VisionQualityMetric | number>
   reasons: string[]
   retake_prompts: string[]
   quality_receipt: string | null
@@ -120,6 +123,8 @@ export interface VisionTask {
   household_id: string
   member_id: string | null
   file_id: string
+  /** HCT-414-D1：任务绑定媒体类型；旧服务端可能缺省，视为 image。 */
+  media_type?: 'image' | 'video'
   task_type: string
   status: string
   error_code: string | null
@@ -130,6 +135,24 @@ export interface VisionTask {
   created_at: string
 }
 
+/** HCT-102 授权对象（GET /households/{id}/authorizations，仅 Owner）。 */
+export interface AuthorizationRead {
+  id: string
+  household_id: string
+  member_id: string
+  grantor_actor_id: string
+  grantee_actor_id: string
+  data_fields: string[]
+  actions: string[]
+  purpose: string
+  valid_from: string
+  valid_until: string
+  revoked_at: string | null
+  version: number
+  created_at: string
+  updated_at: string
+}
+
 export interface RequestOptions {
   actorId?: string
   accessPurpose?: string
@@ -137,4 +160,6 @@ export interface RequestOptions {
   authSession?: AuthSession | null
   idempotencyKey?: string
   signal?: AbortSignal
+  /** 请求超时毫秒数；0 表示不启用内部超时。默认 15s（MOB-144 区分超时与不可达）。 */
+  timeoutMs?: number
 }

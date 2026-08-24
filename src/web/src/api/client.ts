@@ -1,9 +1,11 @@
 import type {
   AccessAudit,
   ActiveModelVersion,
+  AuthSession,
   ApiErrorCode,
   ApiErrorEnvelope,
   AssistantChatInput,
+  AssistantAgentCatalog,
   AssistantResponse,
   AssistantTool,
   Authorization,
@@ -17,11 +19,13 @@ import type {
   CreateHouseholdInput,
   CreateKnowledgeDocumentInput,
   CreateMemberInput,
+  MemberAccountBindingInput,
   CreateModelVersionBindingInput,
   HardSample,
   HealthEvent,
   HealthResponse,
   CapabilityResponse,
+  DashboardSummary,
   Household,
   KnowledgeDocument,
   KnowledgeIndexSnapshot,
@@ -34,13 +38,18 @@ import type {
   OutboxMessage,
   ProjectionCheckpoint,
   ProjectionReplayResult,
+  PlanWorkbenchResponse,
+  RelationshipGraph,
   RequestOptions,
   ReviewTask,
   SkipReviewInput,
   RiskAlert,
+  RiskAcknowledgement,
   RiskDetailResponse,
   RiskListResponse,
   EvidencePipelineResult,
+  FaceCredential,
+  FaceChallenge,
   TrainingConsent,
   UpdateAuthorizationInput,
   UploadedFile,
@@ -110,10 +119,15 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 15_000
 export class ApiClient {
   private readonly baseUrl: string
   private readonly fetcher: typeof fetch
+  private unauthorizedHandler: (() => void) | null = null
 
   constructor(options: ApiClientOptions = {}) {
     this.baseUrl = options.baseUrl ?? ''
     this.fetcher = options.fetcher ?? globalThis.fetch.bind(globalThis)
+  }
+
+  setUnauthorizedHandler(handler: (() => void) | null): void {
+    this.unauthorizedHandler = handler
   }
 
   private async request<T>(
@@ -126,7 +140,8 @@ export class ApiClient {
     if (init.body !== undefined && !(init.body instanceof FormData)) {
       headers.set('Content-Type', 'application/json')
     }
-    if (options.actorId) headers.set('X-Actor-Id', options.actorId)
+    if (options.sessionToken) headers.set('Authorization', `Bearer ${options.sessionToken}`)
+    else if (options.actorId) headers.set('X-Actor-Id', options.actorId)
     if (options.accessPurpose) headers.set('X-Access-Purpose', options.accessPurpose)
     if (options.idempotencyKey) headers.set('Idempotency-Key', options.idempotencyKey)
 
@@ -169,8 +184,86 @@ export class ApiClient {
       }
     }
 
-    if (!response.ok) throw parseErrorBody(body, response.status, requestId)
+    if (!response.ok) {
+      if (response.status === 401) this.unauthorizedHandler?.()
+      throw parseErrorBody(body, response.status, requestId)
+    }
     return body as T
+  }
+
+  registerAccount(actorId: string, password: string): Promise<{ status: string; actor_id: string }> {
+    return this.request('/api/v1/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ actor_id: actorId, password }),
+    })
+  }
+
+  login(actorId: string, password: string): Promise<AuthSession> {
+    return this.request('/api/v1/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ actor_id: actorId, password }),
+    })
+  }
+
+  loginWithPin(householdId: string, actorId: string, pin: string): Promise<AuthSession> {
+    return this.request('/api/v1/auth/pin-login', {
+      method: 'POST',
+      body: JSON.stringify({ household_id: householdId, actor_id: actorId, pin }),
+    })
+  }
+
+  createFaceChallenge(householdId: string, actorId: string): Promise<FaceChallenge> {
+    return this.request('/api/v1/auth/face-challenge', {
+      method: 'POST',
+      body: JSON.stringify({ household_id: householdId, actor_id: actorId }),
+    })
+  }
+
+  createFamilyFaceChallenge(householdId: string): Promise<FaceChallenge> {
+    return this.request('/api/v1/auth/family-face-challenge', {
+      method: 'POST',
+      body: JSON.stringify({ household_id: householdId }),
+    })
+  }
+
+  loginWithFace(
+    householdId: string,
+    actorId: string,
+    challengeId: string,
+    frames: File[],
+  ): Promise<AuthSession> {
+    const body = new FormData()
+    body.append('household_id', householdId)
+    body.append('actor_id', actorId)
+    body.append('challenge_id', challengeId)
+    for (const frame of frames) body.append('frames', frame, frame.name)
+    return this.request('/api/v1/auth/face-login', { method: 'POST', body })
+  }
+
+  loginWithFamilyFace(
+    householdId: string,
+    challengeId: string,
+    frames: File[],
+  ): Promise<AuthSession> {
+    const body = new FormData()
+    body.append('household_id', householdId)
+    body.append('challenge_id', challengeId)
+    for (const frame of frames) body.append('frames', frame, frame.name)
+    return this.request('/api/v1/auth/family-face-login', { method: 'POST', body })
+  }
+
+  setPin(householdId: string, pin: string, options?: RequestOptions): Promise<{ status: string; household_id: string }> {
+    return this.request('/api/v1/auth/pin', {
+      method: 'POST',
+      body: JSON.stringify({ household_id: householdId, pin }),
+    }, options)
+  }
+
+  logout(sessionToken: string): Promise<{ status: string }> {
+    return this.request('/api/v1/auth/logout', {
+      method: 'POST',
+      body: JSON.stringify({ session_token: sessionToken }),
+    })
   }
 
   getHealth(options?: RequestOptions): Promise<HealthResponse> {
@@ -251,6 +344,19 @@ export class ApiClient {
     }, options)
   }
 
+  bindMemberAccount(
+    householdId: string,
+    memberId: string,
+    input: MemberAccountBindingInput,
+    options?: RequestOptions,
+  ): Promise<Member> {
+    return this.request(
+      `/api/v1/households/${encodeURIComponent(householdId)}/members/${encodeURIComponent(memberId)}/account`,
+      { method: 'PATCH', body: JSON.stringify(input) },
+      options,
+    )
+  }
+
   listMembers(
     householdId: string,
     options?: RequestOptions,
@@ -258,6 +364,55 @@ export class ApiClient {
     return this.request(
       `/api/v1/households/${householdId}/members`,
       undefined,
+      options,
+    )
+  }
+
+  listFaceCredentials(householdId: string, options?: RequestOptions): Promise<FaceCredential[]> {
+    return this.request(
+      `/api/v1/households/${encodeURIComponent(householdId)}/face-credentials`,
+      undefined,
+      options,
+    )
+  }
+
+  registerFaceCredential(
+    householdId: string,
+    frames: File | File[],
+    input: {
+      consent: boolean
+      targetActorId?: string
+      replaceExisting?: boolean
+      confirmationMethod: 'pin' | 'password'
+      confirmationCode?: string
+      confirmationChallengeId?: string
+    },
+    options?: RequestOptions,
+  ): Promise<FaceCredential> {
+    const body = new FormData()
+    if (Array.isArray(frames)) {
+      for (const frame of frames) body.append('frames', frame)
+    } else {
+      // Backward-compatible payload for older local clients; new UI uses frames.
+      body.append('file', frames)
+    }
+    body.append('consent', String(input.consent))
+    if (input.targetActorId) body.append('target_actor_id', input.targetActorId)
+    body.append('replace_existing', String(input.replaceExisting ?? false))
+    body.append('confirmation_method', input.confirmationMethod)
+    if (input.confirmationCode) body.append('confirmation_code', input.confirmationCode)
+    if (input.confirmationChallengeId) body.append('confirmation_challenge_id', input.confirmationChallengeId)
+    return this.request(
+      `/api/v1/households/${encodeURIComponent(householdId)}/face-credentials`,
+      { method: 'POST', body },
+      options,
+    )
+  }
+
+  deleteFaceCredential(householdId: string, credentialId: string, options?: RequestOptions): Promise<FaceCredential> {
+    return this.request(
+      `/api/v1/households/${encodeURIComponent(householdId)}/face-credentials/${encodeURIComponent(credentialId)}`,
+      { method: 'DELETE' },
       options,
     )
   }
@@ -370,6 +525,18 @@ export class ApiClient {
     )
   }
 
+  getRelationshipGraph(
+    householdId: string,
+    memberId: string,
+    options?: RequestOptions,
+  ): Promise<RelationshipGraph> {
+    return this.request(
+      `/api/v1/households/${householdId}/members/${memberId}/relationship-graph`,
+      undefined,
+      options,
+    )
+  }
+
   getMemberState(
     householdId: string,
     memberId: string,
@@ -408,6 +575,22 @@ export class ApiClient {
       },
       options,
     )
+  }
+
+  getPlanWorkbench(
+    householdId: string,
+    memberId: string,
+    options?: RequestOptions,
+  ): Promise<PlanWorkbenchResponse> {
+    return this.request(
+      `/api/v1/households/${householdId}/members/${memberId}/plan-workbench`,
+      undefined,
+      options,
+    )
+  }
+
+  getDashboardSummary(householdId: string, options?: RequestOptions): Promise<DashboardSummary> {
+    return this.request(`/api/v1/households/${householdId}/dashboard-summary`, undefined, options)
   }
 
   listOutboxMessages(
@@ -484,6 +667,20 @@ export class ApiClient {
     )
   }
 
+  missCarePlan(
+    householdId: string,
+    memberId: string,
+    planEventId: string,
+    reason: string,
+    options?: RequestOptions,
+  ): Promise<HealthEvent> {
+    return this.request(
+      `/api/v1/households/${householdId}/members/${memberId}/plans/missed?plan_event_id=${encodeURIComponent(planEventId)}&reason=${encodeURIComponent(reason)}`,
+      { method: 'POST' },
+      options,
+    )
+  }
+
   listMemberRisks(
     householdId: string,
     memberId: string,
@@ -509,6 +706,20 @@ export class ApiClient {
     )
   }
 
+  acknowledgeRisk(
+    householdId: string,
+    memberId: string,
+    ruleId: string,
+    input: { rule_version: string; risk_fingerprint: string },
+    options?: RequestOptions,
+  ): Promise<RiskAcknowledgement> {
+    return this.request(
+      `/api/v1/households/${householdId}/members/${memberId}/risks/${encodeURIComponent(ruleId)}/acknowledge`,
+      { method: 'POST', body: JSON.stringify(input) },
+      options,
+    )
+  }
+
   getVisionTask(taskId: string, options?: RequestOptions): Promise<VisionTask> {
     return this.request(
       `/api/v1/vision-tasks/${encodeURIComponent(taskId)}`,
@@ -520,7 +731,8 @@ export class ApiClient {
   /** 携带开发身份头下载文件字节（<img> 无法带请求头，需转 blob URL）。 */
   async fetchFileBlob(storageKey: string, options: RequestOptions = {}): Promise<Blob> {
     const headers = new Headers()
-    if (options.actorId) headers.set('X-Actor-Id', options.actorId)
+    if (options.sessionToken) headers.set('Authorization', `Bearer ${options.sessionToken}`)
+    else if (options.actorId) headers.set('X-Actor-Id', options.actorId)
     if (options.accessPurpose) headers.set('X-Access-Purpose', options.accessPurpose)
     let response: Response
     try {
@@ -546,6 +758,14 @@ export class ApiClient {
   cancelVisionTask(taskId: string, options?: RequestOptions): Promise<VisionTask> {
     return this.request(
       `/api/v1/vision-tasks/${encodeURIComponent(taskId)}/cancel`,
+      { method: 'POST' },
+      options,
+    )
+  }
+
+  retryVisionTask(taskId: string, options?: RequestOptions): Promise<VisionTask> {
+    return this.request(
+      `/api/v1/vision-tasks/${encodeURIComponent(taskId)}/retry`,
       { method: 'POST' },
       options,
     )
@@ -638,6 +858,10 @@ export class ApiClient {
 
   listAssistantTools(options?: RequestOptions): Promise<{ tools: AssistantTool[]; count: number }> {
     return this.request('/api/v1/assistant/tools', undefined, options)
+  }
+
+  listAssistantAgents(options?: RequestOptions): Promise<AssistantAgentCatalog> {
+    return this.request('/api/v1/assistant/agents', undefined, options)
   }
 
   listKnowledgeDocuments(options?: RequestOptions): Promise<KnowledgeDocument[]> {

@@ -24,6 +24,7 @@ const ICONS: Record<string, string> = {
   refresh: '<path d="M19 12a7 7 0 1 1-2-4.9"/><path d="M17.5 3.5V7H14"/>',
   plus: '<path d="M12 5.5v13M5.5 12h13"/>',
   close: '<path d="m6 6 12 12M18 6 6 18"/>',
+  trash: '<path d="M5 7h14M10 11v6M14 11v6M9 7V4.5h6V7M7 7l.8 13h8.4L17 7"/>',
   'arrow-right': '<path d="M4.5 12h15M14 6.5l5.5 5.5L14 17.5"/>',
   upload: '<path d="M12 15.5v-11M7.5 9 12 4.5 16.5 9"/><path d="M4.5 15.5v3a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5v-3"/>',
   alert: '<path d="M12 4 2.8 19.5h18.4L12 4Z"/><path d="M12 10v4M12 17v.01"/>',

@@ -3,7 +3,7 @@ import secrets
 import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import NoReturn
+from typing import Any, NoReturn
 
 from ai.vision.candidate_fusion import (
     FusionRequest,
@@ -33,16 +33,33 @@ from fastapi import (
     status,
 )
 from fastapi.responses import FileResponse
-from sqlalchemy import select, text, update
+from sqlalchemy import func, select, text, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.audit_pagination import decode_audit_cursor, encode_audit_cursor
 from app.auth import (
     authenticate,
+    authenticate_with_pin,
+    check_face_rate_limit,
+    clear_face_failures,
+    consume_face_challenge,
+    consume_family_face_challenge,
+    consume_pin_challenge,
+    create_face_challenge,
+    create_face_session,
+    create_family_face_challenge,
+    family_face_rate_actor,
     generate_pin_challenge,
+    introspect_session,
     logout,
+    record_face_failure,
     register_account,
-    verify_pin,
+    revoke_household_sessions,
+    set_account_pin,
+    verify_pin_challenge,
 )
+from app.care_plan import validate_plan_confirmation_window
 from app.config import get_settings
 from app.db import get_session
 from app.erasure import (
@@ -50,6 +67,7 @@ from app.erasure import (
     find_erasure_task,
     request_household_erasure,
 )
+from app.event_pagination import decode_event_cursor, encode_event_cursor
 from app.event_service import (
     CheckpointInvalidError,
     EventAlreadySupersededError,
@@ -59,6 +77,18 @@ from app.event_service import (
     create_projection_checkpoint,
     dispatch_outbox_batch,
     replay_member_projection,
+)
+from app.face_credentials import (
+    FACE_CONSENT_VERSION,
+    FACE_MATCH_THRESHOLD,
+    FAMILY_FACE_MATCH_MARGIN,
+    LEGACY_FACE_ALGORITHM_VERSION,
+    check_face_liveness,
+    decrypt_template,
+    encrypt_template,
+    extract_face_template,
+    extract_legacy_face_template,
+    face_template_similarity,
 )
 from app.file_upload import (
     compute_hash,
@@ -70,14 +100,17 @@ from app.file_upload import (
     validate_size,
 )
 from app.knowledge import KnowledgeDocument
+from app.local_agents import get_agent_catalog, run_local_multi_agent
 from app.models import (
     AccessAudit,
     CareAuthorization,
+    FaceCredential,
     HealthEvent,
     Household,
     Member,
     MemberStateProjection,
     OutboxMessage,
+    RiskAcknowledgement,
     VisionTask,
 )
 from app.review import (
@@ -95,34 +128,51 @@ from app.review import (
 from app.review import (
     list_review_tasks as list_review_tasks_query,
 )
+from app.risk_acknowledgement import (
+    acknowledgement_read,
+    request_fingerprint,
+    risk_fingerprint,
+)
 from app.schemas import (
+    AccessAuditPageRead,
     AccessAuditRead,
     AssistantRequest,
     AssistantResponse,
+    AuthCredentials,
     AuthorizationCreate,
     AuthorizationRead,
     AuthorizationRevoke,
     AuthorizationUpdate,
+    AuthSessionRead,
+    AuthSessionRequest,
     CapabilityResponse,
     CorrectionDiffCreate,
     CorrectionDiffRead,
+    DashboardSummaryRead,
     ErasureTaskRead,
     ExportManifestCreate,
     ExportManifestInvalidate,
     ExportManifestRead,
+    FaceChallengeRead,
+    FaceChallengeRequest,
+    FaceCredentialRead,
+    FamilyFaceChallengeRequest,
     HardSampleCreate,
     HardSampleRead,
     HardSampleUpdate,
     HealthEventCompensationCreate,
     HealthEventCreate,
+    HealthEventPageRead,
     HealthEventRead,
     HealthResponse,
     HouseholdCreate,
     HouseholdRead,
+    HouseholdUpdate,
     KnowledgeDocumentCreate,
     KnowledgeDocumentRead,
     KnowledgeRetrieveRequest,
     KnowledgeRetrieveResponse,
+    MemberAccountBindingUpdate,
     MemberCreate,
     MemberRead,
     MemberStateRead,
@@ -133,16 +183,28 @@ from app.schemas import (
     OutboxDispatchRead,
     OutboxDispatchRequest,
     OutboxRead,
+    PinLoginCredentials,
+    PinSetRequest,
+    PlanAutomationRead,
+    PlanWorkbenchRead,
     ProjectionCheckpointRead,
     ProjectionReplayRead,
     ProjectionReplayRequest,
+    RelationshipGraphRead,
     ReviewTaskConfirm,
     ReviewTaskCorrect,
     ReviewTaskRead,
     ReviewTaskSkip,
+    RiskAcknowledgementCreate,
+    RiskAcknowledgementRead,
     RiskAlertRead,
     RiskDetailResponse,
     RiskListResponse,
+    SessionIntrospectRead,
+    StepUpChallengeRead,
+    StepUpChallengeRequest,
+    StepUpGrantRead,
+    StepUpVerifyRequest,
     TrainingConsentCreate,
     TrainingConsentRead,
     TrainingConsentRevoke,
@@ -156,17 +218,20 @@ from app.security import (
     get_actor_id,
     has_authorized_action,
     require_household_owner,
+    require_session_token,
 )
 from app.tool_call import (
     get_approved_tools,
     run_assistant,
 )
 from app.vision_tasks import (
+    VISION_MEDIA_TYPES,
     VisionTaskStatus,
     _file_digest,
     create_vision_task,
     get_vision_task,
     list_vision_tasks,
+    retry_vision_task,
     transition_status,
 )
 from app.weather_adapter import WeatherActionCardsResponse, fetch_weather
@@ -189,6 +254,50 @@ def _is_erased(household: Household | None, member: Member | None = None) -> boo
     ):
         return True
     return False
+
+
+def _actor_belongs_to_household(session: Session, household_id: str, actor_id: str) -> bool:
+    household = session.get(Household, household_id)
+    if _is_erased(household):
+        return False
+    if household.created_by == actor_id:
+        return True
+    return session.scalar(
+        select(Member.id).where(
+            Member.household_id == household_id,
+            Member.actor_id == actor_id,
+            Member.deleted_at.is_(None),
+        )
+    ) is not None
+
+
+def _record_authentication_audit(
+    session: Session,
+    *,
+    household_id: str,
+    actor_id: str,
+    method: str,
+    outcome: str,
+    reason: str,
+) -> None:
+    """Persist only authentication metadata; never secrets, templates, or scores."""
+    household = session.get(Household, household_id)
+    if _is_erased(household):
+        return
+    session.add(
+        AccessAudit(
+            household_id=household_id,
+            authorization_id=None,
+            actor_id=actor_id,
+            operation="AUTHENTICATION",
+            action=f"{method}_LOGIN",
+            data_field="pin" if method == "PIN" else "biometric_template",
+            purpose="authentication",
+            outcome=outcome,
+            reason=reason[:64],
+        )
+    )
+    session.commit()
 
 
 def _future_time(value: datetime) -> datetime:
@@ -234,23 +343,29 @@ def database_health(session: Session = Depends(get_session)) -> HealthResponse:
 
 @router.get("/meta/capabilities", response_model=CapabilityResponse)
 def capabilities() -> CapabilityResponse:
-    return CapabilityResponse(
-        phase="P0-foundation",
-        available=[
-            "manual-health-event",
-            "household-member",
-            "field-authorization",
-            "audit-outbox",
-            "event-compensation-replay",
-            "outbox-recovery-worker",
-            "review-task",
-            "vision-task",
-            "knowledge-store",
-            "local-assistant",
-            "llm",
-        ],
-        unavailable=["vision-inference", "llm-cloud", "external-web"],
-    )
+    available = [
+        "manual-health-event",
+        "household-member",
+        "field-authorization",
+        "audit-outbox",
+        "event-compensation-replay",
+        "outbox-recovery-worker",
+        "review-task",
+        "vision-task",
+        "knowledge-store",
+        "local-assistant",
+        "llm",
+        "risk-acknowledgement",
+    ]
+    unavailable = ["vision-inference", "llm-cloud", "external-web"]
+    # HCT-414-D2 (DEMO_ONLY until the HCT-201 fixed quality set is signed off):
+    # the video task capability is declarative so mobile clients can hide the
+    # video entry when the server does not provide it.
+    if settings.vision_video_tasks_enabled:
+        available.append("vision-task-video")
+    else:
+        unavailable.append("vision-task-video")
+    return CapabilityResponse(phase="P0-foundation", available=available, unavailable=unavailable)
 
 
 def _valid_authorizations(
@@ -312,9 +427,31 @@ def list_households(
         if authorized_ids
         else []
     )
+    # A member account is a first-class local family identity.  It does not
+    # need a separate CareAuthorization just to discover its own household.
+    member_household_ids = set(
+        session.scalars(
+            select(Member.household_id).where(
+                Member.actor_id == actor_id,
+                Member.deleted_at.is_(None),
+            )
+        ).all()
+    )
+    member_households = (
+        list(
+            session.scalars(
+                select(Household).where(
+                    Household.id.in_(member_household_ids),
+                    Household.deleted_at.is_(None),
+                )
+            ).all()
+        )
+        if member_household_ids
+        else []
+    )
     seen: set[str] = set()
     result: list[Household] = []
-    for h in list(owned) + authorized:
+    for h in list(owned) + authorized + member_households:
         if h.id not in seen:
             seen.add(h.id)
             result.append(h)
@@ -370,8 +507,26 @@ def create_household(
     actor_id: str = Depends(get_actor_id),
     session: Session = Depends(get_session),
 ) -> Household:
-    household = Household(name=payload.name, created_by=actor_id)
+    household = Household(
+        name=payload.name,
+        created_by=actor_id,
+        time_zone=payload.time_zone or settings.default_household_time_zone,
+    )
     session.add(household)
+    session.commit()
+    session.refresh(household)
+    return household
+
+
+@router.patch("/households/{household_id}", response_model=HouseholdRead)
+def update_household(
+    household_id: str,
+    payload: HouseholdUpdate,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> Household:
+    household = require_household_owner(session, household_id, actor_id)
+    household.time_zone = payload.time_zone
     session.commit()
     session.refresh(household)
     return household
@@ -389,15 +544,95 @@ def create_member(
     session: Session = Depends(get_session),
 ) -> Member:
     household = require_household_owner(session, household_id, actor_id)
+    target_actor_id = payload.actor_id.strip() if payload.actor_id else None
+    if target_actor_id:
+        duplicate = session.scalar(
+            select(Member.id).where(
+                Member.household_id == household.id,
+                Member.actor_id == target_actor_id,
+                Member.deleted_at.is_(None),
+            )
+        )
+        if duplicate is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="ACCOUNT_ID_EXISTS")
+        if target_actor_id == household.created_by and payload.role != "SELF":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="ACCOUNT_ID_EXISTS")
     member = Member(
         household_id=household.id,
         display_name=payload.display_name,
         role=payload.role,
-        actor_id=payload.actor_id,
+        actor_id=target_actor_id,
     )
     session.add(member)
     session.commit()
     session.refresh(member)
+    return member
+
+
+@router.patch(
+    "/households/{household_id}/members/{member_id}/account",
+    response_model=MemberRead,
+)
+def bind_member_account(
+    household_id: str,
+    member_id: str,
+    payload: MemberAccountBindingUpdate,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> Member:
+    """Give an existing family member the actor id used for local login."""
+    household = require_household_owner(session, household_id, actor_id)
+    member = _require_household_member(session, household.id, member_id)
+    target_actor_id = payload.actor_id.strip()
+    duplicate = session.scalar(
+        select(Member.id).where(
+            Member.household_id == household.id,
+            Member.id != member.id,
+            Member.actor_id == target_actor_id,
+            Member.deleted_at.is_(None),
+        )
+    )
+    if duplicate is not None or (
+        target_actor_id == household.created_by and member.role != "SELF"
+    ):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="ACCOUNT_ID_EXISTS")
+
+    previous_actor_id = member.actor_id
+    if previous_actor_id != target_actor_id:
+        now = datetime.now(UTC)
+        active_credentials = list(
+            session.scalars(
+                select(FaceCredential).where(
+                    FaceCredential.household_id == household.id,
+                    FaceCredential.actor_id == previous_actor_id,
+                    FaceCredential.status == "ACTIVE",
+                )
+            ).all()
+        ) if previous_actor_id else []
+        for credential in active_credentials:
+            credential.status = "REVOKED"
+            credential.revoked_at = now
+            credential.encrypted_template = b""
+        if previous_actor_id:
+            revoke_household_sessions(household.id, {previous_actor_id})
+        member.actor_id = target_actor_id
+        session.add(
+            AccessAudit(
+                household_id=household.id,
+                authorization_id=None,
+                actor_id=actor_id,
+                operation="MEMBER_ACCOUNT",
+                action="BIND" if previous_actor_id is None else "REPLACE",
+                data_field="member_actor_id",
+                purpose="family-account-binding",
+                outcome="SUCCESS",
+                reason=None,
+                before_version=None,
+                after_version=None,
+            )
+        )
+        session.commit()
+        session.refresh(member)
     return member
 
 
@@ -659,6 +894,65 @@ def list_authorization_audits(
     )
 
 
+@router.get(
+    "/households/{household_id}/authorization-audits/page",
+    response_model=AccessAuditPageRead,
+)
+def page_authorization_audits(
+    household_id: str,
+    request_id: str | None = Query(default=None, min_length=1, max_length=120),
+    cursor: str | None = Query(default=None, min_length=1),
+    limit: int = Query(default=50, ge=1, le=100),
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> AccessAuditPageRead:
+    household = require_household_owner(session, household_id, actor_id)
+    decoded_cursor = None
+    if cursor is not None:
+        try:
+            decoded_cursor = decode_audit_cursor(cursor, secret=settings.cursor_signing_key)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
+        if decoded_cursor.household_id != household.id or decoded_cursor.request_id != request_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="AUDIT_CURSOR_INVALID",
+            )
+
+    query = select(AccessAudit).where(AccessAudit.household_id == household.id)
+    if request_id is not None:
+        query = query.where(AccessAudit.request_id == request_id)
+    if decoded_cursor is not None:
+        query = query.where(
+            (AccessAudit.created_at > decoded_cursor.created_at)
+            | (
+                (AccessAudit.created_at == decoded_cursor.created_at)
+                & (AccessAudit.id > decoded_cursor.audit_id)
+            )
+        )
+    rows = list(
+        session.scalars(
+            query.order_by(AccessAudit.created_at, AccessAudit.id).limit(limit + 1)
+        ).all()
+    )
+    has_more = len(rows) > limit
+    items = rows[:limit]
+    next_cursor = None
+    if has_more and items:
+        last = items[-1]
+        next_cursor = encode_audit_cursor(
+            household_id=household.id,
+            request_id=request_id,
+            created_at=last.created_at,
+            audit_id=last.id,
+            secret=settings.cursor_signing_key,
+        )
+    return AccessAuditPageRead(items=items, next_cursor=next_cursor, has_more=has_more)
+
+
 @router.post(
     "/households/{household_id}/events",
     response_model=HealthEventRead,
@@ -830,25 +1124,9 @@ def list_health_events(
     household = session.get(Household, household_id)
     if _is_erased(household):
         _raise_resource_not_found()
-    members = session.scalars(
-        select(Member).where(
-            Member.household_id == household.id,
-            Member.deleted_at.is_(None),
-        )
-    ).all()
-    allowed_member_ids = {
-        member.id
-        for member in members
-        if has_authorized_action(
-            session,
-            household,
-            member.id,
-            actor_id,
-            "READ_EVENTS",
-            "health_events",
-            access_purpose,
-        )
-    }
+    allowed_member_ids = _authorized_event_member_ids(
+        session, household, actor_id, access_purpose
+    )
     if member_id is not None and member_id not in allowed_member_ids:
         _raise_resource_not_found()
     if not allowed_member_ids:
@@ -862,6 +1140,134 @@ def list_health_events(
     if member_id is not None:
         query = query.where(HealthEvent.member_id == member_id)
     return list(session.scalars(query.order_by(HealthEvent.sequence_no)).all())
+
+
+def _authorized_event_member_ids(
+    session: Session,
+    household: Household,
+    actor_id: str,
+    access_purpose: str | None,
+) -> set[str]:
+    members = session.scalars(
+        select(Member).where(
+            Member.household_id == household.id,
+            Member.deleted_at.is_(None),
+        )
+    ).all()
+    return {
+        member.id
+        for member in members
+        if has_authorized_action(
+            session,
+            household,
+            member.id,
+            actor_id,
+            "READ_EVENTS",
+            "health_events",
+            access_purpose,
+        )
+    }
+
+
+@router.get(
+    "/households/{household_id}/events/page",
+    response_model=HealthEventPageRead,
+)
+def page_health_events(
+    household_id: str,
+    member_id: str | None = None,
+    cursor: str | None = None,
+    limit: int = Query(default=50, ge=1, le=100),
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> HealthEventPageRead:
+    """Return an authorization-scoped page without exposing event payload in the cursor."""
+    household = session.get(Household, household_id)
+    if _is_erased(household):
+        _raise_resource_not_found()
+    allowed_member_ids = _authorized_event_member_ids(
+        session, household, actor_id, access_purpose
+    )
+    if member_id is not None and member_id not in allowed_member_ids:
+        _raise_resource_not_found()
+    if not allowed_member_ids:
+        if household.created_by == actor_id:
+            return HealthEventPageRead(items=[])
+        _raise_resource_not_found()
+
+    try:
+        decoded_cursor = (
+            decode_event_cursor(cursor, secret=settings.cursor_signing_key)
+            if cursor
+            else None
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    if decoded_cursor is not None and (
+        decoded_cursor.household_id != household.id or decoded_cursor.member_id != member_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="EVENT_CURSOR_INVALID",
+        )
+
+    cursor_anchor: HealthEvent | None = None
+    if decoded_cursor is not None:
+        cursor_anchor = session.get(HealthEvent, decoded_cursor.event_id)
+        if (
+            cursor_anchor is None
+            or cursor_anchor.household_id != household.id
+            or (
+                member_id is not None
+                and cursor_anchor.member_id != member_id
+            )
+            or (
+                member_id is None
+                and cursor_anchor.member_id not in allowed_member_ids
+            )
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="EVENT_CURSOR_INVALID",
+            )
+
+    query = select(HealthEvent).where(
+        HealthEvent.household_id == household.id,
+        HealthEvent.member_id.in_(allowed_member_ids),
+    )
+    if member_id is not None:
+        query = query.where(HealthEvent.member_id == member_id)
+    if decoded_cursor is not None:
+        query = query.where(
+            (HealthEvent.sequence_no > decoded_cursor.sequence_no)
+            | (
+                (HealthEvent.sequence_no == decoded_cursor.sequence_no)
+                & (HealthEvent.id > decoded_cursor.event_id)
+            )
+        )
+    rows = list(
+        session.scalars(
+            query.order_by(HealthEvent.sequence_no, HealthEvent.id).limit(limit + 1)
+        ).all()
+    )
+    has_more = len(rows) > limit
+    items = rows[:limit]
+    next_cursor = None
+    if has_more and items:
+        last = items[-1]
+        next_cursor = encode_event_cursor(
+            household_id=household.id,
+            member_id=member_id,
+            created_at=last.created_at,
+            sequence_no=last.sequence_no,
+            event_id=last.id,
+            secret=settings.cursor_signing_key,
+        )
+    return HealthEventPageRead(items=items, next_cursor=next_cursor, has_more=has_more)
 
 
 @router.get(
@@ -1057,47 +1463,743 @@ def delete_file(
 # ── HCT-107: Local auth ────────────────────────────────────────────
 
 
-@router.post("/auth/register", status_code=status.HTTP_201_CREATED)
+@router.post("/auth/register", response_model=dict, status_code=status.HTTP_201_CREATED)
 def auth_register(
-    actor_id: str,
-    password: str,
+    payload: AuthCredentials,
 ) -> dict:
-    register_account(actor_id, password)
-    return {"status": "registered", "actor_id": actor_id}
+    register_account(payload.actor_id, payload.password)
+    return {"status": "registered", "actor_id": payload.actor_id}
 
 
-@router.post("/auth/login")
+@router.post("/auth/login", response_model=AuthSessionRead)
 def auth_login(
-    actor_id: str,
-    password: str,
+    payload: AuthCredentials,
 ) -> dict:
-    return authenticate(actor_id, password)
+    return {"actor_id": payload.actor_id, **authenticate(payload.actor_id, payload.password)}
+
+
+@router.post("/auth/pin-login", response_model=AuthSessionRead)
+def auth_pin_login(
+    payload: PinLoginCredentials,
+    session: Session = Depends(get_session),
+) -> dict:
+    # Keep household and identity selection server-side: a client cannot use a
+    # valid PIN to enter a different household or impersonate another member.
+    if not _actor_belongs_to_household(session, payload.household_id, payload.actor_id):
+        _record_authentication_audit(
+            session,
+            household_id=payload.household_id,
+            actor_id=payload.actor_id,
+            method="PIN",
+            outcome="FAILED",
+            reason="AUTH_FAILED",
+        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="AUTH_FAILED")
+    try:
+        authentication = authenticate_with_pin(
+            payload.actor_id,
+            payload.household_id,
+            payload.pin,
+        )
+    except HTTPException as exc:
+        _record_authentication_audit(
+            session,
+            household_id=payload.household_id,
+            actor_id=payload.actor_id,
+            method="PIN",
+            outcome="FAILED",
+            reason=str(exc.detail).split(":", 1)[0],
+        )
+        raise
+    _record_authentication_audit(
+        session,
+        household_id=payload.household_id,
+        actor_id=payload.actor_id,
+        method="PIN",
+        outcome="SUCCESS",
+        reason="AUTHENTICATED",
+    )
+    return {
+        "actor_id": payload.actor_id,
+        "household_id": payload.household_id,
+        **authentication,
+    }
+
+
+@router.post("/auth/face-challenge", response_model=FaceChallengeRead)
+def auth_face_challenge(payload: FaceChallengeRequest) -> dict[str, Any]:
+    """Issue an opaque short-lived challenge; binding is checked at login."""
+    return create_face_challenge(payload.actor_id, payload.household_id)
+
+
+@router.post("/auth/family-face-challenge", response_model=FaceChallengeRead)
+def auth_family_face_challenge(payload: FamilyFaceChallengeRequest) -> dict[str, Any]:
+    """Issue a household-scoped challenge; actor identity is resolved later."""
+    return create_family_face_challenge(payload.household_id)
+
+
+@router.post("/auth/face-login", response_model=AuthSessionRead)
+async def auth_face_login(
+    household_id: str = Form(..., min_length=1, max_length=120),
+    actor_id: str = Form(..., min_length=1, max_length=120),
+    challenge_id: str = Form(..., min_length=16, max_length=128),
+    frames: list[UploadFile] = File(...),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    """Match an in-memory motion sequence and issue the normal Bearer session."""
+    try:
+        rate_key = check_face_rate_limit(household_id, actor_id)
+    except HTTPException:
+        _record_authentication_audit(
+            session,
+            household_id=household_id,
+            actor_id=actor_id,
+            method="FACE",
+            outcome="FAILED",
+            reason="RATE_LIMITED",
+        )
+        raise
+
+    def failed(reason: str = "FACE_AUTH_FAILED") -> NoReturn:
+        record_face_failure(rate_key)
+        _record_authentication_audit(
+            session,
+            household_id=household_id,
+            actor_id=actor_id,
+            method="FACE",
+            outcome="FAILED",
+            reason=reason,
+        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="FACE_AUTH_FAILED")
+
+    try:
+        consume_face_challenge(challenge_id, actor_id, household_id)
+    except HTTPException:
+        failed("CHALLENGE_INVALID")
+
+    if not _actor_belongs_to_household(session, household_id, actor_id):
+        failed("ACCOUNT_SCOPE_INVALID")
+    credential = session.scalar(
+        select(FaceCredential).where(
+            FaceCredential.household_id == household_id,
+            FaceCredential.actor_id == actor_id,
+            FaceCredential.status == "ACTIVE",
+        )
+    )
+    if credential is None or not credential.encrypted_template:
+        failed("CREDENTIAL_UNAVAILABLE")
+
+    frame_bytes: list[bytes] = []
+    templates: list[bytes] = []
+    try:
+        if len(frames) < 2 or len(frames) > 3:
+            failed("FRAME_COUNT_INVALID")
+        for upload in frames:
+            if upload.content_type not in {"image/jpeg", "image/png"}:
+                failed("FRAME_TYPE_INVALID")
+            data = await upload.read(2 * 1024 * 1024 + 1)
+            if not data or len(data) > 2 * 1024 * 1024:
+                failed("FRAME_SIZE_INVALID")
+            if upload.content_type == "image/jpeg" and not data.startswith(b"\xff\xd8\xff"):
+                failed("FRAME_MAGIC_INVALID")
+            if upload.content_type == "image/png" and not data.startswith(b"\x89PNG\r\n\x1a\n"):
+                failed("FRAME_MAGIC_INVALID")
+            frame_bytes.append(data)
+            from ai.vision.quality_gate import assess_image, decode_image
+
+            quality = assess_image(
+                decode_image(data),
+                source_id="face-login",
+                thresholds=settings.vision_quality_thresholds(),
+            )
+            if not quality["allow_downstream"]:
+                failed("FRAME_QUALITY_INVALID")
+            extractor = (
+                extract_legacy_face_template
+                if credential.algorithm_version == LEGACY_FACE_ALGORITHM_VERSION
+                else extract_face_template
+            )
+            template, _ = extractor(data)
+            templates.append(template)
+        try:
+            check_face_liveness(templates)
+        except ValueError as exc:
+            if str(exc) == "FACE_LIVENESS_FAILED":
+                failed("LIVENESS_FAILED")
+            failed("FACE_MATCH_FAILED")
+        try:
+            stored_template = decrypt_template(credential.encrypted_template)
+        except HTTPException as exc:
+            _record_authentication_audit(
+                session,
+                household_id=household_id,
+                actor_id=actor_id,
+                method="FACE",
+                outcome="FAILED",
+                reason="FACE_SERVICE_UNAVAILABLE",
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="FACE_AUTH_UNAVAILABLE",
+            ) from exc
+        best_similarity = max(
+            face_template_similarity(template, stored_template) for template in templates
+        )
+        if best_similarity < FACE_MATCH_THRESHOLD:
+            failed()
+    except HTTPException:
+        raise
+    except ValueError:
+        failed("FACE_MATCH_FAILED")
+    except RuntimeError as exc:
+        _record_authentication_audit(
+            session,
+            household_id=household_id,
+            actor_id=actor_id,
+            method="FACE",
+            outcome="FAILED",
+            reason="FACE_SERVICE_UNAVAILABLE",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="FACE_AUTH_UNAVAILABLE",
+        ) from exc
+    finally:
+        for index in range(len(frame_bytes)):
+            frame_bytes[index] = b""
+        templates.clear()
+
+    clear_face_failures(rate_key)
+    _record_authentication_audit(
+        session,
+        household_id=household_id,
+        actor_id=actor_id,
+        method="FACE",
+        outcome="SUCCESS",
+        reason="AUTHENTICATED",
+    )
+    return {
+        "actor_id": actor_id,
+        "household_id": household_id,
+        **create_face_session(actor_id, household_id),
+    }
+
+
+@router.post("/auth/family-face-login", response_model=AuthSessionRead)
+async def auth_family_face_login(
+    household_id: str = Form(..., min_length=1, max_length=120),
+    challenge_id: str = Form(..., min_length=16, max_length=128),
+    frames: list[UploadFile] = File(...),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    """Identify one member inside the already bound household (1:N)."""
+    rate_actor = family_face_rate_actor()
+    try:
+        rate_key = check_face_rate_limit(household_id, rate_actor)
+    except HTTPException:
+        _record_authentication_audit(
+            session,
+            household_id=household_id,
+            actor_id=rate_actor,
+            method="FACE",
+            outcome="FAILED",
+            reason="RATE_LIMITED",
+        )
+        raise
+
+    def failed(reason: str = "FACE_AUTH_FAILED") -> NoReturn:
+        record_face_failure(rate_key)
+        _record_authentication_audit(
+            session,
+            household_id=household_id,
+            actor_id=rate_actor,
+            method="FACE",
+            outcome="FAILED",
+            reason=reason,
+        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="FACE_AUTH_FAILED")
+
+    try:
+        consume_family_face_challenge(challenge_id, household_id)
+    except HTTPException:
+        failed("CHALLENGE_INVALID")
+
+    credentials = list(
+        session.scalars(
+            select(FaceCredential).where(
+                FaceCredential.household_id == household_id,
+                FaceCredential.status == "ACTIVE",
+            )
+        ).all()
+    )
+    credentials = [
+        credential
+        for credential in credentials
+        if credential.encrypted_template
+        and _actor_belongs_to_household(session, household_id, credential.actor_id)
+    ]
+    if not credentials:
+        failed("CREDENTIAL_UNAVAILABLE")
+
+    frame_bytes: list[bytes] = []
+    templates_by_algorithm: dict[str, list[bytes]] = {}
+    try:
+        if len(frames) < 2 or len(frames) > 3:
+            failed("FRAME_COUNT_INVALID")
+        for upload in frames:
+            if upload.content_type not in {"image/jpeg", "image/png"}:
+                failed("FRAME_TYPE_INVALID")
+            data = await upload.read(2 * 1024 * 1024 + 1)
+            if not data or len(data) > 2 * 1024 * 1024:
+                failed("FRAME_SIZE_INVALID")
+            if upload.content_type == "image/jpeg" and not data.startswith(b"\xff\xd8\xff"):
+                failed("FRAME_MAGIC_INVALID")
+            if upload.content_type == "image/png" and not data.startswith(b"\x89PNG\r\n\x1a\n"):
+                failed("FRAME_MAGIC_INVALID")
+            frame_bytes.append(data)
+            from ai.vision.quality_gate import assess_image, decode_image
+
+            quality = assess_image(
+                decode_image(data),
+                source_id="family-face-login",
+                thresholds=settings.vision_quality_thresholds(),
+            )
+            if not quality["allow_downstream"]:
+                failed("FRAME_QUALITY_INVALID")
+
+        # A household may contain legacy v1 and current v2 credentials during
+        # migration, so derive each feature representation only once per
+        # algorithm version and keep all raw frames in memory only.
+        for algorithm_version in {credential.algorithm_version for credential in credentials}:
+            extractor = (
+                extract_legacy_face_template
+                if algorithm_version == LEGACY_FACE_ALGORITHM_VERSION
+                else extract_face_template
+            )
+            extracted = [extractor(data)[0] for data in frame_bytes]
+            try:
+                check_face_liveness(extracted)
+            except ValueError as exc:
+                if str(exc) == "FACE_LIVENESS_FAILED":
+                    failed("LIVENESS_FAILED")
+                failed("FACE_MATCH_FAILED")
+            templates_by_algorithm[algorithm_version] = extracted
+
+        candidates: list[tuple[float, str]] = []
+        decrypt_failures = 0
+        for credential in credentials:
+            try:
+                stored_template = decrypt_template(credential.encrypted_template)
+                templates = templates_by_algorithm[credential.algorithm_version]
+                score = max(
+                    face_template_similarity(template, stored_template)
+                    for template in templates
+                )
+            except (HTTPException, ValueError, KeyError):
+                decrypt_failures += 1
+                continue
+            candidates.append((score, credential.actor_id))
+        if not candidates:
+            if decrypt_failures:
+                raise RuntimeError("FACE_CREDENTIALS_UNAVAILABLE")
+            failed("CREDENTIAL_UNAVAILABLE")
+
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        best_score, best_actor_id = candidates[0]
+        second_score = candidates[1][0] if len(candidates) > 1 else None
+        if best_score < FACE_MATCH_THRESHOLD:
+            failed("NO_MATCH")
+        if second_score is not None and best_score - second_score < FAMILY_FACE_MATCH_MARGIN:
+            # A close race between two family members is not safe to resolve
+            # automatically; the UI falls back to PIN/explicit account login.
+            failed("AMBIGUOUS_MATCH")
+    except HTTPException:
+        raise
+    except ValueError:
+        failed("FACE_MATCH_FAILED")
+    except RuntimeError as exc:
+        _record_authentication_audit(
+            session,
+            household_id=household_id,
+            actor_id=rate_actor,
+            method="FACE",
+            outcome="FAILED",
+            reason="FACE_SERVICE_UNAVAILABLE",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="FACE_AUTH_UNAVAILABLE",
+        ) from exc
+    finally:
+        for index in range(len(frame_bytes)):
+            frame_bytes[index] = b""
+        for templates in templates_by_algorithm.values():
+            templates.clear()
+        templates_by_algorithm.clear()
+
+    clear_face_failures(rate_key)
+    _record_authentication_audit(
+        session,
+        household_id=household_id,
+        actor_id=best_actor_id,
+        method="FACE",
+        outcome="SUCCESS",
+        reason="FAMILY_MATCH_AUTHENTICATED",
+    )
+    return {
+        "actor_id": best_actor_id,
+        "household_id": household_id,
+        **create_face_session(best_actor_id, household_id),
+    }
+
+
+@router.post("/auth/pin", response_model=dict)
+def auth_set_pin(
+    payload: PinSetRequest,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> dict:
+    if not _actor_belongs_to_household(session, payload.household_id, actor_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RESOURCE_NOT_FOUND")
+    set_account_pin(actor_id, payload.household_id, payload.pin)
+    session.add(
+        AccessAudit(
+            household_id=payload.household_id,
+            authorization_id=None,
+            actor_id=actor_id,
+            operation="PIN_CREDENTIAL",
+            action="SET",
+            data_field="pin",
+            purpose="authentication",
+            outcome="SUCCESS",
+            reason="PIN_CONFIGURED",
+        )
+    )
+    session.commit()
+    return {"status": "pin_configured", "household_id": payload.household_id}
 
 
 @router.post("/auth/logout")
-def auth_logout(session_token: str) -> dict:
-    logout(session_token)
+def auth_logout(payload: AuthSessionRequest) -> dict:
+    logout(payload.session_token)
     return {"status": "logged_out"}
 
 
-@router.post("/auth/pin-challenge")
+@router.post("/auth/session", response_model=SessionIntrospectRead)
+def auth_session(session_token: str = Depends(require_session_token)) -> dict:
+    """Revalidate the caller's session so a client can drop a stale one early."""
+    return introspect_session(session_token)
+
+
+@router.post("/auth/pin-challenge", response_model=StepUpChallengeRead)
 def auth_pin_challenge(
+    payload: StepUpChallengeRequest,
     actor_id: str = Depends(get_actor_id),
+    session_token: str = Depends(require_session_token),
+    session: Session = Depends(get_session),
 ) -> dict:
-    session_token = secrets.token_hex(16)
-    return generate_pin_challenge(actor_id, "confirm_high_risk", session_token)
+    # Household selection stays server-side: an explicit household_id is only
+    # honoured when this actor really belongs to it.
+    if payload.household_id is not None and not _actor_belongs_to_household(
+        session, payload.household_id, actor_id
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RESOURCE_NOT_FOUND")
+    return generate_pin_challenge(
+        actor_id,
+        payload.action,
+        session_token,
+        payload.household_id,
+    )
 
 
-@router.post("/auth/pin-verify")
+@router.post("/auth/pin-verify", response_model=StepUpGrantRead)
 def auth_pin_verify(
-    pin: str,
-    action: str = "confirm_high_risk",
-    session_token: str = "",
+    payload: StepUpVerifyRequest,
+    session_token: str = Depends(require_session_token),
 ) -> dict:
-    ok = verify_pin(pin, action, session_token)
-    if not ok:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="PIN_INVALID")
-    return {"status": "confirmed"}
+    # The one-time code travels in the request body only; it must never reach a
+    # query string, where reverse proxies and APM tools would log it.
+    return verify_pin_challenge(
+        payload.challenge_id,
+        payload.action,
+        session_token,
+        payload.code,
+    )
+
+
+# HCT-424: face credential registration and binding.  Login matching and
+# liveness remain deliberately outside this route (HCT-425).
+FACE_REGISTER_ACTION = "register_face"
+
+
+def _require_face_target(
+    session: Session,
+    household_id: str,
+    target_actor_id: str,
+) -> None:
+    if not _actor_belongs_to_household(session, household_id, target_actor_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RESOURCE_NOT_FOUND")
+
+
+def _confirm_face_registration(
+    *,
+    actor_id: str,
+    household_id: str,
+    session_token: str,
+    confirmation_method: str,
+    confirmation_code: str,
+    confirmation_challenge_id: str | None,
+) -> None:
+    if confirmation_challenge_id:
+        consume_pin_challenge(
+            confirmation_challenge_id,
+            FACE_REGISTER_ACTION,
+            session_token,
+            household_id,
+        )
+        return
+    from app.auth import verify_reauthentication
+
+    verify_reauthentication(actor_id, household_id, confirmation_method, confirmation_code)
+
+
+@router.get(
+    "/households/{household_id}/face-credentials",
+    response_model=list[FaceCredentialRead],
+)
+def list_face_credentials(
+    household_id: str,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> list[FaceCredential]:
+    require_household_owner(session, household_id, actor_id)
+    return list(
+        session.scalars(
+            select(FaceCredential)
+            .where(
+                FaceCredential.household_id == household_id,
+                FaceCredential.status != "DELETED",
+            )
+            .order_by(FaceCredential.created_at.desc())
+        ).all()
+    )
+
+
+@router.post(
+    "/households/{household_id}/face-credentials",
+    response_model=FaceCredentialRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def register_face_credential(
+    household_id: str,
+    frames: list[UploadFile] = File(default=[]),
+    file: UploadFile | None = File(default=None),
+    consent: bool = Form(default=False),
+    target_actor_id: str | None = Form(default=None, max_length=120),
+    replace_existing: bool = Form(default=False),
+    confirmation_method: str = Form(default="pin"),
+    confirmation_code: str = Form(default=""),
+    confirmation_challenge_id: str | None = Form(default=None, max_length=128),
+    actor_id: str = Depends(get_actor_id),
+    session_token: str = Depends(require_session_token),
+    session: Session = Depends(get_session),
+) -> FaceCredential:
+    if not consent:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="FACE_CONSENT_REQUIRED",
+        )
+    household = require_household_owner(session, household_id, actor_id)
+    target = (target_actor_id or actor_id).strip()
+    if not target:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="FACE_TARGET_REQUIRED",
+        )
+    _require_face_target(session, household.id, target)
+
+    active = session.scalar(
+        select(FaceCredential).where(
+            FaceCredential.household_id == household.id,
+            FaceCredential.actor_id == target,
+            FaceCredential.status == "ACTIVE",
+        )
+    )
+    if active is not None and not replace_existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="FACE_CREDENTIAL_EXISTS")
+
+    # ``file`` remains accepted for one release so old local clients do not
+    # break. The web UI always sends a 2–3 frame dynamic sequence.
+    uploads = list(frames)
+    if not uploads and file is not None:
+        uploads = [file]
+    if len(uploads) < 2 or len(uploads) > 3:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="FACE_LIVENESS_FAILED",
+        )
+    templates: list[bytes] = []
+    metadata: dict[str, Any] | None = None
+    try:
+        from ai.vision.quality_gate import assess_image, decode_image
+
+        for upload in uploads:
+            filename = validate_filename(upload.filename or "unknown")
+            extension = validate_extension(filename)
+            if extension not in {".jpg", ".jpeg", ".png"} or upload.content_type not in {
+                "image/jpeg", "image/png"
+            }:
+                raise ValueError("FACE_IMAGE_INVALID")
+            validate_magic(upload.file, extension)
+            validate_size(upload.file)
+            image_bytes = await upload.read(2 * 1024 * 1024 + 1)
+            if not image_bytes or len(image_bytes) > 2 * 1024 * 1024:
+                raise ValueError("FACE_FRAME_SIZE_INVALID")
+            quality = assess_image(
+                decode_image(image_bytes),
+                source_id="face-registration",
+                thresholds=settings.vision_quality_thresholds(),
+            )
+            if not quality["allow_downstream"]:
+                raise ValueError("FACE_FRAME_LOW_QUALITY")
+            template, frame_metadata = extract_face_template(image_bytes)
+            templates.append(template)
+            metadata = frame_metadata
+            image_bytes = b""
+        try:
+            check_face_liveness(templates)
+        except ValueError as exc:
+            raise ValueError("FACE_LIVENESS_FAILED") from exc
+        # Store the sequence's most representative frame, not a potentially
+        # extreme turn. This keeps the encrypted schema compact and stable.
+        representative_index = max(
+            range(len(templates)),
+            key=lambda index: sum(
+                face_template_similarity(templates[index], other)
+                for other in templates
+                if other is not templates[index]
+            )
+            / max(1, len(templates) - 1),
+        )
+        template = templates[representative_index]
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    finally:
+        # Drop all decoded registration frames before touching the database.
+        templates.clear()
+
+    if metadata is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="FACE_FRAME_INVALID",
+        )
+
+    _confirm_face_registration(
+        actor_id=actor_id,
+        household_id=household.id,
+        session_token=session_token,
+        confirmation_method=confirmation_method,
+        confirmation_code=confirmation_code,
+        confirmation_challenge_id=confirmation_challenge_id,
+    )
+    now = datetime.now(UTC)
+    previous_version = active.credential_version if active is not None else 0
+    if active is not None:
+        active.status = "REVOKED"
+        active.revoked_at = now
+        active.encrypted_template = b""
+        session.flush()
+
+    credential = FaceCredential(
+        household_id=household.id,
+        actor_id=target,
+        encrypted_template=encrypt_template(template),
+        algorithm_version=metadata["algorithm_version"],
+        feature_version=metadata["feature_version"],
+        credential_version=previous_version + 1,
+        consent_version=FACE_CONSENT_VERSION,
+        status="ACTIVE",
+        created_by=actor_id,
+        consented_at=now,
+    )
+    session.add(credential)
+    session.add(
+        AccessAudit(
+            household_id=household.id,
+            authorization_id=None,
+            actor_id=actor_id,
+            operation="FACE_CREDENTIAL",
+            action="REGISTER" if active is None else "REBIND",
+            data_field="biometric_template",
+            purpose="face-registration",
+            outcome="SUCCESS",
+            reason=None,
+            before_version=previous_version or None,
+            after_version=credential.credential_version,
+        )
+    )
+    session.commit()
+    session.refresh(credential)
+    logger.info(
+        "FACE_CREDENTIAL_%s actor=%s household=%s credential=%s version=%d",
+        "REGISTERED" if active is None else "REBIND",
+        actor_id,
+        household.id,
+        credential.id,
+        credential.credential_version,
+    )
+    return credential
+
+
+@router.delete(
+    "/households/{household_id}/face-credentials/{credential_id}",
+    response_model=FaceCredentialRead,
+)
+def revoke_face_credential(
+    household_id: str,
+    credential_id: str,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> FaceCredential:
+    household = require_household_owner(session, household_id, actor_id)
+    credential = session.scalar(
+        select(FaceCredential).where(
+            FaceCredential.id == credential_id,
+            FaceCredential.household_id == household.id,
+        )
+    )
+    if credential is None:
+        _raise_resource_not_found()
+    if credential.status == "ACTIVE":
+        credential.status = "DELETED"
+        credential.revoked_at = datetime.now(UTC)
+        credential.encrypted_template = b""
+        session.add(
+            AccessAudit(
+                household_id=household.id,
+                authorization_id=None,
+                actor_id=actor_id,
+                operation="FACE_CREDENTIAL",
+                action="DELETE",
+                data_field="biometric_template",
+                purpose="face-registration",
+                outcome="SUCCESS",
+                reason=None,
+                before_version=credential.credential_version,
+                after_version=credential.credential_version,
+            )
+        )
+        session.commit()
+        session.refresh(credential)
+    return credential
 
 
 # ── HCT-301: Event timeline & projection ───────────────────────────
@@ -1130,6 +2232,32 @@ def member_timeline(
     return [HealthEventRead.model_validate(e) for e in events]
 
 
+@router.get(
+    "/households/{household_id}/members/{member_id}/relationship-graph",
+    response_model=RelationshipGraphRead,
+)
+def get_relationship_graph(
+    household_id: str,
+    member_id: str,
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> RelationshipGraphRead:
+    household = session.get(Household, household_id)
+    member = session.get(Member, member_id)
+    if _is_erased(household, member):
+        _raise_resource_not_found()
+    if not has_authorized_action(
+        session, household, member_id, actor_id, "READ_EVENTS", "health_events", access_purpose,
+    ):
+        _raise_resource_not_found()
+
+    from app.projection import build_relationship_graph_view, get_timeline
+
+    graph = build_relationship_graph_view(get_timeline(session, member_id))
+    return RelationshipGraphRead(member_id=member_id, generated_at=datetime.now(UTC), **graph)
+
+
 @router.post("/households/{household_id}/members/{member_id}/projection/rebuild")
 def rebuild_member_projection(
     household_id: str,
@@ -1144,6 +2272,124 @@ def rebuild_member_projection(
 
     proj = rebuild_projection(session, member_id, household_id)
     return {"member_id": member_id, "state": proj.state, "last_event_id": proj.last_event_id}
+
+
+@router.get(
+    "/households/{household_id}/members/{member_id}/plan-workbench",
+    response_model=PlanWorkbenchRead,
+)
+def get_plan_workbench(
+    household_id: str,
+    member_id: str,
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> PlanWorkbenchRead:
+    household = session.get(Household, household_id)
+    member = session.get(Member, member_id)
+    if _is_erased(household, member):
+        _raise_resource_not_found()
+    if not has_authorized_action(
+        session, household, member_id, actor_id, "READ_EVENTS", "health_events", access_purpose,
+    ):
+        _raise_resource_not_found()
+
+    from app.care_plan import build_plan_workbench
+    from app.projection import get_timeline
+
+    return PlanWorkbenchRead(
+        member_id=member_id,
+        generated_at=datetime.now(UTC),
+        plans=build_plan_workbench(
+            get_timeline(session, member_id),
+            time_zone=household.time_zone,
+        ),
+    )
+
+
+@router.get("/households/{household_id}/dashboard-summary", response_model=DashboardSummaryRead)
+def get_dashboard_summary(
+    household_id: str,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> DashboardSummaryRead:
+    household = session.get(Household, household_id)
+    if _is_erased(household) or household.created_by != actor_id:
+        _raise_resource_not_found()
+
+    members = list(
+        session.scalars(
+            select(Member).where(Member.household_id == household_id, Member.deleted_at.is_(None))
+        ).all()
+    )
+    member_ids = [member.id for member in members]
+    events = list(
+        session.scalars(
+            select(HealthEvent)
+            .where(
+                HealthEvent.household_id == household_id,
+                HealthEvent.confirmation_status == "CONFIRMED",
+            )
+            .order_by(HealthEvent.created_at)
+        ).all()
+    )
+    now = datetime.now(UTC)
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    counts_by_day: dict[str, int] = {}
+    for event in events:
+        occurred_at = event.occurred_at
+        normalized = occurred_at if occurred_at.tzinfo else occurred_at.replace(tzinfo=UTC)
+        day = normalized.date().isoformat()
+        counts_by_day[day] = counts_by_day.get(day, 0) + 1
+
+    from app.projection import build_relationship_graph
+    from app.rules import run_rules
+
+    severe_count = 0
+    warning_count = 0
+    info_count = 0
+    for member_id in member_ids:
+        member_events = [event for event in events if event.member_id == member_id]
+        for alert in run_rules(build_relationship_graph(member_events)):
+            if alert.level == "SEVERE":
+                severe_count += 1
+            elif alert.level == "WARNING":
+                warning_count += 1
+            else:
+                info_count += 1
+
+    pending_reviews = session.scalar(
+        select(func.count()).select_from(ReviewTask).where(
+            ReviewTask.household_id == household_id,
+            ReviewTask.status == "PENDING_REVIEW",
+        )
+    ) or 0
+    pending_outbox = session.scalar(
+        select(func.count())
+        .select_from(OutboxMessage)
+        .join(HealthEvent, OutboxMessage.event_id == HealthEvent.id)
+        .where(
+            HealthEvent.household_id == household_id,
+            OutboxMessage.status.in_(("PENDING", "FAILED")),
+        )
+    ) or 0
+    week_series = []
+    for offset in range(6, -1, -1):
+        day = (today - timedelta(days=offset)).date().isoformat()
+        week_series.append({"day": day, "count": counts_by_day.get(day, 0)})
+
+    return DashboardSummaryRead(
+        generated_at=now,
+        member_count=len(members),
+        events_today=counts_by_day.get(today.date().isoformat(), 0),
+        events_total=len(events),
+        severe_count=severe_count,
+        warning_count=warning_count,
+        info_count=info_count,
+        pending_reviews=int(pending_reviews),
+        pending_outbox=int(pending_outbox),
+        week_series=week_series,
+    )
 
 
 # ── HCT-302: Rules engine ──────────────────────────────────────────
@@ -1184,6 +2430,7 @@ def _append_care_plan_action(
     event_type: str,
     payload: dict[str, object],
     idempotency_key: str,
+    occurred_at: datetime | None = None,
 ) -> HealthEvent:
     correlation_id = getattr(request.state, "request_id", None) or request.headers.get(
         settings.request_id_header, ""
@@ -1200,6 +2447,7 @@ def _append_care_plan_action(
             event_type=event_type,
             confirmation_status="CONFIRMED",
             payload=payload,
+            occurred_at=occurred_at,
         ),
     )
 
@@ -1213,6 +2461,7 @@ def confirm_plan_endpoint(
     member_id: str,
     plan_event_id: str,
     request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     actor_id: str = Depends(get_actor_id),
     access_purpose: str | None = Depends(get_access_purpose),
     session: Session = Depends(get_session),
@@ -1225,6 +2474,32 @@ def confirm_plan_endpoint(
         session, household, member_id, actor_id, "WRITE_EVENTS", "health_events", access_purpose,
     ):
         _raise_resource_not_found()
+    from app.projection import get_timeline
+
+    now = datetime.now(UTC)
+    effective_key = idempotency_key or f"confirm:{plan_event_id}:{now.strftime('%Y%m%d%H%M')}"
+    existing = session.scalar(
+        select(HealthEvent).where(
+            HealthEvent.household_id == household.id,
+            HealthEvent.idempotency_key == effective_key,
+        )
+    )
+    if existing is not None:
+        if (
+            existing.member_id != member.id
+            or str((existing.payload or {}).get("plan_event_id") or "") != plan_event_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="IDEMPOTENCY_KEY_CONFLICT",
+            )
+        return HealthEventRead.model_validate(existing)
+    validate_plan_confirmation_window(
+        get_timeline(session, member_id),
+        plan_event_id,
+        now,
+        time_zone=household.time_zone,
+    )
     event = _append_care_plan_action(
         session,
         household=household,
@@ -1232,8 +2507,9 @@ def confirm_plan_endpoint(
         actor_id=actor_id,
         request=request,
         event_type="plan_confirmed",
-        payload={"plan_event_id": plan_event_id, "confirmed_at": datetime.now(UTC).isoformat()},
-        idempotency_key=f"confirm:{plan_event_id}",
+        payload={"plan_event_id": plan_event_id, "confirmed_at": now.isoformat()},
+        idempotency_key=effective_key,
+        occurred_at=now,
     )
     return HealthEventRead.model_validate(event)
 
@@ -1314,6 +2590,90 @@ def skip_plan_endpoint(
         idempotency_key=f"skip:{plan_event_id}",
     )
     return HealthEventRead.model_validate(event)
+
+
+@router.post(
+    "/households/{household_id}/members/{member_id}/plans/missed",
+    status_code=status.HTTP_201_CREATED,
+)
+def miss_plan_endpoint(
+    household_id: str,
+    member_id: str,
+    plan_event_id: str,
+    request: Request,
+    reason: str = Query(min_length=1, max_length=240),
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> HealthEventRead:
+    household = session.get(Household, household_id)
+    member = session.get(Member, member_id)
+    if _is_erased(household, member):
+        _raise_resource_not_found()
+    if not has_authorized_action(
+        session, household, member_id, actor_id, "WRITE_EVENTS", "health_events", access_purpose,
+    ):
+        _raise_resource_not_found()
+    event = _append_care_plan_action(
+        session,
+        household=household,
+        member=member,
+        actor_id=actor_id,
+        request=request,
+        event_type="plan_missed",
+        payload={
+            "plan_event_id": plan_event_id,
+            "reason": reason.strip(),
+            "missed_at": datetime.now(UTC).isoformat(),
+        },
+        idempotency_key=f"miss:{plan_event_id}:{datetime.now(UTC).date().isoformat()}",
+    )
+    return HealthEventRead.model_validate(event)
+
+
+@router.post(
+    "/households/{household_id}/members/{member_id}/plans/evaluate",
+    response_model=PlanAutomationRead,
+)
+def evaluate_plan_automation_endpoint(
+    household_id: str,
+    member_id: str,
+    request: Request,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> PlanAutomationRead:
+    """Evaluate explicitly authorized reminder automation for one member.
+
+    This endpoint is owner-only because it can append health and notification
+    events. Existing plans remain read-only unless their payload explicitly
+    opts into automation.
+    """
+    household = require_household_owner(session, household_id, actor_id)
+    member = _require_household_member(session, household_id, member_id)
+    if _is_erased(household, member):
+        _raise_resource_not_found()
+
+    evaluated_at = datetime.now(UTC)
+    correlation_id = getattr(request.state, "request_id", None) or request.headers.get(
+        settings.request_id_header, ""
+    )
+    from app.care_plan import execute_plan_automation
+
+    created_events, notified_actor_ids = execute_plan_automation(
+        session,
+        household=household,
+        member=member,
+        actor_id=actor_id,
+        correlation_id=correlation_id,
+        now=evaluated_at,
+    )
+
+    return PlanAutomationRead(
+        member_id=member.id,
+        evaluated_at=evaluated_at,
+        created_events=[HealthEventRead.model_validate(item) for item in created_events],
+        notified_caregiver_actor_ids=notified_actor_ids,
+    )
 
 
 # ── HCT-401: Knowledge store & RAG ──────────────────────────────────
@@ -1481,6 +2841,15 @@ def list_assistant_tools(
     return {"tools": tools, "count": len(tools)}
 
 
+@router.get("/assistant/agents")
+def list_assistant_agents(
+    actor_id: str = Depends(get_actor_id),
+) -> dict:
+    """Describe the local agent graph and its explicit network-search gate."""
+    del actor_id  # The catalog contains no household or member data.
+    return get_agent_catalog(settings)
+
+
 def _summarize_event_payload(payload: dict | None) -> str:
     if not payload:
         return ""
@@ -1566,6 +2935,7 @@ def assistant_chat(
     actor_id: str = Depends(get_actor_id),
     household_id: str | None = None,
     member_id: str | None = None,
+    access_purpose: str | None = Depends(get_access_purpose),
     session: Session = Depends(get_session),
 ) -> AssistantResponse:
     """Run the local health assistant with Ollama tool calling.
@@ -1578,16 +2948,43 @@ def assistant_chat(
     context = _build_assistant_context(session, actor_id, household_id, member_id)
     if context:
         messages = [{"role": "system", "content": context}, *messages]
-    result = run_assistant(
-        session,
-        messages=messages,
-        actor_id=actor_id,
-        household_id=household_id,
-        member_id=member_id,
-        model=payload.model,
-        max_tokens=payload.max_tokens,
-        temperature=payload.temperature,
-    )
+    member_display_name = None
+    if context and member_id:
+        # _build_assistant_context has already checked household ownership and
+        # member binding.  Reuse only the authorized display name for query
+        # redaction; it never enters the model/search response.
+        member = session.get(Member, member_id)
+        member_display_name = member.display_name if member else None
+    if payload.agent_mode == "multi_agent" and settings.agent_orchestration_enabled:
+        result = run_local_multi_agent(
+            session,
+            messages=messages,
+            actor_id=actor_id,
+            household_id=household_id,
+            member_id=member_id,
+            access_purpose=access_purpose,
+            model=payload.model,
+            max_tokens=payload.max_tokens,
+            temperature=payload.temperature,
+            allow_network_search=payload.allow_network_search,
+            sensitive_values=[member_display_name],
+        )
+    else:
+        result = run_assistant(
+            session,
+            messages=messages,
+            actor_id=actor_id,
+            household_id=household_id,
+            member_id=member_id,
+            access_purpose=access_purpose,
+            model=payload.model,
+            max_tokens=payload.max_tokens,
+            temperature=payload.temperature,
+        )
+        result.update({
+            "orchestration_mode": "single",
+            "all_agents_local": True,
+        })
     session.commit()
     return AssistantResponse(**result)
 
@@ -1655,6 +3052,7 @@ async def check_vision_quality(
                     sample_interval_ms=sample_interval_ms,
                     max_selected_frames=max_selected_frames,
                     thresholds=thresholds,
+                    max_duration_ms=settings.vision_video_max_duration_seconds * 1000,
                 )
             finally:
                 if temporary_path is not None:
@@ -1690,6 +3088,7 @@ async def check_vision_quality(
             actor_id=actor_id,
             input_digest=input_digest,
             config_version=result["config_version"],
+            media_type=media_type,
         )
         if result["allow_downstream"]
         else None
@@ -1802,6 +3201,21 @@ def create_vision_task_endpoint(
             detail="FILE_NOT_FOUND",
         )
 
+    extension = target.suffix.lower()
+    media_type_by_extension = {
+        ".jpg": "image",
+        ".jpeg": "image",
+        ".png": "image",
+        ".mp4": "video",
+        ".mov": "video",
+    }
+    actual_media_type = media_type_by_extension.get(extension)
+    if actual_media_type not in VISION_MEDIA_TYPES or actual_media_type != payload.media_type:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="MEDIA_TYPE_MISMATCH",
+        )
+
     # Compute input digest for integrity tracking.
     try:
         input_digest = _file_digest(str(target))
@@ -1821,6 +3235,7 @@ def create_vision_task_endpoint(
             actor_id=actor_id,
             input_digest=input_digest,
             config_version=settings.vision_quality_config_version,
+            media_type=payload.media_type,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -1833,6 +3248,7 @@ def create_vision_task_endpoint(
         household_id=household_id,
         created_by=actor_id,
         file_id=payload.file_id,
+        media_type=payload.media_type,
         member_id=payload.member_id,
         task_type=payload.task_type,
         idempotency_key=payload.idempotency_key,
@@ -1862,6 +3278,44 @@ _FUSION_CHANNEL_LABELS = {
     "packaging": "包装特征",
     "metadata": "规格/厂家",
 }
+
+
+def _review_candidate_metadata(
+    master_data: LocalMasterData,
+    record_id: str | None,
+) -> dict[str, Any]:
+    """Copy only approved, non-OCR medicine metadata into the review card."""
+    if not record_id:
+        return {}
+    record = next((item for item in master_data.records if item.record_id == record_id), None)
+    if record is None:
+        return {}
+
+    interaction_warnings: list[dict[str, str]] = []
+    for interaction in master_data.interactions:
+        if record_id not in interaction.record_ids:
+            continue
+        other_ids = [item for item in interaction.record_ids if item != record_id]
+        if not other_ids:
+            continue
+        interaction_warnings.append(
+            {
+                "with_record_id": other_ids[0],
+                "level": interaction.level,
+                "message": interaction.message,
+            }
+        )
+
+    return {
+        "specification": record.specification,
+        "manufacturer": record.manufacturer,
+        "active_ingredients": list(record.active_ingredients),
+        "indications": list(record.indications),
+        "cautions": list(record.cautions),
+        "contraindications": list(record.contraindications),
+        "interaction_warnings": interaction_warnings,
+        "master_data_version": master_data.version,
+    }
 
 
 def _ensure_review_task_for_vision(
@@ -1917,6 +3371,7 @@ def _ensure_review_task_for_vision(
                 "candidate_id": fused.candidate_id,
                 "rank": fused.rank,
                 "conflicts": fused.conflicts,
+                **_review_candidate_metadata(master_data, fused.candidate_id),
             }
         )
 
@@ -1945,6 +3400,12 @@ def _ensure_review_task_for_vision(
                     "candidate_id": None,
                     "rank": index + 1,
                     "conflicts": [],
+                    "active_ingredients": [],
+                    "indications": [],
+                    "cautions": [],
+                    "contraindications": [],
+                    "interaction_warnings": [],
+                    "master_data_version": master_data.version,
                 }
             )
 
@@ -2135,6 +3596,7 @@ def fuse_vision_task_endpoint(
                     "specification": record.specification,
                     "manufacturer": record.manufacturer,
                     "packaging_type": record.packaging_type,
+                    **_review_candidate_metadata(master_data, record.record_id),
                 }
             )
         review_candidates.append(review_candidate)
@@ -2296,6 +3758,31 @@ def cancel_vision_task_endpoint(
         error_code="CANCELLED_BY_USER",
         error_message=f"Cancelled by {actor_id}",
     )
+    session.commit()
+    session.refresh(updated)
+    return updated
+
+
+@router.post("/vision-tasks/{task_id}/retry", response_model=VisionTaskRead)
+def retry_vision_task_endpoint(
+    task_id: str,
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> VisionTask:
+    """Requeue one failed/timeout task in place.
+
+    The original file, member scope and task ID are retained.  This prevents
+    a retry button from creating a second candidate or a second health fact.
+    """
+    task = _require_vision_task_access(
+        session,
+        task_id,
+        actor_id=actor_id,
+        action="WRITE_EVENTS",
+        access_purpose=access_purpose,
+    )
+    updated = retry_vision_task(session, task)
     session.commit()
     session.refresh(updated)
     return updated
@@ -2611,6 +4098,49 @@ def skip_review_endpoint(
 # ── HCT-307: Risk evidence API ─────────────────────────────────────
 
 
+def _risk_alert_read(
+    session: Session,
+    *,
+    household_id: str,
+    member_id: str,
+    alert: Any,
+) -> RiskAlertRead:
+    current_version = settings.ruleset_version
+    fingerprint = risk_fingerprint(
+        rule_id=alert.rule_id,
+        level=alert.level,
+        source_event_ids=alert.source_event_ids,
+        rule_version=current_version,
+    )
+    acknowledgement = session.scalar(
+        select(RiskAcknowledgement).where(
+            RiskAcknowledgement.household_id == household_id,
+            RiskAcknowledgement.member_id == member_id,
+            RiskAcknowledgement.rule_id == alert.rule_id,
+            RiskAcknowledgement.risk_fingerprint == fingerprint,
+        )
+    )
+    return RiskAlertRead(
+        rule_id=alert.rule_id,
+        level=alert.level,
+        message=alert.message,
+        source_event_ids=alert.source_event_ids,
+        rule_version=current_version,
+        risk_fingerprint=fingerprint,
+        acknowledgement=(acknowledgement_read(acknowledgement) if acknowledgement else None),
+    )
+
+
+def _current_risk_alert(session: Session, member_id: str, rule_id: str) -> Any | None:
+    from app.projection import build_relationship_graph, get_timeline
+    from app.rules import run_rules
+
+    events = get_timeline(session, member_id)
+    facts = build_relationship_graph(events)
+    alerts = run_rules(facts, rule_ids=[rule_id])
+    return alerts[0] if alerts else None
+
+
 @router.get(
     "/households/{household_id}/members/{member_id}/risks",
     response_model=RiskListResponse,
@@ -2631,7 +4161,7 @@ def list_risks(
     ):
         _raise_resource_not_found()
     from app.projection import build_relationship_graph, get_timeline
-    from app.rules import apply_daily_budget, dedup_alerts, run_rules
+    from app.rules import DEFAULT_DAILY_BUDGET, apply_daily_budget, dedup_alerts, run_rules
 
     events = get_timeline(session, member_id)
     facts = build_relationship_graph(events)
@@ -2640,11 +4170,11 @@ def list_risks(
     budgeted = apply_daily_budget(deduped)
 
     alerts = [
-        RiskAlertRead(
-            rule_id=a.rule_id,
-            level=a.level,
-            message=a.message,
-            source_event_ids=a.source_event_ids,
+        _risk_alert_read(
+            session,
+            household_id=household_id,
+            member_id=member_id,
+            alert=a,
         )
         for a in budgeted
     ]
@@ -2654,6 +4184,9 @@ def list_risks(
         total=len(alerts),
         severe_count=sum(1 for a in alerts if a.level == "SEVERE"),
         warning_count=sum(1 for a in alerts if a.level == "WARNING"),
+        ruleset_version=settings.ruleset_version,
+        non_severe_budget=DEFAULT_DAILY_BUDGET,
+        suppressed_count=max(len(deduped) - len(budgeted), 0),
     )
 
 
@@ -2698,14 +4231,149 @@ def get_risk_detail(
                 "created_at": evt.created_at.isoformat() if evt.created_at else None,
             })
     return RiskDetailResponse(
-        alert=RiskAlertRead(
-            rule_id=alert.rule_id,
-            level=alert.level,
-            message=alert.message,
-            source_event_ids=alert.source_event_ids,
+        alert=_risk_alert_read(
+            session,
+            household_id=household_id,
+            member_id=member_id,
+            alert=alert,
         ),
         source_events=sources,
     )
+
+
+@router.post(
+    "/households/{household_id}/members/{member_id}/risks/{rule_id}/acknowledge",
+    response_model=RiskAcknowledgementRead,
+)
+def acknowledge_risk(
+    household_id: str,
+    member_id: str,
+    rule_id: str,
+    payload: RiskAcknowledgementCreate,
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> RiskAcknowledgementRead:
+    """Write a minimal receipt only for the currently computed risk signal."""
+
+    if not idempotency_key or len(idempotency_key) > 128:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="IDEMPOTENCY_KEY_REQUIRED",
+        )
+
+    household = session.get(Household, household_id)
+    member = session.get(Member, member_id)
+    if _is_erased(household, member):
+        _raise_resource_not_found()
+    if not has_authorized_action(
+        session,
+        household,
+        member_id,
+        actor_id,
+        "ACK_RISK",
+        "risk_alerts",
+        access_purpose,
+    ):
+        _raise_resource_not_found()
+
+    alert = _current_risk_alert(session, member_id, rule_id)
+    if alert is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RISK_NOT_FOUND")
+
+    current_version = settings.ruleset_version
+    current_fingerprint = risk_fingerprint(
+        rule_id=alert.rule_id,
+        level=alert.level,
+        source_event_ids=alert.source_event_ids,
+        rule_version=current_version,
+    )
+    request_hash = request_fingerprint(
+        household_id=household_id,
+        member_id=member_id,
+        rule_id=rule_id,
+        rule_version=payload.rule_version,
+        risk_fingerprint_value=payload.risk_fingerprint,
+        actor_id=actor_id,
+    )
+    existing = session.scalar(
+        select(RiskAcknowledgement).where(
+            RiskAcknowledgement.household_id == household_id,
+            RiskAcknowledgement.idempotency_key == idempotency_key,
+        )
+    )
+    if existing is not None:
+        if existing.request_fingerprint != request_hash:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="IDEMPOTENCY_KEY_CONFLICT",
+            )
+        return acknowledgement_read(existing, replayed=True)
+
+    if payload.rule_version != current_version or payload.risk_fingerprint != current_fingerprint:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="RISK_VERSION_CONFLICT",
+        )
+
+    existing_signal = session.scalar(
+        select(RiskAcknowledgement).where(
+            RiskAcknowledgement.household_id == household_id,
+            RiskAcknowledgement.member_id == member_id,
+            RiskAcknowledgement.rule_id == rule_id,
+            RiskAcknowledgement.risk_fingerprint == current_fingerprint,
+        )
+    )
+    if existing_signal is not None:
+        return acknowledgement_read(existing_signal, replayed=True)
+
+    acknowledgement = RiskAcknowledgement(
+        household_id=household_id,
+        member_id=member_id,
+        rule_id=rule_id,
+        rule_version=current_version,
+        risk_fingerprint=current_fingerprint,
+        actor_id=actor_id,
+        idempotency_key=idempotency_key,
+        request_fingerprint=request_hash,
+    )
+    session.add(acknowledgement)
+    session.add(
+        AccessAudit(
+            household_id=household_id,
+            authorization_id=None,
+            actor_id=actor_id,
+            operation="RISK_ACK",
+            action="ACK_RISK",
+            data_field="risk_alerts",
+            purpose=access_purpose,
+            outcome="ALLOWED",
+            reason=None,
+            request_id=getattr(request.state, "request_id", None),
+        )
+    )
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raced = session.scalar(
+            select(RiskAcknowledgement).where(
+                RiskAcknowledgement.household_id == household_id,
+                RiskAcknowledgement.risk_fingerprint == current_fingerprint,
+                RiskAcknowledgement.rule_id == rule_id,
+                RiskAcknowledgement.member_id == member_id,
+            )
+        )
+        if raced is not None:
+            return acknowledgement_read(raced, replayed=True)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="IDEMPOTENCY_KEY_CONFLICT",
+        ) from None
+    session.refresh(acknowledgement)
+    return acknowledgement_read(acknowledgement)
 
 
 # ── HCT-208: Correction diff, hard sample, training consent & export ───

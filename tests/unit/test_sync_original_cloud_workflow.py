@@ -86,7 +86,12 @@ def simulate_preflight_then_push(nodes: list[Node], start_sha: str) -> list[str]
 
 def workflow_run_script() -> str:
     document = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
-    run_script = document["jobs"]["sync"]["steps"][1]["run"]
+    run_step = next(
+        step
+        for step in document["jobs"]["sync"]["steps"]
+        if step.get("name") == "预检身份并按成员 Token 逐个同步"
+    )
+    run_script = run_step["run"]
     assert isinstance(run_script, str)
     return run_script
 
@@ -95,7 +100,7 @@ def test_sync_job_is_master_only_on_the_dedicated_runner() -> None:
     document = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
     job = document["jobs"]["sync"]
 
-    assert job["runs-on"] == ["self-hosted", "linux", "hct-sync"]
+    assert job["runs-on"] == ["self-hosted", "hct-sync"]
     assert job["if"] == "github.ref == 'refs/heads/master'"
 
 
@@ -117,6 +122,24 @@ def test_artifact_uploads_are_disabled() -> None:
     assert upload_steps == []
 
 
+def test_history_replay_uses_dedicated_runner_backup_and_exact_lease() -> None:
+    path = WORKFLOW_ROOT / "execute-cloud-history-sync.yml"
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    job = document["jobs"]["execute"]
+    scripts = "\n".join(step.get("run", "") for step in job["steps"])
+
+    assert job["runs-on"] == ["self-hosted", "hct-sync"]
+    assert "replay_from_sha" in document[True]["workflow_dispatch"]["inputs"]
+    assert "hct-sync-backup-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" in scripts
+    assert '"--force-with-lease=refs/heads/master:${cloud_sha}"' in scripts
+    assert '"${replay_from_sha}:refs/heads/master"' in scripts
+    assert "-c credential.helper=" in scripts
+    assert "cloud_git push original-cloud" in scripts
+    assert "action=\"${action//$'\\r'/}\"" in scripts
+    assert "git remote get-url original-cloud" in scripts
+    assert "git remote set-url original-cloud" in scripts
+
+
 def test_ci_and_relay_review_are_manual_only() -> None:
     for workflow_name in ("ci.yml", "relay-review-bot.yml"):
         document = yaml.safe_load(
@@ -136,10 +159,25 @@ def test_workflow_uses_full_history_and_preflights_before_push() -> None:
     assert "--parent-sha" in run_script
     assert "完整 Git diff" in run_script
 
+    setup_script = workflow["jobs"]["sync"]["steps"][1]["run"]
+    assert "HCT_SYNC_RUNNER_BIN" in setup_script
+    assert "RUNNER_OS" in setup_script
+    assert "cygpath" in setup_script
+    assert "${sync_sha//$'\\r'/}" in run_script
+    assert "${pr_meta//$'\\r'/}" in run_script
+    assert "cloud_git()" in run_script
+    assert "-c credential.helper=" in run_script
+    assert "-c credential.useHttpPath=true" in run_script
+    assert '-c "credential.username=${CLOUD_SELECTED_USERNAME}"' in run_script
+    assert "cloud_git fetch original-cloud master" in run_script
+    assert 'cloud_git push original-cloud "${refspec}"' in run_script
+    assert 'push_cloud_with_retry "${sync_sha}:refs/heads/master"' in run_script
+    assert "cloud_git ls-remote original-cloud" in run_script
+
     preflight_loop = run_script.index('for sync_sha in "${sync_shas[@]}"')
     plan_append = run_script.index("sync_plan+=(", preflight_loop)
     push_loop = run_script.index('for plan_row in "${sync_plan[@]}"')
-    push_command = run_script.index("git push original-cloud", push_loop)
+    push_command = run_script.index("push_cloud_with_retry", push_loop)
     assert preflight_loop < plan_append < push_loop < push_command
 
 

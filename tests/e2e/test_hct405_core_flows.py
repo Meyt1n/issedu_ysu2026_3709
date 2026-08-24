@@ -161,10 +161,33 @@ def test_caregiver_plan_actions_require_write_authorization(client: TestClient) 
     )
     headers = caregiver_headers("plan-care")
 
+    plans = [
+        append_confirmed_event(
+            client,
+            household_id,
+            member_id,
+            "plan_created",
+            {
+                "drug": f"synthetic-plan-{index}",
+                "schedule": "daily",
+                "safety_window": {"min_interval_hours": 4, "max_daily_doses": 2},
+            },
+        )
+        for index in range(3)
+    ]
+
     actions = [
-        ("confirm", {"plan_event_id": "plan-confirm"}, "plan_confirmed"),
-        ("defer", {"plan_event_id": "plan-defer", "delay_hours": 6}, "plan_deferred"),
-        ("skip", {"plan_event_id": "plan-skip", "reason": "not available"}, "plan_skipped"),
+        ("confirm", {"plan_event_id": plans[0]["id"]}, "plan_confirmed"),
+        (
+            "defer",
+            {"plan_event_id": plans[1]["id"], "delay_hours": 6},
+            "plan_deferred",
+        ),
+        (
+            "skip",
+            {"plan_event_id": plans[2]["id"], "reason": "not available"},
+            "plan_skipped",
+        ),
     ]
     for action, params, expected_type in actions:
         response = client.post(

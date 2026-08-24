@@ -2,15 +2,121 @@ from datetime import datetime
 from typing import Any, Literal
 
 from ai.vision.candidate_fusion import CandidateFusionResult
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from app.time_zone import validate_iana_time_zone
 
 PURPOSE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$"
+ACTOR_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$"
 
 
 class HealthResponse(BaseModel):
     status: Literal["ok"]
     service: str
     version: str
+
+
+class AuthCredentials(BaseModel):
+    actor_id: str = Field(min_length=1, max_length=120)
+    password: str = Field(min_length=8, max_length=256)
+
+
+class PinLoginCredentials(BaseModel):
+    household_id: str = Field(min_length=1, max_length=120)
+    actor_id: str = Field(min_length=1, max_length=120)
+    pin: str = Field(pattern=r"^[0-9]{6}$")
+
+
+class FaceChallengeRequest(BaseModel):
+    household_id: str = Field(min_length=1, max_length=120)
+    actor_id: str = Field(min_length=1, max_length=120)
+
+
+class FamilyFaceChallengeRequest(BaseModel):
+    household_id: str = Field(min_length=1, max_length=120)
+
+
+class FaceChallengeRead(BaseModel):
+    challenge_id: str
+    expires_at: float
+
+
+class PinSetRequest(BaseModel):
+    household_id: str = Field(min_length=1, max_length=120)
+    pin: str = Field(pattern=r"^[0-9]{6}$")
+
+
+class AuthSessionRequest(BaseModel):
+    session_token: str = Field(min_length=32, max_length=256)
+
+
+class AuthSessionRead(BaseModel):
+    actor_id: str
+    session_token: str
+    expires_at: float
+    household_id: str | None = None
+
+
+class FaceCredentialRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    household_id: str
+    actor_id: str
+    algorithm_version: str
+    feature_version: str
+    credential_version: int
+    consent_version: str
+    status: Literal["ACTIVE", "REVOKED", "DELETED"]
+    created_by: str
+    consented_at: datetime
+    revoked_at: datetime | None
+    created_at: datetime
+
+
+# ── HCT-427: step-up confirmation and session revalidation ─────────
+
+# Action codes stay ASCII and short so they can be logged and compared safely.
+STEP_UP_ACTION_PATTERN = r"^[a-z][a-z0-9_]{0,63}$"
+
+
+class SessionIntrospectRead(BaseModel):
+    """Live session behind the caller's Bearer token; no credential is returned."""
+
+    actor_id: str
+    expires_at: float
+
+
+class StepUpChallengeRequest(BaseModel):
+    action: str = Field(pattern=STEP_UP_ACTION_PATTERN)
+    # Optional: resolved server-side when the actor has a PIN in exactly one household.
+    household_id: str | None = Field(default=None, min_length=1, max_length=120)
+    method: Literal["pin"] = "pin"
+
+
+class StepUpChallengeRead(BaseModel):
+    """Deliberately carries no PIN: the caller re-enters its own household PIN."""
+
+    challenge_id: str
+    action: str
+    household_id: str
+    expires_at: float
+
+
+class StepUpVerifyRequest(BaseModel):
+    challenge_id: str = Field(min_length=1, max_length=128)
+    action: str = Field(pattern=STEP_UP_ACTION_PATTERN)
+    code: str = Field(pattern=r"^[0-9]{6}$")
+    method: Literal["pin"] = "pin"
+
+
+class StepUpGrantRead(BaseModel):
+    # `status` is kept so the already shipped mobile adapter (MOB-133) can assert
+    # a confirmed grant without another release.
+    status: Literal["confirmed"] = "confirmed"
+    challenge_id: str
+    action: str
+    confirmed_at: float
 
 
 class CapabilityResponse(BaseModel):
@@ -21,6 +127,21 @@ class CapabilityResponse(BaseModel):
 
 class HouseholdCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
+    time_zone: str | None = Field(default=None, min_length=1, max_length=64)
+
+    @field_validator("time_zone")
+    @classmethod
+    def validate_time_zone(cls, value: str | None) -> str | None:
+        return None if value is None else validate_iana_time_zone(value)
+
+
+class HouseholdUpdate(BaseModel):
+    time_zone: str = Field(min_length=1, max_length=64)
+
+    @field_validator("time_zone")
+    @classmethod
+    def validate_time_zone(cls, value: str) -> str:
+        return validate_iana_time_zone(value)
 
 
 class HouseholdRead(BaseModel):
@@ -29,13 +150,20 @@ class HouseholdRead(BaseModel):
     id: str
     name: str
     created_by: str
+    time_zone: str
     created_at: datetime
 
 
 class MemberCreate(BaseModel):
     display_name: str = Field(min_length=1, max_length=120)
     role: Literal["SELF", "DEPENDENT", "CAREGIVER"] = "DEPENDENT"
-    actor_id: str | None = Field(default=None, max_length=120)
+    actor_id: str | None = Field(default=None, max_length=120, pattern=ACTOR_ID_PATTERN)
+
+
+class MemberAccountBindingUpdate(BaseModel):
+    """Bind a local family member to the actor used at login."""
+
+    actor_id: str = Field(min_length=1, max_length=120, pattern=ACTOR_ID_PATTERN)
 
 
 class MemberRead(BaseModel):
@@ -53,7 +181,7 @@ class AuthorizationCreate(BaseModel):
     member_id: str
     grantee_actor_id: str = Field(min_length=1, max_length=120)
     data_fields: list[str] = Field(min_length=1)
-    actions: list[Literal["READ_EVENTS", "WRITE_EVENTS"]] = Field(min_length=1)
+    actions: list[Literal["READ_EVENTS", "WRITE_EVENTS", "ACK_RISK"]] = Field(min_length=1)
     purpose: str = Field(pattern=PURPOSE_PATTERN)
     valid_until: datetime
 
@@ -61,7 +189,7 @@ class AuthorizationCreate(BaseModel):
 class AuthorizationUpdate(BaseModel):
     expected_version: int = Field(ge=1)
     data_fields: list[str] | None = Field(default=None, min_length=1)
-    actions: list[Literal["READ_EVENTS", "WRITE_EVENTS"]] | None = Field(
+    actions: list[Literal["READ_EVENTS", "WRITE_EVENTS", "ACK_RISK"]] | None = Field(
         default=None,
         min_length=1,
     )
@@ -114,9 +242,16 @@ class AccessAuditRead(BaseModel):
     purpose: str | None
     outcome: str
     reason: str | None
+    request_id: str | None
     before_version: int | None
     after_version: int | None
     created_at: datetime
+
+
+class AccessAuditPageRead(BaseModel):
+    items: list[AccessAuditRead]
+    next_cursor: str | None = None
+    has_more: bool = False
 
 
 class HealthEventCreate(BaseModel):
@@ -162,6 +297,12 @@ class HealthEventRead(BaseModel):
     supersedes_event_id: str | None
     schema_version: int
     created_at: datetime
+
+
+class HealthEventPageRead(BaseModel):
+    items: list[HealthEventRead]
+    next_cursor: str | None = None
+    has_more: bool = False
 
 
 class MemberStateRead(BaseModel):
@@ -234,7 +375,94 @@ class OutboxDispatchRead(BaseModel):
     recovered_stale: int
 
 
+class PlanWorkbenchActionRead(BaseModel):
+    action: Literal["CONFIRM", "DEFER", "SKIP", "MISS"]
+    recorded_at: datetime
+    reason: str | None = None
+    delay_hours: int | None = None
+
+
+class PlanWorkbenchItemRead(BaseModel):
+    plan_event_id: str
+    drug: str
+    schedule: str
+    dose: str | None = None
+    times: list[str] = Field(default_factory=list)
+    start_date: str | None = None
+    end_date: str | None = None
+    status: Literal["NORMAL", "REMINDER", "ESCALATED", "COMPLETED"]
+    next_action_at: datetime
+    last_action: PlanWorkbenchActionRead | None = None
+    action_history: list[PlanWorkbenchActionRead] = Field(default_factory=list)
+    allowed_actions: list[Literal["CONFIRM", "DEFER", "SKIP", "MISS"]]
+
+
+class PlanWorkbenchRead(BaseModel):
+    member_id: str
+    generated_at: datetime
+    plans: list[PlanWorkbenchItemRead]
+
+
+class PlanAutomationRead(BaseModel):
+    member_id: str
+    evaluated_at: datetime
+    created_events: list[HealthEventRead] = Field(default_factory=list)
+    notified_caregiver_actor_ids: list[str] = Field(default_factory=list)
+
+
+class DashboardDayCountRead(BaseModel):
+    day: str
+    count: int
+
+
+class DashboardSummaryRead(BaseModel):
+    generated_at: datetime
+    member_count: int
+    events_today: int
+    events_total: int
+    severe_count: int
+    warning_count: int
+    info_count: int
+    pending_reviews: int
+    pending_outbox: int
+    week_series: list[DashboardDayCountRead]
+
+
+class RelationshipGraphNodeRead(BaseModel):
+    id: str
+    category: Literal["drug", "allergy", "disease", "plan", "caregiver"]
+    label: str
+    source_event_id: str
+    source_recorded_at: datetime
+    source_created_by: str
+
+
+class RelationshipGraphRead(BaseModel):
+    member_id: str
+    generated_at: datetime
+    events_count: int
+    last_event_id: str | None
+    nodes: list[RelationshipGraphNodeRead]
+
+
 # ── HCT-307: Risk evidence schemas ──────────────────────────────────
+
+
+class RiskAcknowledgementCreate(BaseModel):
+    rule_version: str = Field(min_length=1, max_length=64)
+    risk_fingerprint: str = Field(min_length=64, max_length=64)
+
+
+class RiskAcknowledgementRead(BaseModel):
+    receipt_id: str
+    household_id: str
+    member_id: str
+    rule_id: str
+    rule_version: str
+    risk_fingerprint: str
+    actor_id: str
+    acknowledged_at: datetime
+    replayed: bool = False
 
 
 class RiskAlertRead(BaseModel):
@@ -245,6 +473,9 @@ class RiskAlertRead(BaseModel):
     message: str
     source_event_ids: list[str] = Field(default_factory=list)
     created_at: datetime | None = None
+    rule_version: str
+    risk_fingerprint: str
+    acknowledgement: RiskAcknowledgementRead | None = None
 
 
 class RiskListResponse(BaseModel):
@@ -255,6 +486,9 @@ class RiskListResponse(BaseModel):
     total: int
     severe_count: int
     warning_count: int
+    ruleset_version: str
+    non_severe_budget: int
+    suppressed_count: int
 
 
 class RiskDetailResponse(BaseModel):
@@ -321,6 +555,7 @@ class ReviewTaskRead(BaseModel):
 
 class VisionTaskCreate(BaseModel):
     file_id: str = Field(min_length=1, description="Reference to an uploaded file")
+    media_type: Literal["image", "video"] = Field(default="image")
     member_id: str | None = Field(default=None)
     task_type: str = Field(default="ocr", min_length=1, max_length=40)
     idempotency_key: str | None = Field(default=None, max_length=128)
@@ -335,10 +570,12 @@ class VisionTaskRead(BaseModel):
     household_id: str
     member_id: str | None
     file_id: str
+    media_type: Literal["image", "video"]
     task_type: str
     status: str
     error_code: str | None = None
     error_message: str | None = None
+    error_detail: dict[str, Any] | None = None
     result: dict[str, Any] | None = None
     preprocess_version: str | None = None
     model_version: str | None = None
@@ -351,6 +588,27 @@ class VisionTaskRead(BaseModel):
     finished_at: datetime | None = None
     created_by: str
     created_at: datetime
+
+    @model_validator(mode="after")
+    def derive_error_detail(self) -> "VisionTaskRead":
+        if not self.error_code:
+            self.error_detail = None
+            return self
+        actions = {
+            "PREPROCESS_FAILED": "请检查图片格式、清晰度和文件是否完整后重新处理。",
+            "MODEL_NOT_FOUND": "本地视觉模型不可用，请启动视觉 worker 或检查模型配置。",
+            "MODEL_INFERENCE_ERROR": "视觉模型处理失败，请查看本地 worker 状态后重新处理。",
+            "TIMEOUT": "任务超过本地处理时限，请确认 worker 正常运行后重新处理。",
+            "UNKNOWN": "本地识别发生未知错误，请保留任务编号并重新处理。",
+        }
+        retryable = self.status in {"failed", "timeout"}
+        self.error_detail = {
+            "code": self.error_code,
+            "message": self.error_message or "未提供错误详情。",
+            "retryable": retryable,
+            "next_action": actions.get(self.error_code, "请刷新任务状态并联系项目维护者。"),
+        }
+        return self
 
 
 class VisionFusionRead(CandidateFusionResult):
@@ -444,6 +702,9 @@ class AssistantCitation(BaseModel):
     document_id: str
     version: str
     chunk_id: str
+    document_title: str | None = None
+    text: str | None = None
+    locator: str | None = None
 
 
 class AssistantRequest(BaseModel):
@@ -451,6 +712,11 @@ class AssistantRequest(BaseModel):
     model: str | None = Field(default=None, max_length=64)
     temperature: float = Field(default=0.3, ge=0.0, le=2.0)
     max_tokens: int = Field(default=512, ge=1, le=4096)
+    # Keep existing API clients on HCT-403's single-agent contract.  The web
+    # demo opts into multi-agent mode explicitly so this additive field cannot
+    # change legacy tool-call tests or integrations unexpectedly.
+    agent_mode: Literal["single", "multi_agent"] = "single"
+    allow_network_search: bool = False
 
 
 class AssistantResponse(BaseModel):
@@ -464,6 +730,15 @@ class AssistantResponse(BaseModel):
     degrade_reason: str | None = None
     model: str | None = None
     route: str | None = None
+    query_type: str | None = None
+    risk_notice: str | None = None
+    orchestration_mode: Literal["single", "multi_agent"] | None = None
+    orchestration_id: str | None = None
+    all_agents_local: bool = True
+    network_used: bool = False
+    network_query: str | None = None
+    agent_trace: list[dict[str, Any]] = Field(default_factory=list)
+    external_sources: list[dict[str, Any]] = Field(default_factory=list)
 
 
 # ── HCT-208: Correction diff schemas ──────────────────────────────────

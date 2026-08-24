@@ -10,7 +10,24 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 
 if (-not (Test-Path (Join-Path $JavaHome "bin\java.exe"))) {
-    throw "未找到 JDK：$JavaHome；请安装 Android Studio 或用 -JavaHome 指定 JDK 21+"
+    throw "未找到 JDK：$JavaHome；请安装 JDK 21-24 或用 -JavaHome 指定兼容路径"
+}
+$javaInfo = New-Object System.Diagnostics.ProcessStartInfo
+$javaInfo.FileName = Join-Path $JavaHome "bin\java.exe"
+$javaInfo.Arguments = '-version'
+$javaInfo.RedirectStandardError = $true
+$javaInfo.UseShellExecute = $false
+$javaProcess = New-Object System.Diagnostics.Process
+$javaProcess.StartInfo = $javaInfo
+$javaProcess.Start() | Out-Null
+$javaProcess.WaitForExit()
+$javaVersionText = $javaProcess.StandardError.ReadToEnd()
+if ($javaVersionText -notmatch 'version "(\d+)') {
+    throw "无法识别 JDK 版本：$JavaHome"
+}
+$javaMajor = [int]$Matches[1]
+if ($javaMajor -lt 21 -or $javaMajor -gt 24) {
+    throw "当前 Gradle 8.14.3 仅支持 JDK 21-24；检测到 JDK $javaMajor，请用 -JavaHome 指定兼容 JDK"
 }
 if (-not $env:ANDROID_HOME) {
     $env:ANDROID_HOME = Join-Path $env:LOCALAPPDATA "Android\Sdk"
@@ -27,7 +44,7 @@ if (-not (Test-Path $localProps)) {
 }
 
 Set-Location $RepoRoot
-npm run android:sync
+npm run android:sync:debug
 if ($LASTEXITCODE -ne 0) { throw "Web 构建或 Capacitor 同步失败" }
 
 $env:JAVA_HOME = $JavaHome

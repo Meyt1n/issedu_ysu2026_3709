@@ -2,7 +2,7 @@ export type ApiErrorCode = string
 
 export type MemberRole = 'SELF' | 'DEPENDENT' | 'CAREGIVER'
 
-export type AuthorizationAction = 'READ_EVENTS' | 'WRITE_EVENTS'
+export type AuthorizationAction = 'READ_EVENTS' | 'WRITE_EVENTS' | 'ACK_RISK'
 
 export interface ApiErrorEnvelope {
   error?: {
@@ -47,10 +47,29 @@ export interface Member {
   created_at: string
 }
 
+export interface FaceCredential {
+  id: string
+  household_id: string
+  actor_id: string
+  algorithm_version: string
+  feature_version: string
+  credential_version: number
+  consent_version: string
+  status: 'ACTIVE' | 'REVOKED' | 'DELETED'
+  created_by: string
+  consented_at: string
+  revoked_at: string | null
+  created_at: string
+}
+
 export interface CreateMemberInput {
   display_name: string
   role?: MemberRole
   actor_id?: string | null
+}
+
+export interface MemberAccountBindingInput {
+  actor_id: string
 }
 
 export interface Authorization {
@@ -179,6 +198,68 @@ export interface ProjectionReplayResult {
   projection_version: number
 }
 
+export type PlanWorkbenchStatus = 'NORMAL' | 'REMINDER' | 'ESCALATED'
+
+export interface PlanWorkbenchAction {
+  action: 'CONFIRM' | 'DEFER' | 'SKIP' | 'MISS'
+  recorded_at: string
+  reason?: string | null
+  delay_hours?: number | null
+}
+
+export interface PlanWorkbenchItem {
+  plan_event_id: string
+  drug: string
+  schedule: string
+  dose?: string | null
+  times: string[]
+  start_date?: string | null
+  end_date?: string | null
+  status: PlanWorkbenchStatus
+  next_action_at: string
+  last_action: PlanWorkbenchAction | null
+  action_history: PlanWorkbenchAction[]
+  allowed_actions: Array<'CONFIRM' | 'DEFER' | 'SKIP' | 'MISS'>
+}
+
+export interface PlanWorkbenchResponse {
+  member_id: string
+  generated_at: string
+  plans: PlanWorkbenchItem[]
+}
+
+export interface DashboardSummary {
+  generated_at: string
+  member_count: number
+  events_today: number
+  events_total: number
+  severe_count: number
+  warning_count: number
+  info_count: number
+  pending_reviews: number
+  pending_outbox: number
+  week_series: Array<{ day: string; count: number }>
+}
+
+export type RelationshipGraphCategory = 'drug' | 'allergy' | 'disease' | 'plan' | 'caregiver'
+
+export interface RelationshipGraphNode {
+  id: string
+  category: RelationshipGraphCategory
+  label: string
+  source_event_id: string
+  source_recorded_at: string
+  source_created_by: string
+}
+
+export interface RelationshipGraph {
+  member_id: string
+  generated_at: string
+  events_count: number
+  last_event_id: string | null
+  nodes: RelationshipGraphNode[]
+}
+
 export interface OutboxMessage {
   id: string
   event_id: string
@@ -209,6 +290,21 @@ export interface RiskAlert {
   message: string
   source_event_ids: string[]
   created_at: string | null
+  rule_version: string
+  risk_fingerprint: string
+  acknowledgement: RiskAcknowledgement | null
+}
+
+export interface RiskAcknowledgement {
+  receipt_id: string
+  household_id: string
+  member_id: string
+  rule_id: string
+  rule_version: string
+  risk_fingerprint: string
+  actor_id: string
+  acknowledged_at: string
+  replayed: boolean
 }
 
 export interface RiskListResponse {
@@ -217,6 +313,9 @@ export interface RiskListResponse {
   total: number
   severe_count: number
   warning_count: number
+  ruleset_version?: string
+  non_severe_budget?: number
+  suppressed_count?: number
 }
 
 export interface RiskSourceEvent {
@@ -233,11 +332,24 @@ export interface RiskDetailResponse {
 
 export interface RequestOptions {
   actorId?: string
+  sessionToken?: string
   accessPurpose?: string
   idempotencyKey?: string
   signal?: AbortSignal
   /** 单次请求超时（毫秒）。超时视为本地 API 不可用，写请求可凭幂等键安全重试。 */
   timeoutMs?: number
+}
+
+export interface AuthSession {
+  actor_id: string
+  session_token: string
+  expires_at: number
+  household_id?: string
+}
+
+export interface FaceChallenge {
+  challenge_id: string
+  expires_at: number
 }
 
 export interface VisionQualityMetric {
@@ -294,6 +406,7 @@ export interface VisionTask {
   status: string
   error_code: string | null
   error_message: string | null
+  error_detail: VisionTaskErrorDetail | null
   result: EvidencePipelineResult | null
   model_version: string | null
   model_threshold: number | null
@@ -304,6 +417,13 @@ export interface VisionTask {
   input_digest: string | null
   created_by: string
   created_at: string
+}
+
+export interface VisionTaskErrorDetail {
+  code: string
+  message: string
+  retryable: boolean
+  next_action: string
 }
 
 export type EvidenceFieldName =
@@ -440,6 +560,19 @@ export interface ReviewCandidate {
   evidence?: string[]
   dosage?: string | null
   frequency?: string | null
+  specification?: string | null
+  manufacturer?: string | null
+  active_ingredients?: string[]
+  indications?: string[]
+  cautions?: string[]
+  contraindications?: string[]
+  interaction_warnings?: Array<{
+    with_record_id: string
+    level: 'INFO' | 'WARNING' | string
+    message: string
+  }>
+  master_data_version?: string | null
+  candidate_id?: string | null
   [key: string]: unknown
 }
 
@@ -508,12 +641,53 @@ export interface AssistantChatInput {
   model?: string
   temperature?: number
   max_tokens?: number
+  agent_mode?: 'single' | 'multi_agent'
+  allow_network_search?: boolean
 }
 
 export interface AssistantCitation {
   document_id: string
   version: string
   chunk_id: string
+  document_title?: string | null
+  text?: string | null
+  locator?: string | null
+}
+
+export interface AssistantAgentTrace {
+  agent_id: string
+  role: string
+  status: string
+  local: boolean
+  network_used: boolean
+  duration_ms?: number
+  summary?: string
+  source_count?: number
+}
+
+export interface AssistantExternalSource {
+  title: string
+  url: string
+  snippet?: string
+  domain?: string
+  source?: string
+}
+
+export interface AssistantAgentCatalogItem {
+  agent_id: string
+  name: string
+  role: string
+  local: boolean
+  network: boolean
+}
+
+export interface AssistantAgentCatalog {
+  mode: 'multi_agent'
+  all_agents_local: boolean
+  ollama_local_only: boolean
+  web_search_enabled: boolean
+  web_search_requires_request_opt_in: boolean
+  agents: AssistantAgentCatalogItem[]
 }
 
 export interface AssistantResponse {
@@ -527,6 +701,15 @@ export interface AssistantResponse {
   degrade_reason: string | null
   model?: string | null
   route?: string | null
+  query_type?: string | null
+  risk_notice?: string | null
+  orchestration_mode?: 'single' | 'multi_agent' | null
+  orchestration_id?: string | null
+  all_agents_local?: boolean
+  network_used?: boolean
+  network_query?: string | null
+  agent_trace?: AssistantAgentTrace[]
+  external_sources?: AssistantExternalSource[]
 }
 
 export interface AssistantTool {
@@ -683,3 +866,4 @@ export interface CorrectionDiff {
   version: number
   created_at: string
 }
+

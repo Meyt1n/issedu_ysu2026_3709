@@ -4,6 +4,8 @@ import { formatDay } from '@/utils/format'
 import type {
   CareTask,
   DataProvider,
+  EnvironmentActionState,
+  HouseholdOption,
   MemberDetail,
   MemberSummary,
   ProviderInfo,
@@ -15,6 +17,8 @@ import type {
   TimelineItem,
   TodaySnapshot,
   TrendPoint,
+  VisionTaskStatusSnapshot,
+  TaskActionHistoryEntry,
 } from './types'
 
 const WEEKDAY_LABELS = ['日', '一', '二', '三', '四', '五', '六']
@@ -39,11 +43,31 @@ function daysFromNow(days: number, hours = 9): string {
 
 const EXPIRED_DATE = daysFromNow(-12)
 
+function demoEnvironmentAction(memberId: string): EnvironmentActionState {
+  if (memberId === 'm-li') {
+    return { availability: 'UNAUTHORIZED', reason: '当前授权范围不包含环境行动标签，因此不会请求或展示该成员的环境提示。', card: null }
+  }
+  const generatedAt = new Date().toISOString()
+  const validUntil = new Date(Date.now() + 4 * 3_600_000).toISOString()
+  return {
+    availability: 'AVAILABLE', reason: '',
+    card: {
+      id: `demo-environment-${memberId}`,
+      action: '演示：外出前留意当地环境变化，并根据实际情况安排衣物和出行时间。',
+      source: '家庭服务器环境行动（演示）', generatedAt, validUntil,
+      ruleVersion: 'environment-rules-demo-1', configVersion: 'weather-adapter-demo-1',
+      deduplicationKey: `demo-environment-${memberId}-${new Date().toISOString().slice(0, 13)}`,
+    },
+  }
+}
+
 interface DemoState {
   tasks: CareTask[]
   risks: RiskCard[]
   membersBase: Omit<MemberSummary, 'pendingTaskCount' | 'severeRiskCount' | 'warningRiskCount'>[]
   recentEvents: Record<string, TimelineItem[]>
+  /** 演示模式的任务操作日志（内存态，随演示数据重置）；条目用于操作历史展示。 */
+  actionLog: { eventId: string; taskId: string; memberId: string; action: TaskAction; at: string }[]
 }
 
 function buildInitialState(): DemoState {
@@ -93,6 +117,10 @@ function buildInitialState(): DemoState {
         dueAt: todayAt(8, 0),
         status: 'PENDING',
         planEventId: 'EVT-PLAN-101',
+        reminder: {
+          authorization: 'AUTHORIZED', planVersion: 'demo-plan-101-v1', deduplicationKey: 'demo-plan-101-v1',
+          firstReminderAt: todayAt(8, 0), repeatReminderAt: todayAt(8, 15), maxReminders: 2,
+        },
       },
       {
         id: 't-bp',
@@ -115,6 +143,10 @@ function buildInitialState(): DemoState {
         dueAt: todayAt(19, 0),
         status: 'PENDING',
         planEventId: 'EVT-PLAN-103',
+        reminder: {
+          authorization: 'AUTHORIZED', planVersion: 'demo-plan-103-v1', deduplicationKey: 'demo-plan-103-v1',
+          firstReminderAt: todayAt(19, 0), repeatReminderAt: todayAt(19, 15), maxReminders: 2,
+        },
       },
       {
         id: 't-walk',
@@ -287,6 +319,7 @@ function buildInitialState(): DemoState {
         },
       ],
     },
+    actionLog: [],
   }
 }
 
@@ -371,6 +404,12 @@ export const demoProvider: DataProvider = {
     }
   },
 
+  async listHouseholds(): Promise<HouseholdOption[]> {
+    await delay(80)
+    // 演示模式只有一个虚构家庭；保留这个方法让家庭选择界面对两种模式一致。
+    return [{ id: 'demo-household', name: '演示家庭（虚构）' }]
+  },
+
   async listMembers(): Promise<MemberSummary[]> {
     await delay(160)
     return memberSummaries()
@@ -384,19 +423,36 @@ export const demoProvider: DataProvider = {
       memberId === 'm-wang'
         ? [
             {
-              granteeName: '王芳（我）',
+              id: 'demo-auth-wang-1',
+              memberId,
+              granteeActorId: 'demo-family-owner',
+              granteeName: '王芳（我·演示）',
               fields: ['已确认健康事件', '用药与计划'],
+              actions: ['read'],
               purpose: 'family-care',
+              validFrom: new Date(Date.now() - 24 * 3_600_000).toISOString(),
               validUntil: daysFromNow(28),
+              revokedAt: null,
+              version: 1,
+              status: 'ACTIVE' as const,
             },
           ]
         : memberId === 'm-li'
           ? [
               {
-                granteeName: '王芳（我）',
+                id: 'demo-auth-li-1',
+                memberId,
+                granteeActorId: 'demo-family-owner',
+                granteeName: '王芳（我·演示）',
                 fields: ['已确认健康事件'],
+                actions: ['read'],
                 purpose: 'family-care',
+                validFrom: new Date(Date.now() - 24 * 3_600_000).toISOString(),
                 validUntil: daysFromNow(9),
+                revokedAt: null,
+                version: 1,
+                // 9 天后到期：仍有效但进入"即将到期"提示窗口（7 天阈值）
+                status: 'EXPIRING' as const,
               },
             ]
           : []
@@ -415,6 +471,7 @@ export const demoProvider: DataProvider = {
       tasks: clone(state.tasks.filter(t => t.memberId === memberId)),
       risks: clone(state.risks.filter(r => r.memberId === memberId && !r.acknowledged)),
       recentEvents: clone((state.recentEvents[memberId] ?? []).slice(0, 4)),
+      environmentAction: demoEnvironmentAction(memberId),
     }
   },
 
@@ -464,7 +521,33 @@ export const demoProvider: DataProvider = {
       task.skipReason = reason
     }
     task.lastActionAt = now
+    state.actionLog.push({ eventId: `demo-action-${state.actionLog.length + 1}`, taskId, memberId: task.memberId, action, at: now })
     return clone(task)
+  },
+
+  async listTaskActionHistory(memberId: string): Promise<TaskActionHistoryEntry[]> {
+    await delay(120)
+    const member = state.membersBase.find(m => m.id === memberId)
+    return state.actionLog
+      .filter(entry => entry.memberId === memberId)
+      .slice()
+      .reverse()
+      .map(entry => {
+        const task = state.tasks.find(t => t.id === entry.taskId)
+        return {
+          eventId: entry.eventId,
+          action: entry.action,
+          actionLabel: entry.action === 'confirm' ? '确认' : entry.action === 'defer' ? '延期' : '跳过',
+          taskTitle: task?.title ?? '演示任务',
+          memberName: member?.name ?? '演示成员',
+          memberId,
+          serverTime: entry.at,
+          // 演示模式没有幂等覆盖场景：同一任务重复提交会被上面拦截，最终状态即任务当前状态
+          finalStatus: task?.status ?? 'PENDING',
+          receipt: 'RECEIPTED' as const,
+          note: '（演示）演示模式操作只写内存日志，随"恢复演示数据"重置。',
+        }
+      })
   },
 
   async checkImageQuality(file: File): Promise<QualityCheckResult> {
@@ -498,18 +581,49 @@ export const demoProvider: DataProvider = {
     }
   },
 
+  async checkVideoQuality(file: File): Promise<QualityCheckResult> {
+    await delay(420)
+    // 演示模式同样保留门控语义（极小文件视为无可用帧）。视频入口在演示
+    // 模式下隐藏（没有真实抽帧链路），此实现只满足 Provider 契约与测试。
+    if (file.size < 30_000) {
+      return {
+        decision: 'RETAKE',
+        reasons: ['没有可用证据帧'],
+        retakePrompts: ['请保持药盒稳定、居中并在均匀光线下重拍'],
+        metrics: [
+          { label: '可用帧数', value: '0', passed: false },
+        ],
+        qualityReceipt: null,
+      }
+    }
+    return {
+      decision: 'PASS',
+      reasons: [],
+      retakePrompts: [],
+      metrics: [
+        { label: '采样帧数', value: '4', passed: true },
+        { label: '可用帧数', value: '4', passed: true },
+      ],
+      qualityReceipt: `demo-video-receipt-${Date.now()}`,
+      framesSummary: { mediaType: 'video', sampledFrames: 4, selectedFrames: 4, usableFrames: 4 },
+    }
+  },
+
   async getWeeklyTrend(memberId: string): Promise<TrendPoint[]> {
     await delay(160)
     // 前 6 天为稳定的虚构数据（按成员区分），今天与当前任务状态联动。
     const seed = memberId === 'm-li' ? [1, 1, 1, 0, 1, 1] : [2, 3, 2, 3, 1, 3]
     const totalSeed = memberId === 'm-li' ? [1, 1, 1, 1, 1, 1] : [3, 3, 3, 3, 3, 3]
+    // Demo fixtures are fictional, but their business-day labels still use an explicit timezone.
+    const demoTimeZone = 'Asia/Shanghai'
+    const weekday = new Intl.DateTimeFormat('en-US', { timeZone: demoTimeZone, weekday: 'short' })
+    const weekdayIndex = (date: Date) => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(weekday.format(date))
     const points: TrendPoint[] = []
     for (let offset = 6; offset >= 1; offset -= 1) {
-      const date = new Date()
-      date.setDate(date.getDate() - offset)
+      const date = new Date(Date.now() - offset * 86_400_000)
       const index = 6 - offset
       points.push({
-        label: WEEKDAY_LABELS[date.getDay()]!,
+        label: WEEKDAY_LABELS[weekdayIndex(date)]!,
         done: seed[index] ?? 0,
         total: totalSeed[index] ?? 0,
       })
@@ -523,7 +637,7 @@ export const demoProvider: DataProvider = {
     return points
   },
 
-  async recognizeMedicine(file: File): Promise<RecognitionCandidate> {
+  async recognizeMedicine(file: File, _memberId?: string, _mediaKind?: 'image' | 'video'): Promise<RecognitionCandidate> {
     await delay(700)
     const versions = {
       ocr: 'paddleocr-demo-0.1',
@@ -572,4 +686,28 @@ export const demoProvider: DataProvider = {
       notice: '未能在本地药品主数据中找到匹配项。未知药品不会自动入库，可补拍更清晰的照片或转人工复核。',
     }
   },
+
+  async fetchVisionTaskStatus(taskId: string): Promise<VisionTaskStatusSnapshot> {
+    // 演示模式按调用次数模拟排队→处理→完成，让状态回查流程可教学；
+    // 每个任务独立计数，状态文案明确标注“演示”，不冒充真实服务器回查。
+    const counters = demoVisionTaskPollCounters
+    const count = (counters.get(taskId) ?? 0) + 1
+    counters.set(taskId, count)
+    await delay(120)
+    const status = count <= 1 ? 'queued' : count === 2 ? 'running' : 'succeeded'
+    return {
+      taskId,
+      status,
+      terminal: status === 'succeeded',
+      errorCode: null,
+      errorMessage: null,
+      modelVersion: 'demo-vision-0.1',
+      createdAt: new Date().toISOString(),
+      nextStep: status === 'succeeded'
+        ? '（演示）识别已完成；演示模式不会创建真实复核任务，网页端复核中心流程在联机模式下体验。'
+        : `（演示）任务${status === 'queued' ? '已排队' : '处理中'}；下方会按退避节奏继续回查。`,
+    }
+  },
 }
+
+const demoVisionTaskPollCounters = new Map<string, number>()

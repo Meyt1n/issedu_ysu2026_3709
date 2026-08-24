@@ -9,11 +9,14 @@ import type {
   RequestOptions,
   RiskDetailResponse,
   RiskListResponse,
+  AuthorizationRead,
   UploadedFile,
   VisionQualityResponse,
   VisionTask,
 } from './types'
 import type { AuthSession } from './auth'
+import { recordRequestTrace } from './requestLog'
+import { validateServerBaseUrl } from '@/utils/serverUrl'
 
 /** 与主仓库 web 端 ApiClient 相同的错误封装与请求头约定。 */
 export class ApiClientError extends Error {
@@ -29,6 +32,9 @@ export class ApiClientError extends Error {
     this.requestId = options.requestId ?? null
   }
 }
+
+/** 默认请求超时；用于区分"超时"与"网络不可达"（MOB-144）。 */
+const DEFAULT_TIMEOUT_MS = 15_000
 
 function fallbackErrorCode(status: number): ApiErrorCode {
   if (status === 401) return 'UNAUTHENTICATED'
@@ -52,7 +58,11 @@ export class ApiClient {
   private readonly authSessionProvider?: () => AuthSession | null
 
   constructor(options: ApiClientOptions = {}) {
-    this.baseUrl = (options.baseUrl ?? '').replace(/\/+$/, '')
+    const baseUrl = validateServerBaseUrl(options.baseUrl ?? '')
+    if (!baseUrl.ok) {
+      throw new ApiClientError(baseUrl.message, { status: 0, code: 'INVALID_SERVER_URL' })
+    }
+    this.baseUrl = baseUrl.value
     this.fetcher = options.fetcher ?? globalThis.fetch.bind(globalThis)
     this.authSessionProvider = options.authSessionProvider
   }
@@ -91,41 +101,87 @@ export class ApiClient {
     }
     if (options.idempotencyKey) headers.set('Idempotency-Key', options.idempotencyKey)
 
-    const requestInit: RequestInit = { ...init, headers, signal: options.signal }
+    // MOB-144：15s 超时让"超时"与"网络不可达"可区分；外部传入 signal 时尊重外部控制。
+    const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
+    const timeoutController = (typeof AbortController !== 'undefined' && timeoutMs > 0)
+      ? new AbortController()
+      : null
+    const timeoutTimer = timeoutController
+      ? setTimeout(() => timeoutController.abort(), timeoutMs)
+      : null
+    const onExternalAbort = () => timeoutController?.abort()
+    options.signal?.addEventListener('abort', onExternalAbort)
+    const requestInit: RequestInit = {
+      ...init,
+      headers,
+      signal: options.signal ?? timeoutController?.signal,
+    }
     if (authSession?.transport === 'cookie' && requestInit.credentials === undefined) {
       requestInit.credentials = 'include'
     }
 
+    const traceBase = {
+      method: init.method ?? 'GET',
+      path,
+      idempotencyKey: options.idempotencyKey,
+    }
+
     let response: Response
-    try {
-      response = await this.fetcher(`${this.baseUrl}${path}`, requestInit)
-    } catch {
-      throw new ApiClientError('家庭服务器暂时无法访问', { status: 0, code: 'DEPENDENCY_UNAVAILABLE' })
-    }
-
-    const requestId = response.headers.get('x-request-id')
-    const text = await response.text()
     let body: unknown = null
-    if (text) {
+    try {
       try {
-        body = JSON.parse(text) as unknown
+        response = await this.fetcher(`${this.baseUrl}${path}`, requestInit)
       } catch {
-        body = { detail: text }
+        const aborted = timeoutController?.signal.aborted === true
+        recordRequestTrace({
+          ...traceBase,
+          outcome: aborted ? 'timeout' : 'unreachable',
+        })
+        if (aborted) {
+          throw new ApiClientError('请求超时，服务器没有在限定时间内响应', { status: 0, code: 'REQUEST_TIMEOUT' })
+        }
+        throw new ApiClientError('家庭服务器暂时无法访问', { status: 0, code: 'DEPENDENCY_UNAVAILABLE' })
       }
-    }
 
-    if (!response.ok) {
-      const envelope = (body ?? {}) as ApiErrorEnvelope
-      throw new ApiClientError(
-        envelope.error?.message ?? envelope.detail ?? `请求失败（HTTP ${response.status}）`,
-        {
-          status: response.status,
-          code: envelope.error?.code ?? fallbackErrorCode(response.status),
-          requestId: envelope.error?.request_id ?? envelope.request_id ?? requestId,
-        },
-      )
+      const requestId = response.headers.get('x-request-id')
+      const text = await response.text()
+      if (text) {
+        try {
+          body = JSON.parse(text) as unknown
+        } catch {
+          body = { detail: text }
+        }
+      }
+
+      // 成功与失败都记录可定位回执；响应体若携带事件/任务 ID 一并关联。
+      const receiptId = body !== null && typeof body === 'object' && body !== null
+        && typeof (body as { id?: unknown }).id === 'string'
+        ? (body as { id: string }).id
+        : undefined
+      recordRequestTrace({
+        ...traceBase,
+        outcome: response.ok ? 'success' : response.status >= 500 ? 'server-error' : 'client-error',
+        status: response.status,
+        requestId,
+        receiptId,
+      })
+
+      if (!response.ok) {
+        const envelope = (body ?? {}) as ApiErrorEnvelope
+        throw new ApiClientError(
+          envelope.error?.message ?? envelope.detail ?? `请求失败（HTTP ${response.status}）`,
+          {
+            status: response.status,
+            code: envelope.error?.code ?? fallbackErrorCode(response.status),
+            requestId: envelope.error?.request_id ?? envelope.request_id ?? requestId,
+          },
+        )
+      }
+      return body as T
+    } finally {
+      if (timeoutTimer) clearTimeout(timeoutTimer)
+      options.signal?.removeEventListener('abort', onExternalAbort)
     }
-    return body as T
   }
 
   getHealth(options?: RequestOptions): Promise<HealthResponse> {
@@ -140,6 +196,18 @@ export class ApiClient {
     return this.request('/api/v1/households', undefined, options)
   }
 
+  /**
+   * 设置或更新当前身份在某个家庭的六位 PIN（HCT-427 的二次确认凭据）。
+   * PIN 只出现在请求体里，不进 URL；服务端只保存哈希。
+   */
+  setAccountPin(householdId: string, pin: string, options?: RequestOptions): Promise<unknown> {
+    return this.request(
+      '/api/v1/auth/pin',
+      { method: 'POST', body: JSON.stringify({ household_id: householdId, pin }) },
+      options,
+    )
+  }
+
   listMembers(householdId: string, options?: RequestOptions): Promise<Member[]> {
     return this.request(`/api/v1/households/${householdId}/members`, undefined, options)
   }
@@ -148,8 +216,8 @@ export class ApiClient {
     return this.request(`/api/v1/households/${householdId}/members/${memberId}/timeline`, undefined, options)
   }
 
-  /** 仅家庭 owner 可读；非 owner 返回 404（用于区分照护者视角）。 */
-  listAuthorizations(householdId: string, options?: RequestOptions): Promise<unknown[]> {
+  /** 授权列表（HCT-102，仅 Owner；非 Owner 服务端隐藏式拒绝 403/404）。 */
+  listAuthorizations(householdId: string, options?: RequestOptions): Promise<AuthorizationRead[]> {
     return this.request(`/api/v1/households/${householdId}/authorizations`, undefined, options)
   }
 
@@ -211,10 +279,14 @@ export class ApiClient {
     )
   }
 
-  checkVisionQuality(file: File, options?: RequestOptions): Promise<VisionQualityResponse> {
+  checkVisionQuality(
+    file: File,
+    mediaType: 'image' | 'video' = 'image',
+    options?: RequestOptions,
+  ): Promise<VisionQualityResponse> {
     const body = new FormData()
     body.append('file', file)
-    body.append('media_type', 'image')
+    body.append('media_type', mediaType)
     return this.request('/api/v1/vision-quality/check', { method: 'POST', body }, options)
   }
 
@@ -225,9 +297,24 @@ export class ApiClient {
   }
 
   createVisionTask(
-    input: { file_id: string; member_id?: string; quality_receipt: string; idempotency_key?: string },
+    input: {
+      file_id: string
+      member_id?: string
+      quality_receipt: string
+      idempotency_key?: string
+      media_type?: 'image' | 'video'
+    },
     options?: RequestOptions,
   ): Promise<VisionTask> {
     return this.request('/api/v1/vision-tasks', { method: 'POST', body: JSON.stringify(input) }, options)
+  }
+
+  /** 回查单个视觉任务的状态；身份由会话承载，路径只包含服务端签发的任务 ID。 */
+  getVisionTask(taskId: string, options?: RequestOptions): Promise<VisionTask> {
+    return this.request(
+      `/api/v1/vision-tasks/${encodeURIComponent(taskId)}`,
+      { method: 'GET' },
+      options,
+    )
   }
 }

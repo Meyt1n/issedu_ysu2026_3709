@@ -6,7 +6,9 @@ requires-python = ">=3.11,<3.12"
 dependencies = [
   "alembic>=1.14,<2",
   "bcrypt>=4.2,<5",
+  "cryptography>=43,<46",
   "fastapi>=0.115,<0.116",
+  "httpx>=0.28,<0.29",
   "numpy>=2,<3",
   "opencv-python-headless>=4.10,<5",
   "pydantic-settings>=2.7,<3",
@@ -14,12 +16,12 @@ dependencies = [
   "pymysql>=1.1,<2",
   "python-multipart>=0.0.9,<1",
   "sqlalchemy>=2.0.36,<2.1",
+  "tzdata>=2024.1,<2027",
   "uvicorn[standard]>=0.34,<0.35",
 ]
 
 [dependency-groups]
 dev = [
-  "httpx>=0.28,<0.29",
   "pytest>=8.3,<9",
   "pytest-cov>=6,<7",
   "requests>=2.32,<3",

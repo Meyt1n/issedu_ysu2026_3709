@@ -1,7 +1,9 @@
 import { computed, reactive, readonly } from 'vue'
 
 import { ApiClientError, apiClient } from './api/client'
+import { clearChatSessionsForActor } from './assistant/chatSession'
 import type {
+  AuthSession,
   CapabilityResponse,
   Household,
   Member,
@@ -21,8 +23,17 @@ export type ViewName =
   | 'bigscreen'
   | 'knowledge'
   | 'modellab'
+  | 'face-credentials'
 
 export type SessionStatus = 'signed-out' | 'loading' | 'ready' | 'empty' | 'error'
+
+export const HEALTH_DATA_REFRESH_EVENT = 'hct:health-data-refresh'
+export const FACE_FAMILY_STORAGE_KEY = 'hct:face-family-household'
+
+interface BoundFaceHousehold {
+  id: string
+  name: string
+}
 
 export interface Toast {
   id: number
@@ -32,6 +43,9 @@ export interface Toast {
 
 interface SessionState {
   actorId: string
+  sessionToken: string
+  sessionExpiresAt: number | null
+  authMode: 'development' | 'session'
   accessPurpose: string
   status: SessionStatus
   error: string
@@ -48,6 +62,9 @@ interface SessionState {
 
 const state = reactive<SessionState>({
   actorId: '',
+  sessionToken: '',
+  sessionExpiresAt: null,
+  authMode: 'development',
   accessPurpose: 'family-care',
   status: 'signed-out',
   error: '',
@@ -63,11 +80,13 @@ const state = reactive<SessionState>({
 })
 
 let toastSeq = 0
+let sessionExpiryTimer: ReturnType<typeof setTimeout> | null = null
 
 export const session = readonly(state)
 
 export const requestOptions = computed<RequestOptions>(() => ({
-  actorId: state.actorId.trim() || undefined,
+  actorId: state.sessionToken ? undefined : state.actorId.trim() || undefined,
+  sessionToken: state.sessionToken || undefined,
   accessPurpose: state.accessPurpose.trim() || undefined,
 }))
 
@@ -90,10 +109,43 @@ export function createIdempotencyKey(): string {
 export function formatError(cause: unknown): string {
   if (cause instanceof ApiClientError) {
     if (cause.code === 'DEPENDENCY_UNAVAILABLE') return '本地 API 服务不可用，本次没有改变任何数据。'
-    if (cause.status === 401) return '需要先填写开发身份才能继续这次请求。'
+    if (cause.status === 401) {
+      if (cause.message === 'SESSION_REQUIRED' || cause.message === 'AUTH_REQUIRED') {
+        return '此操作需要正式账号会话，请切换到“正式账号登录”后重试。'
+      }
+      return state.authMode === 'session'
+        ? '账号、密码或会话无效，请重新登录。'
+        : '需要先填写开发身份才能继续这次请求。'
+    }
+    if (cause.status === 403) {
+      if (cause.message === 'CONFIRMATION_FAILED') return '二次确认失败，请检查当前账号的 PIN 或密码后重试。'
+      if (cause.message === 'STEP_UP_FAILED') return '二次确认未通过，请重新发起确认后重试。'
+      return '当前账号没有执行此操作的权限。'
+    }
     if (cause.status === 404) return '当前身份无权访问该资源，或资源不存在。'
-    if (cause.status === 409) return '数据已在其它位置被修改，请刷新后再试。'
-    if (cause.status === 422) return `请求内容未通过校验：${cause.message}`
+    if (cause.status === 409) {
+      if (cause.message === 'FACE_CREDENTIAL_EXISTS') {
+        return '当前身份已经有有效的人脸凭证；如需替换，请勾选“已有凭证时重新绑定”。'
+      }
+      if (cause.message === 'ACCOUNT_ID_EXISTS') return '这个登录账号已经在当前家庭使用，请换一个账号 ID。'
+      if (cause.message === 'PIN_NOT_CONFIGURED') return '当前家庭账号尚未配置 PIN，请改用账号密码确认。'
+      if (cause.message === 'STEP_UP_EXPIRED' || cause.message === 'STEP_UP_REPLAY') {
+        return '二次确认已过期或已使用，请重新发起确认。'
+      }
+      return '数据已在其它位置被修改，请刷新后再试。'
+    }
+    if (cause.status === 422) {
+      if (cause.message === 'FACE_FRAME_LOW_QUALITY') {
+        return '人脸图片质量不足：请使用至少 640×480 的清晰正面照片，保证光线均匀、仅有一张人脸且不要裁切脸部。'
+      }
+      if (cause.message === 'FACE_NOT_FOUND') return '图片中没有检测到清晰人脸，请重新拍摄正面照片。'
+      if (cause.message === 'FACE_MULTIPLE_SUBJECTS') return '图片中检测到多张人脸，请只保留要绑定的一个人。'
+      if (cause.message === 'FACE_LIVENESS_FAILED') return '动态采集没有形成有效变化，请看向镜头后缓慢转动头部，再重新采集。'
+      return `请求内容未通过校验：${cause.message}`
+    }
+    if (cause.status === 503 && cause.message === 'FACE_DETECTOR_UNAVAILABLE') {
+      return '本地人脸检测器暂不可用，请重启 API 服务后重试。'
+    }
     if (cause.status === 429) return '尝试过于频繁，请稍后再试。'
   }
   return '请求未能完成，页面不会显示未经授权的健康数据。'
@@ -117,13 +169,40 @@ export function setView(view: ViewName): void {
   state.currentView = view
 }
 
+function sessionIsSignedOut(): boolean {
+  return state.status === 'signed-out'
+}
+
+export function requestHealthDataRefresh(): void {
+  globalThis.dispatchEvent?.(new Event(HEALTH_DATA_REFRESH_EVENT))
+}
+
+export function onHealthDataRefresh(listener: () => void): () => void {
+  const handler = () => listener()
+  globalThis.addEventListener?.(HEALTH_DATA_REFRESH_EVENT, handler)
+  return () => globalThis.removeEventListener?.(HEALTH_DATA_REFRESH_EVENT, handler)
+}
+
 export function setIdentityDraft(actorId: string, accessPurpose: string): void {
   state.actorId = actorId
   state.accessPurpose = accessPurpose
 }
 
 export function signOut(): void {
+  const token = state.sessionToken
+  if (token) void apiClient.logout(token).catch(() => undefined)
+  clearSessionContext()
+}
+
+function clearSessionContext(): void {
+  if (sessionExpiryTimer !== null) {
+    clearTimeout(sessionExpiryTimer)
+    sessionExpiryTimer = null
+  }
+  clearChatSessionsForActor(state.actorId)
   state.actorId = ''
+  state.sessionToken = ''
+  state.sessionExpiresAt = null
   state.status = 'signed-out'
   state.error = ''
   state.currentView = 'overview'
@@ -135,9 +214,26 @@ export function signOut(): void {
   state.capabilities = null
 }
 
+function scheduleSessionExpiry(sessionToken: string, expiresAt: number): void {
+  if (sessionExpiryTimer !== null) clearTimeout(sessionExpiryTimer)
+
+  const delayMs = Math.max(0, expiresAt * 1000 - Date.now())
+  sessionExpiryTimer = setTimeout(() => {
+    sessionExpiryTimer = null
+    if (state.sessionToken === sessionToken) expireSession()
+  }, delayMs)
+}
+
+export function expireSession(): void {
+  clearSessionContext()
+  state.error = '会话已过期或已被撤销，请重新登录。'
+}
+
 export async function connect(actorId: string, accessPurpose: string): Promise<void> {
+  clearSessionContext()
   state.actorId = actorId.trim()
   state.accessPurpose = accessPurpose.trim()
+  state.authMode = 'development'
   if (!state.actorId) {
     state.status = 'signed-out'
     state.error = '请先填写开发身份。'
@@ -159,6 +255,7 @@ export async function connect(actorId: string, accessPurpose: string): Promise<v
     }
     state.selectedHouseholdId = state.households[0]?.id ?? ''
     await loadHouseholdScope()
+    if (sessionIsSignedOut()) return
     state.status = 'ready'
   } catch (cause) {
     state.status = 'error'
@@ -166,9 +263,224 @@ export async function connect(actorId: string, accessPurpose: string): Promise<v
   }
 }
 
+function readBoundFaceHousehold(): BoundFaceHousehold | null {
+  try {
+    const raw = globalThis.localStorage?.getItem(FACE_FAMILY_STORAGE_KEY)?.trim() ?? ''
+    if (!raw) return null
+    if (raw.startsWith('{')) {
+      const parsed = JSON.parse(raw) as Partial<BoundFaceHousehold>
+      if (typeof parsed.id === 'string' && parsed.id.trim()) {
+        return { id: parsed.id.trim(), name: typeof parsed.name === 'string' ? parsed.name.trim() : '' }
+      }
+    }
+    // Keep old plain household ids readable after upgrading the web client.
+    return { id: raw, name: '' }
+  } catch {
+    return null
+  }
+}
+
+export function getBoundFaceHouseholdId(): string {
+  return readBoundFaceHousehold()?.id ?? ''
+}
+
+export function getBoundFaceHouseholdName(): string {
+  return readBoundFaceHousehold()?.name ?? ''
+}
+
+export function bindFaceHousehold(householdId: string, householdName = ''): void {
+  const id = householdId.trim()
+  if (!id) return
+  try {
+    const previous = readBoundFaceHousehold()
+    globalThis.localStorage?.setItem(
+      FACE_FAMILY_STORAGE_KEY,
+      JSON.stringify({ id, name: householdName.trim() || (previous?.id === id ? previous.name : '') }),
+    )
+  } catch {
+    // Private browsing may disable storage; the API still supports manual entry.
+  }
+}
+
+export function clearBoundFaceHousehold(): void {
+  try {
+    globalThis.localStorage?.removeItem(FACE_FAMILY_STORAGE_KEY)
+  } catch {
+    // Ignore storage cleanup failures; no authentication state is persisted here.
+  }
+}
+
+async function enterAuthenticatedSession(
+  sessionResult: AuthSession,
+  preferredHouseholdId = '',
+): Promise<void> {
+  state.sessionToken = sessionResult.session_token
+  state.sessionExpiresAt = sessionResult.expires_at
+  scheduleSessionExpiry(state.sessionToken, state.sessionExpiresAt)
+  state.actorId = sessionResult.actor_id
+  state.households = await apiClient.listHouseholds(requestOptions.value)
+  if (state.households.length === 0) {
+    state.status = 'empty'
+    return
+  }
+
+  const requestedHouseholdId = sessionResult.household_id || preferredHouseholdId
+  state.selectedHouseholdId =
+    requestedHouseholdId && state.households.some(item => item.id === requestedHouseholdId)
+      ? requestedHouseholdId
+      : state.households[0]?.id ?? ''
+  await loadHouseholdScope()
+  if (sessionIsSignedOut()) return
+  state.status = 'ready'
+}
+
+export async function connectWithPassword(
+  actorId: string,
+  password: string,
+  accessPurpose: string,
+  register = false,
+): Promise<void> {
+  clearSessionContext()
+  state.authMode = 'session'
+  state.actorId = actorId.trim()
+  state.accessPurpose = accessPurpose.trim()
+  if (!state.actorId || !password) {
+    state.status = 'signed-out'
+    state.error = '请输入本地账号和密码。'
+    return
+  }
+
+  state.status = 'loading'
+  state.error = ''
+  try {
+    if (register) await apiClient.registerAccount(state.actorId, password)
+    await enterAuthenticatedSession(await apiClient.login(state.actorId, password))
+  } catch (cause) {
+    const sessionExpired = sessionIsSignedOut() && state.error.includes('会话已过期')
+    if (!sessionExpired) clearSessionContext()
+    state.authMode = 'session'
+    state.status = 'signed-out'
+    if (sessionExpired) return
+    state.error = formatError(cause)
+  }
+}
+
+export async function connectWithPin(
+  actorId: string,
+  householdId: string,
+  pin: string,
+  accessPurpose: string,
+): Promise<void> {
+  clearSessionContext()
+  state.authMode = 'session'
+  state.actorId = actorId.trim()
+  state.accessPurpose = accessPurpose.trim()
+  if (!state.actorId || !householdId.trim() || !/^\d{6}$/.test(pin)) {
+    state.status = 'signed-out'
+    state.error = '请输入家庭、身份和六位数字 PIN。'
+    return
+  }
+
+  state.status = 'loading'
+  state.error = ''
+  try {
+    await enterAuthenticatedSession(
+      await apiClient.loginWithPin(householdId.trim(), state.actorId, pin),
+      householdId.trim(),
+    )
+  } catch (cause) {
+    const sessionExpired = sessionIsSignedOut() && state.error.includes('会话已过期')
+    if (!sessionExpired) clearSessionContext()
+    state.authMode = 'session'
+    state.status = 'signed-out'
+    if (sessionExpired) return
+    state.error = formatError(cause)
+  }
+}
+
+export async function connectWithFace(
+  actorId: string,
+  householdId: string,
+  frames: File[],
+  accessPurpose: string,
+): Promise<void> {
+  clearSessionContext()
+  state.authMode = 'session'
+  state.actorId = actorId.trim()
+  state.accessPurpose = accessPurpose.trim()
+  if (!state.actorId || !householdId.trim() || frames.length < 2) {
+    state.status = 'signed-out'
+    state.error = '需要选择家庭、账号并完成摄像头活体采集。'
+    return
+  }
+
+  state.status = 'loading'
+  state.error = ''
+  try {
+    const challenge = await apiClient.createFaceChallenge(householdId.trim(), state.actorId)
+    await enterAuthenticatedSession(
+      await apiClient.loginWithFace(
+        householdId.trim(),
+        state.actorId,
+        challenge.challenge_id,
+        frames,
+      ),
+      householdId.trim(),
+    )
+  } catch (cause) {
+    const sessionExpired = sessionIsSignedOut() && state.error.includes('会话已过期')
+    if (!sessionExpired) clearSessionContext()
+    state.authMode = 'session'
+    state.status = 'signed-out'
+    if (sessionExpired) return
+    state.error = cause instanceof ApiClientError && cause.status === 401
+      ? '人脸验证未通过。请确认这个家庭账号已经绑定人脸，并保持正面、光线均匀；也可以改用 PIN 或密码登录。'
+      : formatError(cause)
+  }
+}
+
+export async function connectWithFamilyFace(
+  householdId: string,
+  frames: File[],
+  accessPurpose: string,
+): Promise<void> {
+  clearSessionContext()
+  state.authMode = 'session'
+  state.accessPurpose = accessPurpose.trim()
+  if (!householdId.trim() || frames.length < 2) {
+    state.status = 'signed-out'
+    state.error = '需要先绑定家庭，并完成摄像头动态采集。'
+    return
+  }
+
+  state.status = 'loading'
+  state.error = ''
+  try {
+    const household = householdId.trim()
+    const challenge = await apiClient.createFamilyFaceChallenge(household)
+    const sessionResult = await apiClient.loginWithFamilyFace(
+      household,
+      challenge.challenge_id,
+      frames,
+    )
+    await enterAuthenticatedSession(sessionResult, household)
+    const matchedHousehold = state.households.find(item => item.id === state.selectedHouseholdId)
+    bindFaceHousehold(household, matchedHousehold?.name ?? '')
+  } catch (cause) {
+    const sessionExpired = sessionIsSignedOut() && state.error.includes('会话已过期')
+    if (!sessionExpired) clearSessionContext()
+    state.authMode = 'session'
+    state.status = 'signed-out'
+    if (sessionExpired) return
+    state.error = cause instanceof ApiClientError && cause.status === 401
+      ? '没有在这个家庭中找到明确的人脸匹配。请重新采集，或改用 PIN/账号登录。'
+      : formatError(cause)
+  }
+}
+
 export async function createHouseholdAndEnter(
   householdName: string,
-  memberDrafts: Array<{ displayName: string; role: 'SELF' | 'DEPENDENT' | 'CAREGIVER' }>,
+  memberDrafts: Array<{ displayName: string; role: 'SELF' | 'DEPENDENT' | 'CAREGIVER'; actorId?: string }>,
 ): Promise<void> {
   const created = await apiClient.createHousehold(
     { name: householdName },
@@ -178,13 +490,18 @@ export async function createHouseholdAndEnter(
     if (!draft.displayName.trim()) continue
     await apiClient.createMember(
       created.id,
-      { display_name: draft.displayName.trim(), role: draft.role },
+      {
+        display_name: draft.displayName.trim(),
+        role: draft.role,
+        actor_id: draft.actorId?.trim() || undefined,
+      },
       { ...requestOptions.value, idempotencyKey: createIdempotencyKey() },
     )
   }
   state.households = await apiClient.listHouseholds(requestOptions.value)
   state.selectedHouseholdId = created.id
   await loadHouseholdScope()
+  if (sessionIsSignedOut()) return
   state.status = 'ready'
 }
 
@@ -209,7 +526,13 @@ export async function loadHouseholdScope(): Promise<void> {
   state.isOwnerView = false
   try {
     state.members = await apiClient.listMembers(householdId, requestOptions.value)
-    state.selectedMemberId = state.members[0]?.id ?? ''
+    // A family-face session already tells us which small account was matched.
+    // Keep that member selected when the scope loads instead of silently
+    // falling back to the first member in the household.
+    state.selectedMemberId =
+      state.members.find(member => member.actor_id === state.actorId)?.id ??
+      state.members[0]?.id ??
+      ''
 
     try {
       await apiClient.listAuthorizations(householdId, requestOptions.value)
@@ -229,7 +552,7 @@ export async function loadHouseholdScope(): Promise<void> {
     }
   } catch (cause) {
     state.members = []
-    state.error = formatError(cause)
+    if (!sessionIsSignedOut()) state.error = formatError(cause)
   } finally {
     state.loadingScope = false
   }
@@ -265,3 +588,8 @@ export function rememberedVisionTasks(): string[] {
     return []
   }
 }
+
+apiClient.setUnauthorizedHandler(() => {
+  if (state.sessionToken) expireSession()
+})
+

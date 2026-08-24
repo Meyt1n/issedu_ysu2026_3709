@@ -100,6 +100,40 @@ def is_egress_allowed(url: str) -> bool:
     return allowed
 
 
+def is_web_search_egress_allowed(url: str, settings=None) -> bool:
+    """Allow only the configured HTTPS search host for HCT-430.
+
+    This is deliberately separate from ``is_egress_allowed``: weather keeps
+    its existing whitelist and audit semantics, while web search is a second,
+    opt-in exception with its own allowlist.  Callers must still redact the
+    query before making a request.
+    """
+    settings = settings or get_settings()
+    if not settings.agent_web_search_enabled:
+        logger.warning("EGRESS_BLOCKED: local agent web search is disabled")
+        return False
+    parsed = urlparse(url)
+    if parsed.scheme.lower() != "https":
+        logger.warning("EGRESS_BLOCKED: agent web search requires HTTPS")
+        return False
+    target = _normalize_host(url)
+    if not target:
+        logger.warning("EGRESS_BLOCKED: agent web search URL has no host")
+        return False
+    allowed_hosts = settings.agent_web_search_allowed_domain_set
+    if not allowed_hosts:
+        configured_host = _normalize_host(settings.agent_web_search_url)
+        allowed_hosts = {configured_host} if configured_host else set()
+    allowed = target in allowed_hosts
+    if not allowed:
+        logger.warning(
+            "EGRESS_BLOCKED: agent search host=%s not in allowlist size=%d",
+            target,
+            len(allowed_hosts),
+        )
+    return allowed
+
+
 def validate_egress_payload(body: dict[str, Any] | None) -> tuple[bool, str | None]:
     """Reject outbound payloads that contain forbidden health fields.
 

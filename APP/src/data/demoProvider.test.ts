@@ -24,6 +24,29 @@ describe('演示数据 provider', () => {
     expect(snapshot.recentEvents.length).toBeGreaterThan(0)
   })
 
+  it('环境行动卡仅在已授权的演示成员上显示虚构且可追溯的内容', async () => {
+    const snapshot = await demoProvider.getTodaySnapshot('m-wang')
+
+    expect(snapshot.environmentAction).toMatchObject({
+      availability: 'AVAILABLE',
+      card: {
+        id: 'demo-environment-m-wang',
+        source: '家庭服务器环境行动（演示）',
+        ruleVersion: 'environment-rules-demo-1',
+        configVersion: 'weather-adapter-demo-1',
+      },
+    })
+    expect(snapshot.environmentAction.card?.action).toContain('演示')
+    expect(snapshot.environmentAction.card?.generatedAt).toBeTruthy()
+    expect(snapshot.environmentAction.card?.validUntil).toBeTruthy()
+  })
+
+  it('未获环境行动授权的演示成员不返回卡片', async () => {
+    const snapshot = await demoProvider.getTodaySnapshot('m-li')
+
+    expect(snapshot.environmentAction).toMatchObject({ availability: 'UNAUTHORIZED', card: null })
+  })
+
   it('确认任务后状态变化，重复处理会被拒绝', async () => {
     const task = await demoProvider.submitTaskAction('t-am-med', 'confirm')
     expect(task.status).toBe('CONFIRMED')
@@ -114,5 +137,48 @@ describe('演示数据 provider', () => {
       't-pm-med': 'DEFERRED',
       't-bp': 'SKIPPED',
     })
+  })
+})
+
+describe('演示模式视觉任务状态回查（MOB-132）', () => {
+  it('按回查次数演示排队→处理→完成，文案明确标注演示且不冒充服务器', async () => {
+    const first = await demoProvider.fetchVisionTaskStatus('demo-review-pending')
+    const second = await demoProvider.fetchVisionTaskStatus('demo-review-pending')
+    const third = await demoProvider.fetchVisionTaskStatus('demo-review-pending')
+
+    expect(first.status).toBe('queued')
+    expect(first.terminal).toBe(false)
+    expect(second.status).toBe('running')
+    expect(second.terminal).toBe(false)
+    expect(third.status).toBe('succeeded')
+    expect(third.terminal).toBe(true)
+    expect(third.nextStep).toContain('演示')
+    expect(third.nextStep).toContain('不会创建真实复核任务')
+  })
+})
+
+describe('演示模式任务操作历史（MOB-135）', () => {
+  beforeEach(async () => {
+    resetDemoData()
+    await demoProvider.submitTaskAction('t-am-med', 'confirm')
+    await demoProvider.submitTaskAction('t-bp', 'skip', { reason: '外出（演示）' })
+  })
+
+  it('操作写入内存日志并按成员过滤、倒序展示回执', async () => {
+    const wang = await demoProvider.listTaskActionHistory('m-wang')
+    const li = await demoProvider.listTaskActionHistory('m-li')
+
+    expect(wang).toHaveLength(2)
+    expect(wang[0]).toMatchObject({ action: 'skip', actionLabel: '跳过', receipt: 'RECEIPTED', finalStatus: 'SKIPPED' })
+    expect(wang[0]!.taskTitle).toContain('血压')
+    expect(wang[1]).toMatchObject({ action: 'confirm', actionLabel: '确认', finalStatus: 'CONFIRMED' })
+    expect(wang[1]!.note).toContain('演示')
+    // 其他成员看不到别人的操作
+    expect(li).toHaveLength(0)
+  })
+
+  it('恢复演示数据后历史清空', async () => {
+    resetDemoData()
+    expect(await demoProvider.listTaskActionHistory('m-wang')).toHaveLength(0)
   })
 })

@@ -41,6 +41,9 @@ class VisionTaskStatus(StrEnum):
     TIMEOUT = "timeout"
 
 
+VISION_MEDIA_TYPES = frozenset({"image", "video"})
+
+
 # Valid transitions: current_status → set of allowed next statuses
 _VALID_TRANSITIONS: dict[str, set[str]] = {
     VisionTaskStatus.QUEUED: {VisionTaskStatus.RUNNING, VisionTaskStatus.CANCELLED},
@@ -78,10 +81,16 @@ def _can_transition(current: str, next_: str) -> bool:
 
 
 def _file_digest(path: str) -> str:
-    """SHA-256 of the first 8 KB of the file (fast integrity check)."""
+    """SHA-256 of the whole file (integrity check + receipt binding).
+
+    HCT-414-D2: previously only the first 8 KiB were hashed, which silently
+    disagreed with the quality-check receipt (full-file sha256) for any media
+    larger than 8 KiB and made task creation reject valid uploads with
+    QUALITY_RECEIPT_MISMATCH before this fix.
+    """
     h = hashlib.sha256()
     with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b""):
+        for chunk in iter(lambda: f.read(65536), b""):
             h.update(chunk)
     return h.hexdigest()
 
@@ -179,6 +188,48 @@ def transition_status(
     return task
 
 
+def retry_vision_task(session: Session, task: VisionTask) -> VisionTask:  # noqa: F821
+    """Requeue one terminal failure without creating a second task record.
+
+    A retry is deliberately limited to failed/timeout tasks.  Keeping the
+    same task ID preserves the original file/member scope and makes repeated
+    UI clicks safe: after the first update the conditional update no longer
+    matches and the caller receives a conflict instead of another job.
+    """
+    if task.status not in {VisionTaskStatus.FAILED, VisionTaskStatus.TIMEOUT}:
+        raise HTTPException(
+            status_code=http_status.HTTP_409_CONFLICT,
+            detail=f"VISION_TASK_NOT_RETRYABLE_{task.status.upper()}",
+        )
+
+    now = _now()
+    stmt = (
+        update(VisionTask)
+        .where(
+            VisionTask.id == task.id,
+            VisionTask.status.in_([VisionTaskStatus.FAILED, VisionTaskStatus.TIMEOUT]),
+        )
+        .values(
+            status=VisionTaskStatus.QUEUED,
+            error_code=None,
+            error_message=None,
+            result=None,
+            started_at=None,
+            finished_at=None,
+            updated_at=now,
+        )
+    )
+    updated = session.execute(stmt)
+    if updated.rowcount != 1:
+        raise HTTPException(
+            status_code=http_status.HTTP_409_CONFLICT,
+            detail="VISION_TASK_RETRY_CONFLICT",
+        )
+    session.refresh(task)
+    logger.info("VISION_TASK_REQUEUED task=%s", task.id)
+    return task
+
+
 # ── CRUD ───────────────────────────────────────────────────────────────
 
 
@@ -189,6 +240,7 @@ def _assert_matching_create_request(
     member_id: str | None,
     created_by: str,
     file_id: str,
+    media_type: str,
     task_type: str,
     input_digest: str | None,
     model_threshold: float | None,
@@ -203,6 +255,7 @@ def _assert_matching_create_request(
         or task.member_id != member_id
         or task.created_by != created_by
         or task.file_id != file_id
+        or task.media_type != media_type
         or task.task_type != task_type
         or task.input_digest != input_digest
         or task.model_threshold != model_threshold
@@ -236,6 +289,7 @@ def create_vision_task(
     household_id: str,
     created_by: str,
     file_id: str,
+    media_type: str = "image",
     member_id: str | None = None,
     task_type: str = "ocr",
     status: str = VisionTaskStatus.QUEUED,
@@ -249,6 +303,11 @@ def create_vision_task(
     data_version: str | None = None,
 ) -> VisionTask:  # noqa: F821
     """Create a vision task, or return the matching task for an idempotent retry."""
+    if media_type not in VISION_MEDIA_TYPES:
+        raise HTTPException(
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="MEDIA_TYPE_INVALID",
+        )
     if idempotency_key is not None:
         existing = _get_task_by_idempotency_key(session, idempotency_key)
         if existing is not None:
@@ -258,6 +317,7 @@ def create_vision_task(
                 member_id=member_id,
                 created_by=created_by,
                 file_id=file_id,
+                media_type=media_type,
                 task_type=task_type,
                 input_digest=input_digest,
                 model_threshold=model_threshold,
@@ -274,6 +334,7 @@ def create_vision_task(
         household_id=household_id,
         member_id=member_id,
         file_id=file_id,
+        media_type=media_type,
         task_type=task_type,
         status=status,
         idempotency_key=idempotency_key,
@@ -308,6 +369,7 @@ def create_vision_task(
                 member_id=member_id,
                 created_by=created_by,
                 file_id=file_id,
+                media_type=media_type,
                 task_type=task_type,
                 input_digest=input_digest,
                 model_threshold=model_threshold,

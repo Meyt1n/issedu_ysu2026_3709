@@ -1,3 +1,4 @@
+import { AuthAdapterError } from './auth'
 import { ApiClientError } from './client'
 
 export type ErrorAction = 'retry' | 'settings'
@@ -6,25 +7,65 @@ export interface ErrorPresentation {
   message: string
   action: ErrorAction
   actionLabel: string
+  /** 服务端 X-Request-ID（MOB-144）；缺失时为 null，展示层标注“回执信息不可用”。 */
+  requestId: string | null
 }
 
 const GENERIC_MESSAGE = '请求未能完成，页面不会显示未经授权的健康数据。'
 
-function retry(message: string): ErrorPresentation {
-  return { message, action: 'retry', actionLabel: '重试' }
+function retry(message: string, requestId: string | null = null): ErrorPresentation {
+  return { message, action: 'retry', actionLabel: '重试', requestId }
 }
 
-function settings(message: string): ErrorPresentation {
-  return { message, action: 'settings', actionLabel: '检查设置' }
+function settings(message: string, requestId: string | null = null): ErrorPresentation {
+  return { message, action: 'settings', actionLabel: '检查设置', requestId }
+}
+
+/**
+ * 鉴权与二次确认错误码的统一文案。
+ *
+ * `ApiClientError` 和 `AuthAdapterError` 共用这张表，避免适配器抛出的错误
+ * 绕过文案映射、把内部消息直接显示给用户。返回 null 表示不是鉴权类错误码。
+ */
+function presentAuthCode(code: string): ErrorPresentation | null {
+  if (code === 'AUTH_FAILED' || code === 'AUTH_LOCKED') {
+    return settings('登录信息不正确或暂时无法验证，请稍后重试。')
+  }
+  if (code === 'AUTH_UNAVAILABLE') {
+    return retry('家庭服务器暂时无法验证身份，请稍后重试。')
+  }
+  if (code === 'SESSION_EXPIRED' || code === 'AUTH_REVOKED') {
+    return settings('登录会话已失效，请重新登录后重试。')
+  }
+  if (code === 'STEP_UP_REQUIRED') {
+    return settings('该操作需要 PIN 或二维码二次确认，请完成确认后重试。')
+  }
+  if (code === 'STEP_UP_NOT_CONFIGURED') {
+    return settings('还没有为这个家庭设置 PIN，请在下面的“设置或更新家庭 PIN”里设置后再发起二次确认。')
+  }
+  if (code === 'STEP_UP_HOUSEHOLD_REQUIRED') {
+    return settings('这个身份在多个家庭设置过 PIN，请先确认要操作的家庭。')
+  }
+  if (code === 'STEP_UP_EXPIRED' || code === 'STEP_UP_REPLAY') {
+    return retry('二次确认已过期或已经使用，请重新发起该操作。')
+  }
+  if (code === 'STEP_UP_FAILED') {
+    return retry('二次确认未通过，请检查 PIN 后重试。')
+  }
+  return null
 }
 
 /**
  * 将 API/网络异常转换成不会泄露后端拒绝细节的用户文案。
  *
- * 仅 ApiClientError 使用状态码和服务端错误码；普通 Error 保留本地业务
+ * `ApiClientError` 与 `AuthAdapterError` 走错误码映射；普通 Error 保留本地业务
  * 校验提示（例如“跳过前请填写原因”），未知异常则使用统一兜底文案。
  */
-export function presentApiError(cause: unknown): ErrorPresentation {
+function presentApiErrorInternal(cause: unknown): ErrorPresentation {
+  if (cause instanceof AuthAdapterError) {
+    return presentAuthCode(cause.code) ?? retry(cause.message.trim() || GENERIC_MESSAGE)
+  }
+
   if (!(cause instanceof ApiClientError)) {
     if (cause instanceof Error && cause.message.trim()) {
       return retry(cause.message)
@@ -45,32 +86,27 @@ export function presentApiError(cause: unknown): ErrorPresentation {
     return settings('当前家庭暂无可用成员，请检查家庭设置和授权范围。')
   }
 
-  if (code === 'AUTH_FAILED' || code === 'AUTH_LOCKED') {
-    return settings('登录信息不正确或暂时无法验证，请稍后重试。')
+  if (code === 'HOUSEHOLD_NOT_SELECTED') {
+    return settings('当前身份可以访问多个家庭，请到“我的 → 数据来源”选择要查看的家庭。')
   }
 
-  if (code === 'AUTH_UNAVAILABLE') {
-    return retry('家庭服务器暂时无法验证身份，请稍后重试。')
+  if (code === 'HOUSEHOLD_UNAVAILABLE') {
+    return settings('之前选择的家庭已不可用（可能已被撤权或删除）。为保护隐私，页面不会自动切到另一个家庭，请重新选择。')
   }
 
-  if (code === 'SESSION_EXPIRED' || code === 'AUTH_REVOKED') {
-    return settings('登录会话已失效，请重新登录后重试。')
+  const authPresentation = presentAuthCode(code)
+  if (authPresentation) return authPresentation
+
+  if (code === 'AUTHORIZATION_REVERIFICATION_REQUIRED' || code === 'AUTHORIZATION_EXPIRED' || code === 'CONSENT_REVOKED') {
+    return settings('授权可能已到期、被撤回或访问范围已变化。为保护隐私，已清除本地页面数据；请到“我的”重新验证身份与访问目的。')
   }
 
-  if (code === 'STEP_UP_REQUIRED') {
-    return settings('该操作需要 PIN 或二维码二次确认，请完成确认后重试。')
-  }
-
-  if (code === 'STEP_UP_EXPIRED' || code === 'STEP_UP_REPLAY') {
-    return retry('二次确认已过期或已经使用，请重新发起该操作。')
-  }
-
-  if (code === 'STEP_UP_FAILED') {
-    return retry('二次确认未通过，请检查后重试。')
+  if (code === 'REQUEST_TIMEOUT') {
+    return retry('请求超时，服务器没有在限定时间内响应；结果未知，请稍后重试（重试会复用幂等键，不会重复写入）。', cause.requestId)
   }
 
   if (code === 'DEPENDENCY_UNAVAILABLE' || cause.status === 0) {
-    return retry('家庭服务器暂时无法访问，请检查网络或服务器状态后重试。')
+    return retry('家庭服务器暂时无法访问，请检查网络或服务器状态后重试。', cause.requestId)
   }
 
   if (cause.status === 401 || code === 'UNAUTHENTICATED') {
@@ -109,6 +145,18 @@ export function presentApiError(cause: unknown): ErrorPresentation {
   }
 
   return retry(GENERIC_MESSAGE)
+}
+
+/**
+ * MOB-144：任何 ApiClientError 的展示都携带服务端请求标识，
+ * 供用户报障时定位服务端日志；缺失时保持 null，展示层如实标注。
+ */
+export function presentApiError(cause: unknown): ErrorPresentation {
+  const presentation = presentApiErrorInternal(cause)
+  if (presentation.requestId === null && cause instanceof ApiClientError && cause.requestId) {
+    return { ...presentation, requestId: cause.requestId }
+  }
+  return presentation
 }
 
 export function errorMessage(cause: unknown): string {

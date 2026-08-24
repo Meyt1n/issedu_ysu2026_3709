@@ -116,6 +116,7 @@ function bracketPath(item: NormalizedEvidence): string {
 
 const fields = computed(() => props.task.result?.fields ?? [])
 const findings = computed(() => props.task.result?.findings ?? [])
+const masterCandidates = computed(() => props.task.result?.master_candidates ?? [])
 const versions = computed(() => props.task.result?.versions ?? {})
 
 function onImageLoad(event: Event): void {
@@ -314,8 +315,19 @@ const FIELD_LABELS: Record<string, string> = {
           </div>
         </template>
 
+        <template v-if="masterCandidates.length > 0">
+          <p class="eyebrow" style="margin: 10px 0 0">主数据核对</p>
+          <ul class="evidence-chain-list">
+            <li v-for="candidate in masterCandidates" :key="candidate.record_id">
+              <strong>{{ candidate.record_id }}</strong>
+              <span>{{ candidate.reasons.join('、') }}</span>
+            </li>
+          </ul>
+        </template>
+
         <p class="text-faint" style="font-size: 11.5px; line-height: 1.6; margin: 10px 0 0">
-          OCR {{ versions.ocr_engine_version ?? '未知' }} · 主数据 {{ versions.master_data_version ?? '未知' }} ·
+          YOLO {{ versions.vision_model_version ?? '未登记' }} · OCR {{ versions.ocr_engine_version ?? '未知' }} ·
+          条码 {{ versions.barcode_decoder_version ?? '未知' }} · 主数据 {{ versions.master_data_version ?? '未知' }} ·
           识别结果仅为候选，确认后才进入健康记录。
         </p>
       </template>

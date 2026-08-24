@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import { ApiClientError, apiClient } from '../api/client'
 import type { VisionQualityResponse, VisionTask } from '../api/types'
 import AppIcon from '../components/AppIcon.vue'
-import captureExampleUrl from '../assets/vision-capture-example.png'
+import captureExampleUrl from '../assets/vision-capture-example-v2.png'
 import {
   canCreateVisionTask,
   formatMetricValue,
@@ -31,6 +31,7 @@ const qualityResult = ref<VisionQualityResponse | null>(null)
 const createdTask = ref<VisionTask | null>(null)
 const state = ref<QualityFlowState>('idle')
 const error = ref('')
+const guideOpen = ref(false)
 let requestGeneration = 0
 
 const isBusy = computed(() => state.value === 'checking' || state.value === 'queueing')
@@ -85,6 +86,18 @@ function clearFile(): void {
   selectedFile.value = null
   releasePreview()
   state.value = 'idle'
+}
+
+function openGuide(): void {
+  guideOpen.value = true
+}
+
+function closeGuide(): void {
+  guideOpen.value = false
+}
+
+function handleGuideKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') closeGuide()
 }
 
 function selectFile(event: Event): void {
@@ -175,7 +188,12 @@ async function queueVisionTask(): Promise<void> {
   }
 }
 
-onBeforeUnmount(releasePreview)
+onMounted(() => window.addEventListener('keydown', handleGuideKeydown))
+
+onBeforeUnmount(() => {
+  releasePreview()
+  window.removeEventListener('keydown', handleGuideKeydown)
+})
 
 watch(() => [props.actorId, props.memberId, props.accessPurpose], () => {
   resetEvidence()
@@ -223,19 +241,16 @@ watch(() => [props.actorId, props.memberId, props.accessPurpose], () => {
       图片只发送到本机 API。质量通过不代表识别成功，识别结果仅为候选，确认后才进入健康记录。
     </p>
 
-    <div class="grid-two">
+    <div class="grid-two capture-layout">
       <label class="capture-zone" :class="{ checking: state === 'checking' }" :aria-disabled="isBusy">
         <img v-if="previewUrl" :src="previewUrl" alt="当前待检查药盒图片的本地预览" />
         <template v-else>
-          <div class="capture-guide" aria-label="拍照示例">
-            <img :src="captureExampleUrl" alt="拍照示例：药盒正面朝向镜头，画面中只有完整药盒" />
-            <span class="capture-guide-copy">
-              <strong>拍照示例</strong>
-              <span>正对药盒，完整放入画面</span>
-              <span>不要出现其他杂物</span>
-            </span>
+          <div class="capture-empty">
+            <span class="capture-empty-icon"><AppIcon name="scan" :size="30" /></span>
+            <strong>点击选择药盒照片</strong>
+            <span>支持 JPEG / PNG · 仅在本机预览</span>
           </div>
-          <span class="capture-hint">点击此处拍照或选择 JPEG / PNG 图片</span>
+          <span class="capture-hint">点击此处拍照，或从设备选择图片</span>
         </template>
         <input
           type="file"
@@ -246,6 +261,62 @@ watch(() => [props.actorId, props.memberId, props.accessPurpose], () => {
           @change="selectFile"
         />
       </label>
+
+      <aside class="capture-example-panel" aria-labelledby="capture-example-title">
+        <div class="capture-example-head">
+          <div>
+            <p class="capture-example-kicker">拍摄参考</p>
+            <h4 id="capture-example-title">让正面信息完整入框</h4>
+            <p>镜头与药盒正面保持平行，四边都留出一点边缘。</p>
+          </div>
+          <button type="button" class="capture-example-expand" @click="openGuide">
+            <AppIcon name="eye" :size="15" />
+            放大查看
+          </button>
+        </div>
+
+        <button
+          type="button"
+          class="capture-example-media"
+          aria-label="放大查看药盒拍摄示例"
+          @click="openGuide"
+        >
+          <span class="capture-example-visual">
+            <img :src="captureExampleUrl" alt="拍摄示例：药盒正面平行镜头，完整且无遮挡地进入取景框" />
+            <span class="capture-frame-guides" aria-hidden="true">
+              <i class="top-left" />
+              <i class="top-right" />
+              <i class="bottom-left" />
+              <i class="bottom-right" />
+              <b>正面平拍</b>
+            </span>
+          </span>
+          <span class="capture-example-caption">
+            <AppIcon name="eye" :size="14" />
+            点击图片可放大查看
+          </span>
+        </button>
+
+        <div class="capture-check-list" aria-label="拍摄要求">
+          <div class="capture-check-item">
+            <span class="capture-check-icon"><AppIcon name="check" :size="14" /></span>
+            <span><strong>正面平拍</strong><small>镜头与药盒正面保持平行</small></span>
+          </div>
+          <div class="capture-check-item">
+            <span class="capture-check-icon"><AppIcon name="check" :size="14" /></span>
+            <span><strong>完整入框</strong><small>四边可见，不要裁掉关键信息</small></span>
+          </div>
+          <div class="capture-check-item">
+            <span class="capture-check-icon"><AppIcon name="check" :size="14" /></span>
+            <span><strong>减少反光</strong><small>避开闪光灯和强逆光，保持清晰</small></span>
+          </div>
+        </div>
+
+        <div class="capture-example-foot">
+          <AppIcon name="lock" :size="14" />
+          教学示例 · 不含真实健康信息
+        </div>
+      </aside>
 
       <div class="section-stack">
         <p v-if="selectedFile" class="text-soft" style="font-size: 13px; margin: 0">
@@ -297,4 +368,34 @@ watch(() => [props.actorId, props.memberId, props.accessPurpose], () => {
       </div>
     </div>
   </section>
+
+  <Teleport to="body">
+    <div
+      v-if="guideOpen"
+      class="capture-lightbox"
+      role="presentation"
+      @click.self="closeGuide"
+    >
+      <div
+        class="capture-lightbox-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="capture-lightbox-title"
+      >
+        <div class="capture-lightbox-head">
+          <div>
+            <p class="capture-example-kicker">拍摄参考</p>
+            <h4 id="capture-lightbox-title">正面平拍，完整入框</h4>
+          </div>
+          <button type="button" class="capture-lightbox-close" aria-label="关闭拍摄示例" @click="closeGuide">
+            <AppIcon name="close" :size="20" />
+          </button>
+        </div>
+        <figure class="capture-lightbox-figure">
+          <img :src="captureExampleUrl" alt="放大的药盒拍摄示例" />
+          <figcaption>保持镜头与药盒正面平行，四边可见并避免反光。</figcaption>
+        </figure>
+      </div>
+    </div>
+  </Teleport>
 </template>

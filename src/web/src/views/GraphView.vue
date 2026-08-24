@@ -1,26 +1,22 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import { apiClient } from '../api/client'
-import type { HealthEvent } from '../api/types'
+import type { RelationshipGraphNode } from '../api/types'
 import AppIcon from '../components/AppIcon.vue'
 import {
   formatError,
+  onHealthDataRefresh,
   requestOptions,
   selectMember,
   selectedMember,
   session,
 } from '../store'
 import { formatDateTime } from '../ui/labels'
-import { buildFactsFromTimeline } from '../ui/projection'
 import { vTilt } from '../ui/tilt'
 
-interface GraphNode {
-  id: string
-  label: string
-  category: string
+interface GraphNode extends RelationshipGraphNode {
   tone: string
-  sourceEventId: string
   x: number
   y: number
 }
@@ -28,7 +24,7 @@ interface GraphNode {
 const CENTER_X = 500
 const CENTER_Y = 330
 
-const CATEGORY_META: Record<string, { label: string; tone: string; fill: string; stroke: string }> = {
+const CATEGORY_META: Record<RelationshipGraphNode['category'], { label: string; tone: string; fill: string; stroke: string }> = {
   drug: { label: '在用药品', tone: 'pine', fill: '#e3ece7', stroke: '#38665a' },
   allergy: { label: '过敏史', tone: 'rose', fill: '#f4dde0', stroke: '#ad4152' },
   disease: { label: '关注疾病', tone: 'gold', fill: '#f4e8c8', stroke: '#a97e1f' },
@@ -36,30 +32,20 @@ const CATEGORY_META: Record<string, { label: string; tone: string; fill: string;
   caregiver: { label: '照护者', tone: 'sage', fill: '#e6ede4', stroke: '#6e8a74' },
 }
 
-const timeline = ref<HealthEvent[]>([])
+const graph = ref<{ eventsCount: number; nodes: RelationshipGraphNode[] }>({
+  eventsCount: 0,
+  nodes: [],
+})
 const loading = ref(false)
 const loadError = ref('')
 const selectedNodeId = ref<string | null>(null)
-
-const facts = computed(() => buildFactsFromTimeline(timeline.value))
+let removeHealthRefreshListener: (() => void) | null = null
 
 const nodes = computed<GraphNode[]>(() => {
-  const raw: Array<Omit<GraphNode, 'x' | 'y'>> = []
-  for (const drug of facts.value.drugs) {
-    raw.push({ id: `drug:${drug.addedBy}`, label: drug.name, category: 'drug', tone: 'pine', sourceEventId: drug.addedBy })
-  }
-  for (const allergy of facts.value.allergies) {
-    raw.push({ id: `allergy:${allergy.addedBy}`, label: allergy.name, category: 'allergy', tone: 'rose', sourceEventId: allergy.addedBy })
-  }
-  for (const disease of facts.value.diseases) {
-    raw.push({ id: `disease:${disease.addedBy}`, label: disease.name, category: 'disease', tone: 'gold', sourceEventId: disease.addedBy })
-  }
-  for (const plan of facts.value.plans) {
-    raw.push({ id: `plan:${plan.addedBy}`, label: `${plan.drug} · 计划`, category: 'plan', tone: 'sky', sourceEventId: plan.addedBy })
-  }
-  facts.value.caregivers.forEach((caregiver, index) => {
-    raw.push({ id: `caregiver:${index}`, label: caregiver, category: 'caregiver', tone: 'sage', sourceEventId: '' })
-  })
+  const raw = graph.value.nodes.map(node => ({
+    ...node,
+    tone: CATEGORY_META[node.category].tone,
+  }))
 
   const total = raw.length
   return raw.map((node, index) => {
@@ -77,18 +63,12 @@ const selectedNode = computed(
   () => nodes.value.find(node => node.id === selectedNodeId.value) ?? null,
 )
 
-const selectedSourceEvent = computed(() => {
-  const sourceId = selectedNode.value?.sourceEventId
-  if (!sourceId) return null
-  return timeline.value.find(event => event.id === sourceId) ?? null
-})
-
 const legendCounts = computed(() => [
-  { key: 'drug', count: facts.value.drugs.length },
-  { key: 'allergy', count: facts.value.allergies.length },
-  { key: 'disease', count: facts.value.diseases.length },
-  { key: 'plan', count: facts.value.plans.length },
-  { key: 'caregiver', count: facts.value.caregivers.length },
+  { key: 'drug', count: nodes.value.filter(node => node.category === 'drug').length },
+  { key: 'allergy', count: nodes.value.filter(node => node.category === 'allergy').length },
+  { key: 'disease', count: nodes.value.filter(node => node.category === 'disease').length },
+  { key: 'plan', count: nodes.value.filter(node => node.category === 'plan').length },
+  { key: 'caregiver', count: nodes.value.filter(node => node.category === 'caregiver').length },
 ])
 
 function edgePath(node: GraphNode): string {
@@ -120,9 +100,10 @@ async function loadGraph(): Promise<void> {
   loadError.value = ''
   selectedNodeId.value = null
   try {
-    timeline.value = await apiClient.listMemberTimeline(householdId, memberId, requestOptions.value)
+    const response = await apiClient.getRelationshipGraph(householdId, memberId, requestOptions.value)
+    graph.value = { eventsCount: response.events_count, nodes: response.nodes }
   } catch (cause) {
-    timeline.value = []
+    graph.value = { eventsCount: 0, nodes: [] }
     loadError.value = formatError(cause)
   } finally {
     loading.value = false
@@ -138,7 +119,12 @@ watch(
   () => void loadGraph(),
 )
 
-onMounted(() => void loadGraph())
+onMounted(() => {
+  void loadGraph()
+  removeHealthRefreshListener = onHealthDataRefresh(() => void loadGraph())
+})
+
+onBeforeUnmount(() => removeHealthRefreshListener?.())
 </script>
 
 <template>
@@ -176,7 +162,7 @@ onMounted(() => void loadGraph())
       <span class="legend-row" style="border-top: 1px dashed var(--line); margin-top: 2px; padding-top: 7px">
         <AppIcon name="timeline" :size="12" style="color: var(--ink-faint)" />
         已确认事件
-        <span class="legend-count">{{ facts.eventsCount }}</span>
+        <span class="legend-count">{{ graph.eventsCount }}</span>
       </span>
     </div>
     <div v-if="loading" class="inline-loading" style="padding: 48px 24px">
@@ -265,15 +251,15 @@ onMounted(() => void loadGraph())
           {{ CATEGORY_META[selectedNode.category]!.label }}
         </span>
       </div>
-      <template v-if="selectedSourceEvent">
+      <template v-if="selectedNode.source_event_id">
         <span class="text-soft" style="font-size: 12.5px">
-          来源事件：{{ selectedSourceEvent.id.slice(0, 8) }}… · 已确认
+          来源事件：{{ selectedNode.source_event_id.slice(0, 8) }}… · 已确认
         </span>
         <span class="text-soft" style="font-size: 12.5px">
-          记录时间：{{ formatDateTime(selectedSourceEvent.created_at) }}
+          记录时间：{{ formatDateTime(selectedNode.source_recorded_at) }}
         </span>
         <span class="text-soft" style="font-size: 12.5px">
-          记录人：{{ selectedSourceEvent.created_by }}
+          记录人：{{ selectedNode.source_created_by }}
         </span>
       </template>
       <span v-else class="text-soft" style="font-size: 12.5px">

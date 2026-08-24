@@ -5,13 +5,24 @@ from fastapi import Header, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.auth import validate_session
 from app.config import get_settings
 from app.models import AccessAudit, CareAuthorization, Household, Member
+from app.request_context import current_request_id
 
 PURPOSE_CODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
 
 
-def get_actor_id(x_actor_id: str | None = Header(default=None)) -> str:
+def get_actor_id(
+    x_actor_id: str | None = Header(default=None),
+    authorization: str | None = Header(default=None),
+) -> str:
+    if authorization is not None:
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() != "bearer" or not token.strip():
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="AUTH_REQUIRED")
+        return validate_session(token.strip())
+
     settings = get_settings()
     if settings.app_env == "production" or not settings.allow_dev_actor_header:
         raise HTTPException(
@@ -21,6 +32,28 @@ def get_actor_id(x_actor_id: str | None = Header(default=None)) -> str:
     if not x_actor_id or len(x_actor_id) > 120:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="ACTOR_REQUIRED")
     return x_actor_id
+
+
+def require_session_token(
+    authorization: str | None = Header(default=None),
+) -> str:
+    """Return the caller's live session token.
+
+    HCT-427: step-up confirmation and session revalidation must be tied to a real
+    server session, so the development ``X-Actor-Id`` path is deliberately not
+    accepted here even when it is enabled for business endpoints.
+    """
+    if authorization is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="SESSION_REQUIRED",
+        )
+    scheme, _, raw_token = authorization.partition(" ")
+    token = raw_token.strip()
+    if scheme.lower() != "bearer" or not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="AUTH_REQUIRED")
+    validate_session(token)
+    return token
 
 
 def get_access_purpose(
@@ -74,6 +107,7 @@ def _record_access_decision(
             purpose=purpose,
             outcome=outcome,
             reason=reason,
+            request_id=current_request_id(),
         )
     )
     # Access checks run before any business mutation. Persisting the decision here ensures

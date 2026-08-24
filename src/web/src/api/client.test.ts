@@ -1,8 +1,67 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { ApiClient } from './client'
 
 describe('ApiClient authorization contract', () => {
+  it('registers face credentials as multipart without exposing secrets in the URL', async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = []
+    const client = new ApiClient({
+      baseUrl: 'http://local.test',
+      fetcher: async (input, init) => {
+        requests.push({ url: String(input), init: init ?? {} })
+        return new Response(JSON.stringify({
+          id: 'credential-1',
+          household_id: 'household-1',
+          actor_id: 'owner',
+          algorithm_version: 'opencv-haar-grayscale-v1',
+          feature_version: 'face-template-v1',
+          credential_version: 1,
+          consent_version: 'face-registration-consent-v1',
+          status: 'ACTIVE',
+          created_by: 'owner',
+          consented_at: '2026-08-21T00:00:00Z',
+          revoked_at: null,
+          created_at: '2026-08-21T00:00:00Z',
+        }), { status: 201 })
+      },
+    })
+    const file = new File(['pixels'], 'face.png', { type: 'image/png' })
+
+    await client.registerFaceCredential('household/1', file, {
+      consent: true,
+      targetActorId: 'owner',
+      confirmationMethod: 'pin',
+      confirmationCode: '123456',
+    }, { sessionToken: 's'.repeat(40) })
+
+    expect(requests[0]?.url).toBe('http://local.test/api/v1/households/household%2F1/face-credentials')
+    expect(requests[0]?.url).not.toContain('123456')
+    const headers = new Headers(requests[0]?.init.headers)
+    expect(headers.get('Authorization')).toBe(`Bearer ${'s'.repeat(40)}`)
+    expect(headers.get('Content-Type')).toBeNull()
+    const body = requests[0]?.init.body as FormData
+    expect(body.get('consent')).toBe('true')
+    expect(body.get('confirmation_code')).toBe('123456')
+    expect(body.get('file')).toBeInstanceOf(File)
+  })
+
+  it('encodes face credential list and delete paths', async () => {
+    const requests: string[] = []
+    const client = new ApiClient({
+      baseUrl: 'http://local.test',
+      fetcher: async input => {
+        requests.push(String(input))
+        return new Response(JSON.stringify([]), { status: 200 })
+      },
+    })
+    await client.listFaceCredentials('household/1')
+    await client.deleteFaceCredential('household/1', 'credential/1')
+    expect(requests).toEqual([
+      'http://local.test/api/v1/households/household%2F1/face-credentials',
+      'http://local.test/api/v1/households/household%2F1/face-credentials/credential%2F1',
+    ])
+  })
+
   it('loads households and members through the shared identity headers', async () => {
     const requests: Array<{ url: string; headers: Headers }> = []
     const fetcher: typeof fetch = async (input, init) => {
@@ -53,6 +112,72 @@ describe('ApiClient authorization contract', () => {
     })
   })
 
+  it('uses JSON credentials and keeps session tokens in the Authorization header', async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = []
+    const client = new ApiClient({
+      baseUrl: 'http://local.test',
+      fetcher: async (input, init) => {
+        requests.push({ url: String(input), init: init ?? {} })
+        if (String(input).endsWith('/auth/login')) {
+          return new Response(JSON.stringify({ actor_id: 'owner', session_token: 's'.repeat(40), expires_at: 123 }), { status: 200 })
+        }
+        return new Response(JSON.stringify({ status: 'logged_out' }), { status: 200 })
+      },
+    })
+
+    const session = await client.login('owner', 'password-123')
+    await client.logout(session.session_token)
+
+    expect(requests[0]?.url).toBe('http://local.test/api/v1/auth/login')
+    expect(requests[0]?.url).not.toContain('password-123')
+    expect(JSON.parse(String(requests[0]?.init.body))).toEqual({ actor_id: 'owner', password: 'password-123' })
+    expect(JSON.parse(String(requests[1]?.init.body))).toEqual({ session_token: 's'.repeat(40) })
+  })
+
+  it('creates a face challenge and sends frames as multipart without URL secrets', async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = []
+    const client = new ApiClient({
+      baseUrl: 'http://local.test',
+      fetcher: async (input, init) => {
+        requests.push({ url: String(input), init: init ?? {} })
+        if (String(input).endsWith('/face-challenge')) {
+          return new Response(JSON.stringify({ challenge_id: 'c'.repeat(32), expires_at: 123 }), { status: 200 })
+        }
+        return new Response(JSON.stringify({ actor_id: 'owner', household_id: 'home', session_token: 's'.repeat(40), expires_at: 123 }), { status: 200 })
+      },
+    })
+    const challenge = await client.createFaceChallenge('home/1', 'owner')
+    const frame = new File(['frame'], 'frame.jpg', { type: 'image/jpeg' })
+    const session = await client.loginWithFace('home/1', 'owner', challenge.challenge_id, [frame, frame])
+
+    expect(session.household_id).toBe('home')
+    expect(requests[0]?.url).toBe('http://local.test/api/v1/auth/face-challenge')
+    expect(JSON.parse(String(requests[0]?.init.body))).toEqual({ household_id: 'home/1', actor_id: 'owner' })
+    expect(requests[1]?.url).toBe('http://local.test/api/v1/auth/face-login')
+    expect(requests[1]?.url).not.toContain(challenge.challenge_id)
+    expect(new Headers(requests[1]?.init.headers).get('Content-Type')).toBeNull()
+    const body = requests[1]?.init.body as FormData
+    expect(body.getAll('frames')).toHaveLength(2)
+  })
+
+  it('prefers bearer session authentication and clears on a 401 callback', async () => {
+    const headers: Headers[] = []
+    const client = new ApiClient({
+      fetcher: async (_input, init) => {
+        headers.push(new Headers(init?.headers))
+        return new Response(JSON.stringify({ detail: 'SESSION_INVALID' }), { status: 401 })
+      },
+    })
+    const onUnauthorized = vi.fn()
+    client.setUnauthorizedHandler(onUnauthorized)
+
+    await expect(client.listHouseholds({ actorId: 'dev-actor', sessionToken: 's'.repeat(40) })).rejects.toMatchObject({ status: 401 })
+
+    expect(headers[0]?.get('Authorization')).toBe(`Bearer ${'s'.repeat(40)}`)
+    expect(headers[0]?.get('X-Actor-Id')).toBeNull()
+    expect(onUnauthorized).toHaveBeenCalledOnce()
+  })
+
   it('loads member risks and encodes a rule id for risk detail', async () => {
     const requests: string[] = []
     const fetcher: typeof fetch = async input => {
@@ -76,6 +201,41 @@ describe('ApiClient authorization contract', () => {
     ])
   })
 
+  it('writes a risk acknowledgement with the idempotency header', async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = []
+    const client = new ApiClient({
+      baseUrl: 'http://local.test',
+      fetcher: async (input, init) => {
+        requests.push({ url: String(input), init: init ?? {} })
+        return new Response(JSON.stringify({
+          receipt_id: 'receipt-1',
+          household_id: 'household-1',
+          member_id: 'member-1',
+          rule_id: 'expiry_check',
+          rule_version: 'rules-v0',
+          risk_fingerprint: 'a'.repeat(64),
+          actor_id: 'owner',
+          acknowledged_at: '2026-08-19T00:00:00Z',
+          replayed: false,
+        }), { status: 200 })
+      },
+    })
+
+    await client.acknowledgeRisk(
+      'household-1',
+      'member-1',
+      'expiry/check',
+      { rule_version: 'rules-v0', risk_fingerprint: 'a'.repeat(64) },
+      { actorId: 'owner', idempotencyKey: 'ack-1' },
+    )
+
+    expect(requests[0]?.url).toBe(
+      'http://local.test/api/v1/households/household-1/members/member-1/risks/expiry%2Fcheck/acknowledge',
+    )
+    expect(requests[0]?.init.method).toBe('POST')
+    expect(new Headers(requests[0]?.init.headers).get('Idempotency-Key')).toBe('ack-1')
+  })
+
   it('loads the authorized member timeline through the API boundary', async () => {
     const fetcher: typeof fetch = async () => new Response(JSON.stringify([]), { status: 200 })
     const client = new ApiClient({ baseUrl: 'http://local.test', fetcher })
@@ -96,7 +256,7 @@ describe('ApiClient authorization contract', () => {
     ])
   })
 
-  it('routes the care-plan actions and rule run through the authorized API boundary', async () => {
+  it('routes desktop workbenches, graph projection, care-plan actions and rule run through the authorized API boundary', async () => {
     const requests: Array<{ url: string; method: string | undefined; headers: Headers }> = []
     const client = new ApiClient({
       baseUrl: 'http://local.test',
@@ -116,18 +276,28 @@ describe('ApiClient authorization contract', () => {
     }
 
     await client.runMemberRules('household-1', 'member-1', options)
+    await client.getRelationshipGraph('household-1', 'member-1', options)
+    await client.getPlanWorkbench('household-1', 'member-1', options)
+    await client.getDashboardSummary('household-1', options)
     await client.confirmCarePlan('household-1', 'member-1', 'plan/1', options)
     await client.deferCarePlan('household-1', 'member-1', 'plan/1', 6, options)
     await client.skipCarePlan('household-1', 'member-1', 'plan/1', 'member declined', options)
+    await client.missCarePlan('household-1', 'member-1', 'plan/1', 'forgot', options)
 
     expect(requests.map(request => request.url)).toEqual([
       'http://local.test/api/v1/households/household-1/rules/run?member_id=member-1',
+      'http://local.test/api/v1/households/household-1/members/member-1/relationship-graph',
+      'http://local.test/api/v1/households/household-1/members/member-1/plan-workbench',
+      'http://local.test/api/v1/households/household-1/dashboard-summary',
       'http://local.test/api/v1/households/household-1/members/member-1/plans/confirm?plan_event_id=plan%2F1',
       'http://local.test/api/v1/households/household-1/members/member-1/plans/defer?plan_event_id=plan%2F1&delay_hours=6',
       'http://local.test/api/v1/households/household-1/members/member-1/plans/skip?plan_event_id=plan%2F1&reason=member%20declined',
+      'http://local.test/api/v1/households/household-1/members/member-1/plans/missed?plan_event_id=plan%2F1&reason=forgot',
     ])
-    expect(requests.map(request => request.method)).toEqual(['POST', 'POST', 'POST', 'POST'])
-    expect(requests.every(request => request.headers.get('Idempotency-Key') === 'e2e-plan-action-1')).toBe(true)
+    expect(requests.map(request => request.method)).toEqual(['POST', undefined, undefined, undefined, 'POST', 'POST', 'POST', 'POST'])
+    expect(requests.filter(request => request.method === 'POST').every(
+      request => request.headers.get('Idempotency-Key') === 'e2e-plan-action-1',
+    )).toBe(true)
   })
 
   it('uses browser multipart boundaries for quality checks and uploads', async () => {
@@ -213,5 +383,48 @@ describe('ApiClient authorization contract', () => {
     expect(new Headers(requests[0]?.init.headers).get('Content-Type')).toBe('application/json')
     expect(requests[1]?.url).toBe('http://local.test/api/v1/files/folder%2Fname.png')
     expect(requests[1]?.init.method).toBe('DELETE')
+  })
+
+  it('requeues a failed vision task in place', async () => {
+    const requests: Array<{ url: string; method: string | undefined }> = []
+    const client = new ApiClient({
+      baseUrl: 'http://local.test',
+      fetcher: async (input, init) => {
+        requests.push({ url: String(input), method: init?.method })
+        return new Response(JSON.stringify({ status: 'queued' }), { status: 200 })
+      },
+    })
+
+    await client.retryVisionTask('task/failed', { actorId: 'owner' })
+
+    expect(requests).toEqual([{
+      url: 'http://local.test/api/v1/vision-tasks/task%2Ffailed/retry',
+      method: 'POST',
+    }])
+  })
+
+  it('sends household-scoped PIN credentials and uses the bearer session for PIN setup', async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = []
+    const client = new ApiClient({
+      baseUrl: 'http://local.test',
+      fetcher: async (input, init) => {
+        requests.push({ url: String(input), init: init ?? {} })
+        const response = String(input).endsWith('/auth/pin-login')
+          ? { actor_id: 'owner', household_id: 'household-1', session_token: 's'.repeat(40), expires_at: 123 }
+          : { status: 'pin_configured', household_id: 'household-1' }
+        return new Response(JSON.stringify(response), { status: 200 })
+      },
+    })
+
+    const loggedIn = await client.loginWithPin('household-1', 'owner', '042006')
+    await client.setPin('household-1', '042006', { sessionToken: loggedIn.session_token })
+
+    expect(JSON.parse(String(requests[0]?.init.body))).toEqual({
+      household_id: 'household-1',
+      actor_id: 'owner',
+      pin: '042006',
+    })
+    expect(new Headers(requests[1]?.init.headers).get('Authorization')).toBe(`Bearer ${'s'.repeat(40)}`)
+    expect(JSON.parse(String(requests[1]?.init.body))).toEqual({ household_id: 'household-1', pin: '042006' })
   })
 })

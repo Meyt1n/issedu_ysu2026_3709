@@ -18,6 +18,8 @@ export const CAPABILITY_IDS = {
   outboxRecoveryWorker: 'outbox-recovery-worker',
   reviewTask: 'review-task',
   visionTask: 'vision-task',
+  /** MOB-149/HCT-414-D2：服务端声明视频任务能力；未声明时移动端隐藏视频入口。 */
+  visionTaskVideo: 'vision-task-video',
   visionInference: 'vision-inference',
   knowledgeStore: 'knowledge-store',
   localAssistant: 'local-assistant',
@@ -25,6 +27,7 @@ export const CAPABILITY_IDS = {
   llmCloud: 'llm-cloud',
   externalWeb: 'external-web',
   riskAcknowledgement: 'risk-acknowledgement',
+  environmentActionCard: 'environment-action-card',
 } as const
 
 export type CapabilityId = (typeof CAPABILITY_IDS)[keyof typeof CAPABILITY_IDS] | (string & {})
@@ -43,6 +46,7 @@ const CAPABILITY_META: Record<string, CapabilityMeta> = {
   [CAPABILITY_IDS.outboxRecoveryWorker]: { label: '投递恢复任务', description: '后台恢复未完成的事件投递。' },
   [CAPABILITY_IDS.reviewTask]: { label: '人工复核任务', description: '创建并跟踪需要人工确认的复核任务。' },
   [CAPABILITY_IDS.visionTask]: { label: '视觉任务', description: '提交照片并创建视觉识别任务。' },
+  [CAPABILITY_IDS.visionTaskVideo]: { label: '短视频任务', description: '提交 MP4/MOV 短视频，服务端抽帧识别。' },
   [CAPABILITY_IDS.visionInference]: { label: '视觉推理', description: '在服务端执行视觉模型推理。' },
   [CAPABILITY_IDS.knowledgeStore]: { label: '知识库', description: '访问受边界约束的家庭知识内容。' },
   [CAPABILITY_IDS.localAssistant]: { label: '本地助手', description: '使用家庭可信域内的助手能力。' },
@@ -50,6 +54,7 @@ const CAPABILITY_META: Record<string, CapabilityMeta> = {
   [CAPABILITY_IDS.llmCloud]: { label: '云端语言模型', description: '访问外部云端语言模型服务。' },
   [CAPABILITY_IDS.externalWeb]: { label: '外部网络', description: '访问家庭可信域之外的网络服务。' },
   [CAPABILITY_IDS.riskAcknowledgement]: { label: '风险知晓回写', description: '把“我已知晓”状态写回家庭服务器。' },
+  [CAPABILITY_IDS.environmentActionCard]: { label: '环境行动卡', description: '由家庭服务器按最小化城市或区县编码生成的低风险生活安排提示。' },
 }
 
 const state = reactive<{ snapshot: CapabilitySnapshot | null }>({ snapshot: null })

@@ -1,7 +1,9 @@
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.time_zone import validate_iana_time_zone
 
 
 class Settings(BaseSettings):
@@ -14,9 +16,12 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173"
     database_url: str = "sqlite+pysqlite:///./homecare-dev.sqlite3"
     request_id_header: str = "X-Request-ID"
+    cursor_signing_key: str = "dev-only-change-me"
+    default_household_time_zone: str = "UTC"
     outbox_poll_seconds: float = 2.0
     outbox_batch_size: int = 100
     outbox_stale_seconds: int = 300
+    care_plan_poll_seconds: float = Field(default=30.0, ge=5, le=3600)
     file_root: str = "./data/files"
     master_data_root: str = "./data/master-data"
     master_data_approved_versions: str = ""
@@ -30,6 +35,11 @@ class Settings(BaseSettings):
     # this off to make quality metrics advisory while OCR integration is being
     # tuned.
     vision_quality_enforce_retake: bool = True
+    # HCT-414-D2: short-video upper bound and capability switch.  The flag also
+    # drives the /meta/capabilities declaration so mobile clients can fail
+    # closed and hide the video entry when the server lacks the ability.
+    vision_video_max_duration_seconds: int = Field(default=30, gt=0, le=600)
+    vision_video_tasks_enabled: bool = True
     vision_quality_min_width: int = 640
     vision_quality_min_height: int = 480
     vision_quality_min_blur_variance: float = 80.0
@@ -41,13 +51,24 @@ class Settings(BaseSettings):
     vision_quality_min_edge_density: float = 0.005
     vision_quality_min_subject_area_ratio: float = 0.08
     vision_quality_max_border_touch_ratio: float = 0.50
+    biometric_encryption_key: str = "dev-only-biometric-key-change-me"
     ruleset_version: str = "rules-v0"
     knowledge_version: str = "knowledge-v0"
     embedding_version: str = "unavailable"
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "unavailable"
     ollama_timeout_seconds: float = 30.0
+    # HCT-430: the orchestrator and every model call stay local.  Public web
+    # search is an explicitly opt-in, redacted tool and remains disabled by
+    # default so HCT-004's default-deny posture is preserved.
+    agent_orchestration_enabled: bool = True
+    agent_web_search_enabled: bool = False
+    agent_web_search_url: str = "https://html.duckduckgo.com/html/"
+    agent_web_search_timeout_seconds: float = Field(default=8.0, gt=0, le=20)
+    agent_web_search_max_results: int = Field(default=5, ge=1, le=10)
+    agent_web_search_allowed_domains: str = ""
     weather_adapter: str = "disabled"
+    weather_provider: str = "generic"
     weather_api_url: str = ""
     weather_api_timeout_seconds: float = Field(default=3.0, gt=0, le=10)
     weather_default_city_code: str = ""
@@ -64,6 +85,14 @@ class Settings(BaseSettings):
     log_mask_enabled: bool = True
     upload_allowed_extensions: str = ".jpg,.jpeg,.png,.pdf,.mp4,.mov"
     upload_max_size_bytes: int = 10 * 1024 * 1024
+
+    @field_validator("default_household_time_zone")
+    @classmethod
+    def validate_default_household_time_zone(cls, value: str) -> str:
+        try:
+            return validate_iana_time_zone(value)
+        except ValueError as exc:
+            raise ValueError("DEFAULT_HOUSEHOLD_TIME_ZONE_INVALID") from exc
 
     @property
     def upload_allowed_ext_set(self) -> set[str]:
@@ -89,6 +118,14 @@ class Settings(BaseSettings):
     def weather_location_whitelist_set(self) -> set[str]:
         return {
             item.strip() for item in self.weather_location_whitelist.split(",") if item.strip()
+        }
+
+    @property
+    def agent_web_search_allowed_domain_set(self) -> set[str]:
+        return {
+            item.strip().lower()
+            for item in self.agent_web_search_allowed_domains.split(",")
+            if item.strip()
         }
 
     def vision_quality_thresholds(self):

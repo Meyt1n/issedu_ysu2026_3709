@@ -47,6 +47,9 @@
 - 无 UI 组件库：手写设计系统（玻璃拟态 + AI 生成水彩氛围底图 + 立体光影 + 浅/深/高对比三套材质变量联动；全部由 CSS 自定义属性驱动）；
 - vitest + happy-dom 单元测试；
 - PWA manifest + 离线 Service Worker（缓存应用外壳与静态资产；`/api`、`/health` 绝不缓存，健康数据不落缓存）；
+  - 发布级安装资产：PNG 192/512 与 maskable 图标、`id`/`scope` 启动配置（MOB-151）；
+  - 更新生命周期：新版本默认等待，页面显示可关闭、可读屏的更新提示，用户确认后才接管并刷新；更新后版本可在"我的"页构建信息行定位；
+  - 缓存恢复："我的"页提供"清理离线外壳缓存"入口（两步确认），只清理 `hct-mobile-shell` 前缀缓存；外壳缓存丢失且离线时显示安全回退提示，不显示旧健康数据；
 - Capacitor 8 安卓壳：同一套 Web 代码打包为原生 Android 应用（见下文"安卓应用"）。
 
 ## 快速开始
@@ -64,6 +67,24 @@ npm run test       # vitest 单元测试
 npm run build      # 产物输出到 dist/
 ```
 
+## 近 7 天趋势统计口径
+
+联机趋势只使用服务端事件时间戳和家庭接口返回的 IANA 时区 `time_zone` 分日，不使用浏览器本地时区。同一计划的更新按稳定计划标识折叠，计划总数保留原始创建日期；完成数只计服务端最终动作为 `plan_confirmed` 的那一天。时区、稳定关联或事件时间不完整时趋势显示为不可用，不使用零值代替未知结果。演示模式的趋势为虚构教学数据，标签固定按 `Asia/Shanghai` 生成。
+## 受控发布环境
+
+MOB-147 为 PWA、Android WebView 与正式后端依赖联调提供了受控发布记录模板和静态校验器。它只允许合成“演示”数据与 HTTPS 受控环境，并要求同一记录关联服务端/APP 提交、API、PWA shell、APK、种子 SHA-256、设备和实际场景；模板、运行手册和已知限制见 [受控发布环境运行手册](docs/MOB-147-受控发布环境运行手册.md)。真实地址、密钥、令牌、Cookie、真实健康数据及原始 API 正文不得写入仓库或发布记录。
+
+```powershell
+npm run test:controlled-release
+npm run verify:controlled-release -- --record C:\temp\mob147-release-record.json
+```
+## 环境行动卡
+
+今日页的环境行动卡只展示家庭服务器已授权、可追溯的低风险生活安排。应用不直接请求外部天气服务，也不发送位置、联系人或健康正文；缺少成员级授权、来源、有效期、规则/配置版本或能力声明时，卡片显示“当前不可用”，不会把旧天气、缓存或客户端推断包装成实时结论。当前 HCT-305 服务端契约尚缺这些成员级审计字段，因此联机模式保持安全降级；演示模式仅显示虚构、明确标注“演示”的卡片。
+
+## 计划本地提醒
+
+Android 仅对家庭服务器返回的完整、已授权计划提醒契约安排本地通知：必须包含计划版本、稳定去重键、首次/再提醒时间和预算。通知只显示“家健镜提醒”和“请打开应用查看今日安排”，不包含成员姓名、药名、风险详情、电话或健康正文。确认、延期、跳过、登出、撤权、家庭/成员切换和计划版本变化会取消旧调度；服务端动作回执仍是最终事实。PWA 没有可靠的后台本地调度时会明确显示不可用，不会声称已提醒，也不会使用远程推送或客户端推断代替。
 ## 数据来源与诚实状态说明
 
 应用有两种数据模式（在"我的 → 数据来源"切换）：
@@ -79,7 +100,14 @@ npm run build      # 产物输出到 dist/
 - 成员时间线（仅已确认事件，升序）与用药清单（由 `medication_added` 事件推导）；
 - 确定性规则风险：`allergy_conflict`（SEVERE）与 `interaction`（INFO）经移动端链路可见，含证据事件详情；
 - 今日任务：由 `plan_created` / `plan_updated` 计划事实 + 最后一条 `plan_confirmed` / `plan_deferred` / `plan_skipped` 动作事件推导；确认/延期/跳过写回事件中心（服务端按计划幂等）；
-- 图片质量门控与视觉任务创建（识别候选确认仍在网页端复核中心完成，这是产品设计）。
+- 任务操作历史（MOB-135）：今日页可展开"任务操作历史"，按当前成员展示服务端动作事件的脱敏摘要（动作、任务、成员、服务端时间、事件回执标识、最终状态）；同一计划的重复动作只计一条有效回执、更早动作标注"已被覆盖"；网络失败或回执丢失时置顶显示"未获回执"本地条目（仅内存，切换会话/成员即清空），提供沿用幂等键的安全重试，不把本地点击当作成功；
+- 请求与回执追踪（MOB-144）：每个 API 请求（成功、失败、超时、不可达）都会记录可定位的服务端 `X-Request-ID`；"我的 → 最近请求与回执"可查看最近请求的结局、状态、请求标识、写请求幂等键与回执对象；错误提示附带请求标识，缺失时如实标注"回执信息不可用"；15s 超时与网络不可达区分提示；诊断只存内存，退出登录或切换身份即清空。
+- 发布门禁（MOB-142）：构建期把版本号、构建时间与源码提交哈希注入产物，「我的 → 关于」展示同一组信息；`npm run release:manifest [--apk <apk>]` 生成逐产物 SHA-256 清单（版本/提交/一致性），`npm run privacy:scan` 校验 dist 资源类型、体积与密钥/签名材料边界；回滚按 Story 中的演练步骤用清单哈希定位上一份产物与源码提交。
+- 性能预算门禁（MOB-145）：`npm run perf:budget`（基线）与 `npm run perf:budget:low-end`（4×CPU + Slow 3G 低端模拟）对生产构建测量冷启动、路由切换、断网恢复与产物体积，并按 `perf-budget.config.json` 的阈值判定 PASS/FAIL（报告在 `APP/release/`）；受控部署用 `--base <url>`、Android WebView 用 `--base <adb reverse 端口>` 复跑同一套预算；测量只用演示模式，不采集健康数据。
+- 授权范围只读呈现（MOB-136）：成员详情"谁可以查看"按服务端返回展示被授权人（身份标识）、可见字段、允许动作、用途、有效期与状态（有效/即将到期/已到期/已撤回/待生效）及服务端版本；非 Owner 由服务端隐藏式拒绝，界面明确"无权查看授权管理，不代表没有授权"，不与"暂无对外授权"混淆；授权的新增/修改/撤回仍在网页端。
+- 图片质量门控与视觉任务创建（识别候选确认仍在网页端复核中心完成，这是产品设计）；
+- 短视频药盒采集（MOB-149，DEMO_ONLY）：服务端声明 `vision-task-video` 能力时开放"选择短视频"入口（未声明或演示模式下隐藏并说明限制，图片路径不受影响）；本地先校验格式（MP4/MOV）/时长（≤30 秒）/大小（≤10 MiB）/方向并展示"将上传"摘要，再走服务端抽帧质量门（帧级摘要：采样/选中/可用帧数）；任务以 `media_type=video` 创建并沿用状态回查与人工复核交接，任一帧候选都不会被当作已确认药品；HCT-201 固定集批准前不声明生产识别性能；
+- 视觉任务状态回查（MOB-132）：任务创建后按有上限的退避节奏轮询 `GET /api/v1/vision-tasks/{id}`，排队中/处理中/已完成/失败/超时/已取消如实展示对应时间与下一步；到达终态、切后台、离开页面或切换会话时停止并清理，回前台立即回查一次；失败/超时给出服务端错误码与"重试回查"（复用同一任务，绝不重复创建）；可选本地完成提醒不含任何健康数据，无权限时只保留页面内状态。
 
 ### 联调步骤
 
@@ -99,24 +127,47 @@ npm run seed:live -- --base http://127.0.0.1:18800
 npm run dev
 ```
 
-应用内切到"我的 → 数据来源 → 家庭服务器"，身份填 `dev-wang`（owner）或 `dev-uncle`（仅被授权读王秀兰事件的照护者），目的代码保持 `family-care`。网页端（主仓库 `npm run dev:web`）连同一后端即可两端互通。
+应用内切到"我的 → 数据来源 → 家庭服务器"。`npm run dev` 属于开发配置，因此"身份来源"里可以选择"开发期身份（仅本地联调）"，身份填 `dev-wang`（owner）或 `dev-uncle`（仅被授权读王秀兰事件的照护者），目的代码保持 `family-care`。网页端（主仓库 `npm run dev:web`）连同一后端即可两端互通。
+
+默认身份来源是"正式登录"：会走 `POST /api/v1/auth/login` 建立服务端会话，后续请求使用 `Authorization: Bearer`，不再发送 `X-Actor-Id`。正式构建（`npm run build`，未设置 `VITE_ALLOW_DEV_ACTOR=true`）下开发期身份入口不会渲染，已保存的开发配置会在启动时回退成正式登录。会话生命周期、契约与当前缺口见 [MOB-133 Story](../docs/stories/MOB-133-正式鉴权与会话生命周期联调.md)。
 
 ### 联机模式的已知限制（如实记录，不冒充完成）
 
-- 药盒识别链路只到"创建视觉任务"，候选确认仍需回网页端人工复核中心；
+- 服务器地址由移动端统一校验：发布构建只允许 HTTPS；开发/PWA 本地和 Android Debug 构建可显式开放家庭私网/本机 HTTP，但仍拒绝公网 HTTP；地址变更或旧值非法会清理当前成员、能力快照和连接状态并要求重新测试；
+- 紧急联系人号码仅保存在本机设置，保存时会去除常见分隔符并拒绝 URL scheme、控制字符和异常长度；求助、风险详情和测试拨号都读取最新规范化值，拨号前仍需确认；
+- 药盒识别链路：任务创建与状态回查可在移动端完成，候选确认仍需回网页端人工复核中心；服务端 `cancelled` 终态实测不携带错误码，移动端按终态展示不虚构原因；
 - 风险"我已知晓"回写暂无对应服务端接口，界面会如实提示而不是伪装成功；
 - 联机入口会探测 `/api/v1/meta/capabilities` 并列出服务阶段、可用和未提供能力；能力探测失败或服务端未声明的能力按不可用处理，相关入口会禁用并标注限制；
+- 一个身份被授权访问多个家庭时，必须在“我的 → 数据来源 → 当前家庭”里显式选择；应用不会默认取家庭列表的第一个，列表顺序变化也不会改变已选家庭。切换家庭会清除上一个家庭的成员、任务、风险、时间线、上传草稿和能力快照后重新加载；当前家庭被撤权或删除时回到“请重新选择”，不自动切到另一个家庭。只有一个家庭时自动选定，保持低步骤。本机只保存家庭 ID，不保存家庭名称或健康数据。详见 [MOB-158 Story](../docs/stories/MOB-158-多家庭选择隔离与切换状态清理.md)（正式后端多家庭联调与真机验收待执行）；
 - 照护者视角的可见范围按"服务端已过滤"标注（授权明细仅 owner 可读，到期时间不显示）；
 - "近 7 天完成情况"由计划事实与 `plan_confirmed` 事件推导，为近似统计；
-- 登录 / PIN 二次确认尚未接入主仓库正式接口；当前仅保留明确标注的开发期 `X-Actor-Id` 联调路径。移动端适配契约、Bearer/Cookie 传输边界和内存测试桩见 [MOB-115 Story](../docs/stories/MOB-115-正式鉴权适配设计.md)，正式鉴权仍跟随主仓库 HCT-107 交付；
+- 正式登录、会话生命周期和 PIN 二次确认已在移动端接入（登录页、路由守卫、内存会话、401/过期/撤权 fail-closed、登出清理、家庭 PIN 设置与二次确认）。随主仓库 HCT-423 与 HCT-427 合并，鉴权契约已对齐并完成本地真实后端联调："登录 / 服务端销毁会话后 401 / 重新登录 / 主动退出"四条路径，以及"未设 PIN 提示 → 设置家庭 PIN → 错误 PIN 被拒 → 正确 PIN 通过"的二次确认链路（证据见 Story）。二次确认的 PIN 是本家庭自己设置的 6 位数字，服务端只存哈希，不下发、不回显。**Android 真机/WebView 与 PWA 上的四条路径仍未执行**，设备验收前不得把本项当作完成。详见 [MOB-133 Story](../docs/stories/MOB-133-正式鉴权与会话生命周期联调.md)，适配设计背景见 [MOB-115 Story](../docs/stories/MOB-115-正式鉴权适配设计.md)；
+- 会话凭据（token / sessionId）只保存在内存：不写 `localStorage`、不进 URL、不进日志或通知；密码提交后立即从输入框清除，PIN 用完即弃。联调后已核对 `localStorage` 不含密码、会话 token 与 PIN，且所有认证请求的 URL 都不含凭据；
 - 联调发现的主仓库缺口：投影丢弃药品 `expiry_date/stock/ingredient` 导致过期/低库存/重复成分规则无法触发——
   已提交修复（[Issue #140](https://github.com/Meyt1n/issedu_ysu2026_3709/issues/140)、
   [PR #141](https://github.com/Meyt1n/issedu_ysu2026_3709/pull/141)，含"事件→投影→规则"回归测试，待维护者复核合并）。
 
 ## 安卓应用（Capacitor）
 
-同一套代码通过 Capacitor 打包为原生 Android 应用，WebView 内置打包产物，联机数据走"我的 → 数据来源"里配置的家庭服务器地址（`AndroidManifest` 已允许家庭局域网明文 http）。
+同一套代码通过 Capacitor 打包为原生 Android 应用，WebView 内置打包产物，联机数据走"我的 → 数据来源"里配置的家庭服务器地址。Release/Main Manifest 和网络安全配置拒绝全部明文流量；Android Debug 通过独立 Manifest 保留家庭局域网 HTTP 联调能力，并继续由 APP 地址校验拒绝公网 HTTP。
 
+Android 平台安全基线：
+
+- `allowBackup=false`，Android 11 及以下 full-backup 与 Android 12+ cloud-backup/device-transfer 规则均排除应用全部私有域；联系人、开发身份、服务器地址和本地偏好不得进入系统云备份或设备迁移；
+- 主 Manifest 只声明 `INTERNET`；相机/文件由用户主动触发的系统文件选择器处理，`tel:` 只打开拨号界面，当前未申请 `CAMERA`、`CALL_PHONE`、通知或存储权限；
+- 可运行 `npm run audit:android-security` 静态核对备份、网络和最小权限配置。
+
+### 真机无障碍签收
+
+`npm run check`、`npm run test`、`npm run build` 和 `npm run android:sync` 不能代替 Android 真机签收。TalkBack、中文 TTS、系统字号、高对比、减少动效、触觉以及系统拨号确认必须使用同一 APK 在真机验证，并按 [MOB-141 验收记录](../docs/testing/MOB-141-Android真机无障碍验收记录.md) 填写设备与版本、APK SHA-256、每条用例结果和脱敏证据。
+
+记录所有项目通过后执行以下门禁；默认模板会故意失败，防止空记录被当作签收结果：
+
+```powershell
+npm run verify:android-a11y-evidence -- ../docs/testing/MOB-141-Android真机无障碍验收记录.md
+```
+
+浏览器截图、模拟器结果和自动化测试不得替代真机证据。未完成真机记录时，发布状态必须保持“待验收”。
 一键构建（推荐）：
 
 ```powershell
@@ -127,9 +178,9 @@ powershell -ExecutionPolicy Bypass -File scripts/build-apk.ps1
 手动步骤（等价）：
 
 ```powershell
-npm run android:sync                 # 构建 Web 产物并同步到 android/ 工程
+npm run android:sync:debug           # Debug：允许经 APP 校验的家庭局域网 HTTP
 cd android
-$env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"   # 或任何 JDK 21+
+$env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"   # Gradle 8.14.3 需要 JDK 21-24
 $env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk"
 .\gradlew.bat assembleDebug
 ```
@@ -140,6 +191,7 @@ $env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk"
 - 仓库路径含中文目录时依赖 `android.overridePathCheck=true`（已配置），个别环境仍失败时可把仓库放到纯 ASCII 路径构建；
 - 把 `app-debug.apk` 传到手机安装（需允许安装未知来源应用），或连接手机后 `npx cap run android`；
 - 手机与家庭服务器需在同一局域网，服务器地址填电脑的局域网 IP，例如 `http://192.168.1.10:8000`。
+- `npm run android:sync` 使用生产模式 Web 产物，私网 HTTP 会在 APP 层被拒绝；Release/Main Android 网络策略也只允许 HTTPS。
 
 ## 目录结构
 
@@ -148,14 +200,14 @@ android/             Capacitor 生成的原生安卓工程（构建产物与 loc
 public/              PWA manifest、图标、AI 生成氛围底图（bg/）与离线 Service Worker（sw.js）
 scripts/             联调造数脚本（虚构数据）与一键 APK 构建脚本
 src/
-  api/               与主仓库对齐的 API 契约、鉴权适配和客户端（开发期 X-Actor-Id 等请求头一致）
+  api/               与主仓库对齐的 API 契约、正式鉴权适配（HTTP 适配器 + 测试桩）和客户端
   components/        TabBar、任务卡、等级标签、开关等基础组件
   composables/       语音播报（Web Speech API）
-  data/              DataProvider 接口 + 演示数据 + 联机适配器 + 文案映射
-  router/            页面路由
-  stores/            无障碍设置、会话设置（localStorage 持久化）、运行时能力探测状态
+  data/              DataProvider 接口 + 演示数据 + 联机适配器 + 鉴权适配器实例 + 文案映射
+  router/            页面路由（联机页面带正式会话守卫）
+  stores/            无障碍设置、会话设置（localStorage 持久化）、正式会话生命周期（仅内存）、运行时能力探测状态
   utils/             时间格式化等
-  views/             9 个页面
+  views/             10 个页面（含登录页）
 docs/                无障碍模式设计说明
 capacitor.config.ts  安卓壳配置（appId、webDir）
 ```

@@ -33,6 +33,7 @@ services:
       APP_ENV: ${APP_ENV:-development}
       ALLOW_DEV_ACTOR_HEADER: ${ALLOW_DEV_ACTOR_HEADER:-true}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      DEFAULT_HOUSEHOLD_TIME_ZONE: ${DEFAULT_HOUSEHOLD_TIME_ZONE:-UTC}
       DATABASE_URL: mysql+pymysql://${MYSQL_USER:-homecare}:${MYSQL_PASSWORD:-change-me}@db:3306/${MYSQL_DATABASE:-homecare}?charset=utf8mb4
       PYTHONPATH: /app/src/api:/app/src
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://localhost:11434}

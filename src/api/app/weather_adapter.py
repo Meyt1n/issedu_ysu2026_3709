@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 LOCATION_CODE_PATTERN = re.compile(r"^\d{6}$")
 DEFAULT_RULESET_VERSION = "weather-actions-v1"
 WEATHER_DISCLAIMER = "环境行动建议仅供日常生活安排参考，不构成诊断或用药建议。"
+UAPIS_PROVIDER = "uapis"
 
 
 class WeatherAdapterError(Exception):
@@ -215,6 +216,76 @@ def _iso_datetime(value: datetime | None) -> str | None:
     return value.astimezone(UTC).isoformat()
 
 
+def _normalize_uapis_condition(value: object) -> str | None:
+    """Map provider-specific Chinese conditions to the rule vocabulary."""
+    if not isinstance(value, str):
+        return None
+    condition = value.strip()
+    if not condition:
+        return None
+    if "雷" in condition:
+        return "thunderstorm"
+    if "雨" in condition:
+        return "storm" if "暴" in condition else "rain"
+    if "雪" in condition:
+        return "snow"
+    if "晴" in condition:
+        return "sunny"
+    if "云" in condition or "阴" in condition:
+        return "cloudy"
+    return condition[:40]
+
+
+def _normalize_uapis_observed_at(value: object) -> object:
+    """Treat the provider's local China time as Asia/Shanghai, not UTC."""
+    if not isinstance(value, str):
+        return value
+    observed_at = value.strip()
+    if not observed_at:
+        return None
+    if not re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?",
+        observed_at,
+    ):
+        return None
+    if observed_at.endswith("Z") or "+" in observed_at[10:]:
+        return observed_at
+    return f"{observed_at.replace(' ', 'T')}+08:00"
+
+
+def _normalize_provider_payload(payload: object) -> object:
+    """Convert an explicitly configured provider into the canonical schema."""
+    settings = get_settings()
+    if settings.weather_provider != UAPIS_PROVIDER:
+        return payload
+    if not isinstance(payload, dict):
+        return payload
+
+    wind_direction = payload.get("wind_direction")
+    wind_power = payload.get("wind_power")
+    wind_parts = [
+        part.strip()
+        for part in (wind_direction, wind_power)
+        if isinstance(part, str) and part.strip()
+    ]
+    return {
+        "temperature": payload.get("temperature"),
+        "humidity": payload.get("humidity"),
+        "condition": _normalize_uapis_condition(payload.get("weather")),
+        "wind": " · ".join(wind_parts) or None,
+        "aqi": payload.get("aqi"),
+        "observed_at": _normalize_uapis_observed_at(payload.get("report_time")),
+    }
+
+
+def _provider_params(body: dict[str, str]) -> dict[str, str]:
+    """Build provider params from the already validated coarse location body."""
+    settings = get_settings()
+    if settings.weather_provider == UAPIS_PROVIDER:
+        return {"adcode": body.get("district_code") or body["city_code"]}
+    return body
+
+
 def generate_action_cards(
     weather_data: dict[str, Any],
     *,
@@ -333,7 +404,7 @@ async def _request_provider(
             try:
                 response = await client.get(
                     settings.weather_api_url,
-                    params=body,
+                    params=_provider_params(body),
                     headers={"Accept": "application/json"},
                 )
                 if response.status_code == 429:
@@ -341,7 +412,9 @@ async def _request_provider(
                     return None, "rate_limited"
                 response.raise_for_status()
                 try:
-                    payload = WeatherProviderPayload.model_validate(response.json())
+                    payload = WeatherProviderPayload.model_validate(
+                        _normalize_provider_payload(response.json())
+                    )
                 except (ValidationError, ValueError, TypeError):
                     logger.warning("weather_adapter: provider response failed schema validation")
                     return None, "invalid_response"

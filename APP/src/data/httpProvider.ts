@@ -1,8 +1,11 @@
 import { ApiClient, ApiClientError } from '@/api/client'
-import type { HealthEvent, Member, RequestOptions, UploadedFile, VisionTask } from '@/api/types'
+import { CAPABILITY_IDS, hasCapability } from '@/stores/capabilities'
+import type { AuthorizationRead, HealthEvent, Member, RequestOptions, UploadedFile, VisionTask } from '@/api/types'
 import type {
   CareTask,
   DataProvider,
+  EnvironmentActionState,
+  HouseholdOption,
   MemberDetail,
   MemberSummary,
   MedicationItem,
@@ -10,6 +13,7 @@ import type {
   QualityCheckResult,
   RecognitionCandidate,
   RiskCard,
+  ReminderPolicy,
   RiskLevel,
   TaskAction,
   TaskActionPayload,
@@ -17,6 +21,9 @@ import type {
   TimelineItem,
   TodaySnapshot,
   TrendPoint,
+  VisionTaskStatusSnapshot,
+  TaskActionHistoryEntry,
+  AuthorizationView,
 } from './types'
 
 /**
@@ -33,6 +40,8 @@ import type {
 interface SessionContext {
   actorId: string
   accessPurpose: string
+  /** 用户已显式选择的家庭；空字符串表示尚未选择。 */
+  householdId: string
 }
 
 interface VisionDraft {
@@ -48,6 +57,14 @@ const PLAN_FACT_TYPES = new Set(['plan_created', 'plan_updated'])
 const PLAN_ACTION_TYPES = new Set(['plan_confirmed', 'plan_deferred', 'plan_skipped'])
 const TASK_LEVELS: TaskLevel[] = ['INFO', 'GENERAL', 'HIGH', 'URGENT']
 const RISK_ORDER: Record<string, number> = { SEVERE: 0, WARNING: 1, INFO: 2, TIP: 3 }
+
+/** HCT-305 lacks a member-scoped, audited action-card contract, so do not call it from mobile. */
+export function environmentActionUnavailable(): EnvironmentActionState {
+  if (!hasCapability(CAPABILITY_IDS.environmentActionCard)) {
+    return { availability: 'UNAVAILABLE', reason: '环境行动服务当前未提供；应用不会使用旧天气或本地推断代替实时结果。', card: null }
+  }
+  return { availability: 'UNAVAILABLE', reason: '环境行动服务尚未提供成员授权、来源、有效期和版本证据；当前无法安全展示。', card: null }
+}
 
 function textOf(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
@@ -93,6 +110,27 @@ function planLevel(event: HealthEvent): TaskLevel {
   return (TASK_LEVELS as string[]).includes(raw) ? (raw as TaskLevel) : 'GENERAL'
 }
 
+function recordOf(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null
+}
+
+/** Only a server-provided, member-authorized reminder contract may enter local scheduling. */
+function planReminder(event: HealthEvent): ReminderPolicy | undefined {
+  const reminder = recordOf((event.payload ?? {})['reminder'])
+  if (!reminder || textOf(reminder['authorization']).toUpperCase() !== 'AUTHORIZED') return undefined
+  const planVersion = textOf(reminder['plan_version'])
+  const deduplicationKey = textOf(reminder['deduplication_key'])
+  const firstReminderAt = textOf(reminder['first_reminder_at'])
+  const repeatReminderAt = textOf(reminder['repeat_reminder_at']) || undefined
+  const maxReminders = Number(reminder['max_reminders'])
+  if (!planVersion || !deduplicationKey || !firstReminderAt || (maxReminders !== 1 && maxReminders !== 2)) return undefined
+  if (maxReminders === 2 && !repeatReminderAt) return undefined
+  return {
+    authorization: 'AUTHORIZED', planVersion, deduplicationKey, firstReminderAt, repeatReminderAt,
+    maxReminders: maxReminders as 1 | 2,
+  }
+}
+
 /** 从时间线推导任务：计划事实 + 指向它的最后一条动作事件。 */
 export function deriveTasksFromEvents(
   events: HealthEvent[],
@@ -116,6 +154,7 @@ export function deriveTasksFromEvents(
       dueAt: planDueAt(plan),
       status: 'PENDING',
       planEventId: plan.id,
+      reminder: planReminder(plan),
     }
 
     if (latest) {
@@ -138,41 +177,184 @@ export function deriveTasksFromEvents(
   })
 }
 
+/** 即将到期阈值：7 天内提示但不改变语义。 */
+const EXPIRING_SOON_MS = 7 * 24 * 3_600_000
+
+/** MOB-136：授权状态只由服务端时间/撤回字段推导；解析失败按已到期处理（fail-closed）。 */
+export function authorizationStatus(
+  auth: { valid_from: string; valid_until: string; revoked_at: string | null },
+  now: Date = new Date(),
+): AuthorizationView['status'] {
+  if (auth.revoked_at) return 'REVOKED'
+  const from = Date.parse(auth.valid_from)
+  const until = Date.parse(auth.valid_until)
+  const nowMs = now.getTime()
+  if (Number.isFinite(from) && nowMs < from) return 'PENDING'
+  if (!Number.isFinite(until) || nowMs > until) return 'EXPIRED'
+  if (nowMs > until - EXPIRING_SOON_MS) return 'EXPIRING'
+  return 'ACTIVE'
+}
+
+function authorizationViewFromRead(read: AuthorizationRead, now: Date = new Date()): AuthorizationView {
+  return {
+    id: read.id,
+    memberId: read.member_id,
+    granteeActorId: read.grantee_actor_id,
+    // 服务端不返回姓名；原样展示身份标识，不做猜测映射。
+    granteeName: read.grantee_actor_id,
+    fields: [...read.data_fields],
+    actions: [...read.actions],
+    purpose: read.purpose,
+    validFrom: read.valid_from,
+    validUntil: read.valid_until,
+    revokedAt: read.revoked_at,
+    version: read.version,
+    status: authorizationStatus(read, now),
+  }
+}
+
+const PLAN_ACTION_LABELS: Record<string, { action: TaskAction; label: string; finalStatus: string }> = {
+  plan_confirmed: { action: 'confirm', label: '确认', finalStatus: 'CONFIRMED' },
+  plan_deferred: { action: 'defer', label: '延期', finalStatus: 'DEFERRED' },
+  plan_skipped: { action: 'skip', label: '跳过', finalStatus: 'SKIPPED' },
+}
+
+/**
+ * MOB-135：从时间线事件推导任务操作历史。
+ *
+ * 只读脱敏摘要：动作、任务标题、成员、服务端时间、事件 ID、最终状态。
+ * 同一 plan_event_id 的动作里只有最新一条是"有效回执"，更早的同类动作
+ * 标注 SUPERSEDED（服务端幂等保留），不重复计数。
+ */
+export function deriveTaskActionHistory(
+  events: HealthEvent[],
+  memberId: string,
+  memberName: string,
+): TaskActionHistoryEntry[] {
+  const planTitles = new Map<string, string>()
+  for (const plan of events.filter(e => PLAN_FACT_TYPES.has(e.event_type))) {
+    planTitles.set(plan.id, eventTitle(plan))
+  }
+
+  const grouped = new Map<string, HealthEvent[]>()
+  for (const event of events) {
+    const mapping = PLAN_ACTION_LABELS[event.event_type]
+    if (!mapping) continue
+    const planEventId = textOf((event.payload ?? {})['plan_event_id']) || event.id
+    const bucket = grouped.get(planEventId) ?? []
+    bucket.push(event)
+    grouped.set(planEventId, bucket)
+  }
+
+  const entries: TaskActionHistoryEntry[] = []
+  for (const [planEventId, bucket] of grouped) {
+    // 时间线升序：最后一条是当前有效动作
+    const sorted = [...bucket].sort((a, b) => eventTime(a) - eventTime(b))
+    const latest = sorted[sorted.length - 1]!
+    const latestMapping = PLAN_ACTION_LABELS[latest.event_type]!
+    sorted.forEach((event, index) => {
+      const mapping = PLAN_ACTION_LABELS[event.event_type]!
+      const isLatest = index === sorted.length - 1
+      entries.push({
+        eventId: event.id,
+        action: mapping.action,
+        actionLabel: mapping.label,
+        taskTitle: planTitles.get(planEventId) ?? '计划任务（标题未知）',
+        memberName,
+        memberId,
+        serverTime: event.occurred_at ?? event.created_at,
+        // 最终状态取该计划最新动作的结果，覆盖条目同样显示最新终态便于理解
+        finalStatus: latestMapping.finalStatus,
+        receipt: isLatest ? 'RECEIPTED' : 'SUPERSEDED',
+        note: isLatest ? undefined : '该计划的后续操作已覆盖此动作（服务端幂等保留历史）',
+      })
+    })
+  }
+
+  return entries.sort((a, b) => Date.parse(b.serverTime) - Date.parse(a.serverTime))
+}
+
 const TREND_WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六']
 
 function eventTime(event: HealthEvent): number {
   const time = Date.parse(event.occurred_at ?? event.created_at)
-  return Number.isFinite(time) ? time : 0
+  return Number.isFinite(time) ? time : Number.NaN
+}
+
+function stablePlanId(event: HealthEvent): string | null {
+  const payload = event.payload ?? {}
+  const linked = textOf(payload['plan_event_id']) || textOf(payload['plan_id'])
+  if (event.event_type === 'plan_created') return linked || event.id
+  return linked || null
+}
+
+function dateParts(time: number, timeZone: string): { day: string; weekday: number } | null {
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short',
+    }).formatToParts(new Date(time))
+    const value = (kind: string) => parts.find(part => part.type === kind)?.value
+    const weekday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(value('weekday') ?? '')
+    const year = value('year'); const month = value('month'); const day = value('day')
+    return year && month && day && weekday >= 0 ? { day: `${year}-${month}-${day}`, weekday } : null
+  } catch { return null }
 }
 
 /**
- * 从时间线事件推导近 7 天完成趋势：
- * 某天的 total = 截至当天结束已存在的计划事实数；
- * done = 当天发生的 plan_confirmed 动作数（服务端按计划幂等）。
+ * Uses server timestamps and an explicit household IANA timezone. Updates must
+ * reference a stable plan id; orphan updates are ignored rather than counted.
+ * The total is plans active by local business-day end; done is the plan's final
+ * action only, when that final action is a confirmation on that business day.
  */
-export function deriveWeeklyTrendFromEvents(events: HealthEvent[], now: Date = new Date()): TrendPoint[] {
-  const plans = events.filter(e => PLAN_FACT_TYPES.has(e.event_type))
-  const confirms = events.filter(e => e.event_type === 'plan_confirmed')
-
-  const points: TrendPoint[] = []
-  for (let offset = 6; offset >= 0; offset -= 1) {
-    const dayStart = new Date(now)
-    dayStart.setDate(dayStart.getDate() - offset)
-    dayStart.setHours(0, 0, 0, 0)
-    const dayEnd = dayStart.getTime() + 24 * 3600 * 1000
-
-    points.push({
-      label: offset === 0 ? '今' : TREND_WEEKDAYS[dayStart.getDay()]!,
-      total: plans.filter(p => eventTime(p) < dayEnd).length,
-      done: confirms.filter(c => {
-        const time = eventTime(c)
-        return time >= dayStart.getTime() && time < dayEnd
-      }).length,
-    })
+export function deriveWeeklyTrendFromEvents(
+  events: HealthEvent[],
+  now: Date = new Date(),
+  timeZone?: string,
+): TrendPoint[] {
+  if (!timeZone) return []
+  const nowTime = now.getTime()
+  const today = dateParts(nowTime, timeZone)
+  if (!today) return []
+  const dayFormatter = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' })
+  const dayKey = (time: number) => {
+    const p = dayFormatter.formatToParts(new Date(time)); const v = (type: string) => p.find(x => x.type === type)?.value
+    return `${v('year')}-${v('month')}-${v('day')}`
   }
-  return points
+  // Calendar arithmetic is performed on YYYY-MM-DD keys, so a 23/25-hour DST
+  // day cannot duplicate or omit a business date in the seven-day window.
+  const addCalendarDays = (day: string, offset: number) => {
+    const [year, month, date] = day.split('-').map(Number)
+    return new Date(Date.UTC(year!, month! - 1, date! + offset)).toISOString().slice(0, 10)
+  }
+  const weekdayForDay = (day: string) => new Date(`${day}T12:00:00Z`).getUTCDay()
+  const windowDays = Array.from({ length: 7 }, (_, index) => addCalendarDays(today.day, index - 6))
+  const planFacts = new Map<string, HealthEvent>()
+  const actions = new Map<string, HealthEvent>()
+  for (const event of events) {
+    const isPlanEvent = PLAN_FACT_TYPES.has(event.event_type) || PLAN_ACTION_TYPES.has(event.event_type)
+    if (!isPlanEvent) continue
+    const time = eventTime(event)
+    if (!Number.isFinite(time)) return []
+    const id = stablePlanId(event)
+    if (!id) return []
+    if (PLAN_FACT_TYPES.has(event.event_type)) {
+      const prior = planFacts.get(id)
+      // An update changes plan content, not the fact that the plan already existed.
+      if (!prior || eventTime(prior) > time) planFacts.set(id, event)
+    } else {
+      const prior = actions.get(id)
+      if (!prior || eventTime(prior) <= time) actions.set(id, event)
+    }
+  }
+  return windowDays.map((day, index) => {
+    const total = [...planFacts.values()].filter(plan => dayKey(eventTime(plan)) <= day).length
+    const done = [...actions.entries()].filter(([id, action]) =>
+      planFacts.has(id) && action.event_type === 'plan_confirmed' && dayKey(eventTime(action)) === day,
+    ).length
+    return { label: index === 6 ? '今' : TREND_WEEKDAYS[weekdayForDay(day)]!, total, done }
+  })
 }
-
 function toMedication(event: HealthEvent): MedicationItem {
   const payload = event.payload ?? {}
   const expiry = textOf(payload['expiry_date'])
@@ -193,6 +375,7 @@ export class HttpDataProvider implements DataProvider {
   private readonly client: ApiClient
   private readonly context: () => SessionContext
   private householdId: string | null = null
+  private householdTimeZone: string | null = null
   private memberCache = new Map<string, Member>()
   private taskCache = new Map<string, CareTask>()
   /** 同一 File 的上传请求在当前运行时共享，避免重试或重复点击产生多个文件。 */
@@ -225,23 +408,31 @@ export class HttpDataProvider implements DataProvider {
     return upload
   }
 
-  private visionDraft(file: File, memberId: string): VisionDraft {
+  private visionDraft(file: File, memberId: string, mediaKind: 'image' | 'video' = 'image'): VisionDraft {
     let drafts = this.visionDrafts.get(file)
     if (!drafts) {
       drafts = new Map<string, VisionDraft>()
       this.visionDrafts.set(file, drafts)
     }
-    let draft = drafts.get(memberId)
+    const key = `${memberId}:${mediaKind}`
+    let draft = drafts.get(key)
     if (!draft) {
-      draft = { idempotencyKey: `vision:${createIdempotencyKey()}` }
-      drafts.set(memberId, draft)
+      draft = { idempotencyKey: `vision-${mediaKind}:${createIdempotencyKey()}` }
+      drafts.set(key, draft)
     }
     return draft
   }
 
+  /**
+   * 解析本轮请求使用的家庭。
+   *
+   * MOB-158：绝不再取 `listHouseholds()[0]` —— 列表顺序变化会让用户看错家庭。
+   * 规则是：已选家庭必须仍在服务端返回的列表里；恰好一个家庭时自动选定以保持
+   * 低步骤体验；可访问多个但未选择时 fail-closed，由界面要求显式选择。
+   */
   private async resolveHouseholdId(): Promise<string> {
     if (this.householdId) return this.householdId
-    const { actorId, accessPurpose } = this.context()
+    const { actorId, accessPurpose, householdId } = this.context()
     if (!actorId.trim() || !accessPurpose.trim()) {
       throw new ApiClientError('联机模式需要身份和访问目的', {
         status: 401,
@@ -249,15 +440,45 @@ export class HttpDataProvider implements DataProvider {
       })
     }
     const households = await this.client.listHouseholds(this.options())
-    const first = households[0]
-    if (!first) {
+    if (households.length === 0) {
       throw new ApiClientError('当前身份没有可访问的家庭', {
         status: 404,
         code: 'NO_HOUSEHOLD',
       })
     }
-    this.householdId = first.id
-    return first.id
+    const choose = (household: (typeof households)[number]) => {
+      this.householdId = household.id
+      this.householdTimeZone = typeof household.time_zone === 'string' && household.time_zone.trim()
+        ? household.time_zone.trim()
+        : null
+      return household.id
+    }
+
+    const selected = householdId.trim()
+    if (selected) {
+      const match = households.find(candidate => candidate.id === selected)
+      if (!match) {
+        // Revoked, removed, or outside current authorization: never fall back to another household.
+        throw new ApiClientError('当前选择的家庭已不可用，请重新选择', {
+          status: 404,
+          code: 'HOUSEHOLD_UNAVAILABLE',
+        })
+      }
+      return choose(match)
+    }
+
+    if (households.length === 1) return choose(households[0]!)
+
+    throw new ApiClientError('当前身份可访问多个家庭，请先选择一个家庭', {
+      status: 409,
+      code: 'HOUSEHOLD_NOT_SELECTED',
+    })
+  }
+
+  /** 服务端授权范围内的家庭列表；只暴露 ID 与名称，供界面显式选择。 */
+  async listHouseholds(): Promise<HouseholdOption[]> {
+    const households = await this.client.listHouseholds(this.options())
+    return households.map(household => ({ id: household.id, name: household.name }))
   }
 
   private async memberName(memberId: string): Promise<string> {
@@ -350,12 +571,27 @@ export class HttpDataProvider implements DataProvider {
       medications = 'UNAUTHORIZED'
     }
 
+    // MOB-136：授权列表只读展示。仅 Owner 可读；非 Owner 的 403/404 是
+    // 隐藏式拒绝，映射为 'UNAUTHORIZED'（与"暂无授权"区分），其余异常如实抛出。
+    let authorizations: MemberDetail['authorizations']
+    try {
+      const reads = await this.client.listAuthorizations(householdId, this.options())
+      authorizations = reads
+        .filter(read => read.member_id === memberId)
+        .map(read => authorizationViewFromRead(read))
+    } catch (cause) {
+      if (cause instanceof ApiClientError && (cause.status === 403 || cause.status === 404)) {
+        authorizations = 'UNAUTHORIZED'
+      } else {
+        throw cause
+      }
+    }
+
     return {
       summary,
       medications,
       timeline,
-      // 授权列表接口仅家庭 owner 可读，移动端暂不展示（在网页端管理）。
-      authorizations: [],
+      authorizations,
     }
   }
 
@@ -375,6 +611,7 @@ export class HttpDataProvider implements DataProvider {
       tasks,
       risks,
       recentEvents: [...events].reverse().slice(0, 4).map(toTimelineItem),
+      environmentAction: environmentActionUnavailable(),
     }
   }
 
@@ -479,31 +716,63 @@ export class HttpDataProvider implements DataProvider {
   async getWeeklyTrend(memberId: string): Promise<TrendPoint[]> {
     const householdId = await this.resolveHouseholdId()
     const events = await this.client.listMemberTimeline(householdId, memberId, this.options())
-    return deriveWeeklyTrendFromEvents(events)
+    return deriveWeeklyTrendFromEvents(events, new Date(), this.householdTimeZone ?? undefined)
   }
 
   async checkImageQuality(file: File): Promise<QualityCheckResult> {
-    const response = await this.client.checkVisionQuality(file, this.options())
+    const response = await this.client.checkVisionQuality(file, 'image', this.options())
     return {
       decision: response.decision,
       reasons: response.reasons,
       retakePrompts: response.retake_prompts,
       metrics: Object.entries(response.metrics).map(([key, metric]) => ({
         label: key,
-        value: `${metric.value}${metric.unit ? ` ${metric.unit}` : ''}`,
-        passed: metric.passed,
+        value: typeof metric === 'number' ? String(metric) : `${metric.value}${metric.unit ? ` ${metric.unit}` : ''}`,
+        passed: typeof metric === 'number' ? true : metric.passed,
       })),
       qualityReceipt: response.quality_receipt,
     }
   }
 
-  async recognizeMedicine(file: File, memberId: string): Promise<RecognitionCandidate> {
-    const quality = await this.checkImageQuality(file)
-    if (quality.decision !== 'PASS' || !quality.qualityReceipt) {
-      throw new Error('图片未通过质量门控，请按提示重拍')
+  /** MOB-149：短视频质量门；metrics 为帧数统计（纯数字），映射为信息型条目。 */
+  async checkVideoQuality(file: File): Promise<QualityCheckResult> {
+    const response = await this.client.checkVisionQuality(file, 'video', this.options())
+    const numeric = (key: string): number => {
+      const value = response.metrics[key]
+      return typeof value === 'number' ? value : Number(value?.value ?? 0)
     }
-    const draft = this.visionDraft(file, memberId)
-    if (draft.task) return recognitionCandidateFromTask(draft.task)
+    return {
+      decision: response.decision,
+      reasons: response.reasons,
+      retakePrompts: response.retake_prompts,
+      metrics: Object.entries(response.metrics).map(([key, metric]) => ({
+        label: QUALITY_METRIC_LABELS[key] ?? key,
+        value: typeof metric === 'number' ? String(metric) : `${metric.value}${metric.unit ? ` ${metric.unit}` : ''}`,
+        passed: typeof metric === 'number' ? true : metric.passed,
+      })),
+      qualityReceipt: response.quality_receipt,
+      framesSummary: {
+        mediaType: 'video',
+        sampledFrames: numeric('sampled_frames'),
+        selectedFrames: numeric('selected_frames'),
+        usableFrames: numeric('usable_frames'),
+      },
+    }
+  }
+
+  async recognizeMedicine(
+    file: File,
+    memberId: string,
+    mediaKind: 'image' | 'video' = 'image',
+  ): Promise<RecognitionCandidate> {
+    const quality = mediaKind === 'video'
+      ? await this.checkVideoQuality(file)
+      : await this.checkImageQuality(file)
+    if (quality.decision !== 'PASS' || !quality.qualityReceipt) {
+      throw new Error(mediaKind === 'video' ? '视频未通过抽帧质量门控，请按提示重拍' : '图片未通过质量门控，请按提示重拍')
+    }
+    const draft = this.visionDraft(file, memberId, mediaKind)
+    if (draft.task) return recognitionCandidateFromTask(draft.task, mediaKind)
     const uploaded = await this.uploadFileOnce(file)
     const task = await this.client.createVisionTask(
       {
@@ -511,20 +780,75 @@ export class HttpDataProvider implements DataProvider {
         member_id: memberId,
         quality_receipt: quality.qualityReceipt,
         idempotency_key: draft.idempotencyKey,
+        media_type: mediaKind,
       },
       this.options({ idempotencyKey: draft.idempotencyKey }),
     )
     draft.task = task
-    return recognitionCandidateFromTask(task)
+    return recognitionCandidateFromTask(task, mediaKind)
+  }
+
+  async fetchVisionTaskStatus(taskId: string): Promise<VisionTaskStatusSnapshot> {
+    // 只读回查：重试必须复用同一 taskId；这里绝不创建任务或重新上传照片。
+    const task = await this.client.getVisionTask(taskId, this.options())
+    return visionTaskStatusSnapshotFromTask(task)
+  }
+
+  async listTaskActionHistory(memberId: string): Promise<TaskActionHistoryEntry[]> {
+    // 只读脱敏摘要，直接来自服务端时间线；不缓存、不在本地建第二份事实库。
+    const householdId = await this.resolveHouseholdId()
+    const memberName = await this.memberName(memberId)
+    const events = await this.client.listMemberTimeline(householdId, memberId, this.options())
+    return deriveTaskActionHistory(events, memberId, memberName)
   }
 }
 
-function recognitionCandidateFromTask(task: VisionTask): RecognitionCandidate {
+/** HCT-204 状态全集；集合之外的状态按"停止自动回查+原样展示"处理，不猜测为成功。 */
+const KNOWN_VISION_TASK_STATUSES = new Set(['queued', 'running', 'succeeded', 'failed', 'cancelled', 'timeout'])
+const VISION_TASK_TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled', 'timeout'])
+
+function visionTaskNextStep(status: string): string {
+  switch (status) {
+    case 'queued':
+      return '任务已排队，等待家庭服务器处理；下方会按退避节奏继续回查，不会重复创建任务。'
+    case 'running':
+      return '家庭服务器正在提取 OCR、条码与包装特征证据；到达终态后这里会展示结果与下一步。'
+    case 'succeeded':
+      return '识别已完成，请到网页端“人工复核中心”查看证据并人工确认识别候选；确认前不会写入健康档案。'
+    case 'failed':
+      return '识别未完成。可点击“重试回查”确认状态，或回到上一步重新拍摄；重试回查不会重复创建任务。'
+    case 'cancelled':
+      return '任务已被取消，不会再有结果；如需识别请重新拍摄并创建新任务。'
+    case 'timeout':
+      return '任务在服务端超时未完成。可点击“重试回查”确认状态，或重新拍摄。'
+    default:
+      return `服务端返回了移动端未定义的状态“${status}”；已停止自动轮询，请到网页端人工复核中心核实，不以猜测代替结论。`
+  }
+}
+
+export function visionTaskStatusSnapshotFromTask(task: VisionTask): VisionTaskStatusSnapshot {
+  const status = task.status.toLowerCase()
+  return {
+    taskId: task.id,
+    status,
+    // 终态或未知状态都停止自动回查：未知状态绝不能被猜测为成功。
+    terminal: VISION_TASK_TERMINAL_STATUSES.has(status) || !KNOWN_VISION_TASK_STATUSES.has(status),
+    errorCode: task.error_code,
+    errorMessage: task.error_message,
+    modelVersion: task.model_version,
+    createdAt: task.created_at,
+    nextStep: visionTaskNextStep(status),
+  }
+}
+
+function recognitionCandidateFromTask(task: VisionTask, mediaKind: 'image' | 'video' = 'image'): RecognitionCandidate {
+  const mediaLabel = mediaKind === 'video' ? '短视频（服务端抽帧）' : '照片'
   return {
     status: 'REVIEW',
     fields: [
       { label: '视觉任务', value: task.id, source: '主数据', confidence: 1 },
       { label: '任务状态', value: task.status, source: '主数据', confidence: 1 },
+      { label: '媒体类型', value: task.media_type ?? mediaKind, source: '主数据', confidence: 1 },
     ],
     conflicts: [],
     versions: { 服务端: task.model_version ?? '等待家庭服务器处理' },
@@ -536,6 +860,16 @@ function recognitionCandidateFromTask(task: VisionTask): RecognitionCandidate {
       nextStep: '请在网页端人工复核中心查看证据并确认识别候选；移动端不会自动写入健康档案。',
     },
     notice:
-      '照片已通过质量门控并创建视觉识别任务。识别与多证据融合在家庭服务器上执行，完成后请在网页端“人工复核中心”确认候选。',
+      `${mediaLabel}已通过质量门控并创建视觉识别任务。识别与多证据融合在家庭服务器上执行（视频先抽帧再逐帧识别），完成后请在网页端“人工复核中心”确认候选；任一帧都不会被单独当作已确认药品。`,
   }
+}
+
+/** MOB-149：视频质量门 metrics 的中文名（帧数统计为信息型，不算通过/失败）。 */
+const QUALITY_METRIC_LABELS: Record<string, string> = {
+  decoded_frames: '解码帧数',
+  sampled_frames: '采样帧数',
+  selected_frames: '选中帧数',
+  usable_frames: '可用帧数',
+  sample_interval_ms: '采样间隔(ms)',
+  sample_limit: '采样上限',
 }

@@ -19,6 +19,8 @@
 - 复核确认后事务写入 HealthEvent + OutboxMessage
 - 与 HCT-104 文件上传对接
 
+本次增量还补充了药品识别结果卡：确认前集中展示名称、规格、厂家、用途、注意事项、禁忌人群和置信度；“确认保存”是唯一进入健康档案的入口，候选展示本身不产生健康事件。
+
 ## Given / When / Then
 
 - Given 视觉任务结果；When 人工提交 ACCEPT；Then 创建 CONFIRMED HealthEvent。

@@ -47,6 +47,7 @@ def reset_weather_state() -> Iterator[None]:
 def enabled_weather(monkeypatch: pytest.MonkeyPatch) -> object:
     settings = get_settings()
     monkeypatch.setattr(settings, "weather_adapter", "enabled")
+    monkeypatch.setattr(settings, "weather_provider", "generic")
     monkeypatch.setattr(settings, "weather_api_url", "https://weather.example.com/current")
     monkeypatch.setattr(settings, "egress_weather_whitelist", "weather.example.com")
     monkeypatch.setattr(settings, "weather_location_whitelist", "110000,110108")
@@ -113,6 +114,48 @@ async def test_valid_response_has_version_source_scope_and_non_medical_notice(
     assert result["action_cards"][0]["rule_id"] == "heat-high"
     assert "member_id" not in result
     assert client.requests[0]["params"] == {"city_code": "110000"}
+
+
+@pytest.mark.anyio
+async def test_adcode_provider_maps_only_the_approved_district_code(
+    enabled_weather: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "weather_provider", "uapis")
+    monkeypatch.setattr(settings, "weather_api_url", "https://uapis.cn/api/v1/misc/weather")
+    monkeypatch.setattr(settings, "egress_weather_whitelist", "uapis.cn")
+    monkeypatch.setattr(settings, "weather_location_whitelist", "130600,130629")
+    monkeypatch.setattr(settings, "weather_default_city_code", "130600")
+    monkeypatch.setattr(settings, "weather_default_district_code", "130629")
+
+    client = SequenceClient(
+        [
+            response(
+                200,
+                {
+                    "adcode": "130629",
+                    "weather": "暴雨",
+                    "temperature": 30,
+                    "wind_direction": "东风",
+                    "wind_power": "微风",
+                    "humidity": 58,
+                    "report_time": "2026-08-20 15:05:23",
+                    "member_id": "must-not-be-forwarded",
+                },
+            )
+        ]
+    )
+    monkeypatch.setattr(weather_adapter.httpx, "AsyncClient", lambda **_kwargs: client)
+
+    result = await weather_adapter.fetch_weather()
+
+    assert result["status"] == "ok"
+    assert result["location_scope"] == "district"
+    assert result["condition"] == "storm"
+    assert result["action_cards"][0]["rule_id"] == "rain-travel"
+    assert result["source_observed_at"] == "2026-08-20T07:05:23+00:00"
+    assert client.requests[0]["params"] == {"adcode": "130629"}
 
 
 @pytest.mark.anyio

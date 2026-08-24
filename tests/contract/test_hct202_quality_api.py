@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import hashlib
+
 import cv2
 import numpy as np
+from ai.vision.quality_receipt import issue_quality_receipt
+
+from app.config import get_settings
 
 
 def _encode_demo_image(*, dark: bool = False) -> bytes:
@@ -281,3 +286,46 @@ def test_vision_task_rejects_malformed_receipt_as_controlled_conflict(
 
     assert response.status_code == 409
     assert response.json() == {"detail": "QUALITY_RECEIPT_INVALID"}
+
+
+def test_vision_task_binds_media_type_to_file_and_receipt(
+    client, tmp_path, monkeypatch
+) -> None:
+    member_id = _create_member(client, "video-owner")
+    content = b"synthetic video container bytes"
+    file_id = "stored.mp4"
+    (tmp_path / file_id).write_bytes(content)
+    monkeypatch.setattr("app.routes.settings.file_root", str(tmp_path))
+    digest = hashlib.sha256(content).hexdigest()
+    receipt = issue_quality_receipt(
+        actor_id="video-owner",
+        input_digest=digest,
+        config_version=get_settings().vision_quality_config_version,
+        media_type="video",
+    )
+
+    accepted = client.post(
+        "/api/v1/vision-tasks",
+        json={
+            "file_id": file_id,
+            "media_type": "video",
+            "member_id": member_id,
+            "quality_receipt": receipt,
+        },
+        headers={"X-Actor-ID": "video-owner"},
+    )
+    assert accepted.status_code == 201, accepted.text
+    assert accepted.json()["media_type"] == "video"
+
+    mismatch = client.post(
+        "/api/v1/vision-tasks",
+        json={
+            "file_id": file_id,
+            "media_type": "image",
+            "member_id": member_id,
+            "quality_receipt": receipt,
+        },
+        headers={"X-Actor-ID": "video-owner"},
+    )
+    assert mismatch.status_code == 409
+    assert mismatch.json() == {"detail": "MEDIA_TYPE_MISMATCH"}

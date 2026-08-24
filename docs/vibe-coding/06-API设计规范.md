@@ -41,8 +41,12 @@
 | GET | `/health` | 服务健康检查 | ✅ |
 | GET | `/api/v1/health/db` | 数据库连接检查 | ✅ |
 | GET | `/api/v1/meta/capabilities` | 系统能力元数据 | ✅ |
+| POST | `/api/v1/auth/register` | 使用 JSON 请求体注册本地账号 | ✅ |
+| POST | `/api/v1/auth/login` | 使用 JSON 请求体建立短期 Bearer 会话 | ✅ |
+| POST | `/api/v1/auth/logout` | 撤销当前短期会话 | ✅ |
 | GET | `/api/v1/households` | 列出当前用户可见的家庭 | ✅ |
 | POST | `/api/v1/households` | 创建家庭 | ✅ |
+| PATCH | `/api/v1/households/{id}` | Owner 修改家庭业务时区 | ✅ |
 | GET | `/api/v1/households/{id}/members` | 列出家庭成员 | ✅ |
 | POST | `/api/v1/households/{id}/members` | 添加成员 | ✅ |
 | GET | `/api/v1/households/{id}/authorizations` | Owner 查询本家庭授权 | ✅ |
@@ -50,6 +54,7 @@
 | PATCH | `/api/v1/households/{id}/authorizations/{auth_id}` | 按版本修改授权 | ✅ |
 | POST | `/api/v1/households/{id}/authorizations/{auth_id}/revoke` | 撤销授权 | ✅ |
 | GET | `/api/v1/households/{id}/authorization-audits` | Owner 查询授权与访问审计 | ✅ |
+| GET | `/api/v1/households/{id}/authorization-audits/page` | Owner 按签名游标分页查询审计，可按 `request_id` 过滤 | ✅ |
 | POST | `/api/v1/households/{id}/events` | 追加健康事件 | ✅ |
 | GET | `/api/v1/households/{id}/events` | 查询事件列表 | ✅ |
 | POST | `/api/v1/households/{id}/events/{event_id}/compensations` | 追加补偿事件 | ✅ |
@@ -60,6 +65,10 @@
 | POST | `/api/v1/households/{id}/outbox/dispatch` | Owner 手工触发恢复批次 | ✅ |
 
 P0 错误格式：当前使用 FastAPI 默认 `{"detail":"..."}`，P1 统一为 `{"error":{"code":"...","message":"...","details":{},"request_id":"..."}}`。
+
+家庭接口的 `HouseholdRead.time_zone` 是服务端业务日的 IANA 时区名称。创建家庭可传入时区，省略时使用部署配置 `DEFAULT_HOUSEHOLD_TIME_ZONE`；只有家庭 Owner 可通过 `PATCH /api/v1/households/{id}` 修改该字段，非法时区返回校验错误。该字段只影响业务日展示，不参与身份或授权判断。
+
+HCT-417 Web 会话边界：注册、登录和登出只接受 JSON 请求体，密码不得出现在 URL、日志或前端持久化存储中。登录返回 `actor_id`、短期 `session_token` 和 `expires_at`；除登录/注册外，正式网页请求使用 `Authorization: Bearer <session_token>`，Bearer 身份优先于 `X-Actor-Id`。令牌当前只保存在页面内存，浏览器收到 `401` 时必须清理家庭、成员、健康数据和会话状态并回到登录页。`X-Actor-Id` 仅保留给明确的非生产本地演示；正式部署还必须补齐持久化会话存储、密钥轮换、CSRF/同源策略和会话撤销审计，不能把本地内存实现直接宣称为生产鉴权。
 
 P0 权限边界的事实源是：owner 可访问本家庭成员目录和健康事件/状态；非 owner 只能看到授权成员和字段。若未来改为 owner 也必须逐项授权，必须先更新 Story、ADR、OpenAPI 和契约测试，不能由单个 PR 默默改变。
 
@@ -79,6 +88,7 @@ HCT-103 事件写入支持最长 128 位 `Idempotency-Key`。家庭、key、操�
 | POST | `/vision-tasks/{id}/evidence` | 保存本地适配器签名的 OCR-first 证据 |
 | POST | `/vision-tasks/{id}/fusion` | 融合批准主数据候选并创建唯一待复核任务 |
 | GET | `/vision-tasks/{id}` | 查询任务、版本和证据结果 |
+| POST | `/vision-tasks/{id}/retry` | 失败/超时任务原地重新排队，不创建第二个任务 |
 | GET | `/households/{household_id}/members/{member_id}/review-tasks` | 查询有权限成员的待复核任务 |
 | GET | `/households/{household_id}/review-tasks/{id}` | 查询单个复核任务和版本 |
 | POST | `/households/{household_id}/review-tasks/{id}/confirm` | 确认候选并追加健康事件 |
@@ -104,6 +114,8 @@ HCT-103 事件写入支持最长 128 位 `Idempotency-Key`。家庭、key、操�
 | POST | `/risks/evaluate` | 重算风险 |
 | POST | `/plans/{id}/optimize` | 生成提醒建议 |
 | POST | `/plans/{id}/approve` | 人工批准计划 |
+| GET | `/households/{household_id}/members/{member_id}/plan-workbench` | 按家庭时区读取计划、动作历史、逾期和疗程结束状态 |
+| POST | `/households/{household_id}/members/{member_id}/plans/evaluate` | Owner 对明确授权的计划执行幂等漏服、疗程结束与照护升级评估 |
 | GET | `/environment/actions` | 环境行动卡 |
 | POST | `/assistant/chat` | 本地助手 |
 | POST | `/models/retrain` | 追加训练 |
@@ -143,6 +155,8 @@ MATCHED/CONFLICT/UNKNOWN/REVIEW -> CONFIRMED | CORRECTED | REJECTED
 
 `POST /assistant/chat` 只执行白名单只读工具。`retrieve_knowledge` 必须使用请求中的 `household_id`/`member_id`，模型不得改写范围。最终 `citations` 只能引用本次工具返回的 `document_id`/`version`/`chunk_id`；伪造来源返回 `CITATION_NOT_FOUND`，无授权文档返回 `NO_AUTHORISED_DOCUMENTS`。降级响应的 `sources` 和 `citations` 必须为空。
 
+助手响应中的引用展示字段（标题、片段正文、定位）只能从同一轮已授权检索结果透传，不能由模型生成或由前端补猜；它们用于解释展示，不改变引用的身份校验。前端只在当前标签页保存按身份/家庭/成员隔离的临时会话，不新增服务端会话存储。
+
 语音输入不新增 API：浏览器只把用户主动授权后的识别文字写入聊天草稿，用户发送后沿用本接口；服务端不接收或保存音频。语音回复由客户端浏览器本地 `speechSynthesis` 按用户操作播放，不改变回答、引用、权限或审计契约。
 
 正常回答可返回 `suggested_questions`（最多 3 条）作为交互提示。该字段只由最新用户问题的受控意图模板生成，不是事实、规则、健康事件或模型思考链；建议必须去重、限长、无外链/广告/问诊导流/医疗指令。模型不可用、无证据降级、引用校验失败或请求失败时返回空数组，客户端不得把建议写入健康事实。
@@ -158,3 +172,6 @@ MATCHED/CONFLICT/UNKNOWN/REVIEW -> CONFIRMED | CORRECTED | REJECTED
 ## 6. 契约管理
 
 OpenAPI 是接口事实源。破坏性变化必须新版本或迁移期；Schema、SDK、Mock、契约测试和本文同时更新。Mock 只用于开发，不得作为功能完成证据。
+
+风险“已知晓”回写必须使用服务端重新计算的规则版本和风险指纹；`POST /households/{household_id}/members/{member_id}/risks/{rule_id}/acknowledge` 必须携带 `Idempotency-Key`。接口只返回最小回执（操作者、服务端时间、规则版本和指纹），不得写入风险消息、健康正文、证据正文或图片。授权撤回、过期、目的不匹配、风险失效和版本变化必须拒绝或隐藏，重复幂等键只能返回原回执。
+

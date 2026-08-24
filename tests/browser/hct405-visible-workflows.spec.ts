@@ -51,7 +51,57 @@ async function installSyntheticApi(page: Page): Promise<void> {
       return respond(hasAuthorization && !authorization.revoked_at ? [authorization] : [])
     }
     if (request.method() === 'GET' && path.endsWith('/audits')) return respond([])
+    if (request.method() === 'GET' && path.endsWith('/relationship-graph')) {
+      return respond({
+        member_id: member.id,
+        generated_at: '2026-08-20T02:00:00Z',
+        events_count: 1,
+        last_event_id: 'event-1',
+        nodes: [{
+          id: 'drug:event-1',
+          category: 'drug',
+          label: '合成药品',
+          source_event_id: 'event-1',
+          source_recorded_at: '2026-08-20T01:00:00Z',
+          source_created_by: 'owner-1',
+        }],
+      })
+    }
     if (request.method() === 'GET' && path.endsWith('/timeline')) return respond([])
+    if (request.method() === 'GET' && path.endsWith('/plan-workbench')) {
+      return respond({
+        member_id: member.id,
+        generated_at: '2026-08-20T02:00:00Z',
+        plans: [{
+          plan_event_id: 'plan-1',
+          drug: '合成药品',
+          schedule: '每日一次',
+          status: 'REMINDER',
+          next_action_at: '2026-08-20T03:00:00Z',
+          last_action: null,
+          allowed_actions: ['CONFIRM', 'DEFER', 'SKIP'],
+        }],
+      })
+    }
+    if (request.method() === 'GET' && path.endsWith('/dashboard-summary')) {
+      return respond({
+        generated_at: '2026-08-20T02:00:00Z',
+        member_count: 1,
+        events_today: 2,
+        events_total: 5,
+        severe_count: 0,
+        warning_count: 1,
+        info_count: 1,
+        pending_reviews: 1,
+        pending_outbox: 0,
+        week_series: [
+          { day: '2026-08-14', count: 0 }, { day: '2026-08-15', count: 0 },
+          { day: '2026-08-16', count: 0 }, { day: '2026-08-17', count: 0 },
+          { day: '2026-08-18', count: 1 }, { day: '2026-08-19', count: 2 },
+          { day: '2026-08-20', count: 2 },
+        ],
+      })
+    }
     if (request.method() === 'GET' && path.endsWith('/state')) {
       return respond({
         member_id: member.id,
@@ -124,17 +174,17 @@ async function enterFamilySpace(page: Page): Promise<void> {
   await expect(navItem(page, '授权管理')).toBeVisible()
 }
 
-test('家庭总览显著展示带来源、范围和规则版本的环境行动卡', async ({ page }) => {
+test('家庭总览显著展示简洁的环境行动卡', async ({ page }) => {
   await installSyntheticApi(page)
   await enterFamilySpace(page)
 
-  const panel = page.getByRole('region', { name: '今日环境与可执行提醒' })
+  const panel = page.getByRole('region', { name: '今天的环境提醒' })
   await expect(panel).toBeVisible()
   await expect(panel.getByText('37°')).toBeVisible()
   await expect(panel.getByText(/高温提醒：建议减少长时间户外活动/)).toBeVisible()
-  await expect(panel.getByText('城市级范围，不发送精确住址或成员健康信息')).toBeVisible()
-  await expect(panel.getByText(/来源时间 08月18日 09:00/)).toBeVisible()
-  await expect(panel.getByText('规则 weather-actions-v1')).toBeVisible()
+  await expect(panel.getByText('城市级范围天气')).toBeVisible()
+  await expect(panel.getByText(/更新于 08月18日 09:00/)).toBeVisible()
+  await expect(panel.getByText('规则 weather-actions-v1')).toHaveCount(0)
   await expect(panel.getByText(/不构成诊断或用药建议/)).toBeVisible()
 
   const refreshed = page.waitForResponse(response =>
@@ -142,7 +192,7 @@ test('家庭总览显著展示带来源、范围和规则版本的环境行动�
   )
   await panel.getByRole('button', { name: '刷新天气' }).click()
   await refreshed
-  await expect(panel.getByText('天气已更新')).toBeVisible()
+  await expect(panel.getByText(/更新于/)).toBeVisible()
 })
 
 test('管理员创建授权后撤回，照护者可见范围立即清空', async ({ page }) => {
@@ -193,6 +243,40 @@ test('命令面板 Ctrl+K 可以在十二个视图之间快速跳转', async ({ 
   await expect(palette.getByText(/没有匹配「购药」的命令/)).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(palette).toHaveCount(0)
+})
+
+test('健康计划页只展示服务端返回的照护待办', async ({ page }) => {
+  await installSyntheticApi(page)
+  await enterFamilySpace(page)
+
+  await navItem(page, '健康计划').click()
+  await expect(viewHeading(page)).toHaveText('健康计划中心')
+  await expect(page.getByText('合成药品')).toBeVisible()
+  await expect(page.getByText('待提醒')).toBeVisible()
+  await expect(page.getByText(/下次处理/)).toBeVisible()
+})
+
+test('家庭健康图谱只消费服务端脱敏关系投影', async ({ page }) => {
+  await installSyntheticApi(page)
+  await enterFamilySpace(page)
+
+  const graph = page.waitForResponse(response => response.url().includes('/relationship-graph'))
+  await navItem(page, '健康图谱').click()
+  await graph
+  await expect(viewHeading(page)).toHaveText('家庭健康图谱')
+  await expect(page.getByRole('img', { name: 'Synthetic member的健康关系图谱' })).toBeVisible()
+  await expect(page.getByText('合成药品')).toBeVisible()
+})
+
+test('家庭大屏使用脱敏聚合接口而非成员逐项汇总', async ({ page }) => {
+  await installSyntheticApi(page)
+  await enterFamilySpace(page)
+
+  const summary = page.waitForResponse(response => response.url().includes('/dashboard-summary'))
+  await navItem(page, '家庭大屏').click()
+  await summary
+  await expect(page.getByRole('heading', { name: '家庭大屏', level: 1 })).toBeVisible()
+  await expect(page.getByText('累计 5 条已确认事实')).toBeVisible()
 })
 
 test('本地 API 不可用时不进入家庭空间，也不渲染任何健康摘要', async ({ page }) => {

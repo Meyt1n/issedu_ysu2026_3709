@@ -26,6 +26,18 @@ RuleFunc = Callable[[dict[str, Any]], list[Alert]]
 _registry: dict[str, RuleFunc] = {}
 
 
+def _drug_ingredients(drug: dict[str, Any]) -> list[str]:
+    raw = drug.get("active_ingredients")
+    if isinstance(raw, str):
+        raw = [raw]
+    if isinstance(raw, list):
+        values = [str(item).strip().lower() for item in raw if str(item).strip()]
+        if values:
+            return values
+    ingredient = drug.get("ingredient")
+    return [str(ingredient).strip().lower()] if ingredient else []
+
+
 def register_rule(rule_id: str) -> Callable[[RuleFunc], RuleFunc]:
     def decorator(fn: RuleFunc) -> RuleFunc:
         _registry[rule_id] = fn
@@ -76,8 +88,7 @@ def duplicate_ingredient(facts: dict[str, Any]) -> list[Alert]:
     drugs = facts.get("drugs", [])
     ingredient_map: dict[str, list[str]] = {}
     for drug in drugs:
-        ingredient = drug.get("ingredient")
-        if ingredient:
+        for ingredient in _drug_ingredients(drug):
             ingredient_map.setdefault(ingredient, []).append(drug.get("added_by", ""))
     alerts: list[Alert] = []
     for ingredient, sources in ingredient_map.items():
@@ -105,21 +116,37 @@ def allergy_conflict(facts: dict[str, Any]) -> list[Alert]:
 
 @register_rule("interaction")
 def interaction(facts: dict[str, Any]) -> list[Alert]:
+    """Report only pair rules explicitly present in approved local metadata."""
     drugs = facts.get("drugs", [])
-    known_pairs: set[tuple[str, str]] = set()
     alerts: list[Alert] = []
     for i, d1 in enumerate(drugs):
         for d2 in drugs[i + 1:]:
-            pair = tuple(sorted([str(d1.get("name", "")), str(d2.get("name", ""))]))
-            if pair in known_pairs:
+            left_id = d1.get("candidate_id")
+            right_id = d2.get("candidate_id")
+            if not left_id or not right_id:
                 continue
-            known_pairs.add(pair)
-            # In production, check against a drug interaction database.
-            # Here we flag any concurrent medication as INFO-level awareness.
-            alerts.append(Alert("interaction", "INFO",
-                f"同时使用 {pair[0]} 和 {pair[1]}，请关注相互作用", [
-                    d1.get("added_by", ""), d2.get("added_by", ""),
-                ]))
+            warnings = [
+                warning
+                for warning in d1.get("interaction_warnings", [])
+                if isinstance(warning, dict) and warning.get("with_record_id") == right_id
+            ]
+            warnings.extend(
+                warning
+                for warning in d2.get("interaction_warnings", [])
+                if isinstance(warning, dict) and warning.get("with_record_id") == left_id
+            )
+            if not warnings:
+                continue
+            warning = warnings[0]
+            level = str(warning.get("level") or "WARNING")
+            if level not in {"INFO", "WARNING"}:
+                level = "WARNING"
+            alerts.append(Alert(
+                "interaction",
+                level,
+                str(warning.get("message") or "本地主数据要求核对这两种药品的相互作用信息"),
+                [d1.get("added_by", ""), d2.get("added_by", "")],
+            ))
     return alerts
 
 

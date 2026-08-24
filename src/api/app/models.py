@@ -2,7 +2,17 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Integer, String, func
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    LargeBinary,
+    String,
+    func,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -20,6 +30,9 @@ class Household(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     created_by: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    time_zone: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="UTC", server_default="UTC"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
@@ -39,6 +52,40 @@ class Member(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
+    )
+
+
+class FaceCredential(Base):
+    """Encrypted face template bound to one household account.
+
+    Raw registration frames never reach this table.  ``encrypted_template`` is
+    an authenticated Fernet envelope produced by ``face_credentials.py``.
+    """
+
+    __tablename__ = "face_credential"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    household_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("household.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    actor_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    encrypted_template: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    algorithm_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    feature_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    credential_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    consent_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="ACTIVE", index=True)
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    consented_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        server_default=func.now(),
+        onupdate=lambda: datetime.now(UTC),
     )
 
 
@@ -82,6 +129,7 @@ class AccessAudit(Base):
     purpose: Mapped[str | None] = mapped_column(String(64), nullable=True)
     outcome: Mapped[str] = mapped_column(String(16), nullable=False)
     reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    request_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     before_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     after_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -191,6 +239,15 @@ class ProjectionCheckpoint(Base):
 
 Index("ix_member_household_actor", Member.household_id, Member.actor_id)
 Index(
+    "uq_face_credential_active_account",
+    FaceCredential.household_id,
+    FaceCredential.actor_id,
+    FaceCredential.status,
+    unique=True,
+    sqlite_where=FaceCredential.status == "ACTIVE",
+    postgresql_where=FaceCredential.status == "ACTIVE",
+)
+Index(
     "ix_event_household_member_time",
     HealthEvent.household_id,
     HealthEvent.member_id,
@@ -224,6 +281,7 @@ Index("ix_auth_grantor_actor_id", CareAuthorization.grantor_actor_id)
 Index("ix_auth_grantee_actor_id", CareAuthorization.grantee_actor_id)
 Index("ix_audit_household_time", AccessAudit.household_id, AccessAudit.created_at)
 Index("ix_audit_authorization", AccessAudit.authorization_id)
+Index("ix_audit_request_id", AccessAudit.request_id)
 
 
 # ── HCT-204: Vision task ───────────────────────────────────────────────
@@ -246,6 +304,9 @@ class VisionTask(Base):
     )
     member_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     file_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    media_type: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="image", server_default="image", index=True
+    )
     task_type: Mapped[str] = mapped_column(String(40), nullable=False, default="ocr")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -277,3 +338,45 @@ class VisionTask(Base):
         server_default=func.now(),
         onupdate=lambda: datetime.now(UTC),
     )
+
+
+class RiskAcknowledgement(Base):
+    """Minimal receipt for acknowledging one current rule result."""
+
+    __tablename__ = "risk_acknowledgement"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    household_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("household.id", ondelete="CASCADE"), nullable=False
+    )
+    member_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("member.id", ondelete="CASCADE"), nullable=False
+    )
+    rule_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    rule_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    risk_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    acknowledged_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), server_default=func.now()
+    )
+
+
+Index(
+    "uq_risk_ack_household_idempotency",
+    RiskAcknowledgement.household_id,
+    RiskAcknowledgement.idempotency_key,
+    unique=True,
+)
+Index(
+    "uq_risk_ack_current_signal",
+    RiskAcknowledgement.household_id,
+    RiskAcknowledgement.member_id,
+    RiskAcknowledgement.rule_id,
+    RiskAcknowledgement.risk_fingerprint,
+    unique=True,
+)

@@ -402,7 +402,7 @@ def test_write_only_auth_does_not_grant_list_access(client: TestClient) -> None:
 # ── 字段级权限断言 ──────────────────────────────────────
 
 MEMBER_READ_FIELDS = {"id", "household_id", "display_name", "role", "actor_id", "created_at"}
-HOUSEHOLD_READ_FIELDS = {"id", "name", "created_by", "created_at"}
+HOUSEHOLD_READ_FIELDS = {"id", "name", "created_by", "time_zone", "created_at"}
 
 
 def test_list_members_response_contains_only_memberread_fields(
