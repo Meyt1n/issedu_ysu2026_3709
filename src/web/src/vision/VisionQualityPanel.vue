@@ -19,6 +19,7 @@ const props = defineProps<{
   actorId: string
   memberId?: string
   accessPurpose?: string
+  audience?: 'member' | 'admin'
 }>()
 
 const emit = defineEmits<{
@@ -35,6 +36,7 @@ const guideOpen = ref(false)
 let requestGeneration = 0
 
 const isBusy = computed(() => state.value === 'checking' || state.value === 'queueing')
+const isMemberView = computed(() => props.audience === 'member')
 const canCheck = computed(() => Boolean(selectedFile.value && props.actorId && !isBusy.value))
 const canQueue = computed(
   () => (
@@ -65,7 +67,7 @@ const stepStates = computed(() => {
       label: '创建识别任务',
       state: flow === 'queued' ? 'done' : passed ? 'current' : 'idle',
     },
-    { label: '人工复核后入档', state: 'idle' },
+    { label: isMemberView.value ? '等待家人确认' : '人工复核后入档', state: 'idle' },
   ]
 })
 
@@ -205,8 +207,10 @@ watch(() => [props.actorId, props.memberId, props.accessPurpose], () => {
   <section class="card" aria-labelledby="vision-quality-title">
     <div class="card-heading">
       <div>
-        <p class="eyebrow">本地药盒采集</p>
-        <h3 id="vision-quality-title" class="card-title">先检查图片质量，再进入识别</h3>
+        <p class="eyebrow">{{ isMemberView ? '拍照录药' : '本地药盒采集' }}</p>
+        <h3 id="vision-quality-title" class="card-title">
+          {{ isMemberView ? '拍一张清楚的药盒照片' : '先检查图片质量，再进入识别' }}
+        </h3>
       </div>
       <span
         class="pill"
@@ -238,7 +242,9 @@ watch(() => [props.actorId, props.memberId, props.accessPurpose], () => {
     </div>
 
     <p class="card-note" style="margin: 0 0 14px">
-      图片只发送到本机 API。质量通过不代表识别成功，识别结果仅为候选，确认后才进入健康记录。
+      {{ isMemberView
+        ? '照片只发送到本机，提交后由家庭管理员确认；没有确认前不会写入家庭记录。'
+        : '图片只发送到本机 API。质量通过不代表识别成功，识别结果仅为候选，确认后才进入健康记录。' }}
     </p>
 
     <div class="grid-two capture-layout">
@@ -314,7 +320,7 @@ watch(() => [props.actorId, props.memberId, props.accessPurpose], () => {
 
         <div class="capture-example-foot">
           <AppIcon name="lock" :size="14" />
-          教学示例 · 不含真实健康信息
+          {{ isMemberView ? '照片只在本机处理' : '拍摄参考' }}
         </div>
       </aside>
 
@@ -324,7 +330,7 @@ watch(() => [props.actorId, props.memberId, props.accessPurpose], () => {
         </p>
         <div class="row-actions">
           <button type="button" class="btn btn-primary" :disabled="!canCheck" @click="checkQuality">
-            {{ state === 'checking' ? '正在检查' : '检查图片质量' }}
+            {{ state === 'checking' ? '正在检查' : isMemberView ? '检查照片' : '检查图片质量' }}
           </button>
           <button v-if="selectedFile" type="button" class="btn btn-ghost" :disabled="isBusy" @click="clearFile">
             清除
@@ -347,23 +353,25 @@ watch(() => [props.actorId, props.memberId, props.accessPurpose], () => {
         <template v-if="qualityResult?.decision === 'PASS'">
           <div class="notice ok" role="status">
             <AppIcon name="check" :size="16" />
-            图片质量通过（配置 {{ qualityResult.config_version }}），可以创建本地识别任务。
+            {{ isMemberView ? '照片清楚，可以提交给家庭管理员确认。' : `图片质量通过（配置 ${qualityResult.config_version}），可以创建本地识别任务。` }}
           </div>
-          <dl class="quality-metrics">
+          <dl v-if="!isMemberView" class="quality-metrics">
             <div v-for="item in visibleMetrics" :key="item.key">
               <dt>{{ item.label }}</dt>
               <dd :data-passed="item.metric.passed">{{ formatMetricValue(item.key, item.metric.value) }}</dd>
             </div>
           </dl>
           <button type="button" class="btn btn-clay" :disabled="!canQueue" @click="queueVisionTask">
-            {{ state === 'queueing' ? '正在创建任务' : '通过并创建识别任务' }}
+            {{ state === 'queueing' ? '正在提交' : isMemberView ? '提交给家庭管理员' : '通过并创建识别任务' }}
             <AppIcon v-if="state !== 'queueing'" name="arrow-right" :size="16" />
           </button>
         </template>
 
         <div v-if="createdTask" class="notice ok" role="status" style="display: block">
-          <strong style="display: block; margin-bottom: 4px">本地识别任务已创建</strong>
-          任务编号 {{ createdTask.id }} · 当前进入 OCR 待处理队列，不会自动写入健康记录。
+          <strong style="display: block; margin-bottom: 4px">{{ isMemberView ? '照片已提交，等待家庭管理员确认' : '本地识别任务已创建' }}</strong>
+          {{ isMemberView
+            ? '管理员确认后，药品信息才会出现在家庭记录中。'
+            : `任务编号 ${createdTask.id} · 当前进入 OCR 待处理队列，不会自动写入健康记录。` }}
         </div>
       </div>
     </div>

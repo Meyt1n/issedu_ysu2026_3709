@@ -219,6 +219,9 @@ from app.security import (
     get_access_purpose,
     get_actor_id,
     has_authorized_action,
+    has_member_read_access,
+    has_vision_capture_access,
+    is_self_member,
     require_household_owner,
     require_session_token,
 )
@@ -513,9 +516,11 @@ def list_members(
             )
         ).all()
     )
+    own_member = [m for m in members if m.actor_id == actor_id]
     authorized_members = [
         m
         for m in members
+        if m.actor_id != actor_id
         if has_authorized_action(
             session,
             household,
@@ -526,9 +531,10 @@ def list_members(
             access_purpose,
         )
     ]
-    if not authorized_members:
+    visible_members = list(dict.fromkeys([*own_member, *authorized_members]))
+    if not visible_members:
         _raise_resource_not_found()
-    return authorized_members
+    return visible_members
 
 
 @router.post("/households", response_model=HouseholdRead, status_code=status.HTTP_201_CREATED)
@@ -1219,6 +1225,8 @@ def list_health_events(
     )
     if member_id is not None:
         query = query.where(HealthEvent.member_id == member_id)
+    if member_id is not None and is_self_member(session, household, member_id, actor_id):
+        query = query.where(HealthEvent.confirmation_status == "CONFIRMED")
     return list(session.scalars(query.order_by(HealthEvent.sequence_no)).all())
 
 
@@ -1237,14 +1245,8 @@ def _authorized_event_member_ids(
     return {
         member.id
         for member in members
-        if has_authorized_action(
-            session,
-            household,
-            member.id,
-            actor_id,
-            "READ_EVENTS",
-            "health_events",
-            access_purpose,
+        if has_member_read_access(
+            session, household, member.id, actor_id, access_purpose
         )
     }
 
@@ -1393,13 +1395,11 @@ def read_member_state(
     member = session.get(Member, member_id)
     if _is_erased(household, member):
         _raise_resource_not_found()
-    if not has_authorized_action(
+    if not has_member_read_access(
         session,
         household,
         member_id,
         actor_id,
-        "READ_EVENTS",
-        "health_events",
         access_purpose,
     ):
         _raise_resource_not_found()
@@ -2348,13 +2348,11 @@ def member_timeline(
     member = session.get(Member, member_id)
     if _is_erased(household, member):
         _raise_resource_not_found()
-    if not has_authorized_action(
+    if not has_member_read_access(
         session,
         household,
         member_id,
         actor_id,
-        "READ_EVENTS",
-        "health_events",
         access_purpose,
     ):
         _raise_resource_not_found()
@@ -2364,6 +2362,8 @@ def member_timeline(
     since_dt = datetime.fromisoformat(since) if since else None
     until_dt = datetime.fromisoformat(until) if until else None
     events = get_timeline(session, member_id, since=since_dt, until=until_dt)
+    if is_self_member(session, household, member_id, actor_id):
+        events = [event for event in events if event.confirmation_status == "CONFIRMED"]
     return [HealthEventRead.model_validate(e) for e in events]
 
 
@@ -2382,13 +2382,11 @@ def get_relationship_graph(
     member = session.get(Member, member_id)
     if _is_erased(household, member):
         _raise_resource_not_found()
-    if not has_authorized_action(
+    if not has_member_read_access(
         session,
         household,
         member_id,
         actor_id,
-        "READ_EVENTS",
-        "health_events",
         access_purpose,
     ):
         _raise_resource_not_found()
@@ -2430,13 +2428,11 @@ def get_plan_workbench(
     member = session.get(Member, member_id)
     if _is_erased(household, member):
         _raise_resource_not_found()
-    if not has_authorized_action(
+    if not has_member_read_access(
         session,
         household,
         member_id,
         actor_id,
-        "READ_EVENTS",
-        "health_events",
         access_purpose,
     ):
         _raise_resource_not_found()
@@ -3318,19 +3314,18 @@ def _require_vision_task_access(
         return task
     member = session.get(Member, task.member_id)
     household = session.get(Household, task.household_id)
+    allowed = False
+    if member is not None and household is not None:
+        allowed = has_member_read_access(
+            session, household, member.id, actor_id, access_purpose
+        ) if action == "READ_EVENTS" else has_vision_capture_access(
+            session, household, member.id, actor_id, access_purpose
+        )
     if (
         member is None
         or household is None
         or _is_erased(household, member)
-        or not has_authorized_action(
-            session,
-            household,
-            member.id,
-            actor_id,
-            action,
-            "health_events",
-            access_purpose,
-        )
+        or not allowed
     ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -3364,14 +3359,8 @@ def create_vision_task_endpoint(
             member is None
             or household is None
             or _is_erased(household, member)
-            or not has_authorized_action(
-                session,
-                household,
-                member.id,
-                actor_id,
-                "WRITE_EVENTS",
-                "health_events",
-                access_purpose,
+            or not has_vision_capture_access(
+                session, household, member.id, actor_id, access_purpose
             )
         ):
             _raise_resource_not_found()
@@ -3883,14 +3872,8 @@ def list_vision_tasks_endpoint(
         if (
             member is None
             or member.household_id != household.id
-            or not has_authorized_action(
-                session,
-                household,
-                member.id,
-                actor_id,
-                "READ_EVENTS",
-                "health_events",
-                access_purpose,
+            or not has_member_read_access(
+                session, household, member.id, actor_id, access_purpose
             )
         ):
             raise HTTPException(

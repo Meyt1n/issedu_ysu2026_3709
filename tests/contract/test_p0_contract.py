@@ -189,6 +189,42 @@ def test_list_members_as_owner_returns_all(client: TestClient) -> None:
     assert len(resp.json()) == 2
 
 
+def test_bound_member_can_see_only_self_scope_but_cannot_write_health_event(
+    client: TestClient,
+) -> None:
+    """成员前台可以建立自己的上下文，但不能绕过管理员直接写入健康事实。"""
+    household_id = _create_household(client)["id"]
+    member = client.post(
+        f"/api/v1/households/{household_id}/members",
+        headers={"X-Actor-Id": "owner"},
+        json={"display_name": "奶奶", "role": "DEPENDENT", "actor_id": "grandma"},
+    ).json()
+
+    members = client.get(
+        f"/api/v1/households/{household_id}/members",
+        headers={"X-Actor-Id": "grandma"},
+    )
+    assert members.status_code == 200, members.text
+    assert [item["id"] for item in members.json()] == [member["id"]]
+
+    timeline = client.get(
+        f"/api/v1/households/{household_id}/members/{member['id']}/timeline",
+        headers={"X-Actor-Id": "grandma", "X-Access-Purpose": "family-care"},
+    )
+    assert timeline.status_code == 200, timeline.text
+
+    event = client.post(
+        f"/api/v1/households/{household_id}/events",
+        headers={"X-Actor-Id": "grandma", "X-Access-Purpose": "family-care"},
+        json={
+            "member_id": member["id"],
+            "event_type": "manual_note",
+            "payload": {"text": "不应绕过管理员直接写入"},
+        },
+    )
+    assert event.status_code == 404
+
+
 def test_list_members_unauthorized_returns_404_no_leak(client: TestClient) -> None:
     """GET /members 未授权者返回隐藏式 404，且响应不含成员数据。"""
     household_id = _create_household(client)["id"]
