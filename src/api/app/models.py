@@ -24,6 +24,88 @@ class Base(DeclarativeBase):
     pass
 
 
+class AuthAccount(Base):
+    """Persistent local account credential and lockout state (HCT-428)."""
+
+    __tablename__ = "auth_account"
+
+    actor_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    password_hash: Mapped[str] = mapped_column(String(256), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        server_default=func.now(),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
+class AuthPin(Base):
+    """One bcrypt PIN per actor and household; plaintext is never persisted."""
+
+    __tablename__ = "auth_pin"
+
+    household_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    actor_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    pin_hash: Mapped[str] = mapped_column(String(256), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        server_default=func.now(),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
+class AuthSession(Base):
+    """Revocable server session; only a SHA-256 token digest is stored."""
+
+    __tablename__ = "auth_session"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    actor_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    household_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    rotated_from_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AuthRateLimitAttempt(Base):
+    """Durable failed-auth events shared by all workers."""
+
+    __tablename__ = "auth_rate_limit_attempt"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    rate_key: Mapped[str] = mapped_column(String(240), nullable=False, index=True)
+    failed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class AuthPinChallenge(Base):
+    """Durable, single-use step-up challenge metadata (no PIN/code)."""
+
+    __tablename__ = "auth_pin_challenge"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    actor_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    household_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    session_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    grant_consumed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class Household(Base):
     __tablename__ = "household"
 

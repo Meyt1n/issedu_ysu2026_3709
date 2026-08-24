@@ -11,7 +11,7 @@ from app.config import get_settings
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PREVIOUS_REVISION = "0010_hct405_review_wiring"
-CURRENT_REVISION = "0017_hct429_household_timezone"
+CURRENT_REVISION = "0018_hct428_auth_persistence"
 
 
 def _config(database_url: str) -> Config:
