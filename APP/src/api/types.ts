@@ -102,7 +102,8 @@ export interface VisionQualityResponse {
   media_type: 'image' | 'video'
   decision: 'PASS' | 'RETAKE'
   allow_downstream: boolean
-  metrics: Record<string, VisionQualityMetric>
+  /** 图片响应为逐项指标；视频响应为帧数统计等纯数字（MOB-149）。 */
+  metrics: Record<string, VisionQualityMetric | number>
   reasons: string[]
   retake_prompts: string[]
   quality_receipt: string | null
@@ -122,6 +123,8 @@ export interface VisionTask {
   household_id: string
   member_id: string | null
   file_id: string
+  /** HCT-414-D1：任务绑定媒体类型；旧服务端可能缺省，视为 image。 */
+  media_type?: 'image' | 'video'
   task_type: string
   status: string
   error_code: string | null

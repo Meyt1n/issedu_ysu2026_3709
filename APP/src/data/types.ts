@@ -130,6 +130,13 @@ export interface QualityCheckResult {
   retakePrompts: string[]
   metrics: QualityMetricView[]
   qualityReceipt: string | null
+  /** MOB-149：视频质量门的帧级摘要（选中/可用帧数）；图片为空。 */
+  framesSummary?: {
+    mediaType: 'video'
+    selectedFrames: number
+    usableFrames: number
+    sampledFrames: number
+  }
 }
 
 export interface EvidenceFieldView {
@@ -276,7 +283,9 @@ export interface DataProvider {
   acknowledgeRisk(memberId: string, ruleId: string): Promise<RiskCard>
   submitTaskAction(taskId: string, action: TaskAction, payload?: TaskActionPayload): Promise<CareTask>
   checkImageQuality(file: File): Promise<QualityCheckResult>
-  recognizeMedicine(file: File, memberId: string): Promise<RecognitionCandidate>
+  /** MOB-149：短视频质量门（帧级摘要）；仅在服务端声明 vision-task-video 时可用。 */
+  checkVideoQuality(file: File): Promise<QualityCheckResult>
+  recognizeMedicine(file: File, memberId: string, mediaKind?: 'image' | 'video'): Promise<RecognitionCandidate>
   /** 回查视觉任务状态；只读，重试必须复用同一 taskId，不得重新创建任务。 */
   fetchVisionTaskStatus(taskId: string): Promise<VisionTaskStatusSnapshot>
   /** 任务操作历史：服务端时间线动作事件的只读脱敏摘要，不建立第二份事实库。 */

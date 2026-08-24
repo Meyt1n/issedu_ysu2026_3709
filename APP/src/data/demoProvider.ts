@@ -581,6 +581,34 @@ export const demoProvider: DataProvider = {
     }
   },
 
+  async checkVideoQuality(file: File): Promise<QualityCheckResult> {
+    await delay(420)
+    // 演示模式同样保留门控语义（极小文件视为无可用帧）。视频入口在演示
+    // 模式下隐藏（没有真实抽帧链路），此实现只满足 Provider 契约与测试。
+    if (file.size < 30_000) {
+      return {
+        decision: 'RETAKE',
+        reasons: ['没有可用证据帧'],
+        retakePrompts: ['请保持药盒稳定、居中并在均匀光线下重拍'],
+        metrics: [
+          { label: '可用帧数', value: '0', passed: false },
+        ],
+        qualityReceipt: null,
+      }
+    }
+    return {
+      decision: 'PASS',
+      reasons: [],
+      retakePrompts: [],
+      metrics: [
+        { label: '采样帧数', value: '4', passed: true },
+        { label: '可用帧数', value: '4', passed: true },
+      ],
+      qualityReceipt: `demo-video-receipt-${Date.now()}`,
+      framesSummary: { mediaType: 'video', sampledFrames: 4, selectedFrames: 4, usableFrames: 4 },
+    }
+  },
+
   async getWeeklyTrend(memberId: string): Promise<TrendPoint[]> {
     await delay(160)
     // 前 6 天为稳定的虚构数据（按成员区分），今天与当前任务状态联动。
@@ -609,7 +637,7 @@ export const demoProvider: DataProvider = {
     return points
   },
 
-  async recognizeMedicine(file: File): Promise<RecognitionCandidate> {
+  async recognizeMedicine(file: File, _memberId?: string, _mediaKind?: 'image' | 'video'): Promise<RecognitionCandidate> {
     await delay(700)
     const versions = {
       ocr: 'paddleocr-demo-0.1',
