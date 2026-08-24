@@ -92,19 +92,48 @@ jobs:
           EOF
           chmod 700 "${askpass}"
 
-          export GIT_ASKPASS="${askpass}"
-          export GIT_TERMINAL_PROMPT=0
-          export CLOUD_SELECTED_USERNAME="${CLOUD_REPO_USERNAME}"
-          export CLOUD_SELECTED_PASSWORD="${CLOUD_REPO_PASSWORD}"
-
           cloud_git() {
+            local selected_username="$1"
+            local selected_password="$2"
+            shift 2
+
             # Windows Git Credential Manager may otherwise reuse the Runner
             # owner's cached credentials and silently bypass the selected token.
+            CLOUD_SELECTED_USERNAME="${selected_username}" \
+            CLOUD_SELECTED_PASSWORD="${selected_password}" \
+            GIT_ASKPASS="${askpass}" \
+            GIT_TERMINAL_PROMPT=0 \
             git \
+              -c http.proxy= \
+              -c https.proxy= \
               -c credential.helper= \
               -c credential.useHttpPath=true \
-              -c "credential.username=${CLOUD_SELECTED_USERNAME}" \
+              -c "credential.username=${selected_username}" \
               "$@"
+          }
+
+          gh_api_with_retry() {
+            local max_retries=3
+            local attempt=1
+            local delay_seconds=2
+            local error_file="${RUNNER_TEMP}/cloud-sync-gh-api-error.txt"
+
+            while true; do
+              if gh api "$@" 2>"${error_file}"; then
+                return 0
+              fi
+
+              if (( attempt >= max_retries + 1 )); then
+                gh_api_error="$(tr '\n' ' ' < "${error_file}")"
+                echo "::error::GitHub API 请求在 ${attempt} 次尝试后仍失败：${gh_api_error:-unknown GitHub API error}" >&2
+                return 1
+              fi
+
+              echo "::warning::GitHub API 请求第 ${attempt} 次失败，${delay_seconds} 秒后重试" >&2
+              sleep "${delay_seconds}"
+              delay_seconds=$((delay_seconds * 2))
+              attempt=$((attempt + 1))
+            done
           }
 
           if git remote get-url original-cloud >/dev/null 2>&1; then
@@ -112,7 +141,13 @@ jobs:
           else
             git remote add original-cloud "${CLOUD_REPO_URL}"
           fi
-          cloud_git fetch original-cloud master
+          cloud_fetch_error_file="${RUNNER_TEMP}/cloud-sync-fetch-error.txt"
+          if ! cloud_git "${CLOUD_REPO_USERNAME}" "${CLOUD_REPO_PASSWORD}" \
+            fetch original-cloud master 2>"${cloud_fetch_error_file}"; then
+            cloud_fetch_error="$(tr '\n' ' ' < "${cloud_fetch_error_file}")"
+            echo "::error::读取原云端 master 失败：${cloud_fetch_error:-unknown cloud fetch error}"
+            exit 1
+          fi
 
           github_sha="$(git rev-parse "${GITHUB_SHA}")"
           cloud_sha="$(git rev-parse original-cloud/master)"
@@ -152,7 +187,7 @@ jobs:
           plan_previous_sha="${cloud_sha}"
           for sync_sha in "${sync_shas[@]}"; do
             sync_sha="${sync_sha//$'\r'/}"
-            pr_meta="$(gh api \
+            pr_meta="$(gh_api_with_retry \
               "repos/${GITHUB_REPOSITORY}/commits/${sync_sha}/pulls" \
               --header 'Accept: application/vnd.github+json' \
               --jq 'map(select(.base.ref == "master" and .merged_at != null)) | if length == 1 then .[0] | [.number, .user.login] | @tsv else "" end')"
@@ -174,7 +209,7 @@ jobs:
                 exit 1
               fi
               direct_commit_file="${RUNNER_TEMP}/sync-cloud-direct-${sync_sha}.json"
-              gh api \
+              gh_api_with_retry \
                 "repos/${GITHUB_REPOSITORY}/commits/${sync_sha}" \
                 --header 'Accept: application/vnd.github+json' > "${direct_commit_file}"
               direct_parent_sha="$(git rev-parse "${sync_sha}^")"
@@ -205,7 +240,7 @@ jobs:
 
               IFS=$'\t' read -r pr_number pr_login <<< "${pr_meta}"
               commits_file="${RUNNER_TEMP}/sync-cloud-pr-${pr_number}-commits.ndjson"
-              gh api --paginate \
+              gh_api_with_retry --paginate \
                 "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}/commits?per_page=100" \
                 --header 'Accept: application/vnd.github+json' \
                 --jq '.[]' > "${commits_file}"
@@ -271,13 +306,16 @@ jobs:
           done
 
           push_cloud_with_retry() {
-            local refspec="$1"
+            local selected_username="$1"
+            local selected_password="$2"
+            local refspec="$3"
             local max_retries=3
             local attempt=1
             local delay_seconds=2
 
             while true; do
-              if cloud_git push original-cloud "${refspec}"; then
+              if cloud_git "${selected_username}" "${selected_password}" \
+                push original-cloud "${refspec}"; then
                 return 0
               fi
 
@@ -298,17 +336,23 @@ jobs:
               sync_sha kind reference pr_login token_env cloud_username username_env commit_count introduced_count \
               <<< "${plan_row}"
 
-            export CLOUD_SELECTED_PASSWORD="$(printenv "${token_env}")"
+            selected_password="$(printenv "${token_env}")"
             if [[ -n "${username_env}" ]]; then
-              export CLOUD_SELECTED_USERNAME="$(printenv "${username_env}")"
+              selected_username="$(printenv "${username_env}")"
             else
-              export CLOUD_SELECTED_USERNAME="${cloud_username}"
+              selected_username="${cloud_username}"
             fi
 
             echo "同步 ${kind} ${reference}：${pr_login}，新增可达提交 ${introduced_count} 个，目标 ${sync_sha}"
-            push_cloud_with_retry "${sync_sha}:refs/heads/master"
+            push_cloud_with_retry \
+              "${selected_username}" \
+              "${selected_password}" \
+              "${sync_sha}:refs/heads/master"
 
-            verified_cloud_sha="$(cloud_git ls-remote original-cloud refs/heads/master | awk '{print $1}')"
+            verified_cloud_sha="$(cloud_git \
+              "${selected_username}" \
+              "${selected_password}" \
+              ls-remote original-cloud refs/heads/master | awk '{print $1}')"
             if [[ "${verified_cloud_sha}" != "${sync_sha}" ]]; then
               echo "::error::${kind} ${reference} 推送后校验失败：原云端=${verified_cloud_sha}，预期=${sync_sha}"
               exit 1
