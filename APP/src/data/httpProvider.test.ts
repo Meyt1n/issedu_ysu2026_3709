@@ -648,6 +648,18 @@ describe('任务操作历史推导（MOB-135）', () => {
     expect(entries).toHaveLength(1)
     expect(entries[0]).toMatchObject({ action: 'skip', actionLabel: '跳过', finalStatus: 'SKIPPED', receipt: 'RECEIPTED' })
   })
+
+  it('无效服务端时间排在有效时间之后，并以事件 ID 保证稳定顺序', () => {
+    const events = [
+      makeEvent({ id: 'p1', event_type: 'plan_created', payload: { drug: 'C药', schedule: '每日' } }),
+      makeEvent({ id: 'a-invalid', event_type: 'plan_skipped', payload: { plan_event_id: 'p1' }, occurred_at: 'not-a-date' }),
+      makeEvent({ id: 'a-valid', event_type: 'plan_confirmed', payload: { plan_event_id: 'p1' }, occurred_at: '2026-08-22T02:00:00Z' }),
+    ]
+
+    const entries = deriveTaskActionHistory(events, 'm1', '成员')
+    expect(entries.map(entry => entry.eventId)).toEqual(['a-valid', 'a-invalid'])
+    expect(entries[1]?.serverTime).toBe('not-a-date')
+  })
 })
 
 describe('授权范围只读呈现（MOB-136）', () => {
