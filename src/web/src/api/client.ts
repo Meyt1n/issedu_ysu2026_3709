@@ -953,11 +953,15 @@ export class ApiClient {
   rollbackModelBinding(
     bindingId: string,
     reason: string,
+    evidenceHash?: string,
     options?: RequestOptions,
   ): Promise<ModelVersionBinding> {
     return this.request(
       `/api/v1/model-version-bindings/${encodeURIComponent(bindingId)}/rollback`,
-      { method: 'POST', body: JSON.stringify({ reason }) },
+      {
+        method: 'POST',
+        body: JSON.stringify({ reason, ...(evidenceHash ? { evidence_hash: evidenceHash } : {}) }),
+      },
       options,
     )
   }

@@ -4940,6 +4940,14 @@ def _mb_raise_val(err: str) -> NoReturn:
         "BINDING_ALREADY_REVOKED": 409,
         "NO_ACTIVE_BINDING": 404,
         "COMPARISON_REPORT_REQUIRED": 422,
+        "HCT404_FORMAL_RELEASE_REQUIRED": 422,
+        "HCT404_RELEASE_EVIDENCE_SCHEMA_REQUIRED": 422,
+        "HCT404_RELEASE_EVIDENCE_HASH_REQUIRED": 422,
+        "HCT404_RELEASE_EVIDENCE_HASH_MISMATCH": 422,
+        "HCT404_FIXED_SET_HASH_MISMATCH": 422,
+        "HCT404_COMPARISON_HASH_MISMATCH": 422,
+        "HCT404_ROLLBACK_REASON_REQUIRED": 422,
+        "HCT404_ROLLBACK_EVIDENCE_REQUIRED": 422,
     }
     status_code_val = 422
     for prefix, code in mapping.items():
@@ -4976,6 +4984,7 @@ def create_model_binding_endpoint(
             fixed_set_hash=payload.fixed_set_hash,
             safety_thresholds=payload.safety_thresholds,
             comparison_report_hash=payload.comparison_report_hash,
+            release_evidence_hash=payload.release_evidence_hash,
             created_by=actor_id,
         )
     except ValueError as exc:
@@ -5046,7 +5055,13 @@ def rollback_model_binding_endpoint(
     if binding is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="BINDING_NOT_FOUND")
     try:
-        _mb.rollback_binding(session, binding, actor_id="admin", reason=payload.reason)
+        _mb.rollback_binding(
+            session,
+            binding,
+            actor_id="admin",
+            reason=payload.reason,
+            evidence_hash=payload.evidence_hash,
+        )
     except ValueError as exc:
         _mb_raise_val(str(exc))
     session.commit()
@@ -5065,6 +5080,8 @@ def get_model_binding_comparison_endpoint(
     return {
         "binding_id": binding.id,
         "comparison_report_hash": binding.comparison_report_hash,
+        "release_evidence_hash": binding.release_evidence_hash,
+        "rollback_evidence_hash": binding.rollback_evidence_hash,
         "model_id": binding.model_id,
         "dataset_version": binding.dataset_version,
         "fixed_set_hash": binding.fixed_set_hash,

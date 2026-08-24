@@ -51,6 +51,25 @@ class TestActivateBindingAPI:
         )
         assert resp2.status_code == 422
 
+    def test_hct404_activate_without_real_release_evidence_fails(self, client: TestClient):
+        resp = client.post(
+            "/api/v1/model-version-bindings",
+            json={
+                "model_id": "hct404-vision-v2",
+                "dataset_version": "candidate-v2",
+                "fixed_set_hash": "a" * 64,
+                "comparison_report_hash": "b" * 64,
+            },
+            headers={"X-Actor-Id": "alice"},
+        )
+        binding_id = resp.json()["id"]
+        resp2 = client.post(
+            f"/api/v1/model-version-bindings/{binding_id}/activate",
+            json={"approved_by": "bob"},
+        )
+        assert resp2.status_code == 422
+        assert resp2.json()["detail"] == "HCT404_FORMAL_RELEASE_REQUIRED"
+
     def test_activate_deactivates_previous(self, client: TestClient, db_session: Session):
         # First binding
         r1 = client.post("/api/v1/model-version-bindings", json={
@@ -99,6 +118,61 @@ class TestRollbackBindingAPI:
                          json={"reason": "bug"})
         assert r2.status_code == 200
         assert r2.json()["release_status"] == "revoked"
+
+    def test_hct404_rollback_requires_evidence_hash(self, client: TestClient):
+        hashes = {
+            key: value * 64
+            for key, value in (
+                ("evidence", "a"),
+                ("gate", "b"),
+                ("model", "c"),
+                ("fixed", "d"),
+                ("comparison", "e"),
+                ("rollback", "f"),
+                ("approval", "0"),
+            )
+        }
+        thresholds = {
+            "hct404_release_evidence_required": True,
+            "hct404_release_evidence_schema": "hct404-model-release-evidence/v1",
+            "hct404_release_status": "ALLOW_FORMAL_RELEASE",
+            "hct404_release_evidence_sha256": hashes["evidence"],
+            "hct404_release_gate_sha256": hashes["gate"],
+            "hct404_model_artifact_sha256": hashes["model"],
+            "hct404_fixed_set_sha256": hashes["fixed"],
+            "hct404_comparison_report_sha256": hashes["comparison"],
+            "hct404_rollback_evidence_sha256": hashes["rollback"],
+            "hct404_approval_sha256": hashes["approval"],
+        }
+        response = client.post(
+            "/api/v1/model-version-bindings",
+            json={
+                "model_id": "hct404-vision-v2",
+                "dataset_version": "candidate-v2",
+                "fixed_set_hash": hashes["fixed"],
+                "comparison_report_hash": hashes["comparison"],
+                "release_evidence_hash": hashes["evidence"],
+                "safety_thresholds": thresholds,
+            },
+            headers={"X-Actor-Id": "alice"},
+        )
+        binding_id = response.json()["id"]
+        client.post(
+            f"/api/v1/model-version-bindings/{binding_id}/activate",
+            json={"approved_by": "bob"},
+        )
+        missing = client.post(
+            f"/api/v1/model-version-bindings/{binding_id}/rollback",
+            json={"reason": "release drill"},
+        )
+        assert missing.status_code == 422
+        assert missing.json()["detail"] == "HCT404_ROLLBACK_EVIDENCE_REQUIRED"
+        rolled_back = client.post(
+            f"/api/v1/model-version-bindings/{binding_id}/rollback",
+            json={"reason": "release drill", "evidence_hash": hashes["rollback"]},
+        )
+        assert rolled_back.status_code == 200
+        assert rolled_back.json()["rollback_evidence_hash"] == hashes["rollback"]
 
     def test_rollback_reactivates_previous(self, client: TestClient):
         # First binding → activate

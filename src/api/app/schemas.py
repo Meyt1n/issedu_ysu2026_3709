@@ -877,6 +877,7 @@ class ModelVersionBindingCreate(BaseModel):
     fixed_set_hash: str = Field(min_length=1, max_length=64)
     safety_thresholds: dict[str, Any] = Field(default_factory=dict)
     comparison_report_hash: str | None = Field(default=None, max_length=64)
+    release_evidence_hash: str | None = Field(default=None, max_length=64)
 
 
 class ModelVersionBindingActivate(BaseModel):
@@ -885,6 +886,7 @@ class ModelVersionBindingActivate(BaseModel):
 
 class ModelVersionBindingRollback(BaseModel):
     reason: str = Field(default="", max_length=240)
+    evidence_hash: str | None = Field(default=None, max_length=64)
 
 
 class ModelVersionBindingRead(BaseModel):
@@ -898,6 +900,8 @@ class ModelVersionBindingRead(BaseModel):
     release_status: str
     safety_thresholds: dict[str, Any]
     comparison_report_hash: str | None
+    release_evidence_hash: str | None
+    rollback_evidence_hash: str | None
     approved_by: str | None
     approved_at: datetime | None
     revoked_by: str | None
