@@ -166,13 +166,27 @@ def test_workflow_uses_full_history_and_preflights_before_push() -> None:
     assert "${sync_sha//$'\\r'/}" in run_script
     assert "${pr_meta//$'\\r'/}" in run_script
     assert "cloud_git()" in run_script
+    assert "gh_api_with_retry()" in run_script
+    assert 'if gh api "$@" 2>"${error_file}"; then' in run_script
+    assert "GitHub API 请求第" in run_script
+    assert run_script.count("gh api") == 1
+    assert 'local selected_username="$1"' in run_script
+    assert 'local selected_password="$2"' in run_script
+    assert 'CLOUD_SELECTED_PASSWORD="${selected_password}"' in run_script
+    assert "-c http.proxy=" in run_script
+    assert "-c https.proxy=" in run_script
     assert "-c credential.helper=" in run_script
     assert "-c credential.useHttpPath=true" in run_script
-    assert '-c "credential.username=${CLOUD_SELECTED_USERNAME}"' in run_script
-    assert "cloud_git fetch original-cloud master" in run_script
-    assert 'cloud_git push original-cloud "${refspec}"' in run_script
-    assert 'push_cloud_with_retry "${sync_sha}:refs/heads/master"' in run_script
-    assert "cloud_git ls-remote original-cloud" in run_script
+    assert '-c "credential.username=${selected_username}"' in run_script
+    assert 'cloud_git "${CLOUD_REPO_USERNAME}" "${CLOUD_REPO_PASSWORD}"' in run_script
+    assert "fetch original-cloud master" in run_script
+    assert 'cloud_git "${selected_username}" "${selected_password}"' in run_script
+    assert 'push original-cloud "${refspec}"' in run_script
+    assert "push_cloud_with_retry" in run_script
+    assert '"${selected_username}"' in run_script
+    assert '"${selected_password}"' in run_script
+    assert '"${sync_sha}:refs/heads/master"' in run_script
+    assert "ls-remote original-cloud" in run_script
 
     preflight_loop = run_script.index('for sync_sha in "${sync_shas[@]}"')
     plan_append = run_script.index("sync_plan+=(", preflight_loop)
@@ -222,6 +236,18 @@ def test_commit_with_pr_metadata_does_not_use_direct_allowlist() -> None:
     # direct doc-only allowlist is not consulted.
     assert simulate_preflight_then_push([node], "cloud-sha") == [
         "pr-sha:CLOUD_TOKEN_SHEN_HUANG_123"
+    ]
+
+
+def test_each_pr_author_keeps_their_own_token_in_sync_plan() -> None:
+    nodes = [
+        Node(sha="shen-sha", parent="cloud-sha", pr_login="Shen-huang-123"),
+        Node(sha="ry-sha", parent="shen-sha", pr_login="ry12-20"),
+    ]
+
+    assert simulate_preflight_then_push(nodes, "cloud-sha") == [
+        "shen-sha:CLOUD_TOKEN_SHEN_HUANG_123",
+        "ry-sha:CLOUD_TOKEN_RY12_20",
     ]
 
 

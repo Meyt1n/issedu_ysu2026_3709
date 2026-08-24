@@ -5,6 +5,14 @@ export type TaskStatus = 'PENDING' | 'CONFIRMED' | 'DEFERRED' | 'SKIPPED' | 'ESC
 export type RiskLevel = 'SEVERE' | 'WARNING' | 'INFO' | 'TIP' | (string & {})
 export type RecognitionStatus = 'MATCHED' | 'CONFLICT' | 'UNKNOWN' | 'REVIEW'
 
+export interface ServerTaskActionPolicy {
+  planVersion: string
+  source: 'FAMILY_SERVER'
+  allowedActions: TaskAction[]
+  nextAllowedAt: string | null
+  windowLabel: string
+}
+
 export interface CareTask {
   id: string
   memberId: string
@@ -16,6 +24,8 @@ export interface CareTask {
   status: TaskStatus
   /** 联机模式对应主仓库计划事件 ID，用于 confirm/defer/skip API */
   planEventId?: string
+  /** Server-provided action boundary. Missing policy means read-only (fail-closed). */
+  actionPolicy?: ServerTaskActionPolicy
   /** Server-authorized reminder metadata. UI-only dueAt must never be scheduled without this evidence. */
   reminder?: ReminderPolicy
   lastActionAt?: string

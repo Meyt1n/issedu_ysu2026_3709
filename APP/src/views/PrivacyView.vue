@@ -3,10 +3,19 @@ import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import AppIcon from '@/components/AppIcon.vue'
-import { clearLocalData, controlledWebHandoff, usePrivacy } from '@/stores/privacy'
+import { clearLocalData, localDataInventory } from '@/stores/localData'
+import { controlledWebHandoff, PRIVACY_NOTICE_VERSION } from '@/stores/privacy'
+import { useSession } from '@/stores/session'
 
 const router = useRouter()
-const { session, entries, noticeVersion } = usePrivacy()
+const { session } = useSession()
+const entries = localDataInventory().map(item => ({
+  id: item.key,
+  label: item.label,
+  detail: item.note,
+  persistence: item.saved ? '本机持久化' : '仅当前运行时',
+  sensitive: item.saved,
+}))
 const clearConfirmOpen = ref(false)
 const clearMessage = ref('')
 const clearError = ref(false)
@@ -26,7 +35,9 @@ function confirmClear(): void {
   const result = clearLocalData()
   clearConfirmOpen.value = false
   clearError.value = !result.ok
-  clearMessage.value = result.message
+  clearMessage.value = result.ok
+    ? `已清理：${result.cleared.join('、')}。服务端健康事实未被修改。`
+    : `清理未完成，不声称已删除：${result.failures.join('；')}`
 }
 </script>
 
@@ -40,7 +51,7 @@ function confirmClear(): void {
     <header class="screen-header">
       <p class="eyebrow">隐私与数据权利</p>
       <h1>本地数据管理</h1>
-      <p class="screen-subtitle">隐私告知版本 {{ noticeVersion }}。移动端只管理本机设置，不替代服务端健康数据删除或导出流程。</p>
+      <p class="screen-subtitle">隐私告知版本 {{ PRIVACY_NOTICE_VERSION }}。移动端只管理本机设置，不替代服务端健康数据删除或导出流程。</p>
     </header>
 
     <section class="card" aria-labelledby="notice-title">

@@ -1,0 +1,26 @@
+{
+  "schema_version": "hct203-maintainer-waiver-gate/v1",
+  "model_id": "hct-yolo11n-box-assist-experimental-v1.3",
+  "approved_by": "current-maintainer",
+  "approved_at": "2026-08-24",
+  "waived_requirements": [
+    "approved_real_fixed_set",
+    "external_weights_verification",
+    "independent_r3_record"
+  ],
+  "passed": true,
+  "decision": "MAINTAINER_WAIVER_APPROVED",
+  "findings": [],
+  "limitations": [
+    "This is an explicit maintainer exception, not a formal fixed-set or R3 validation.",
+    "The candidate weight is identified by its registered hash but is not verified from a local artifact here.",
+    "The two registered hard-negative false positives remain visible and block medicine identity decisions.",
+    "Publication remains auxiliary-only, requires manual confirmation and keeps the unavailable fallback."
+  ],
+  "input_sha256": {
+    "waiver": "2369d0136cbade0806e69b93c710291db9ea717906b9181928064c7b3b56987d",
+    "registry": "a0b63b9de4657cfba1af135fb84dac4a06d0f668896d1054679e3fea3f589d73",
+    "rollback": "c2257297d901122b0db4fbc697f8703dc0435c0ffaaaba68794bb9e754b59dbe"
+  },
+  "report_sha256": "3d13cc5a5fc68a75277d2382cb862e070ec528fecf713f7be1b69c2d23475796"
+}

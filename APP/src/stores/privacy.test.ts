@@ -1,33 +1,53 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { A11Y_STORAGE_KEY } from './accessibility'
-import { clearLocalData, controlledWebHandoff, localStorageAvailable } from './privacy'
-import { SESSION_STORAGE_KEY } from './session'
+import {
+  PRIVACY_ACK_STORAGE_KEY,
+  PRIVACY_NOTICE_VERSION,
+  acknowledgePrivacyNotice,
+  controlledWebHandoff,
+  privacyNoticeRequired,
+  privacyNoticeSpeechText,
+  readPrivacyAck,
+} from './privacy'
 
-describe('移动端本地隐私清理', () => {
+describe('版本化隐私告知与受控网页交接（MOB-146）', () => {
   beforeEach(() => {
     localStorage.clear()
   })
 
-  it('清除会话和无障碍持久配置，但不声称删除服务端事实', () => {
-    localStorage.setItem(SESSION_STORAGE_KEY, '{"caregiverPhone":"13800000000"}')
-    localStorage.setItem(A11Y_STORAGE_KEY, '{"elderMode":true}')
+  it('首次使用需要展示；确认后记录版本与时间', () => {
+    expect(privacyNoticeRequired()).toBe(true)
 
-    expect(clearLocalData(localStorage)).toEqual({
-      ok: true,
-      message: '本机设置、联系人、服务器地址和运行时状态已清理；服务端健康事实未被修改。',
-    })
-    expect(localStorage.getItem(SESSION_STORAGE_KEY)).toBeNull()
-    expect(localStorage.getItem(A11Y_STORAGE_KEY)).toBeNull()
+    expect(acknowledgePrivacyNotice(new Date('2026-08-24T08:00:00Z'))).toBe(true)
+    expect(privacyNoticeRequired()).toBe(false)
+    const ack = readPrivacyAck()
+    expect(ack).toMatchObject({ version: PRIVACY_NOTICE_VERSION, acknowledgedAt: '2026-08-24T08:00:00.000Z' })
   })
 
-  it('存储不可用时返回失败，不虚报已删除', () => {
-    const unavailable = {
-      setItem: () => { throw new Error('blocked') },
-      removeItem: () => { throw new Error('blocked') },
-    } as unknown as Storage
-    expect(localStorageAvailable(unavailable)).toBe(false)
-    expect(clearLocalData(unavailable).ok).toBe(false)
+  it('隐私版本更新后再次展示；已读其他版本不算当前版本', () => {
+    localStorage.setItem(PRIVACY_ACK_STORAGE_KEY, JSON.stringify({
+      version: '2020-01-01.0',
+      acknowledgedAt: '2020-01-01T00:00:00Z',
+    }))
+    expect(privacyNoticeRequired()).toBe(true)
+  })
+
+  it('确认写入失败时返回 false（不声称已确认，下次仍展示）', () => {
+    const setter = vi.spyOn(localStorage, 'setItem').mockImplementation(() => {
+      throw new DOMException('quota', 'QuotaExceededError')
+    })
+    expect(acknowledgePrivacyNotice()).toBe(false)
+    expect(privacyNoticeRequired()).toBe(true)
+    setter.mockRestore()
+  })
+
+  it('损坏的确认记录按未确认处理；告知可合成播报文本', () => {
+    localStorage.setItem(PRIVACY_ACK_STORAGE_KEY, '{not-json')
+    expect(privacyNoticeRequired()).toBe(true)
+
+    const spoken = privacyNoticeSpeechText()
+    expect(spoken).toContain('演示与联机模式')
+    expect(spoken).toContain('健康数据边界')
   })
 
   it('只允许 HTTPS 服务器作为受控网页端交接入口', () => {

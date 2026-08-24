@@ -89,6 +89,61 @@ class TestActivateBinding:
         with pytest.raises(ValueError, match="COMPARISON_REPORT_REQUIRED"):
             activate_binding(db_session, b, approved_by="bob")
 
+    def test_hct203_candidate_requires_publication_evidence(self, db_session: Session):
+        b = create_binding(
+            db_session,
+            model_id="hct-yolo11n-box-assist-experimental-v1.3",
+            dataset_version="approved-v1",
+            export_manifest_id=None,
+            fixed_set_hash="fixed-v1",
+            comparison_report_hash="report-v1",
+            created_by="alice",
+        )
+        db_session.commit()
+        with pytest.raises(ValueError, match="HCT203_PUBLICATION_REQUIRED"):
+            activate_binding(db_session, b, approved_by="bob")
+
+    def test_hct203_publication_evidence_allows_activation(self, db_session: Session):
+        evidence = {
+            "hct203_publication_status": "PUBLISHED_AUXILIARY_ONLY",
+            "hct203_machine_gate_sha256": "a" * 64,
+            "hct203_r3_review_sha256": "b" * 64,
+        }
+        b = create_binding(
+            db_session,
+            model_id="hct-yolo11n-box-assist-released-v1.0",
+            dataset_version="approved-v1",
+            export_manifest_id=None,
+            fixed_set_hash="fixed-v1",
+            safety_thresholds=evidence,
+            comparison_report_hash="report-v1",
+            created_by="alice",
+        )
+        db_session.commit()
+        activate_binding(db_session, b, approved_by="bob")
+        assert b.release_status == "active"
+
+    def test_hct203_maintainer_waiver_evidence_allows_activation(self, db_session: Session):
+        evidence = {
+            "hct203_publication_status": "PUBLISHED_AUXILIARY_ONLY",
+            "hct203_release_authority": "MAINTAINER_WAIVER",
+            "hct203_machine_gate_sha256": "a" * 64,
+            "hct203_waiver_sha256": "b" * 64,
+        }
+        b = create_binding(
+            db_session,
+            model_id="hct-yolo11n-box-assist-waiver-v1.3",
+            dataset_version="candidate-v1",
+            export_manifest_id=None,
+            fixed_set_hash="candidate-v1",
+            safety_thresholds=evidence,
+            comparison_report_hash="report-v1",
+            created_by="alice",
+        )
+        db_session.commit()
+        activate_binding(db_session, b, approved_by="bob")
+        assert b.release_status == "active"
+
     def test_activate_deactivates_previous(self, db_session: Session):
         b1 = self._setup(db_session)
         activate_binding(db_session, b1, approved_by="bob")

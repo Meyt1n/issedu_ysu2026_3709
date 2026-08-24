@@ -54,9 +54,10 @@
 | PATCH | `/api/v1/households/{id}/authorizations/{auth_id}` | 按版本修改授权 | ✅ |
 | POST | `/api/v1/households/{id}/authorizations/{auth_id}/revoke` | 撤销授权 | ✅ |
 | GET | `/api/v1/households/{id}/authorization-audits` | Owner 查询授权与访问审计 | ✅ |
-| GET | `/api/v1/households/{id}/authorization-audits/page` | Owner 按签名游标分页查询审计，可按 `request_id` 过滤 | ✅ |
+| GET | `/api/v1/households/{id}/authorization-audits/page` | Owner 按签名游标分页查询审计，可按 `request_id`、`action`、`outcome` 过滤；游标绑定全部筛选范围 | ✅ |
 | POST | `/api/v1/households/{id}/events` | 追加健康事件 | ✅ |
 | GET | `/api/v1/households/{id}/events` | 查询事件列表 | ✅ |
+| GET | `/api/v1/households/{id}/events/page` | 按授权范围分页查询事件，可按 `member_id`、`event_type`、`confirmation_status` 过滤；游标绑定全部筛选范围 | ✅ |
 | POST | `/api/v1/households/{id}/events/{event_id}/compensations` | 追加补偿事件 | ✅ |
 | GET | `/api/v1/households/{id}/members/{mid}/state` | 查询成员状态投影 | ✅ |
 | POST | `/api/v1/households/{id}/members/{mid}/state/checkpoints` | 创建投影 checkpoint | ✅ |

@@ -271,14 +271,26 @@ export function deriveTaskActionHistory(
     })
   }
 
-  return entries.sort((a, b) => Date.parse(b.serverTime) - Date.parse(a.serverTime))
+  return entries.sort((a, b) => {
+    const aTime = parseHistoryTime(a.serverTime)
+    const bTime = parseHistoryTime(b.serverTime)
+    if (aTime === bTime) return a.eventId.localeCompare(b.eventId)
+    if (!Number.isFinite(aTime)) return 1
+    if (!Number.isFinite(bTime)) return -1
+    return bTime - aTime
+  })
 }
 
 const TREND_WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六']
 
 function eventTime(event: HealthEvent): number {
-  const time = Date.parse(event.occurred_at ?? event.created_at)
-  return Number.isFinite(time) ? time : Number.NaN
+  return parseHistoryTime(event.occurred_at ?? event.created_at)
+}
+
+/** 无效时间不能改变历史语义；统一排到有效服务端时间之后。 */
+function parseHistoryTime(value: string): number {
+  const time = Date.parse(value)
+  return Number.isFinite(time) ? time : Number.POSITIVE_INFINITY
 }
 
 function stablePlanId(event: HealthEvent): string | null {

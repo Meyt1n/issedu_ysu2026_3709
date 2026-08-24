@@ -1,84 +1,130 @@
-import { clearRequestTraces } from '@/api/requestLog'
-import { resetAccessibility, A11Y_STORAGE_KEY } from '@/stores/accessibility'
-import { requireReauth } from '@/stores/auth'
-import { clearCapabilities } from '@/stores/capabilities'
-import { resetSession, SESSION_STORAGE_KEY, useSession } from '@/stores/session'
+import { ref } from 'vue'
+
+/**
+ * MOB-146：版本化隐私告知。
+ *
+ * 首次使用或隐私版本更新时展示适老、可读、可播报的告知；
+ * 确认结果只记录版本号与时间（非健康数据）。写入失败时
+ * 不声称已确认——下次启动会再次展示（fail-closed）。
+ */
 
 export const PRIVACY_NOTICE_VERSION = '2026-08-24'
+export const PRIVACY_ACK_STORAGE_KEY = 'hct-mobile.privacy-ack.v1'
 
-export interface LocalDataEntry {
-  id: 'accessibility' | 'session' | 'runtime'
-  label: string
-  detail: string
-  persistence: '本机持久化' | '仅当前运行时'
-  sensitive: boolean
+export interface PrivacyNoticeSection {
+  title: string
+  lines: string[]
 }
 
-export const LOCAL_DATA_ENTRIES: readonly LocalDataEntry[] = [
+export const PRIVACY_NOTICE_SECTIONS: PrivacyNoticeSection[] = [
   {
-    id: 'accessibility',
-    label: '无障碍偏好',
-    detail: '长辈模式、字号、主题、高对比度、语音和动效设置。',
-    persistence: '本机持久化',
-    sensitive: false,
+    title: '演示与联机模式',
+    lines: [
+      '默认是演示模式：所有成员、任务、风险和药品都是虚构教学数据，不连接任何服务器。',
+      '切换到"家庭服务器（联机）"后，应用只访问你在设置里填写的家庭服务器地址；健康数据不出家庭可信网络。',
+    ],
   },
   {
-    id: 'session',
-    label: '会话配置',
-    detail: '演示/联机模式、服务器地址、访问目的、当前家庭/成员标识和紧急联系人。',
-    persistence: '本机持久化',
-    sensitive: true,
+    title: '访问目的',
+    lines: [
+      '联机时按"访问目的"（如 family-care 家庭照护）读取数据；服务端按授权逐次校验字段、动作和期限。',
+      '更改目的或身份后，之前的查询结果和缓存会被清空。',
+    ],
   },
   {
-    id: 'runtime',
-    label: '运行时状态',
-    detail: '能力快照、Provider 缓存、请求回执和上传草稿；不写入本机持久存储。',
-    persistence: '仅当前运行时',
-    sensitive: true,
+    title: '设备能力',
+    lines: [
+      '相机/相册：仅用于拍摄药盒照片做识别，照片先过质量检查，识别候选必须人工确认。',
+      '通知：仅在你主动开启后，用于视觉任务完成的本地提醒；内容不含健康数据。',
+      '拨号：仅在"求助"页经你确认后拨打紧急联系人电话。',
+    ],
+  },
+  {
+    title: '本机保存了什么',
+    lines: [
+      '保存：界面与无障碍偏好、联机设置（服务器地址、身份来源、成员选择）、紧急联系人。',
+      '不保存：登录密码、PIN、会话凭据（只在内存）、健康数据、照片、查询与任务运行状态。',
+    ],
+  },
+  {
+    title: '健康数据边界',
+    lines: [
+      '应用不做诊断、处方、停药、换药或剂量判断；药品识别结果永远需要人工确认。',
+      '导出、删除、撤回家庭健康数据在网页端由家庭主人办理；清理本机设置不影响服务端事实。',
+    ],
   },
 ]
 
-export interface LocalDataClearResult {
-  ok: boolean
-  message: string
+export interface PrivacyAck {
+  version: string
+  acknowledgedAt: string
 }
 
-export function localStorageAvailable(storage: Storage | undefined = typeof localStorage === 'undefined' ? undefined : localStorage): boolean {
+function readStorage(): Storage | null {
+  try {
+    return typeof window === 'undefined' ? null : window.localStorage
+  } catch {
+    return null
+  }
+}
+
+export function readPrivacyAck(): PrivacyAck | null {
+  const storage = readStorage()
+  if (!storage) return null
+  try {
+    const text = storage.getItem(PRIVACY_ACK_STORAGE_KEY)
+    if (!text) return null
+    const parsed = JSON.parse(text) as Partial<PrivacyAck>
+    if (typeof parsed.version !== 'string' || typeof parsed.acknowledgedAt !== 'string') return null
+    return { version: parsed.version, acknowledgedAt: parsed.acknowledgedAt }
+  } catch {
+    return null
+  }
+}
+
+export function privacyNoticeRequired(): boolean {
+  return readPrivacyAck()?.version !== PRIVACY_NOTICE_VERSION
+}
+
+/** 记录确认；返回是否写入成功（失败=下次仍会展示，不声称已确认）。 */
+export function acknowledgePrivacyNotice(now: Date = new Date()): boolean {
+  const storage = readStorage()
   if (!storage) return false
   try {
-    const probe = 'hct-mobile.storage-probe'
-    storage.setItem(probe, '1')
-    storage.removeItem(probe)
-    return true
+    storage.setItem(PRIVACY_ACK_STORAGE_KEY, JSON.stringify({
+      version: PRIVACY_NOTICE_VERSION,
+      acknowledgedAt: now.toISOString(),
+    } satisfies PrivacyAck))
+    return readPrivacyAck()?.version === PRIVACY_NOTICE_VERSION
   } catch {
     return false
   }
 }
 
-/** 清理移动端本地配置和当前运行时，不触碰服务端健康事实。 */
-export function clearLocalData(storage: Storage | undefined = typeof localStorage === 'undefined' ? undefined : localStorage): LocalDataClearResult {
-  const storageReady = localStorageAvailable(storage)
+/** 供界面响应式使用：确认/重置时推进。 */
+const ackGeneration = ref(0)
 
-  // 先清内存状态和响应式状态；reset* 会短暂写默认值，之后再移除持久 key。
-  resetSession()
-  resetAccessibility()
-  clearCapabilities()
-  clearRequestTraces()
-  requireReauth('signed-out')
-
-  if (!storageReady || !storage) {
-    return { ok: false, message: '本机存储不可用；运行时状态已清理，但应用不能声称持久设置已删除。' }
+export function usePrivacyNotice() {
+  const required = () => {
+    void ackGeneration.value
+    return privacyNoticeRequired()
   }
-
-  try {
-    storage.removeItem(SESSION_STORAGE_KEY)
-    storage.removeItem(A11Y_STORAGE_KEY)
-    return { ok: true, message: '本机设置、联系人、服务器地址和运行时状态已清理；服务端健康事实未被修改。' }
-  } catch {
-    return { ok: false, message: '本机设置清理未能完成；为保护隐私，应用不会声称已删除，请关闭应用后重试。' }
+  const acknowledge = (): boolean => {
+    const ok = acknowledgePrivacyNotice()
+    ackGeneration.value += 1
+    return ok
   }
+  return { required, acknowledge }
 }
 
+/** 把告知合成一段可播报文本（适老语音路径）。 */
+export function privacyNoticeSpeechText(): string {
+  return PRIVACY_NOTICE_SECTIONS
+    .map(section => `${section.title}。${section.lines.join('。')}`)
+    .join('。\n')
+}
+
+/** 只允许跳转到受控 HTTPS 家庭网页端，并移除 URL 中的 token/查询参数。 */
 export function controlledWebHandoff(baseUrl: string): string {
   const trimmed = baseUrl.trim()
   if (!trimmed) return '/'
@@ -91,9 +137,4 @@ export function controlledWebHandoff(baseUrl: string): string {
   } catch {
     return ''
   }
-}
-
-export function usePrivacy() {
-  const { session } = useSession()
-  return { session, entries: LOCAL_DATA_ENTRIES, noticeVersion: PRIVACY_NOTICE_VERSION }
 }

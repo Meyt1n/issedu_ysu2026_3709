@@ -29,6 +29,13 @@
 
 ## 实现与验证证据
 
+### 2026-08-24 边界回归补强
+
+- 新增 IPv4 相邻公网段、`0.0.0.0`、IPv6 回环/ULA/链路本地/公网以及编码凭据的回归用例；
+- 定向测试 16 项通过，完整移动端测试 28 个文件 / 230 项通过；
+- `npm run check`、`npm run build`、`npm run android:sync` 均通过；
+- 本地测试不替代 Android 明文 HTTP、HTTPS 证书/CORS 和受控部署验收。
+
 - `APP/src/utils/serverUrl.ts`：协议、凭据、查询/片段、私网主机和明文 HTTP 边界。
 - `APP/src/stores/session.ts`：启动时归一化并清理不可信旧配置。
 - `APP/src/api/client.ts`：构造请求客户端前 fail-closed，暴露可识别的 `INVALID_SERVER_URL`。

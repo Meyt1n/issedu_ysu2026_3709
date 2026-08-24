@@ -1,0 +1,45 @@
+{
+  "schema_version": "hct203-model-publication/v1",
+  "publication_status": "PUBLISHED_AUXILIARY_ONLY",
+  "decision": "MODEL_PUBLISHED",
+  "release_authority": "MAINTAINER_WAIVER",
+  "model_id": "hct-yolo11n-box-assist-experimental-v1.3",
+  "weights_sha256": "fcda34dd22d25bc0720a8ff9f63022108bd14900e835bba23a8d04ffc7a35f92",
+  "dataset_version": "HCT-201-dataset-v1.2-annotation-reviewed-candidate",
+  "fixed_set_hash": "a0ffc701eed17a1a3e7ded8c2d1c6a14a8c881191d49e77c46f5915b4e52d312",
+  "fixed_set_scope": "candidate_experiment_waived",
+  "machine_gate_decision": "READY_FOR_MAINTAINER_WAIVER_PUBLICATION",
+  "r3_decision": null,
+  "waiver_decision": "MAINTAINER_WAIVER_APPROVED",
+  "previous_version": "vision_model_version=unavailable",
+  "binding_safety_thresholds": {
+    "hct203_publication_status": "PUBLISHED_AUXILIARY_ONLY",
+    "hct203_release_authority": "MAINTAINER_WAIVER",
+    "hct203_machine_gate_sha256": "2d3c29a9c484b9c1273286ab54b80c2d58bb0d284ea48dd8e60c9dc74d490bbb",
+    "hct203_waiver_sha256": "3d13cc5a5fc68a75277d2382cb862e070ec528fecf713f7be1b69c2d23475796",
+    "hct203_r3_review_sha256": null
+  },
+  "runtime_scope": {
+    "mode": "AUXILIARY_ONLY",
+    "enabled_by_default": false,
+    "manual_confirmation_required": true,
+    "fallback": "vision_model_version=unavailable",
+    "prohibited": [
+      "medicine identity decisions",
+      "override OCR or barcode evidence",
+      "diagnosis, prescription or medication changes"
+    ]
+  },
+  "passed": true,
+  "findings": [],
+  "limitations": [
+    "This manifest does not copy weights or activate the household runtime.",
+    "The weights remain in the controlled artifact store and must be verified by SHA-256 at deployment."
+  ],
+  "input_sha256": {
+    "registry": "a0b63b9de4657cfba1af135fb84dac4a06d0f668896d1054679e3fea3f589d73",
+    "machine_gate": "0f663bdc5cb3e9cdcee0ce053d31c26d2813578eb82aa4af0e84e89087066d16",
+    "rollback": "c2257297d901122b0db4fbc697f8703dc0435c0ffaaaba68794bb9e754b59dbe",
+    "waiver": "e826f5de58aa55992407d0aaa36123ae123c92b0eefee0b47ae1026156b7a482"
+  }
+}

@@ -107,11 +107,12 @@ def test_audit_page_rejects_tampered_cursor_and_non_owner(
     first = client.get(url, headers=OWNER_HEADERS, params={"limit": 1})
     cursor = first.json()["next_cursor"]
     encoded, signature = cursor.split(".", 1)
+    replacement = "A" if signature[0] != "A" else "B"
 
     tampered = client.get(
         url,
         headers=OWNER_HEADERS,
-        params={"cursor": f"{encoded}.{signature[:-1]}A"},
+        params={"cursor": f"{encoded}.{replacement}{signature[1:]}"},
     )
     assert tampered.status_code == 422
     assert tampered.json()["detail"] == "AUDIT_CURSOR_INVALID"

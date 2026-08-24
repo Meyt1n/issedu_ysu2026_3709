@@ -113,6 +113,7 @@ from app.models import (
     RiskAcknowledgement,
     VisionTask,
 )
+from app.request_context import current_request_id
 from app.review import (
     FusionStatus as ReviewFusionStatus,
 )
@@ -262,13 +263,16 @@ def _actor_belongs_to_household(session: Session, household_id: str, actor_id: s
         return False
     if household.created_by == actor_id:
         return True
-    return session.scalar(
-        select(Member.id).where(
-            Member.household_id == household_id,
-            Member.actor_id == actor_id,
-            Member.deleted_at.is_(None),
+    return (
+        session.scalar(
+            select(Member.id).where(
+                Member.household_id == household_id,
+                Member.actor_id == actor_id,
+                Member.deleted_at.is_(None),
+            )
         )
-    ) is not None
+        is not None
+    )
 
 
 def _record_authentication_audit(
@@ -335,6 +339,31 @@ def _add_authorization_audit(
     )
 
 
+def _add_household_setting_audit(
+    session: Session,
+    *,
+    household_id: str,
+    actor_id: str,
+    action: str,
+    data_field: str,
+) -> None:
+    """Record only the metadata needed to trace an allowed setting change."""
+    session.add(
+        AccessAudit(
+            household_id=household_id,
+            authorization_id=None,
+            actor_id=actor_id,
+            operation="UPDATE",
+            action=action,
+            data_field=data_field,
+            purpose="household-settings",
+            outcome="ALLOWED",
+            reason=None,
+            request_id=current_request_id(),
+        )
+    )
+
+
 @router.get("/health/db", response_model=HealthResponse)
 def database_health(session: Session = Depends(get_session)) -> HealthResponse:
     session.execute(text("SELECT 1"))
@@ -396,8 +425,7 @@ def _valid_authorizations(
     return [
         a
         for a in auths
-        if "health_events" in (a.data_fields or [])
-        and "READ_EVENTS" in (a.actions or [])
+        if "health_events" in (a.data_fields or []) and "READ_EVENTS" in (a.actions or [])
     ]
 
 
@@ -414,16 +442,17 @@ def list_households(
         )
     ).all()
     authorized_ids = {
-        a.household_id
-        for a in _valid_authorizations(session, actor_id, purpose=access_purpose)
+        a.household_id for a in _valid_authorizations(session, actor_id, purpose=access_purpose)
     }
     authorized = (
-        list(session.scalars(
-            select(Household).where(
-                Household.id.in_(authorized_ids),
-                Household.deleted_at.is_(None),
-            )
-        ).all())
+        list(
+            session.scalars(
+                select(Household).where(
+                    Household.id.in_(authorized_ids),
+                    Household.deleted_at.is_(None),
+                )
+            ).all()
+        )
         if authorized_ids
         else []
     )
@@ -526,7 +555,15 @@ def update_household(
     session: Session = Depends(get_session),
 ) -> Household:
     household = require_household_owner(session, household_id, actor_id)
-    household.time_zone = payload.time_zone
+    if household.time_zone != payload.time_zone:
+        household.time_zone = payload.time_zone
+        _add_household_setting_audit(
+            session,
+            household_id=household.id,
+            actor_id=actor_id,
+            action="UPDATE_TIME_ZONE",
+            data_field="household.time_zone",
+        )
     session.commit()
     session.refresh(household)
     return household
@@ -592,29 +629,31 @@ def bind_member_account(
             Member.deleted_at.is_(None),
         )
     )
-    if duplicate is not None or (
-        target_actor_id == household.created_by and member.role != "SELF"
-    ):
+    if duplicate is not None or (target_actor_id == household.created_by and member.role != "SELF"):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="ACCOUNT_ID_EXISTS")
 
     previous_actor_id = member.actor_id
     if previous_actor_id != target_actor_id:
         now = datetime.now(UTC)
-        active_credentials = list(
-            session.scalars(
-                select(FaceCredential).where(
-                    FaceCredential.household_id == household.id,
-                    FaceCredential.actor_id == previous_actor_id,
-                    FaceCredential.status == "ACTIVE",
-                )
-            ).all()
-        ) if previous_actor_id else []
+        active_credentials = (
+            list(
+                session.scalars(
+                    select(FaceCredential).where(
+                        FaceCredential.household_id == household.id,
+                        FaceCredential.actor_id == previous_actor_id,
+                        FaceCredential.status == "ACTIVE",
+                    )
+                ).all()
+            )
+            if previous_actor_id
+            else []
+        )
         for credential in active_credentials:
             credential.status = "REVOKED"
             credential.revoked_at = now
             credential.encrypted_template = b""
         if previous_actor_id:
-            revoke_household_sessions(household.id, {previous_actor_id})
+            revoke_household_sessions(household.id, {previous_actor_id}, session)
         member.actor_id = target_actor_id
         session.add(
             AccessAudit(
@@ -901,6 +940,8 @@ def list_authorization_audits(
 def page_authorization_audits(
     household_id: str,
     request_id: str | None = Query(default=None, min_length=1, max_length=120),
+    action: str | None = Query(default=None, min_length=1, max_length=80),
+    outcome: str | None = Query(default=None, min_length=1, max_length=32),
     cursor: str | None = Query(default=None, min_length=1),
     limit: int = Query(default=50, ge=1, le=100),
     actor_id: str = Depends(get_actor_id),
@@ -916,7 +957,12 @@ def page_authorization_audits(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=str(exc),
             ) from exc
-        if decoded_cursor.household_id != household.id or decoded_cursor.request_id != request_id:
+        if (
+            decoded_cursor.household_id != household.id
+            or decoded_cursor.request_id != request_id
+            or decoded_cursor.action != action
+            or decoded_cursor.outcome != outcome
+        ):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="AUDIT_CURSOR_INVALID",
@@ -925,6 +971,10 @@ def page_authorization_audits(
     query = select(AccessAudit).where(AccessAudit.household_id == household.id)
     if request_id is not None:
         query = query.where(AccessAudit.request_id == request_id)
+    if action is not None:
+        query = query.where(AccessAudit.action == action)
+    if outcome is not None:
+        query = query.where(AccessAudit.outcome == outcome)
     if decoded_cursor is not None:
         query = query.where(
             (AccessAudit.created_at > decoded_cursor.created_at)
@@ -946,6 +996,8 @@ def page_authorization_audits(
         next_cursor = encode_audit_cursor(
             household_id=household.id,
             request_id=request_id,
+            action=action,
+            outcome=outcome,
             created_at=last.created_at,
             audit_id=last.id,
             secret=settings.cursor_signing_key,
@@ -1039,9 +1091,7 @@ def append_health_event(
         )
     except IdempotencyConflictError as exc:
         detail = (
-            "IDEMPOTENCY_KEY_CONFLICT"
-            if idempotency_key is not None
-            else "IDEMPOTENCY_CONFLICT"
+            "IDEMPOTENCY_KEY_CONFLICT" if idempotency_key is not None else "IDEMPOTENCY_CONFLICT"
         )
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail) from exc
     except EventAlreadySupersededError as exc:
@@ -1124,9 +1174,7 @@ def list_health_events(
     household = session.get(Household, household_id)
     if _is_erased(household):
         _raise_resource_not_found()
-    allowed_member_ids = _authorized_event_member_ids(
-        session, household, actor_id, access_purpose
-    )
+    allowed_member_ids = _authorized_event_member_ids(session, household, actor_id, access_purpose)
     if member_id is not None and member_id not in allowed_member_ids:
         _raise_resource_not_found()
     if not allowed_member_ids:
@@ -1176,6 +1224,8 @@ def _authorized_event_member_ids(
 def page_health_events(
     household_id: str,
     member_id: str | None = None,
+    event_type: str | None = Query(default=None, min_length=1, max_length=80),
+    confirmation_status: str | None = Query(default=None, min_length=1, max_length=32),
     cursor: str | None = None,
     limit: int = Query(default=50, ge=1, le=100),
     actor_id: str = Depends(get_actor_id),
@@ -1186,9 +1236,7 @@ def page_health_events(
     household = session.get(Household, household_id)
     if _is_erased(household):
         _raise_resource_not_found()
-    allowed_member_ids = _authorized_event_member_ids(
-        session, household, actor_id, access_purpose
-    )
+    allowed_member_ids = _authorized_event_member_ids(session, household, actor_id, access_purpose)
     if member_id is not None and member_id not in allowed_member_ids:
         _raise_resource_not_found()
     if not allowed_member_ids:
@@ -1198,9 +1246,7 @@ def page_health_events(
 
     try:
         decoded_cursor = (
-            decode_event_cursor(cursor, secret=settings.cursor_signing_key)
-            if cursor
-            else None
+            decode_event_cursor(cursor, secret=settings.cursor_signing_key) if cursor else None
         )
     except ValueError as exc:
         raise HTTPException(
@@ -1208,7 +1254,10 @@ def page_health_events(
             detail=str(exc),
         ) from exc
     if decoded_cursor is not None and (
-        decoded_cursor.household_id != household.id or decoded_cursor.member_id != member_id
+        decoded_cursor.household_id != household.id
+        or decoded_cursor.member_id != member_id
+        or decoded_cursor.event_type != event_type
+        or decoded_cursor.confirmation_status != confirmation_status
     ):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -1221,14 +1270,8 @@ def page_health_events(
         if (
             cursor_anchor is None
             or cursor_anchor.household_id != household.id
-            or (
-                member_id is not None
-                and cursor_anchor.member_id != member_id
-            )
-            or (
-                member_id is None
-                and cursor_anchor.member_id not in allowed_member_ids
-            )
+            or (member_id is not None and cursor_anchor.member_id != member_id)
+            or (member_id is None and cursor_anchor.member_id not in allowed_member_ids)
         ):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -1241,6 +1284,10 @@ def page_health_events(
     )
     if member_id is not None:
         query = query.where(HealthEvent.member_id == member_id)
+    if event_type is not None:
+        query = query.where(HealthEvent.event_type == event_type)
+    if confirmation_status is not None:
+        query = query.where(HealthEvent.confirmation_status == confirmation_status)
     if decoded_cursor is not None:
         query = query.where(
             (HealthEvent.sequence_no > decoded_cursor.sequence_no)
@@ -1266,6 +1313,8 @@ def page_health_events(
             sequence_no=last.sequence_no,
             event_id=last.id,
             secret=settings.cursor_signing_key,
+            event_type=event_type,
+            confirmation_status=confirmation_status,
         )
     return HealthEventPageRead(items=items, next_cursor=next_cursor, has_more=has_more)
 
@@ -1422,7 +1471,9 @@ async def upload_file(
     result = await validate_and_store(file)
     logger.info(
         "FILE_UPLOADED actor=%s key=%s size=%d",
-        actor_id, result["storage_key"], result["size_bytes"],
+        actor_id,
+        result["storage_key"],
+        result["size_bytes"],
     )
     return result
 
@@ -1455,7 +1506,9 @@ def delete_file(
     deleted = delete_file_tree(storage_key)
     logger.info(
         "FILE_DELETED actor=%s key=%s deleted_paths=%d",
-        actor_id, storage_key, len(deleted),
+        actor_id,
+        storage_key,
+        len(deleted),
     )
     return {"storage_key": storage_key, "deleted_paths": len(deleted)}
 
@@ -1466,16 +1519,21 @@ def delete_file(
 @router.post("/auth/register", response_model=dict, status_code=status.HTTP_201_CREATED)
 def auth_register(
     payload: AuthCredentials,
+    session: Session = Depends(get_session),
 ) -> dict:
-    register_account(payload.actor_id, payload.password)
+    register_account(payload.actor_id, payload.password, session)
     return {"status": "registered", "actor_id": payload.actor_id}
 
 
 @router.post("/auth/login", response_model=AuthSessionRead)
 def auth_login(
     payload: AuthCredentials,
+    session: Session = Depends(get_session),
 ) -> dict:
-    return {"actor_id": payload.actor_id, **authenticate(payload.actor_id, payload.password)}
+    return {
+        "actor_id": payload.actor_id,
+        **authenticate(payload.actor_id, payload.password, session),
+    }
 
 
 @router.post("/auth/pin-login", response_model=AuthSessionRead)
@@ -1500,6 +1558,7 @@ def auth_pin_login(
             payload.actor_id,
             payload.household_id,
             payload.pin,
+            session,
         )
     except HTTPException as exc:
         _record_authentication_audit(
@@ -1681,7 +1740,7 @@ async def auth_face_login(
     return {
         "actor_id": actor_id,
         "household_id": household_id,
-        **create_face_session(actor_id, household_id),
+        **create_face_session(actor_id, household_id, session),
     }
 
 
@@ -1792,8 +1851,7 @@ async def auth_family_face_login(
                 stored_template = decrypt_template(credential.encrypted_template)
                 templates = templates_by_algorithm[credential.algorithm_version]
                 score = max(
-                    face_template_similarity(template, stored_template)
-                    for template in templates
+                    face_template_similarity(template, stored_template) for template in templates
                 )
             except (HTTPException, ValueError, KeyError):
                 decrypt_failures += 1
@@ -1849,7 +1907,7 @@ async def auth_family_face_login(
     return {
         "actor_id": best_actor_id,
         "household_id": household_id,
-        **create_face_session(best_actor_id, household_id),
+        **create_face_session(best_actor_id, household_id, session),
     }
 
 
@@ -1861,7 +1919,7 @@ def auth_set_pin(
 ) -> dict:
     if not _actor_belongs_to_household(session, payload.household_id, actor_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RESOURCE_NOT_FOUND")
-    set_account_pin(actor_id, payload.household_id, payload.pin)
+    set_account_pin(actor_id, payload.household_id, payload.pin, session)
     session.add(
         AccessAudit(
             household_id=payload.household_id,
@@ -1880,15 +1938,18 @@ def auth_set_pin(
 
 
 @router.post("/auth/logout")
-def auth_logout(payload: AuthSessionRequest) -> dict:
-    logout(payload.session_token)
+def auth_logout(payload: AuthSessionRequest, session: Session = Depends(get_session)) -> dict:
+    logout(payload.session_token, session)
     return {"status": "logged_out"}
 
 
 @router.post("/auth/session", response_model=SessionIntrospectRead)
-def auth_session(session_token: str = Depends(require_session_token)) -> dict:
+def auth_session(
+    session_token: str = Depends(require_session_token),
+    session: Session = Depends(get_session),
+) -> dict:
     """Revalidate the caller's session so a client can drop a stale one early."""
-    return introspect_session(session_token)
+    return introspect_session(session_token, session)
 
 
 @router.post("/auth/pin-challenge", response_model=StepUpChallengeRead)
@@ -1909,6 +1970,7 @@ def auth_pin_challenge(
         payload.action,
         session_token,
         payload.household_id,
+        session,
     )
 
 
@@ -1916,6 +1978,7 @@ def auth_pin_challenge(
 def auth_pin_verify(
     payload: StepUpVerifyRequest,
     session_token: str = Depends(require_session_token),
+    session: Session = Depends(get_session),
 ) -> dict:
     # The one-time code travels in the request body only; it must never reach a
     # query string, where reverse proxies and APM tools would log it.
@@ -1924,6 +1987,7 @@ def auth_pin_verify(
         payload.action,
         session_token,
         payload.code,
+        session,
     )
 
 
@@ -1949,6 +2013,7 @@ def _confirm_face_registration(
     confirmation_method: str,
     confirmation_code: str,
     confirmation_challenge_id: str | None,
+    session: Session,
 ) -> None:
     if confirmation_challenge_id:
         consume_pin_challenge(
@@ -1956,11 +2021,12 @@ def _confirm_face_registration(
             FACE_REGISTER_ACTION,
             session_token,
             household_id,
+            session,
         )
         return
     from app.auth import verify_reauthentication
 
-    verify_reauthentication(actor_id, household_id, confirmation_method, confirmation_code)
+    verify_reauthentication(actor_id, household_id, confirmation_method, confirmation_code, session)
 
 
 @router.get(
@@ -2047,7 +2113,8 @@ async def register_face_credential(
             filename = validate_filename(upload.filename or "unknown")
             extension = validate_extension(filename)
             if extension not in {".jpg", ".jpeg", ".png"} or upload.content_type not in {
-                "image/jpeg", "image/png"
+                "image/jpeg",
+                "image/png",
             }:
                 raise ValueError("FACE_IMAGE_INVALID")
             validate_magic(upload.file, extension)
@@ -2074,12 +2141,14 @@ async def register_face_credential(
         # extreme turn. This keeps the encrypted schema compact and stable.
         representative_index = max(
             range(len(templates)),
-            key=lambda index: sum(
-                face_template_similarity(templates[index], other)
-                for other in templates
-                if other is not templates[index]
-            )
-            / max(1, len(templates) - 1),
+            key=lambda index: (
+                sum(
+                    face_template_similarity(templates[index], other)
+                    for other in templates
+                    if other is not templates[index]
+                )
+                / max(1, len(templates) - 1)
+            ),
         )
         template = templates[representative_index]
     except RuntimeError as exc:
@@ -2109,6 +2178,7 @@ async def register_face_credential(
         confirmation_method=confirmation_method,
         confirmation_code=confirmation_code,
         confirmation_challenge_id=confirmation_challenge_id,
+        session=session,
     )
     now = datetime.now(UTC)
     previous_version = active.credential_version if active is not None else 0
@@ -2220,7 +2290,13 @@ def member_timeline(
     if _is_erased(household, member):
         _raise_resource_not_found()
     if not has_authorized_action(
-        session, household, member_id, actor_id, "READ_EVENTS", "health_events", access_purpose,
+        session,
+        household,
+        member_id,
+        actor_id,
+        "READ_EVENTS",
+        "health_events",
+        access_purpose,
     ):
         _raise_resource_not_found()
 
@@ -2248,7 +2324,13 @@ def get_relationship_graph(
     if _is_erased(household, member):
         _raise_resource_not_found()
     if not has_authorized_action(
-        session, household, member_id, actor_id, "READ_EVENTS", "health_events", access_purpose,
+        session,
+        household,
+        member_id,
+        actor_id,
+        "READ_EVENTS",
+        "health_events",
+        access_purpose,
     ):
         _raise_resource_not_found()
 
@@ -2290,7 +2372,13 @@ def get_plan_workbench(
     if _is_erased(household, member):
         _raise_resource_not_found()
     if not has_authorized_action(
-        session, household, member_id, actor_id, "READ_EVENTS", "health_events", access_purpose,
+        session,
+        household,
+        member_id,
+        actor_id,
+        "READ_EVENTS",
+        "health_events",
+        access_purpose,
     ):
         _raise_resource_not_found()
 
@@ -2358,21 +2446,29 @@ def get_dashboard_summary(
             else:
                 info_count += 1
 
-    pending_reviews = session.scalar(
-        select(func.count()).select_from(ReviewTask).where(
-            ReviewTask.household_id == household_id,
-            ReviewTask.status == "PENDING_REVIEW",
+    pending_reviews = (
+        session.scalar(
+            select(func.count())
+            .select_from(ReviewTask)
+            .where(
+                ReviewTask.household_id == household_id,
+                ReviewTask.status == "PENDING_REVIEW",
+            )
         )
-    ) or 0
-    pending_outbox = session.scalar(
-        select(func.count())
-        .select_from(OutboxMessage)
-        .join(HealthEvent, OutboxMessage.event_id == HealthEvent.id)
-        .where(
-            HealthEvent.household_id == household_id,
-            OutboxMessage.status.in_(("PENDING", "FAILED")),
+        or 0
+    )
+    pending_outbox = (
+        session.scalar(
+            select(func.count())
+            .select_from(OutboxMessage)
+            .join(HealthEvent, OutboxMessage.event_id == HealthEvent.id)
+            .where(
+                HealthEvent.household_id == household_id,
+                OutboxMessage.status.in_(("PENDING", "FAILED")),
+            )
         )
-    ) or 0
+        or 0
+    )
     week_series = []
     for offset in range(6, -1, -1):
         day = (today - timedelta(days=offset)).date().isoformat()
@@ -2413,8 +2509,15 @@ def run_rules_endpoint(
     facts = build_relationship_graph(events)
     alerts = run_rules(facts)
     logger.info("RULES_RUN member=%s alerts=%d", member_id, len(alerts))
-    return [{"rule_id": a.rule_id, "level": a.level, "message": a.message,
-             "source_event_ids": a.source_event_ids} for a in alerts]
+    return [
+        {
+            "rule_id": a.rule_id,
+            "level": a.level,
+            "message": a.message,
+            "source_event_ids": a.source_event_ids,
+        }
+        for a in alerts
+    ]
 
 
 # ── HCT-304/308: Care plans & escalation ───────────────────────────
@@ -2471,7 +2574,13 @@ def confirm_plan_endpoint(
     if _is_erased(household, member):
         _raise_resource_not_found()
     if not has_authorized_action(
-        session, household, member_id, actor_id, "WRITE_EVENTS", "health_events", access_purpose,
+        session,
+        household,
+        member_id,
+        actor_id,
+        "WRITE_EVENTS",
+        "health_events",
+        access_purpose,
     ):
         _raise_resource_not_found()
     from app.projection import get_timeline
@@ -2533,7 +2642,13 @@ def defer_plan_endpoint(
     if _is_erased(household, member):
         _raise_resource_not_found()
     if not has_authorized_action(
-        session, household, member_id, actor_id, "WRITE_EVENTS", "health_events", access_purpose,
+        session,
+        household,
+        member_id,
+        actor_id,
+        "WRITE_EVENTS",
+        "health_events",
+        access_purpose,
     ):
         _raise_resource_not_found()
     event = _append_care_plan_action(
@@ -2572,7 +2687,13 @@ def skip_plan_endpoint(
     if _is_erased(household, member):
         _raise_resource_not_found()
     if not has_authorized_action(
-        session, household, member_id, actor_id, "WRITE_EVENTS", "health_events", access_purpose,
+        session,
+        household,
+        member_id,
+        actor_id,
+        "WRITE_EVENTS",
+        "health_events",
+        access_purpose,
     ):
         _raise_resource_not_found()
     event = _append_care_plan_action(
@@ -2611,7 +2732,13 @@ def miss_plan_endpoint(
     if _is_erased(household, member):
         _raise_resource_not_found()
     if not has_authorized_action(
-        session, household, member_id, actor_id, "WRITE_EVENTS", "health_events", access_purpose,
+        session,
+        household,
+        member_id,
+        actor_id,
+        "WRITE_EVENTS",
+        "health_events",
+        access_purpose,
     ):
         _raise_resource_not_found()
     event = _append_care_plan_action(
@@ -2691,6 +2818,7 @@ def create_knowledge_document(
 ) -> KnowledgeDocumentRead:
     """Register a new knowledge document with auto-chunking."""
     from app.knowledge import add_document
+
     doc = add_document(
         session,
         title=payload.title,
@@ -2715,16 +2843,14 @@ def list_knowledge_documents(
 ) -> list[KnowledgeDocumentRead]:
     """List active documents visible to the caller."""
     from app.knowledge import _check_permission
+
     stmt = (
         select(KnowledgeDocument)
         .where(KnowledgeDocument.status == "active")
         .order_by(KnowledgeDocument.created_at.desc())
     )
     docs = session.scalars(stmt).all()
-    return [
-        d for d in docs
-        if _check_permission(d.permission_scope, actor_id)
-    ]
+    return [d for d in docs if _check_permission(d.permission_scope, actor_id)]
 
 
 @router.get("/knowledge/documents/{doc_id}", response_model=KnowledgeDocumentRead)
@@ -2734,6 +2860,7 @@ def get_knowledge_document(
     session: Session = Depends(get_session),
 ) -> KnowledgeDocumentRead:
     from app.knowledge import _check_permission
+
     doc = session.get(KnowledgeDocument, doc_id)
     if doc is None or doc.status != "active":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="DOCUMENT_NOT_FOUND")
@@ -2802,6 +2929,7 @@ def delete_knowledge_document(
     session: Session = Depends(get_session),
 ) -> dict:
     from app.knowledge import delete_document
+
     doc = session.get(KnowledgeDocument, doc_id)
     if doc is None or doc.status != "active" or doc.created_by != actor_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="DOCUMENT_NOT_FOUND")
@@ -2818,6 +2946,7 @@ def create_knowledge_index_snapshot(
     session: Session = Depends(get_session),
 ) -> dict:
     from app.knowledge import create_index_snapshot
+
     idx = create_index_snapshot(session, version=version, created_by=actor_id)
     session.commit()
     return {
@@ -2981,10 +3110,12 @@ def assistant_chat(
             max_tokens=payload.max_tokens,
             temperature=payload.temperature,
         )
-        result.update({
-            "orchestration_mode": "single",
-            "all_agents_local": True,
-        })
+        result.update(
+            {
+                "orchestration_mode": "single",
+                "all_agents_local": True,
+            }
+        )
     session.commit()
     return AssistantResponse(**result)
 
@@ -3169,11 +3300,7 @@ def create_vision_task_endpoint(
     household_id = "system"
     if payload.member_id:
         member = session.get(Member, payload.member_id)
-        household = (
-            session.get(Household, member.household_id)
-            if member is not None
-            else None
-        )
+        household = session.get(Household, member.household_id) if member is not None else None
         if (
             member is None
             or household is None
@@ -3346,9 +3473,7 @@ def _ensure_review_task_for_vision(
         record.record_id: (record.name_aliases[0] if record.name_aliases else record.record_id)
         for record in master_data.records
     }
-    specs_by_record = {
-        record.record_id: record.specification for record in master_data.records
-    }
+    specs_by_record = {record.record_id: record.specification for record in master_data.records}
 
     candidates: list[dict] = []
     for fused in fusion.candidates:
@@ -3587,9 +3712,7 @@ def fuse_vision_task_endpoint(
             review_candidate.update(
                 {
                     "drug_name": (
-                        record.name_aliases[0]
-                        if record.name_aliases
-                        else record.record_id
+                        record.name_aliases[0] if record.name_aliases else record.record_id
                     ),
                     "confidence": candidate.score,
                     "product_barcode": record.product_barcode,
@@ -3746,15 +3869,21 @@ def cancel_vision_task_endpoint(
         access_purpose=access_purpose,
     )
 
-    if task.status in (VisionTaskStatus.SUCCEEDED, VisionTaskStatus.FAILED,
-                       VisionTaskStatus.TIMEOUT, VisionTaskStatus.CANCELLED):
+    if task.status in (
+        VisionTaskStatus.SUCCEEDED,
+        VisionTaskStatus.FAILED,
+        VisionTaskStatus.TIMEOUT,
+        VisionTaskStatus.CANCELLED,
+    ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"VISION_TASK_ALREADY_{task.status.upper()}",
         )
 
     updated = transition_status(
-        session, task, VisionTaskStatus.CANCELLED,
+        session,
+        task,
+        VisionTaskStatus.CANCELLED,
         error_code="CANCELLED_BY_USER",
         error_message=f"Cancelled by {actor_id}",
     )
@@ -4157,7 +4286,13 @@ def list_risks(
     if _is_erased(household, member):
         _raise_resource_not_found()
     if not has_authorized_action(
-        session, household, member_id, actor_id, "READ_EVENTS", "health_events", access_purpose,
+        session,
+        household,
+        member_id,
+        actor_id,
+        "READ_EVENTS",
+        "health_events",
+        access_purpose,
     ):
         _raise_resource_not_found()
     from app.projection import build_relationship_graph, get_timeline
@@ -4207,7 +4342,13 @@ def get_risk_detail(
     if _is_erased(household, member):
         _raise_resource_not_found()
     if not has_authorized_action(
-        session, household, member_id, actor_id, "READ_EVENTS", "health_events", access_purpose,
+        session,
+        household,
+        member_id,
+        actor_id,
+        "READ_EVENTS",
+        "health_events",
+        access_purpose,
     ):
         _raise_resource_not_found()
     from app.projection import build_relationship_graph, get_timeline
@@ -4224,12 +4365,14 @@ def get_risk_detail(
     for eid in alert.source_event_ids:
         evt = session.get(HealthEvent, eid)
         if evt is not None:
-            sources.append({
-                "id": evt.id,
-                "event_type": evt.event_type,
-                "confirmation_status": evt.confirmation_status,
-                "created_at": evt.created_at.isoformat() if evt.created_at else None,
-            })
+            sources.append(
+                {
+                    "id": evt.id,
+                    "event_type": evt.event_type,
+                    "confirmation_status": evt.confirmation_status,
+                    "created_at": evt.created_at.isoformat() if evt.created_at else None,
+                }
+            )
     return RiskDetailResponse(
         alert=_risk_alert_read(
             session,
@@ -4535,8 +4678,11 @@ def list_hard_samples_endpoint(
 ) -> list[HardSampleRead]:
     _hs_household(session, household_id, actor_id)
     samples = _hs.list_hard_samples(
-        session, household_id,
-        status=status, category=category, member_id=member_id,
+        session,
+        household_id,
+        status=status,
+        category=category,
+        member_id=member_id,
         include_deleted=include_deleted,
     )
     return [HardSampleRead.model_validate(s) for s in samples]
@@ -4576,7 +4722,8 @@ def update_hard_sample_endpoint(
         _raise_resource_not_found()
     try:
         _hs.update_hard_sample_status(
-            session, sample,
+            session,
+            sample,
             new_status=payload.status,
             actor_id=actor_id,
             note=payload.note,
@@ -4733,9 +4880,7 @@ def list_export_manifests_endpoint(
     session: Session = Depends(get_session),
 ) -> list[ExportManifestRead]:
     _hs_household(session, household_id, actor_id)
-    manifests = _hs.list_export_manifests(
-        session, household_id, status=status, group_key=group_key
-    )
+    manifests = _hs.list_export_manifests(session, household_id, status=status, group_key=group_key)
     return [ExportManifestRead.model_validate(m) for m in manifests]
 
 
@@ -4772,9 +4917,7 @@ def invalidate_export_manifest_endpoint(
     if manifest is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MANIFEST_NOT_FOUND")
     try:
-        _hs.invalidate_export_manifest(
-            session, manifest, actor_id=actor_id, reason=payload.reason
-        )
+        _hs.invalidate_export_manifest(session, manifest, actor_id=actor_id, reason=payload.reason)
     except ValueError as exc:
         _hs_raise_val(str(exc))
     session.commit()
