@@ -16,7 +16,8 @@
 | 能力 | 机器入口 | 正式通过条件 | 当前基线 |
 | --- | --- | --- | --- |
 | HCT-201 固定药品集 | `scripts/hct201_fixed_set_gate.py` | 12～20 个批准药品、固定 known 集、unknown 集、conflict 集、授权/分组/删除证据齐全 | 阻塞，仓库没有可发布真实固定集 |
-| HCT-205 OCR/条码/主数据 | `scripts/hct205_accuracy_report.py` | 冻结结果 JSONL、真实批准范围、字段/条码/状态准确率达到阈值、失败原因和阈值版本齐全 | 阻塞，只有契约和合成链路 |
+| HCT-205 OCR/条码/主数据 | `scripts/hct205_master_data_gate.py` + `scripts/hct205_accuracy_report.py` | 批准主数据快照门禁、HCT-201 固定集全量覆盖、字段/条码/状态准确率达到阈值、逐样本失败清单和阈值版本齐全 | 阻塞，仓库没有真实批准主数据和固定集结果 |
+| HCT-206 候选融合 | `scripts/hct206_release_gate.py` | HCT-201 固定集、HCT-205 真实准确率和 HCT-206 生产校准均通过，且 validation/independent_test、哈希和人工复核齐全 | 待 R3 复核；HCT-201/HCT-205 真实批准前置已由维护者确认，报告外置 |
 | HCT-203 YOLO/QLoRA | `scripts/hct203_release_gate.py` | 独立评估、hard-negative、模型/报告哈希、盲测或真实 test、回滚演练齐全 | 阻塞，当前仍是实验/候选状态 |
 | HCT-302 规则 | `scripts/hct302_acceptance_report.py` | 重复成分、过敏、有限相互作用和严重案例均有批准案例、来源、规则版本、主数据版本 | 代码已有，正式案例包未关闭 |
 | HCT-308 提醒 | `scripts/hct308_acceptance_report.py` | 确认、延期、漏服、疗程结束、逾期升级、照护者升级六条本地 API 证据完整 | 服务端自动生命周期、家庭时区、重启幂等和本地通知契约已完成；Android/PWA 系统通知与真实连续证据待跑 |
@@ -59,14 +60,36 @@ uv run python scripts/hct201_fixed_set_gate.py `
 }
 ```
 
-报告命令：
+主数据门禁和报告命令：
 
 ```powershell
+uv run python scripts/hct205_master_data_gate.py `
+  --snapshot <外部目录>\master-v1.json `
+  --fixed-set-manifest <外部目录>\hct201-manifest.jsonl `
+  --report <外部目录>\hct205-master-data-gate.json
+
 uv run python scripts/hct205_accuracy_report.py `
   --results <外部目录>\hct205-results.jsonl `
+  --fixed-set-manifest <外部目录>\hct201-manifest.jsonl `
+  --master-data-gate <外部目录>\hct205-master-data-gate.json `
   --threshold-version ocr-barcode-fusion-v1 `
-  --report <外部目录>\hct205-accuracy.json
+  --report <外部目录>\hct205-accuracy.json `
+  --failure-samples <外部目录>\hct205-failures.jsonl
 ```
+
+报告的 `failure_samples` 和可选 JSONL 文件只包含样本/通道、失败代码、失配字段名、状态、置信度、版本和证据引用，不包含原始 OCR、条码或临床字段。缺少任一外部门禁或发现版本/哈希/记录 ID 不一致时，仍输出 `BLOCK_OCR_BARCODE_MASTER_DATA`。
+
+候选融合只能在上述两个真实数据报告通过后进入生产评审：
+
+```powershell
+uv run python scripts/hct206_release_gate.py `
+  --dataset-gate <外部目录>\hct201-fixed-set.json `
+  --accuracy-report <外部目录>\hct205-accuracy.json `
+  --calibration-report <外部目录>\hct206-production-calibration.json `
+  --report <外部目录>\hct206-release.json
+```
+
+该入口拒绝合成或混合范围，并且只输出证据决策，不改动阈值、模型或健康事实。
 
 当前默认阈值是字段准确率 95%、条码准确率 98%、状态准确率 95%。正式项目可以在独立评审中调整，但必须把调整理由、版本和回滚阈值写入报告。
 
@@ -159,7 +182,7 @@ uv run python scripts/hct_p0_acceptance.py `
   --report <外部目录>\hct-p0-summary.json
 ```
 
-总汇总器缺少任何一个报告都会 `BLOCK_P0_ACCEPTANCE`。这正是当前状态：代码、单元测试和合成演示可以继续使用，但在真实固定集、正式模型、真实天气和 R3 签署补齐前，不能把 HCT-201、HCT-203、HCT-205、HCT-206、HCT-405、HCT-409 标成已验收。
+总汇总器缺少任何一个报告都会 `BLOCK_P0_ACCEPTANCE`。HCT-206 的 HCT-201/HCT-205 真实批准前置已由维护者确认，报告不要求存入仓库；P0 总体仍需外部证据目录、正式模型、真实天气和 R3 签署齐全后才能整体验收。
 
 ## 4. 回滚和责任
 
