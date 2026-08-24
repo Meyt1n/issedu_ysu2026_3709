@@ -29,6 +29,13 @@
 
 ## 实现与验证证据
 
+2026-08-24 基于最新 `master`（源码提交 `345b5b2`）复核：
+
+- `npm run check` 通过；
+- URL/API Client 定向测试 13 项全部通过，覆盖 HTTPS、家庭私网 HTTP、公网 HTTP、恶意协议、凭据和查询参数边界；
+- `npm run build` 与 `npm run android:sync` 通过；
+- Android 明文 HTTP、HTTPS 证书/CORS 和受控部署仍需维护者在目标设备/环境验收。
+
 - `APP/src/utils/serverUrl.ts`：协议、凭据、查询/片段、私网主机和明文 HTTP 边界。
 - `APP/src/stores/session.ts`：启动时归一化并清理不可信旧配置。
 - `APP/src/api/client.ts`：构造请求客户端前 fail-closed，暴露可识别的 `INVALID_SERVER_URL`。
