@@ -86,6 +86,32 @@ def test_restore_ps1_syntax():
     _ps_syntax_check(BACKUP_SCRIPTS / "restore.ps1")
 
 
+def test_backup_validation_helper_is_present():
+    """The non-destructive preflight validator is shipped with HCT-408."""
+    validator = BACKUP_SCRIPTS / "hct408_validate_backup.py"
+    assert validator.exists()
+    assert "BACKUP_READY_FOR_RESTORE" in validator.read_text(encoding="utf-8")
+
+
+def test_restore_runs_preflight_before_destructive_operation():
+    """Restore must validate the backup before dropping the database."""
+    script = (BACKUP_SCRIPTS / "restore.ps1").read_text(encoding="utf-8")
+    assert script.index("validating backup before") < script.index("DROP DATABASE")
+
+
+def test_linux_backup_and_restore_scripts_are_shipped():
+    """The deployment story has a Bash path as well as the PowerShell path."""
+    for name in ("backup.sh", "restore.sh"):
+        script = BACKUP_SCRIPTS / name
+        assert script.exists()
+        assert script.read_text(encoding="utf-8").startswith("#!/usr/bin/env bash")
+
+
+def test_linux_restore_validates_before_database_drop():
+    script = (BACKUP_SCRIPTS / "restore.sh").read_text(encoding="utf-8")
+    assert script.index("hct408_validate_backup.py") < script.index("DROP DATABASE")
+
+
 def test_version_manifest_schema():
     """version_manifest.json keys match the expected schema."""
     sample = {

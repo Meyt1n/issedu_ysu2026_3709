@@ -174,7 +174,12 @@ def _create_session(
             previous.revoked_at = _now()
             rotated_from_id = rotated_from_id or previous.id
     token = secrets.token_hex(32)
-    expires_at = _now() + timedelta(seconds=SESSION_TTL_SECONDS)
+    # Keep the public login response identical to the persisted value across
+    # MySQL and SQLite.  The auth migration uses a regular DATETIME column
+    # whose precision is whole seconds on MySQL, so retaining microseconds
+    # here would make a freshly issued session report a different expiry when
+    # it is introspected immediately afterwards.
+    expires_at = (_now() + timedelta(seconds=SESSION_TTL_SECONDS)).replace(microsecond=0)
     db.add(
         AuthSession(
             token_hash=_token_hash(token),

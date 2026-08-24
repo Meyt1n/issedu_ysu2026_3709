@@ -1,116 +1,99 @@
-# HCT-408 恢复脚本（PowerShell）
-# 用途：从备份目录恢复 MySQL dump 并验证健康检查
+# HCT-408 restore: validate first, then restore database and verify references.
 
 param(
     [Parameter(Mandatory=$true)]
     [string]$BackupId,
     [string]$BackupDir = "backups",
     [string]$ComposeProjectName = "",
+    [string]$FileRoot = "",
     [switch]$SkipHealth = $false,
     [switch]$Force = $false
 )
 
 $ErrorActionPreference = "Stop"
-$backupPath = Join-Path $BackupDir $BackupId
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$backupPath = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) (Join-Path $BackupDir $BackupId)))
 
-if (-not (Test-Path $backupPath)) {
-    Write-Error "Backup not found: $backupPath"
-    exit 1
-}
+if (-not (Test-Path -LiteralPath $backupPath)) { throw "Backup not found: $backupPath" }
+
+$validator = Join-Path $scriptDir "hct408_validate_backup.py"
+$validationReport = Join-Path $backupPath "validation-before-restore.json"
+if (-not (Test-Path -LiteralPath $validator)) { throw "HCT-408 validator not found: $validator" }
+Write-Host "[HCT-408 restore] validating backup before any destructive operation ..."
+& uv run python $validator --backup $backupPath --output $validationReport
+if ($LASTEXITCODE -ne 0) { throw "Backup validation failed. Database was not modified. See $validationReport" }
+
+$versionFile = Join-Path $backupPath "version_manifest.json"
+$manifest = Get-Content -LiteralPath $versionFile -Raw | ConvertFrom-Json
+Write-Host "[HCT-408 restore] backup metadata: commit=$($manifest.git_commit_short), migration_head=$($manifest.migration_head)"
 
 if (-not $Force) {
     Write-Warning "This will DESTROY the current database and replace it with backup '$BackupId'."
     Write-Warning "Current data will be LOST. Use -Force to suppress this warning."
     $confirm = Read-Host "Type YES to proceed"
-    if ($confirm -ne "YES") {
-        Write-Host "Aborted."
-        exit 0
-    }
+    if ($confirm -ne "YES") { Write-Host "Aborted."; exit 0 }
 }
 
-Write-Host "[HCT-408 restore] starting from backup_id=$BackupId"
-
-# --- Version manifest check ---
-$versionFile = Join-Path $backupPath "version_manifest.json"
-if (Test-Path $versionFile) {
-    $manifest = Get-Content $versionFile -Raw | ConvertFrom-Json
-    Write-Host "[HCT-408 restore] backup metadata: commit=$($manifest.git_commit_short), migration_head=$($manifest.migration_head)"
-} else {
-    Write-Warning "[HCT-408 restore] no version_manifest.json found, proceeding without metadata"
-}
-
-# --- MySQL restore ---
+$composeArgs = @("-T")
+if ($ComposeProjectName) { $composeArgs = @("-p", $ComposeProjectName) + $composeArgs }
+$mysqlPassword = if ($env:MYSQL_ROOT_PASSWORD) { $env:MYSQL_ROOT_PASSWORD } else { "change-me-root" }
+$mysqlDatabase = if ($env:MYSQL_DATABASE) { $env:MYSQL_DATABASE } else { "homecare" }
 $dumpFile = Join-Path $backupPath "mysqldump.sql.gz"
-if (-not (Test-Path $dumpFile)) {
-    Write-Error "mysqldump not found in backup: $dumpFile"
-    exit 1
-}
 
 Write-Host "[HCT-408 restore] restoring MySQL from $dumpFile ..."
-$composeArgs = @("-T")
-if ($ComposeProjectName) {
-    $composeArgs = @("-T", "-p", $ComposeProjectName)
-}
-$MYSQL_PASSWORD = if ($env:MYSQL_ROOT_PASSWORD) { $env:MYSQL_ROOT_PASSWORD } else { "change-me-root" }
-$MYSQL_DATABASE = if ($env:MYSQL_DATABASE) { $env:MYSQL_DATABASE } else { "homecare" }
-$env:MYSQL_PWD = $MYSQL_PASSWORD
-
+$previousMysqlPwd = $env:MYSQL_PWD
+$env:MYSQL_PWD = $mysqlPassword
 try {
-    # Drop and recreate to ensure clean state
-    docker compose exec $composeArgs db mysql -u root -e "DROP DATABASE IF EXISTS ``$MYSQL_DATABASE``; CREATE DATABASE ``$MYSQL_DATABASE`` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+    docker compose exec $composeArgs db mysql -u root -e "DROP DATABASE IF EXISTS ``$mysqlDatabase``; CREATE DATABASE ``$mysqlDatabase`` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+    if ($LASTEXITCODE -ne 0) { throw "Failed to recreate database." }
 
-    # Restore dump
-    $mysqlArgs = @("-T")
-    if ($ComposeProjectName) { $mysqlArgs = @("-T", "-p", $ComposeProjectName) }
-    Get-Content $dumpFile -Raw -AsByteStream | & {
-        $inputBytes = $input
-        if ($dumpFile.EndsWith('.gz')) {
-            $memStream = New-Object System.IO.MemoryStream(, $inputBytes)
-            $gzipStream = New-Object System.IO.Compression.GzipStream($memStream, [System.IO.Compression.CompressionMode]::Decompress)
-            $reader = New-Object System.IO.StreamReader($gzipStream)
-            $sql = $reader.ReadToEnd()
-            $reader.Close()
-        } else {
-            $sql = [System.Text.Encoding]::UTF8.GetString($inputBytes)
-        }
-        $sql | docker compose exec $mysqlArgs db mysql -u root "$MYSQL_DATABASE"
+    $dumpBytes = Get-Content -LiteralPath $dumpFile -Raw -AsByteStream
+    $memStream = New-Object System.IO.MemoryStream(, $dumpBytes)
+    $gzipStream = New-Object System.IO.Compression.GzipStream($memStream, [System.IO.Compression.CompressionMode]::Decompress)
+    $reader = New-Object System.IO.StreamReader($gzipStream)
+    try {
+        $sql = $reader.ReadToEnd()
+    } finally {
+        $reader.Close()
+        $gzipStream.Close()
+        $memStream.Close()
     }
-
+    $sql | docker compose exec $composeArgs db mysql -u root $mysqlDatabase
+    if ($LASTEXITCODE -ne 0) { throw "MySQL dump import failed." }
     Write-Host "[HCT-408 restore] MySQL restore complete"
 } finally {
-    $env:MYSQL_PWD = $null
+    $env:MYSQL_PWD = $previousMysqlPwd
 }
 
-# --- Run migrations ---
-Write-Host "[HCT-408 restore] running Alembic migrations ..."
 $apiArgs = @("exec", "-T", "api")
-if ($ComposeProjectName) {
-    $apiArgs = @("-p", $ComposeProjectName) + $apiArgs
-}
+if ($ComposeProjectName) { $apiArgs = @("-p", $ComposeProjectName) + $apiArgs }
+Write-Host "[HCT-408 restore] running Alembic migrations ..."
 docker compose $apiArgs uv run alembic upgrade head 2>&1 | ForEach-Object { Write-Host "  $_" }
+if ($LASTEXITCODE -ne 0) { throw "Alembic migration failed after restore." }
 
-# --- Restore file references ---
 $fileManifest = Join-Path $backupPath "file_manifest.json"
-if (Test-Path $fileManifest) {
-    Write-Host "[HCT-408 restore] file manifest found ($fileManifest), verify file references manually if needed."
+if (Test-Path -LiteralPath $fileManifest) {
+    $manifestFiles = @((Get-Content -LiteralPath $fileManifest -Raw | ConvertFrom-Json).files)
+    $fileRootValue = if ($FileRoot) { $FileRoot } elseif ($env:FILE_ROOT) { $env:FILE_ROOT } else { "./data/files" }
+    if ($manifestFiles.Count -gt 0 -and -not (Test-Path -LiteralPath $fileRootValue)) {
+        throw "File root is missing after restore: $fileRootValue"
+    }
+    if ($manifestFiles.Count -gt 0) {
+        Write-Host "[HCT-408 restore] validating file references under $fileRootValue ..."
+        & uv run python $validator --backup $backupPath --file-root $fileRootValue
+        if ($LASTEXITCODE -ne 0) { throw "File reference validation failed after restore." }
+    } else {
+        Write-Host "[HCT-408 restore] file manifest contains no file references."
+    }
 }
 
-# --- Health check ---
 if (-not $SkipHealth) {
-    Write-Host "[HCT-408 restore] running health checks ..."
-    $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
     $healthScript = Join-Path $scriptDir "check_http_health.py"
-    if (Test-Path $healthScript) {
-        uv run python $healthScript 2>&1 | ForEach-Object { Write-Host "  $_" }
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warning "[HCT-408 restore] health check returned non-zero exit code: $LASTEXITCODE"
-        } else {
-            Write-Host "[HCT-408 restore] all health checks passed"
-        }
-    } else {
-        Write-Warning "[HCT-408 restore] health check script not found at $healthScript"
-    }
+    if (-not (Test-Path -LiteralPath $healthScript)) { throw "Health check script not found: $healthScript" }
+    Write-Host "[HCT-408 restore] running health checks ..."
+    uv run python $healthScript 2>&1 | ForEach-Object { Write-Host "  $_" }
+    if ($LASTEXITCODE -ne 0) { throw "Health check returned non-zero exit code: $LASTEXITCODE" }
+    Write-Host "[HCT-408 restore] all health checks passed"
 }
 
 Write-Host "[HCT-408 restore] complete. backup_id=$BackupId restored successfully."
-Write-Host "[HCT-408 restore] verify with: uv run python scripts/check_http_health.py"
