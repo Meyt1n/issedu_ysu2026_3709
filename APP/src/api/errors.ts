@@ -101,6 +101,10 @@ function presentApiErrorInternal(cause: unknown): ErrorPresentation {
     return settings('授权可能已到期、被撤回或访问范围已变化。为保护隐私，已清除本地页面数据；请到“我的”重新验证身份与访问目的。')
   }
 
+  if (code === 'TIME_WINDOW_VIOLATION') {
+    return retry('当前不在服务端允许的操作时间窗内，任务状态未改变。请按提示的下一允许时间操作；紧急情况请联系家人或专业人员。', cause.requestId)
+  }
+
   if (code === 'REQUEST_TIMEOUT') {
     return retry('请求超时，服务器没有在限定时间内响应；结果未知，请稍后重试（重试会复用幂等键，不会重复写入）。', cause.requestId)
   }

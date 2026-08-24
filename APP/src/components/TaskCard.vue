@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 
 import AppIcon from '@/components/AppIcon.vue'
 import LevelTag from '@/components/LevelTag.vue'
@@ -21,6 +21,10 @@ const emit = defineEmits<{
 const panel = ref<'none' | 'defer' | 'skip'>('none')
 const skipReason = ref('')
 const skipError = ref('')
+const policy = computed(() => props.task.actionPolicy)
+const hasActionPolicy = computed(() => Boolean(policy.value && policy.value.allowedActions.length))
+const allowsAction = (action: TaskAction) => Boolean(policy.value?.allowedActions.includes(action))
+const policyMessage = computed(() => policy.value ? 'Server plan version: ' + policy.value.planVersion + '; ' + policy.value.windowLabel : 'Server safety window is unavailable. This task is read-only.')
 
 const DEFER_OPTIONS = [1, 2, 4]
 const taskDomId = String(props.task.id).replace(/[^a-zA-Z0-9_-]/g, '-')
@@ -32,10 +36,12 @@ const skipInputId = `task-${taskDomId}-skip-reason`
 const skipErrorId = `task-${taskDomId}-skip-error`
 
 function confirm(): void {
+  if (!allowsAction('confirm')) return
   emit('action', 'confirm', {})
 }
 
 function defer(hours: number): void {
+  if (!allowsAction('defer')) return
   panel.value = 'none'
   emit('action', 'defer', { deferHours: hours })
 }
@@ -49,6 +55,7 @@ async function togglePanel(nextPanel: 'defer' | 'skip'): Promise<void> {
 }
 
 function submitSkip(): void {
+  if (!allowsAction('skip')) return
   if (!skipReason.value.trim()) {
     skipError.value = '请填写跳过原因，便于家人了解情况。'
     return
@@ -81,11 +88,13 @@ function submitSkip(): void {
     </div>
 
     <p class="task-detail">{{ props.task.detail }}</p>
+    <p class="meta-line">{{ policyMessage }}</p>
+    <p v-if="policy?.nextAllowedAt" class="meta-line">下一允许时间：{{ formatDateTime(policy.nextAllowedAt) }}</p>
     <p v-if="props.task.skipReason" class="meta-line">跳过原因：{{ props.task.skipReason }}</p>
 
     <template v-if="props.task.status === 'PENDING' || props.task.status === 'DEFERRED'">
       <div class="btn-row">
-        <button type="button" class="btn" :disabled="props.busy" @click="confirm">
+        <button type="button" class="btn" :disabled="props.busy || !hasActionPolicy" @click="confirm">
           <AppIcon name="check" :size="18" />
           完成
         </button>
@@ -93,7 +102,7 @@ function submitSkip(): void {
           :id="deferButtonId"
           type="button"
           class="btn btn-quiet"
-          :disabled="props.busy"
+          :disabled="props.busy || !hasActionPolicy"
           :aria-expanded="panel === 'defer'"
           :aria-controls="deferPanelId"
           @click="togglePanel('defer')"
@@ -104,7 +113,7 @@ function submitSkip(): void {
           :id="skipButtonId"
           type="button"
           class="btn btn-danger"
-          :disabled="props.busy"
+          :disabled="props.busy || !hasActionPolicy"
           :aria-expanded="panel === 'skip'"
           :aria-controls="skipPanelId"
           @click="togglePanel('skip')"
@@ -128,7 +137,7 @@ function submitSkip(): void {
             :key="hours"
             type="button"
             class="btn btn-quiet"
-            :disabled="props.busy"
+            :disabled="props.busy || !hasActionPolicy"
             @click="defer(hours)"
           >
             {{ hours }} 小时
@@ -155,7 +164,7 @@ function submitSkip(): void {
           />
         </label>
         <p v-if="skipError" :id="skipErrorId" class="notice" data-tone="error" role="alert">{{ skipError }}</p>
-        <button type="button" class="btn btn-danger btn-block" :disabled="props.busy" @click="submitSkip">
+        <button type="button" class="btn btn-danger btn-block" :disabled="props.busy || !hasActionPolicy" @click="submitSkip">
           记录跳过
         </button>
       </div>
