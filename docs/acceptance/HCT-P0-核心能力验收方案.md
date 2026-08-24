@@ -17,7 +17,7 @@
 | --- | --- | --- | --- |
 | HCT-201 固定药品集 | `scripts/hct201_fixed_set_gate.py` | 12～20 个批准药品、固定 known 集、unknown 集、conflict 集、授权/分组/删除证据齐全 | 阻塞，仓库没有可发布真实固定集 |
 | HCT-205 OCR/条码/主数据 | `scripts/hct205_accuracy_report.py` | 冻结结果 JSONL、真实批准范围、字段/条码/状态准确率达到阈值、失败原因和阈值版本齐全 | 阻塞，只有契约和合成链路 |
-| HCT-203 YOLO/QLoRA | `scripts/hct203_release_gate.py` | 独立评估、hard-negative、模型/报告哈希、盲测或真实 test、回滚演练齐全 | 阻塞，当前仍是实验/候选状态 |
+| HCT-203 YOLO/QLoRA | `scripts/hct203_independent_eval.py`、`scripts/hct203_release_gate.py`、`scripts/hct203_r3_review.py`、`scripts/hct203_publish.py` | 独立评估、hard-negative、模型/报告哈希、盲测或真实 test、回滚演练、人工 R3 和发布清单齐全 | YOLO 已按维护者 waiver 发布为 `PUBLISHED_AUXILIARY_ONLY`；正式固定集/现场权重校验/独立 R3 仍未验证 |
 | HCT-302 规则 | `scripts/hct302_acceptance_report.py` | 重复成分、过敏、有限相互作用和严重案例均有批准案例、来源、规则版本、主数据版本 | 代码已有，正式案例包未关闭 |
 | HCT-308 提醒 | `scripts/hct308_acceptance_report.py` | 确认、延期、漏服、疗程结束、逾期升级、照护者升级六条本地 API 证据完整 | 服务端自动生命周期、家庭时区、重启幂等和本地通知契约已完成；Android/PWA 系统通知与真实连续证据待跑 |
 | HCT-403 助手 | `scripts/hct403_assistant_acceptance_gate.py` | QLoRA 真实盲测、红队、无证据拒答、Ollama 断连降级全部通过 | 本地工具链已有，正式盲测和完整安全证据未完成 |
@@ -92,7 +92,10 @@ uv run python scripts/hct203_release_gate.py `
   --report <外部目录>\hct203-qlora.json
 ```
 
-命令只会给出 `READY_FOR_R3_REVIEW`，不会自行把模型改成生产发布状态。当前已有 registry 的 `EXPERIMENTAL_UNRELEASED` 语义必须继续保留，直到独立复核完成。
+命令只会给出 `READY_FOR_R3_REVIEW`，不会自行把模型改成生产发布状态。随后必须由真实复核人填写外部
+R3 record 并运行 `scripts/hct203_r3_review.py`，再由 `scripts/hct203_publish.py` 生成
+`PUBLISHED_AUXILIARY_ONLY` 清单。发布器不复制权重、不调用 API、不自动启用家庭运行时；当前已有 registry
+的 `EXPERIMENTAL_UNRELEASED` 语义必须继续保留，直到批准固定集、正式权重、独立复核和回滚证据完成。
 
 ### 2.3 规则和提醒
 
@@ -159,7 +162,8 @@ uv run python scripts/hct_p0_acceptance.py `
   --report <外部目录>\hct-p0-summary.json
 ```
 
-总汇总器缺少任何一个报告都会 `BLOCK_P0_ACCEPTANCE`。这正是当前状态：代码、单元测试和合成演示可以继续使用，但在真实固定集、正式模型、真实天气和 R3 签署补齐前，不能把 HCT-201、HCT-203、HCT-205、HCT-206、HCT-405、HCT-409 标成已验收。
+总汇总器缺少任何一个正式报告都会 `BLOCK_P0_ACCEPTANCE`。HCT-203 的维护者 waiver 只允许药盒区域辅助能力以
+`PUBLISHED_AUXILIARY_ONLY` 发布，不代表正式固定集、正式模型质量或 R3 验收通过；未来升级为正式生产模型时仍必须补齐这些证据。
 
 ## 4. 回滚和责任
 

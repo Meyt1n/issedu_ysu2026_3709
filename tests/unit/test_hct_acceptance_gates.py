@@ -296,10 +296,19 @@ def test_hct405_and_hct409_require_release_only_evidence() -> None:
 
 def test_model_release_gate_never_publishes_directly() -> None:
     evaluation = {
+        "schema_version": "hct203-yolo-independent-evaluation/v1",
+        "status": "PASSED",
         "evaluation_scope": "approved_real_fixed_set",
         "independent_evaluation": True,
         "hard_negative_reviewed": True,
-        "metrics": {"map50": 0.99},
+        "test_set_sha256": "d" * 64,
+        "metrics": {
+            "precision": 0.98,
+            "recall": 0.97,
+            "map50": 0.99,
+            "map50_95": 0.90,
+        },
+        "hard_negatives": [{"sample_id": "hard-negative-1", "false_positive": False}],
         "evaluation_report_sha256": "b" * 64,
         "threshold_report_sha256": "c" * 64,
     }
@@ -309,8 +318,13 @@ def test_model_release_gate_never_publishes_directly() -> None:
             "model_id": "model-v1",
             "release_status": "EXPERIMENTAL_UNRELEASED",
             "training": {"dataset_status": "APPROVED"},
+            "artifacts": {"weights_sha256": "e" * 64},
         },
-        dataset_gate={"passed": True, "decision": "ALLOW_APPROVED_FIXED_SET"},
+        dataset_gate={
+            "passed": True,
+            "decision": "ALLOW_APPROVED_FIXED_SET",
+            "manifest_sha256": "f" * 64,
+        },
         evaluation=evaluation,
         rollback={
             "rollback_tested": True,
