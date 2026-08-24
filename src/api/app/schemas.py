@@ -256,6 +256,13 @@ class AccessAuditPageRead(BaseModel):
     has_more: bool = False
 
 
+class AccessAuditSummaryRead(BaseModel):
+    total: int
+    by_action: dict[str, int]
+    by_outcome: dict[str, int]
+    generated_at: datetime
+
+
 class HealthEventCreate(BaseModel):
     member_id: str
     event_type: str = Field(min_length=1, max_length=80)

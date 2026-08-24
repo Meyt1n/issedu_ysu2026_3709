@@ -56,6 +56,7 @@
 | POST | `/api/v1/households/{id}/authorizations/{auth_id}/revoke` | 撤销授权 | ✅ |
 | GET | `/api/v1/households/{id}/authorization-audits` | Owner 查询授权与访问审计 | ✅ |
 | GET | `/api/v1/households/{id}/authorization-audits/page` | Owner 按签名游标分页查询审计，可按 `request_id`、`action`、`outcome` 过滤；游标绑定全部筛选范围 | ✅ |
+| GET | `/api/v1/households/{id}/authorization-audits/summary` | Owner 查询按动作和结果聚合的最小审计摘要，不返回明细正文 | ✅ |
 | POST | `/api/v1/households/{id}/events` | 追加健康事件 | ✅ |
 | GET | `/api/v1/households/{id}/events` | 查询事件列表 | ✅ |
 | GET | `/api/v1/households/{id}/events/page` | 按授权范围分页查询事件，可按 `member_id`、`event_type`、`confirmation_status`、`occurred_from`、`occurred_until` 过滤；游标绑定全部筛选范围 | ✅ |
