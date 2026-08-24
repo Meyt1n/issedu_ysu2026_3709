@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import hashlib
+import json
+
 from hct201_fixed_set_gate import evaluate_fixed_set
 from hct203_release_gate import evaluate_release_readiness
 from hct205_accuracy_report import evaluate_records
+from hct205_master_data_gate import gate_snapshot
 from hct302_acceptance_report import evaluate_cases
 from hct305_provider_preflight import preflight
 from hct308_acceptance_report import evaluate_trace
@@ -93,6 +97,7 @@ def test_accuracy_report_allows_real_scope_only() -> None:
         min_field_accuracy=1.0,
         min_barcode_accuracy=1.0,
         min_status_accuracy=1.0,
+        require_formal_evidence=False,
     )
     assert report["decision"] == "ACCEPT_OCR_BARCODE_MASTER_DATA"
     assert report["metrics"]["status_accuracy"] == 1.0
@@ -117,6 +122,141 @@ def test_accuracy_report_does_not_accept_synthetic_fixture() -> None:
     )
     assert report["passed"] is False
     assert report["decision"] == "BLOCK_OCR_BARCODE_MASTER_DATA"
+
+
+def test_hct205_formal_report_requires_approved_evidence_and_exports_safe_failures() -> None:
+    fixed = [
+        {
+            "sample_id": f"known-{index}",
+            "status": "APPROVED",
+            "dataset_scope": "approved_real_fixed_set",
+            "dataset_version": "fixed-v1",
+            "dataset_approval_ref": "review/approved",
+            "review_record_ref": "review/fixed",
+            "case_type": "known",
+            "drug_id": f"drug-{index}",
+            "split": "test",
+            "fixed_eval": True,
+        }
+        for index in range(12)
+    ]
+    fixed += [
+        {
+            "sample_id": "unknown-1",
+            "status": "APPROVED",
+            "dataset_scope": "approved_real_fixed_set",
+            "dataset_version": "fixed-v1",
+            "dataset_approval_ref": "review/approved",
+            "review_record_ref": "review/fixed",
+            "case_type": "unknown",
+            "split": "unknown",
+            "fixed_eval": True,
+            "unknown_set": True,
+            "unknown_reason": "not in master",
+        },
+        {
+            "sample_id": "conflict-1",
+            "status": "APPROVED",
+            "dataset_scope": "approved_real_fixed_set",
+            "dataset_version": "fixed-v1",
+            "dataset_approval_ref": "review/approved",
+            "review_record_ref": "review/fixed",
+            "case_type": "conflict",
+            "split": "test",
+            "fixed_eval": True,
+            "expected_status": "CONFLICT",
+            "conflict_reason": "evidence conflict",
+        },
+    ]
+    master_gate = {
+        "schema_version": "hct205-approved-master-data-gate/v1",
+        "passed": True,
+        "decision": "ALLOW_APPROVED_MASTER_DATA",
+        "version": "master-v1",
+        "master_data_sha256": "a" * 64,
+        "snapshot_file_sha256": "c" * 64,
+        "record_ids": [f"drug-{index}" for index in range(12)],
+        "fixed_set_manifest_sha256": "b" * 64,
+    }
+    results = []
+    for row in fixed:
+        expected_status = {"known": "MATCHED", "unknown": "UNKNOWN", "conflict": "CONFLICT"}[
+            row["case_type"]
+        ]
+        value = (
+            {"drug_name": "controlled"}
+            if row["case_type"] == "known"
+            else {"barcode": "controlled"}
+        )
+        result = {
+            "sample_id": row["sample_id"],
+            "dataset_status": "APPROVED",
+            "dataset_scope": "approved_real_fixed_set",
+            "dataset_version": "fixed-v1",
+            "master_data_version": "master-v1",
+            "master_data_sha256": "a" * 64,
+            "master_data_record_id": row.get("drug_id"),
+            "channel": "ocr",
+            "expected_status": expected_status,
+            "predicted_status": expected_status,
+            "confidence": 0.99,
+            "threshold_version": "threshold-v1",
+            "source_ref": f"review/{row['sample_id']}",
+            "expected": value,
+            "predicted": dict(value),
+        }
+        results.append(result)
+    results[0]["predicted"] = {"drug_name": "wrong"}
+
+    report = evaluate_records(
+        results,
+        threshold_version="threshold-v1",
+        min_field_accuracy=1.0,
+        min_barcode_accuracy=0.0,
+        min_status_accuracy=1.0,
+        fixed_set_records=fixed,
+        fixed_set_manifest_sha256="b" * 64,
+        master_data_gate=master_gate,
+    )
+    assert report["passed"] is False
+    assert report["metrics"]["failure_count"] == 1
+    failure = report["failure_samples"][0]
+    assert "FIELD_MISMATCH:drug_name" in failure["failure_codes"]
+    assert "expected" not in failure and "predicted" not in failure
+
+
+def test_hct205_master_data_gate_blocks_demo_sized_snapshot(tmp_path) -> None:
+    document = {
+        "schema_version": "hct-master-data/v1",
+        "version": "demo-master-v1",
+        "approval_status": "APPROVED",
+        "approval_ref": "review/demo",
+        "revocation_status": "ACTIVE",
+        "records": [
+            {
+                "record_id": "demo-1",
+                "name_aliases": ["演示药"],
+                "specification": "demo",
+                "manufacturer": "demo",
+            },
+            {
+                "record_id": "demo-2",
+                "name_aliases": ["演示药二"],
+                "specification": "demo",
+                "manufacturer": "demo",
+            },
+        ],
+    }
+    canonical = json.dumps(
+        document, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode()
+    document["sha256"] = hashlib.sha256(canonical).hexdigest()
+    path = tmp_path / "demo-master-v1.json"
+    path.write_text(json.dumps(document, ensure_ascii=False), encoding="utf-8")
+    report = gate_snapshot(path)
+    assert report["passed"] is False
+    assert report["decision"] == "BLOCK_APPROVED_MASTER_DATA"
+    assert any(item["code"] == "RECORD_COUNT_OUT_OF_RANGE" for item in report["findings"])
 
 
 def test_rules_require_provenance_and_cover_duplicate_and_interaction() -> None:
@@ -296,10 +436,19 @@ def test_hct405_and_hct409_require_release_only_evidence() -> None:
 
 def test_model_release_gate_never_publishes_directly() -> None:
     evaluation = {
+        "schema_version": "hct203-yolo-independent-evaluation/v1",
+        "status": "PASSED",
         "evaluation_scope": "approved_real_fixed_set",
         "independent_evaluation": True,
         "hard_negative_reviewed": True,
-        "metrics": {"map50": 0.99},
+        "test_set_sha256": "d" * 64,
+        "metrics": {
+            "precision": 0.98,
+            "recall": 0.97,
+            "map50": 0.99,
+            "map50_95": 0.90,
+        },
+        "hard_negatives": [{"sample_id": "hard-negative-1", "false_positive": False}],
         "evaluation_report_sha256": "b" * 64,
         "threshold_report_sha256": "c" * 64,
     }
@@ -309,8 +458,13 @@ def test_model_release_gate_never_publishes_directly() -> None:
             "model_id": "model-v1",
             "release_status": "EXPERIMENTAL_UNRELEASED",
             "training": {"dataset_status": "APPROVED"},
+            "artifacts": {"weights_sha256": "e" * 64},
         },
-        dataset_gate={"passed": True, "decision": "ALLOW_APPROVED_FIXED_SET"},
+        dataset_gate={
+            "passed": True,
+            "decision": "ALLOW_APPROVED_FIXED_SET",
+            "manifest_sha256": "f" * 64,
+        },
         evaluation=evaluation,
         rollback={
             "rollback_tested": True,

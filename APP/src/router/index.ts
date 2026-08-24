@@ -35,6 +35,12 @@ export const router = createRouter({
       component: () => import('@/views/AccessibilityView.vue'),
       meta: { title: '无障碍设置' },
     },
+    {
+      path: '/me/privacy',
+      name: 'privacy',
+      component: () => import('@/views/PrivacyView.vue'),
+      meta: { title: '本地数据管理' },
+    },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
   scrollBehavior() {

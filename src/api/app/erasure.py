@@ -246,14 +246,17 @@ def request_household_erasure(
     event_count = 0
     vision_tasks: list[VisionTask] = []
     if member_ids:
-        event_count = session.scalar(
-            select(func.count())
-            .select_from(HealthEvent)
-            .where(
-                HealthEvent.household_id == household.id,
-                HealthEvent.member_id.in_(member_ids),
+        event_count = (
+            session.scalar(
+                select(func.count())
+                .select_from(HealthEvent)
+                .where(
+                    HealthEvent.household_id == household.id,
+                    HealthEvent.member_id.in_(member_ids),
+                )
             )
-        ) or 0
+            or 0
+        )
         vision_tasks = list(
             session.scalars(
                 select(VisionTask).where(
@@ -288,9 +291,7 @@ def request_household_erasure(
             FaceCredential.household_id == household.id,
         )
         if member_id is not None:
-            target_actor_ids = {
-                member.actor_id for member in members if member.actor_id
-            }
+            target_actor_ids = {member.actor_id for member in members if member.actor_id}
             if target_actor_ids:
                 credential_stmt = credential_stmt.where(
                     FaceCredential.actor_id.in_(target_actor_ids)
@@ -299,14 +300,12 @@ def request_household_erasure(
                 credential_stmt = credential_stmt.where(False)
         credentials = list(session.scalars(credential_stmt).all())
         credentials_deleted = 0
-        target_actor_ids = {
-            member.actor_id for member in members if member.actor_id
-        }
+        target_actor_ids = {member.actor_id for member in members if member.actor_id}
         pin_actor_ids = target_actor_ids | {credential.actor_id for credential in credentials}
         if member_id is None:
             pin_actor_ids.add(household.created_by)
         for target_actor_id in pin_actor_ids:
-            revoke_account_pin(target_actor_id, household.id)
+            revoke_account_pin(target_actor_id, household.id, session)
         pins_deleted = len(pin_actor_ids)
         for credential in credentials:
             if credential.status != "DELETED" or credential.encrypted_template:
@@ -315,9 +314,9 @@ def request_household_erasure(
                 credential.encrypted_template = b""
                 credentials_deleted += 1
         if member_id is None:
-            sessions_revoked = revoke_household_sessions(household.id)
+            sessions_revoked = revoke_household_sessions(household.id, session=session)
         else:
-            sessions_revoked = revoke_household_sessions(household.id, target_actor_ids)
+            sessions_revoked = revoke_household_sessions(household.id, target_actor_ids, session)
 
         if member_ids:
             authorizations = list(
@@ -393,11 +392,14 @@ def request_household_erasure(
                 member_ids=set(member_ids),
             ):
                 continue
-            chunk_count = session.scalar(
-                select(func.count())
-                .select_from(KnowledgeChunk)
-                .where(KnowledgeChunk.document_id == document.id)
-            ) or 0
+            chunk_count = (
+                session.scalar(
+                    select(func.count())
+                    .select_from(KnowledgeChunk)
+                    .where(KnowledgeChunk.document_id == document.id)
+                )
+                or 0
+            )
             delete_document(session, document.id, deleted_by=actor_id)
             vectors_deleted += chunk_count
         _mark_layer(layers, "vectors", status="completed", count=vectors_deleted)

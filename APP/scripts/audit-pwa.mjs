@@ -7,6 +7,7 @@ const publicDir = path.join(root, 'public')
 const distDir = path.join(root, 'dist')
 const swSource = fs.readFileSync(path.join(publicDir, 'sw.js'), 'utf8')
 const mainSource = fs.readFileSync(path.join(root, 'src', 'main.ts'), 'utf8')
+const pwaSource = fs.readFileSync(path.join(root, 'src', 'stores', 'pwa.ts'), 'utf8')
 const manifest = JSON.parse(fs.readFileSync(path.join(publicDir, 'manifest.webmanifest'), 'utf8'))
 
 function assert(condition, message) {
@@ -20,7 +21,8 @@ function existsInDist(urlPath) {
 
 assert(fs.existsSync(distDir), '请先运行 npm run build 生成 dist/')
 assert(fs.existsSync(path.join(distDir, 'sw.js')), '构建产物缺少 sw.js')
-assert(mainSource.includes("navigator.serviceWorker.register('/sw.js')"), '生产入口没有注册 /sw.js')
+assert(mainSource.includes('initPwaLifecycle('), '生产入口没有初始化 PWA 生命周期')
+assert(pwaSource.includes(".register('/sw.js')"), 'PWA 生命周期没有注册 /sw.js')
 assert(mainSource.includes('import.meta.env.PROD'), 'Service Worker 注册没有限制在生产环境')
 
 const shellMatch = swSource.match(/const SHELL = \[(.*?)\]/s)

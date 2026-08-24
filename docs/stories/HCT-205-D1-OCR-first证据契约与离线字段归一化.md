@@ -58,3 +58,9 @@ PR Required Checks、Relay Review 和维护者 merge 属于仓库合并门禁，
 新增 `scripts/hct205_accuracy_report.py`，从仓库外的冻结 JSONL 计算 OCR、条码、主数据和四状态准确率，保留失败原因、
 置信度、阈值版本、来源引用和输入哈希。脚本只对 `approved_real_fixed_set` 输出正式接受结果；合成夹具即使全部预测正确，
 也只能说明报告格式和计算逻辑可用，不能关闭本 Story。
+
+## 2026-08-24 固定集准确率、失败样本与批准主数据补充
+
+新增 `scripts/hct205_master_data_gate.py`，在正式报告前校验仓库外批准主数据快照的 schema、版本、批准/撤销状态、规范化 SHA-256、12–20 条记录范围，并可核对 HCT-201 固定集的 known `drug_id` 覆盖。`scripts/hct205_accuracy_report.py` 现在要求正式运行同时提供固定集 manifest 和主数据门禁报告，校验结果覆盖、数据集版本、主数据版本/哈希/记录 ID 与批准证据一致。
+
+报告新增 `failure_samples` 和 `--failure-samples` JSONL 输出。失败项仅包含样本/通道、失败代码、失配字段名、状态、置信度、版本和证据引用，不包含原始 OCR、条码或药品临床字段；可选 `hard_sample_ref` 可交给 HCT-208 授权流程。当前仓库没有真实批准固定集、真实结果或批准主数据，故本 Story 仍为“待验收/阻塞”，不得用 demo 快照或合成夹具填充正式准确率。
