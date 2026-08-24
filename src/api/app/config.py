@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.time_zone import validate_iana_time_zone
@@ -93,6 +93,37 @@ class Settings(BaseSettings):
             return validate_iana_time_zone(value)
         except ValueError as exc:
             raise ValueError("DEFAULT_HOUSEHOLD_TIME_ZONE_INVALID") from exc
+
+    @model_validator(mode="after")
+    def reject_unsafe_production_configuration(self) -> "Settings":
+        """Prevent the local demo auth stores from being deployed as production.
+
+        Password/PIN/face challenges and bearer sessions are intentionally
+        process-local in this phase.  Starting with ``APP_ENV=production``
+        would otherwise make a restart silently log everyone out and would
+        retain development trust shortcuts.  Fail closed until the database
+        session store, rotation and CSRF deployment work is delivered.
+        """
+
+        if self.app_env.strip().casefold() not in {"prod", "production"}:
+            return self
+
+        problems: list[str] = ["database-backed session persistence is not implemented"]
+        if self.allow_dev_actor_header:
+            problems.append("ALLOW_DEV_ACTOR_HEADER must be false")
+        if self.cursor_signing_key in {"", "dev-only-change-me"}:
+            problems.append("CURSOR_SIGNING_KEY must be replaced")
+        if self.vision_adapter_signing_key in {"", "dev-only-change-me"}:
+            problems.append("VISION_ADAPTER_SIGNING_KEY must be replaced")
+        if self.biometric_encryption_key in {"", "dev-only-biometric-key-change-me"}:
+            problems.append("BIOMETRIC_ENCRYPTION_KEY must be replaced")
+        if not self.egress_default_deny:
+            problems.append("EGRESS_DEFAULT_DENY must remain true")
+        if self.agent_web_search_enabled and not self.agent_web_search_allowed_domain_set:
+            problems.append("AGENT_WEB_SEARCH_ALLOWED_DOMAINS is required when search is enabled")
+        if problems:
+            raise ValueError("PRODUCTION_CONFIGURATION_BLOCKED: " + "; ".join(problems))
+        return self
 
     @property
     def upload_allowed_ext_set(self) -> set[str]:

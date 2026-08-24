@@ -96,6 +96,10 @@ Final HCT-405 acceptance still requires a deployment restart/offline drill, rele
 2026-08-22 新增 `scripts/hct405_acceptance_gate.py`，将成员上下文、扫描人工确认、规则提醒、助手解释和离线重启纳入一条
 可复现 trace；仍强制检查批准发布模型、部署演练和跨组 R3，合成 E2E 不能单独关闭本 Story。
 
+2026-08-24 新增 `scripts/hct405_local_evidence.py`，可读取 API/Web/数据库健康状态并执行核心合成回归，输出到被 Git 忽略的
+`artifacts/hct405-local-evidence.json`。本地 API、数据库、能力接口和 Web 健康检查均已通过，合成回归也已通过；报告决策固定为
+`LOCAL_EVIDENCE_COLLECTED_NOT_ACCEPTANCE`，不会把真实动态人脸、批准发布模型、重启/断网演练或跨组 R3 误记为通过。
+
 ## Rollback
 
 Revert the focused API/application/test changes, then downgrade `0011_hct405_erasure` only when no `erasure_task` rows exist; the migration refuses to discard erasure audit. Downgrade `0010_hct405_review_wiring` only when no new review audit context/fingerprints/version transitions and no `REVIEW` rows exist. On upgrade, the review-wiring migration repairs historical vision-task household IDs from their assigned members and cancels active legacy tasks with no valid member scope; these safety corrections are intentionally not reversed. The erasure migration adds nullable `deleted_at` tombstones and the cleanup-task table. All test inputs are generated in temporary stores, with no external health-data dependency.

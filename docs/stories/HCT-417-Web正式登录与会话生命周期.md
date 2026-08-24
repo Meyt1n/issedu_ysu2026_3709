@@ -28,6 +28,7 @@
 - 前端：`src/web/src/api/client.ts`、`src/web/src/api/types.ts`、`src/web/src/store.ts`、`src/web/src/views/WelcomeView.vue`。
 - 定向测试：`tests/integration/test_hct417_web_session.py`、`src/web/src/api/client.test.ts`，并补充浏览器路径测试。
 - 已知限制：当前账号和会话仍为进程内存实现，服务重启会清空账号/会话；这只能用于本地演示，正式部署需接入持久化会话和审计方案。
+- 2026-08-24 增加 `Settings` 的生产配置 fail-closed 校验和 `tests/unit/test_production_configuration_gate.py`：当仍使用内存会话、开发身份头或演示密钥时，`APP_ENV=production` 会拒绝启动，避免把本地演示直接当成正式部署。该闸门不替代数据库会话持久化、密钥轮换、CSRF/同源策略实现。
 
 ## 5. 回滚
 
