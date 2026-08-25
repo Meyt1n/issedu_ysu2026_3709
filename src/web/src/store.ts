@@ -2,6 +2,7 @@ import { computed, reactive, readonly } from 'vue'
 
 import { ApiClientError, apiClient } from './api/client'
 import { clearChatSessionsForActor } from './assistant/chatSession'
+import { SHOW_ADVANCED_LAB } from './ui/featureFlags'
 import type {
   AuthSession,
   CapabilityResponse,
@@ -186,6 +187,11 @@ export function setView(view: ViewName): void {
     return
   }
   if (state.portal === 'admin' && MEMBER_VIEWS.includes(view)) {
+    state.currentView = 'overview'
+    return
+  }
+  // 研发入口在生产构建默认隐藏（HCT-439 阶段三），直接访问回落到总览。
+  if (view === 'modellab' && !SHOW_ADVANCED_LAB) {
     state.currentView = 'overview'
     return
   }

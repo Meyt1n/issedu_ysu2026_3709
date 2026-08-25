@@ -1,0 +1,77 @@
+import { describe, expect, it } from 'vitest'
+
+import {
+  isMemberTaskActive,
+  memberVisionStatusHint,
+  memberVisionStatusLabel,
+} from './memberStatus'
+
+const INTERNAL_CODES = [
+  'queued',
+  'running',
+  'succeeded',
+  'failed',
+  'timeout',
+  'cancelled',
+  'MATCHED',
+  'CONFLICT',
+  'UNKNOWN',
+  'REVIEW',
+  'LOW_QUALITY',
+  'READY_FOR_FUSION',
+  'PENDING_REVIEW',
+  'UNCONFIRMED',
+  'OCR',
+]
+
+describe('成员前台状态文案映射（HCT-439 阶段二）', () => {
+  it('把排队/处理中的任务映射为“正在识别”', () => {
+    expect(memberVisionStatusLabel('queued')).toBe('正在识别')
+    expect(memberVisionStatusLabel('running')).toBe('正在识别')
+    expect(isMemberTaskActive('queued')).toBe(true)
+    expect(isMemberTaskActive('running')).toBe(true)
+    expect(isMemberTaskActive('succeeded')).toBe(false)
+  })
+
+  it('识别完成后提示等待家人确认，而不是暴露 succeeded', () => {
+    expect(memberVisionStatusLabel('succeeded')).toBe('已提交，等待家人确认')
+    expect(memberVisionStatusHint('succeeded')).toContain('我的记录')
+  })
+
+  it('管理员确认后的照片显示“已确认”，覆盖任务自身状态', () => {
+    expect(memberVisionStatusLabel('succeeded', true)).toBe('已确认')
+    expect(memberVisionStatusHint('succeeded', true)).toContain('已进入家庭记录')
+  })
+
+  it('失败与超时提示重拍，不出现英文错误码', () => {
+    for (const status of ['failed', 'timeout']) {
+      expect(memberVisionStatusLabel(status)).toBe('识别失败，请重新拍照')
+      expect(memberVisionStatusHint(status)).toContain('再拍一次')
+    }
+  })
+
+  it('未知/内部状态一律回落到兜底文案，绝不透出内部代码', () => {
+    for (const code of [
+      'MATCHED',
+      'CONFLICT',
+      'UNKNOWN',
+      'REVIEW',
+      'LOW_QUALITY',
+      'READY_FOR_FUSION',
+      'PENDING_REVIEW',
+      'SOMETHING_ELSE',
+      '',
+      null,
+      undefined,
+    ]) {
+      const label = memberVisionStatusLabel(code as string)
+      const hint = memberVisionStatusHint(code as string)
+      for (const internal of INTERNAL_CODES) {
+        expect(label).not.toContain(internal)
+        expect(hint).not.toContain(internal)
+      }
+      expect(label.length).toBeGreaterThan(0)
+      expect(/^[\u4e00-\u9fa5“”、。，！？·\s]+$/.test(label)).toBe(true)
+    }
+  })
+})
