@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import cv2
 import numpy as np
 import pytest
 from fastapi import HTTPException
@@ -9,6 +10,7 @@ from app.face_credentials import (
     check_face_liveness,
     decrypt_template,
     encrypt_template,
+    ensure_face_frame_quality,
     extract_face_template,
     face_template_similarity,
 )
@@ -21,6 +23,39 @@ def _pattern_template(flip_count: int = 0, *, invert: bool = False) -> bytes:
     if invert:
         values = -values
     return values.tobytes()
+
+
+def _webcam_selfie_jpeg(width: int = 960, height: int = 540, *, seed: int = 7) -> bytes:
+    """Guided-capture style frame: one person in front of a plain wall.
+
+    Deliberately low edge density (plain background, no text) — exactly the
+    kind of valid frame the medicine-carton OCR gate used to reject as
+    FACE_FRAME_LOW_QUALITY before HCT-424 got its own face frame gate.
+    """
+    rng = np.random.default_rng(seed)
+    frame = np.full((height, width, 3), 160.0, dtype=np.float32)
+    frame += rng.normal(0.0, 2.0, frame.shape).astype(np.float32)
+    center_x, center_y = width // 2, int(height * 0.45)
+    short = min(width, height)
+    cv2.ellipse(
+        frame,
+        (center_x, height),
+        (int(width * 0.30), int(height * 0.45)),
+        0, 180, 360, (70, 60, 55), -1,
+    )
+    axes = (int(short * 0.20), int(short * 0.28))
+    cv2.ellipse(frame, (center_x, center_y), axes, 0, 0, 360, (150, 170, 205), -1)
+    eye_y = center_y - axes[1] // 5
+    for dx in (-axes[0] // 2, axes[0] // 2):
+        cv2.circle(frame, (center_x + dx, eye_y), 6, (30, 30, 30), -1)
+    cv2.ellipse(frame, (center_x, center_y + axes[1] // 2), (20, 8), 0, 0, 180, (80, 80, 140), 2)
+    ok, encoded = cv2.imencode(
+        ".jpg",
+        np.clip(frame, 0, 255).astype(np.uint8),
+        [cv2.IMWRITE_JPEG_QUALITY, 90],
+    )
+    assert ok
+    return encoded.tobytes()
 
 
 def test_face_template_is_encrypted_and_round_trips() -> None:
@@ -194,3 +229,47 @@ def test_face_template_similarity_is_bounded_for_valid_templates() -> None:
 def test_registration_rejects_undecodable_frames(image_bytes: bytes) -> None:
     with pytest.raises(ValueError, match="FACE_FRAME_DECODE_FAILED"):
         extract_face_template(image_bytes)
+
+
+@pytest.mark.parametrize(
+    ("width", "height"),
+    [
+        (960, 540),  # 1280x720 webcam capped to 960 wide by FaceVideoCapture
+        (640, 480),  # classic 4:3 webcam
+        (640, 360),  # common 16:9 low-res fallback when 720p is unavailable
+        (360, 640),  # mobile portrait
+    ],
+)
+def test_face_frame_gate_accepts_guided_webcam_captures(width: int, height: int) -> None:
+    """Regression HCT-424: valid guided captures must not be rejected.
+
+    These plain-background selfie frames fail the medicine-carton OCR gate
+    (edge density / subject contour / 480px height floor), which used to be
+    misapplied to face frames and surfaced as FACE_FRAME_LOW_QUALITY.
+    """
+    metrics = ensure_face_frame_quality(_webcam_selfie_jpeg(width, height))
+
+    assert metrics["width"] == float(width)
+    assert metrics["height"] == float(height)
+
+
+@pytest.mark.parametrize(("width", "height"), [(320, 240), (160, 120), (479, 200)])
+def test_face_frame_gate_rejects_tiny_frames(width: int, height: int) -> None:
+    with pytest.raises(ValueError, match="FACE_FRAME_LOW_QUALITY"):
+        ensure_face_frame_quality(_webcam_selfie_jpeg(width, height))
+
+
+@pytest.mark.parametrize("level", [0, 255])
+def test_face_frame_gate_rejects_black_or_blown_out_frames(level: int) -> None:
+    """A covered lens (black) or hard backlight (white) is still unusable."""
+    flat = np.full((540, 960, 3), level, dtype=np.uint8)
+    ok, encoded = cv2.imencode(".jpg", flat)
+    assert ok
+
+    with pytest.raises(ValueError, match="FACE_FRAME_LOW_QUALITY"):
+        ensure_face_frame_quality(encoded.tobytes())
+
+
+def test_face_frame_gate_rejects_undecodable_bytes() -> None:
+    with pytest.raises(ValueError, match="FACE_FRAME_DECODE_FAILED"):
+        ensure_face_frame_quality(b"not-an-image")
