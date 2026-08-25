@@ -169,7 +169,7 @@ onBeforeUnmount(() => {
       <div>
         <h2 class="hero-greeting">视觉扫描中心</h2>
         <p class="hero-sub">
-          拍摄药盒或报告，先通过本地质量门控，再进入 OCR 识别队列；冲突或未知结果一律进入人工复核。
+          拍摄药盒或报告，经本地质量门控后进入识别队列；冲突结果进入人工复核。
         </p>
       </div>
       <label class="context-select">

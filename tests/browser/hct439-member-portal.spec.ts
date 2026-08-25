@@ -169,7 +169,7 @@ test('家庭成员进入前台，只看到自己的照护入口和已确认记�
   await page.locator('aside.sidebar').getByRole('button', { name: '我的记录', exact: true }).click()
   await expect(page.getByRole('heading', { name: '奶奶的健康记录' })).toBeVisible()
   await expect(page.getByText('药品：布洛芬缓释胶囊')).toBeVisible()
-  await expect(page.getByText('这里只展示家人确认过的内容')).toBeVisible()
+  await expect(page.getByText('只展示家人确认过的内容')).toBeVisible()
 })
 
 /* ── HCT-439 阶段四/六：成员拍照 → 待确认 → 管理员确认 → 前台可见（mock API 全链路 UI 演示，

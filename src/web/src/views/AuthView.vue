@@ -288,7 +288,12 @@ onMounted(() => {
       <div>
         <h2 class="hero-greeting">授权管理</h2>
         <p class="hero-sub">
-          子女与照护者只能看到被精细授权的字段。授权始终标注可见范围、用途与到期时间，撤回立即生效。
+          精细授权可见范围、用途与到期时间；撤回立即生效。
+        </p>
+        <p v-if="session.isOwnerView" class="hero-sub review-session-meta">
+          登录 <strong>{{ session.actorId }}</strong>
+          · 用途 <strong>{{ purposeHint(session.accessPurpose) }}</strong>（{{ session.accessPurpose || '未填' }}）
+          · <span class="pill pine" style="display: inline-flex; margin-left: 4px">可管授权</span>
         </p>
       </div>
     </div>
@@ -303,48 +308,32 @@ onMounted(() => {
         </div>
         <span class="pill sky">仅授权可见</span>
       </div>
-      <p class="card-note" style="margin-top: -6px">
-        登录账号 <strong>{{ session.actorId }}</strong>
+      <p class="card-note" style="margin-top: -2px">
+        登录 <strong>{{ session.actorId }}</strong>
         · 用途 <strong>{{ purposeHint(session.accessPurpose) }}</strong>
-        （{{ session.accessPurpose || '未填' }}）。
-        服务端只返回你被授权的成员与字段，本页不会展示未授权内容。
+        （{{ session.accessPurpose || '未填' }}）。服务端只返回已授权内容。
       </p>
-      <ul class="list-plain" style="margin-top: 14px">
+      <ul class="list-plain" style="margin-top: 12px">
         <li v-for="member in session.members" :key="member.id" class="row-card">
           <span class="row-title">
             <AppIcon name="members" :size="17" style="color: var(--pine)" />
             {{ member.display_name }}
             <span class="pill sage">{{ memberRoleLabel(member.role) }}</span>
           </span>
-          <p class="row-meta" style="margin: 6px 0 0">
-            可见内容由家庭管理员在「授权管理」中配置；用途不一致时会读不到字段。
+          <p class="row-meta" style="margin: 4px 0 0">
+            可见内容由家庭管理员配置；用途不一致时读不到字段。
           </p>
         </li>
       </ul>
       <div v-if="session.members.length === 0" class="empty-state">
-        <AppIcon class="empty-art" name="lock" :size="38" />
+        <AppIcon class="empty-art" name="lock" :size="32" />
         <strong>当前身份与用途下没有可见成员</strong>
-        <p>请与家庭管理员确认授权的成员、字段、动作与用途代码是否匹配。</p>
+        <p>请与家庭管理员确认授权是否匹配。</p>
       </div>
     </section>
   </template>
 
   <template v-else>
-    <section class="card" style="margin-bottom: 16px">
-      <div class="card-heading" style="margin-bottom: 0">
-        <div>
-          <p class="eyebrow">当前会话</p>
-          <h3 class="card-title">管理员权限上下文</h3>
-        </div>
-        <span class="pill pine">可管授权</span>
-      </div>
-      <p class="card-note" style="margin: 10px 0 0">
-        登录账号 <strong>{{ session.actorId }}</strong>
-        · 用途 <strong>{{ purposeHint(session.accessPurpose) }}</strong>（{{ session.accessPurpose || '未填' }}）
-        · 家庭 Owner 可创建、修改与撤回授权；确认/修正复核会以当前身份写入已确认事件。
-      </p>
-    </section>
-
     <p v-if="loadError" class="notice error" role="alert">
       <AppIcon name="alert" :size="16" />
       {{ loadError }}
@@ -371,9 +360,9 @@ onMounted(() => {
             正在读取授权
           </div>
           <div v-else-if="authorizations.length === 0" class="empty-state">
-            <AppIcon class="empty-art" name="key" :size="38" />
+            <AppIcon class="empty-art" name="key" :size="32" />
             <strong>还没有为照护者创建授权</strong>
-            <p>在右侧创建第一条授权。默认最小权限，不存在「一键开放全部健康资料」。</p>
+            <p>在右侧创建第一条授权，默认最小权限。</p>
           </div>
           <ul v-else class="list-plain">
             <li v-for="authorization in authorizations" :key="authorization.id" class="row-card">
@@ -424,9 +413,12 @@ onMounted(() => {
           <label class="field">
             输入照护者身份查看其可见范围
             <input v-model="previewActorId" autocomplete="off" placeholder="照护者身份标识，例如 child-1" />
-            <small>预览只使用授权元数据，不会加载任何健康事件内容；字段过滤始终由 API 负责。</small>
+            <small>只预览授权元数据，不加载健康内容。</small>
           </label>
-          <p v-if="previewActorId && authorizationPreview.length === 0" class="notice warn" style="margin-top: 12px">
+          <p v-if="!previewActorId" class="card-note" style="margin: 8px 0 0">
+            输入身份后显示其可见字段与用途。
+          </p>
+          <p v-else-if="authorizationPreview.length === 0" class="notice warn" style="margin-top: 10px">
             <AppIcon name="info" :size="15" />
             该照护者当前没有任何有效授权字段。
           </p>

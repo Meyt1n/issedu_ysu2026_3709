@@ -33,7 +33,7 @@ onMounted(() => void loadPlans())
   <section class="page-hero member-portal-hero">
     <p class="eyebrow">服药提醒</p>
     <h2 class="hero-greeting">{{ selectedMember?.display_name ?? '我的' }}的提醒</h2>
-    <p class="hero-sub">这里显示家人已经确认的服药安排。需要调整时，请告诉家人。</p>
+    <p class="hero-sub">家人已确认的服药安排；需调整时请告诉家人。</p>
   </section>
   <p v-if="error" class="notice warn" role="status"><AppIcon name="info" :size="16" />暂时没有读取到提醒，请稍后再试。</p>
   <section class="card">
