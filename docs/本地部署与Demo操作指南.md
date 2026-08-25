@@ -196,6 +196,8 @@ Windows 本地开发代理固定使用 `127.0.0.1`，避免 `localhost` 解析�
 
 ### 4.2 如何启用联网搜索（HCT-430，含离线教学夹具）
 
+> **用户向分步教程（含排障表）：** [联网搜索与知识库刷新启用指南](demo/联网搜索与知识库刷新启用指南.md)
+
 联网搜索默认关闭（`AGENT_WEB_SEARCH_ENABLED=false`），且必须**双重开启**：部署开关 + 每次请求在助手页勾选「补充联网参考」。未启用时助手页会显示不可用原因与本节指引；`/api/v1/assistant/agents` 返回 `web_search_ready` 与 `web_search_unavailable_reason`（`DEPLOYMENT_DISABLED` / `EGRESS_BLOCKED` / `OPT_IN_REQUIRED`）供排查。
 
 **路线 A：离线教学夹具（推荐课堂/无网演示，完全不出网）**
@@ -228,6 +230,8 @@ curl.exe http://localhost:8000/api/v1/assistant/agents -H "X-Actor-ID: demo-pare
 ```
 
 ### 4.3 如何刷新知识库（HCT-401 受控爬虫闭环）
+
+> **用户向分步教程（含排障表）：** [联网搜索与知识库刷新启用指南](demo/联网搜索与知识库刷新启用指南.md)
 
 知识爬虫只抓 `docs/knowledge/crawl/allowlist.json` 白名单来源，默认仅本地夹具；结果进入 staging 草稿，**永不 auto_ingest**。Web 入口在「知识文档」页右侧「知识爬虫 / Staging」卡片，仅知识管理员可见可操作：演示身份用 `demo-parent`、`knowledge-steward` 或任意 `demo-` 前缀账号；正式部署把账号加入 `.env` 的 `KNOWLEDGE_ADMIN_ACTORS`（逗号分隔）后重启 API。非管理员会看到明确的「需要知识管理员身份」提示。
 
