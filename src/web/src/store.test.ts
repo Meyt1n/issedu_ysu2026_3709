@@ -5,6 +5,8 @@ import {
   connect,
   connectWithFamilyFace,
   connectWithPassword,
+  connectWithPin,
+  portalWelcomeMessage,
   selectedMember,
   session,
   setView,
@@ -113,6 +115,46 @@ describe('family face entry context', () => {
     expect(selectedMember.value?.display_name).toBe('奶奶')
     expect(session.portal).toBe('member')
     expect(session.currentView).toBe('member-home')
+  })
+
+  it('routes PIN login for a bound member into the member portal', async () => {
+    vi.spyOn(apiClient, 'loginWithPin').mockResolvedValue({
+      actor_id: 'grandma-local',
+      household_id: 'household-family',
+      session_token: 's'.repeat(48),
+      expires_at: (Date.now() + 60_000) / 1000,
+    })
+    vi.spyOn(apiClient, 'listHouseholds').mockResolvedValue([
+      {
+        id: 'household-family',
+        name: '爷爷奶奶家',
+        created_by: 'parent-local',
+        created_at: '2026-08-22T00:00:00Z',
+      },
+    ])
+    vi.spyOn(apiClient, 'listMembers').mockResolvedValue([
+      {
+        id: 'grandma-member',
+        household_id: 'household-family',
+        display_name: '奶奶',
+        role: 'DEPENDENT',
+        actor_id: 'grandma-local',
+        created_at: '2026-08-22T00:00:00Z',
+      },
+    ])
+    vi.spyOn(apiClient, 'getCapabilities').mockResolvedValue({
+      phase: 'P0',
+      available: [],
+      unavailable: [],
+    })
+
+    await connectWithPin('grandma-local', 'household-family', '135790', 'family-care')
+
+    expect(session.status).toBe('ready')
+    expect(session.portal).toBe('member')
+    expect(session.currentView).toBe('member-home')
+    expect(selectedMember.value?.display_name).toBe('奶奶')
+    expect(portalWelcomeMessage()).toBe('你好，奶奶。已进入家庭成员前台。')
   })
 })
 
