@@ -73,6 +73,7 @@ def test_assistant_stream_greeting_emits_trace_token_done(client: TestClient) ->
     assert "event: trace" in body
     assert "event: token" in body
     assert "event: done" in body
+    assert "event: status" in body
     assert "家庭健康助手" in body
     # Validated answer text is streamed; the raw JSON draft must not appear.
     assert '{"answer"' not in body

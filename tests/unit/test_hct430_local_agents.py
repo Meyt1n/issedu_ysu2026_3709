@@ -194,16 +194,20 @@ def test_greeting_fast_path_never_touches_model_or_tools(monkeypatch) -> None:
     monkeypatch.setattr("app.local_agents.execute_whitelisted_tool", _forbidden)
     monkeypatch.setattr("app.local_agents.execute_web_search", _forbidden)
 
+    phases: list[str] = []
     result = run_local_multi_agent(
         None,
         messages=[{"role": "user", "content": "你好"}],
         actor_id="actor",
         allow_network_search=True,
+        on_status=phases.append,
     )
 
     assert result["degraded"] is False
     assert result["answer"]
     assert result["network_used"] is False
+    assert phases[0] == "routing"
+    assert "generating" in phases
     statuses = {trace["agent_id"]: trace["status"] for trace in result["agent_trace"]}
     assert statuses["database"] == "skipped"
     assert statuses["knowledge"] == "skipped"
@@ -426,4 +430,34 @@ def test_synthesis_streams_only_validated_answer(monkeypatch) -> None:
     assert result["answer"] == "最终回答"
     assert "".join(tokens) == "最终回答"
     assert "{" not in "".join(tokens)
-    assert statuses == ["generating"]
+    assert statuses == ["generating", "validating"]
+
+
+def test_synthesis_emits_validating_status(monkeypatch) -> None:
+    from app.config import Settings
+    from app.local_agents import _synthesis_agent
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def chat_stream(self, **kwargs):
+            yield '{"answer":"ok","sources":[],"confidence":"high","escalate":false}'
+
+    monkeypatch.setattr("app.local_agents.OllamaClient", FakeClient)
+    monkeypatch.setattr("app.local_agents.is_loopback_ollama_url", lambda url: True)
+
+    phases: list[str] = []
+    _synthesis_agent(
+        messages=[{"role": "user", "content": "一般问题"}],
+        query_type="GENERAL",
+        database={},
+        knowledge={},
+        external_sources=[],
+        model="local-model",
+        max_tokens=64,
+        temperature=0.1,
+        settings=Settings(),
+        on_status=phases.append,
+    )
+    assert phases == ["generating", "validating"]

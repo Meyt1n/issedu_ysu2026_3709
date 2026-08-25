@@ -89,6 +89,8 @@ class Settings(BaseSettings):
     agent_web_search_allowed_domains: str = ""
     # Short TTL cache for redacted web-search queries (seconds). 0 disables cache.
     agent_web_search_cache_ttl_seconds: float = Field(default=180.0, ge=0, le=3600)
+    # Minimum seconds between outbound search calls from this process (0 = off).
+    agent_web_search_min_interval_seconds: float = Field(default=1.0, ge=0, le=60)
     weather_adapter: str = "disabled"
     weather_provider: str = "generic"
     weather_api_url: str = ""
