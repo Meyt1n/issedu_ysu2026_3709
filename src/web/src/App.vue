@@ -316,15 +316,15 @@ onBeforeUnmount(() => {
       <div class="sidebar-foot">
             <p class="privacy-note">
               <AppIcon name="lock" :size="16" />
-              <span>家庭健康数据默认不出网，全部保存在本地可信域。</span>
+              <span>{{ session.portal === 'admin' ? '家庭健康数据默认不出网，全部保存在本地可信域。' : '健康信息默认只保存在家里，不会自动上网。' }}</span>
             </p>
         <p v-if="session.portal === 'admin'" class="privacy-note">
           <AppIcon name="leaf" :size="16" />
-          <span>管理后台只负责复核、授权和记录，不替代医生判断。</span>
+          <span>管理后台负责复核、授权和记录；当前用途须与授权用途一致，否则读不到字段。</span>
         </p>
         <p v-else class="privacy-note">
           <AppIcon name="leaf" :size="16" />
-          <span>拍照后交给家庭管理员复核，确认后才会出现在家庭记录里。</span>
+          <span>拍完照片交给家人确认，确认后才会出现在你的记录里。</span>
         </p>
         <button type="button" class="sidebar-collapse" :title="sidebarMini ? '展开导航' : '收起导航'" @click="toggleSidebar">
           <AppIcon name="arrow-right" :size="15" style="transform: rotate(180deg)" />
@@ -344,6 +344,7 @@ onBeforeUnmount(() => {
         </div>
         <div class="topbar-side">
           <button
+            v-if="session.portal === 'admin'"
             type="button"
             class="palette-trigger"
             title="打开命令面板（Ctrl+K）"
@@ -353,7 +354,11 @@ onBeforeUnmount(() => {
             <span class="palette-trigger-text">快速跳转</span>
             <kbd class="palette-kbd">Ctrl</kbd><kbd class="palette-kbd">K</kbd>
           </button>
-          <span class="api-dot" :title="session.capabilities ? `本地 API 已连接 · 阶段 ${session.capabilities.phase}` : '本地 API 状态未知'">
+          <span
+            v-if="session.portal === 'admin'"
+            class="api-dot"
+            :title="session.capabilities ? `本地 API 已连接 · 阶段 ${session.capabilities.phase}` : '本地 API 状态未知'"
+          >
             <i :class="session.capabilities ? 'on' : 'off'" />
             {{ session.capabilities ? '本地在线' : '状态未知' }}
           </span>
@@ -415,15 +420,20 @@ onBeforeUnmount(() => {
           </div>
           <span
             class="identity-chip"
-            :title="session.portal === 'admin' ? `${currentHouseholdLabel} · 登录账号 ${session.actorId}` : `${currentHouseholdLabel} · 当前成员`"
+            :title="session.portal === 'admin'
+              ? `${currentHouseholdLabel} · ${session.actorId} · 用途 ${session.accessPurpose || '未填'}`
+              : `${currentHouseholdLabel} · 当前成员`"
           >
             <AppIcon name="members" :size="16" />
             <span class="identity-person">
               <strong>{{ currentMemberLabel }}</strong>
-              <small>{{ session.portal === 'admin' ? session.actorId : '当前家庭成员' }}</small>
+              <small v-if="session.portal === 'admin'">
+                {{ session.actorId }} · {{ session.isOwnerView ? '可管授权' : '仅授权范围' }} · {{ session.accessPurpose || '未填用途' }}
+              </small>
+              <small v-else>当前家庭成员</small>
             </span>
             <span class="role-tag" :class="{ caregiver: !session.isOwnerView }">
-              {{ session.isOwnerView ? '家庭管理员后台' : '家庭成员前台' }}
+              {{ session.isOwnerView ? '家庭管理员后台' : session.portal === 'member' ? '家庭成员' : '照护者后台' }}
             </span>
             <button type="button" class="icon-button" title="退出当前身份" @click="signOut">
               <AppIcon name="signout" :size="17" />

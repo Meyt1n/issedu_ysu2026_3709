@@ -273,6 +273,7 @@ onMounted(() => void loadTasks())
         <h2 class="hero-greeting">人工复核中心</h2>
         <p class="hero-sub">
           成员提交的药盒照片会在这里排队。对照原图确认药品名称和用法后，才会写入家庭健康记录。
+          当前登录 <strong>{{ session.actorId }}</strong> · 用途 {{ session.accessPurpose || '未填' }}。
         </p>
       </div>
       <div class="review-hero-actions">
@@ -400,12 +401,16 @@ onMounted(() => void loadTasks())
           没有可用候选，请选择「人工修正」手工填写，或跳过并补拍。
         </p>
 
-        <details v-if="task.model_version || task.rule_version" class="review-meta-details">
+        <details class="review-meta-details">
           <summary @click.prevent="toggleMeta(task.id)">
-            {{ expandedMetaId === task.id ? '收起版本信息' : '版本与追溯信息' }}
+            {{ expandedMetaId === task.id ? '收起版本与追溯' : '版本、任务编号与追溯' }}
           </summary>
-          <p v-if="expandedMetaId === task.id" class="text-faint" style="font-size: 12.5px; margin: 8px 0 0">
-            模型 {{ task.model_version ?? '未登记' }} · 规则 {{ task.rule_version ?? '未登记' }}
+          <p v-if="expandedMetaId === task.id" class="text-faint" style="font-size: 12.5px; margin: 8px 0 0; font-family: ui-monospace, monospace">
+            视觉任务 {{ task.vision_task_id }} · 复核任务 {{ task.id }} · 成员 {{ task.memberName }}（{{ task.member_id }}）
+            <br />
+            模型 {{ task.model_version ?? '未登记' }} · 规则 {{ task.rule_version ?? '未登记' }} · 版本 v{{ task.version }}
+            <br />
+            确认/修正将以当前登录身份 {{ session.actorId }} 写入已确认事件（需相应写权限）。
           </p>
         </details>
 

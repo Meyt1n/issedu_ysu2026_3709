@@ -44,15 +44,15 @@ export function memberRiskMessage(alert: MemberRiskInput): string {
     case 'allergy_conflict':
       return raw
         ? `${raw}。请先问家人或医生，不要自行停药或加药。`
-        : '请和家庭管理员一起核对：这条药品记录可能和已知过敏有关。'
+        : '请和家人一起核对：这条药品记录可能和已知过敏有关。'
     case 'duplicate_ingredient':
       return raw
         ? `${raw}。请和家人一起核对是否重复用药。`
-        : '请和家庭管理员一起核对：多条记录里可能有相同成分。'
+        : '请和家人一起核对：多条记录里可能有相同成分。'
     case 'interaction':
       return raw
         ? `${raw}。请和家人一起对照说明书或医嘱。`
-        : '请和家庭管理员一起核对这两种药品是否适合一起使用。'
+        : '请和家人一起核对这两种药品是否适合一起使用。'
     case 'expiry_check':
       return raw
         ? `${raw}。请先问家人怎么处理。`
@@ -62,7 +62,7 @@ export function memberRiskMessage(alert: MemberRiskInput): string {
         ? `${raw}。可以告诉家人及时补充。`
         : '请留意：有药品库存不多了。'
     default:
-      return raw || '请和家庭管理员一起核对这条提醒。'
+      return raw || '请和家人一起核对这条提醒。'
   }
 }
 

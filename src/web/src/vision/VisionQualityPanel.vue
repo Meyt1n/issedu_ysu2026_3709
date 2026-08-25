@@ -57,6 +57,20 @@ const stepStates = computed(() => {
   const flow = state.value
   const hasFile = Boolean(selectedFile.value)
   const passed = flow === 'passed' || flow === 'queueing' || flow === 'queued'
+  if (isMemberView.value) {
+    return [
+      { label: '选照片', state: hasFile ? 'done' : 'current' },
+      {
+        label: '看看清不清楚',
+        state: passed ? 'done' : flow === 'checking' ? 'current' : hasFile ? 'current' : 'idle',
+      },
+      {
+        label: '交给家人',
+        state: flow === 'queued' ? 'done' : passed ? 'current' : 'idle',
+      },
+      { label: '等家人确认', state: 'idle' },
+    ]
+  }
   return [
     { label: '选择图片', state: hasFile ? 'done' : 'current' },
     {
@@ -67,7 +81,7 @@ const stepStates = computed(() => {
       label: '创建识别任务',
       state: flow === 'queued' ? 'done' : passed ? 'current' : 'idle',
     },
-    { label: isMemberView.value ? '等待家人确认' : '人工复核后入档', state: 'idle' },
+    { label: '人工复核后入档', state: 'idle' },
   ]
 })
 
@@ -123,12 +137,29 @@ function selectFile(event: Event): void {
 
 function explainError(cause: unknown): string {
   if (cause instanceof ApiClientError) {
-    if (cause.code === 'DEPENDENCY_UNAVAILABLE') return '本地服务不可用，请启动 API 后重试。'
-    if (cause.status === 413) return '图片过大，请缩小图片后重试。'
-    if (cause.status === 422) return '图片格式或内容不符合要求，请重新拍摄。'
-    if (cause.status === 409) return '质量凭证已失效，请重新进行质量检查。'
+    if (cause.code === 'DEPENDENCY_UNAVAILABLE') {
+      return isMemberView.value
+        ? '家里的服务暂时连不上，请让家人帮忙看一下。'
+        : '本地服务不可用，请启动 API 后重试。'
+    }
+    if (cause.status === 413) {
+      return isMemberView.value ? '照片太大了，请换一张小一点的再试。' : '图片过大，请缩小图片后重试。'
+    }
+    if (cause.status === 422) {
+      return isMemberView.value ? '这张照片格式不对，请重新拍一张。' : '图片格式或内容不符合要求，请重新拍摄。'
+    }
+    if (cause.status === 409) {
+      return isMemberView.value
+        ? '刚才的检查过期了，请再点一次「检查照片」。'
+        : '质量凭证已失效，请重新进行质量检查。'
+    }
+    if (cause.status === 403 || cause.status === 404) {
+      return isMemberView.value
+        ? '暂时不能提交这张照片，请让家人帮忙。'
+        : '当前身份或用途无权为该成员创建识别任务。'
+    }
   }
-  return '处理失败，未创建识别任务。请重试。'
+  return isMemberView.value ? '提交没成功，请再试一次。' : '处理失败，未创建识别任务。请重试。'
 }
 
 async function checkQuality(): Promise<void> {
@@ -185,7 +216,9 @@ async function queueVisionTask(): Promise<void> {
     if (generation !== requestGeneration) return
     state.value = 'error'
     error.value = cause instanceof Error && cause.message === 'UPLOAD_DIGEST_MISMATCH'
-      ? '上传文件与已检查图片不一致，已停止并清理文件，请重新检查。'
+      ? (isMemberView.value
+        ? '照片和刚才检查的那张对不上，请重新选图再检查。'
+        : '上传文件与已检查图片不一致，已停止并清理文件，请重新检查。')
       : explainError(cause)
   }
 }
@@ -217,14 +250,27 @@ watch(() => [props.actorId, props.memberId, props.accessPurpose], () => {
         :class="state === 'queued' ? 'pine' : state === 'retake' || state === 'error' ? 'rose' : state === 'passed' ? 'gold' : 'plain'"
       >
         {{
-          state === 'idle' ? '等待图片'
-          : state === 'ready' ? '待检查'
-          : state === 'checking' ? '正在检查'
-          : state === 'retake' ? '需要重拍'
-          : state === 'passed' ? '质量通过'
-          : state === 'queueing' ? '正在创建任务'
-          : state === 'queued' ? '任务已入队'
-          : '出现问题'
+          isMemberView
+            ? (
+              state === 'idle' ? '还没选照片'
+              : state === 'ready' ? '还没检查'
+              : state === 'checking' ? '正在看清不清楚'
+              : state === 'retake' ? '请重新拍'
+              : state === 'passed' ? '照片可以了'
+              : state === 'queueing' ? '正在提交'
+              : state === 'queued' ? '已交给家人'
+              : '出了点问题'
+            )
+            : (
+              state === 'idle' ? '等待图片'
+              : state === 'ready' ? '待检查'
+              : state === 'checking' ? '正在检查'
+              : state === 'retake' ? '需要重拍'
+              : state === 'passed' ? '质量通过'
+              : state === 'queueing' ? '正在创建任务'
+              : state === 'queued' ? '任务已入队'
+              : '出现问题'
+            )
         }}
       </span>
     </div>
@@ -243,8 +289,8 @@ watch(() => [props.actorId, props.memberId, props.accessPurpose], () => {
 
     <p class="card-note" style="margin: 0 0 14px">
       {{ isMemberView
-        ? '照片只发送到本机，提交后由家庭管理员确认；没有确认前不会写入家庭记录。'
-        : '图片只发送到本机 API。质量通过不代表识别成功，识别结果仅为候选，确认后才进入健康记录。' }}
+        ? '照片只留在家里。交给家人核对之前，不会写进家庭本子。'
+        : '图片只发送到本机 API。质量通过不代表识别成功；识别结果仅为候选，人工确认后才进入健康记录。' }}
     </p>
 
     <div class="grid-two capture-layout">
@@ -254,7 +300,7 @@ watch(() => [props.actorId, props.memberId, props.accessPurpose], () => {
           <div class="capture-empty">
             <span class="capture-empty-icon"><AppIcon name="scan" :size="30" /></span>
             <strong>点击选择药盒照片</strong>
-            <span>支持 JPEG / PNG · 仅在本机预览</span>
+            <span>{{ isMemberView ? '可以拍照或从相册选图 · 只在家里看' : '支持 JPEG / PNG · 仅在本机预览' }}</span>
           </div>
           <span class="capture-hint">点击此处拍照，或从设备选择图片</span>
         </template>
@@ -326,7 +372,7 @@ watch(() => [props.actorId, props.memberId, props.accessPurpose], () => {
 
       <div class="section-stack">
         <p v-if="selectedFile" class="text-soft" style="font-size: 13px; margin: 0">
-          已选择：{{ selectedFile.name }}（仅本地预览，未上传）
+          已选择：{{ selectedFile.name }}{{ isMemberView ? '（先在本机看看，还没交给家人）' : '（仅本地预览，未上传）' }}
         </p>
         <div class="row-actions">
           <button type="button" class="btn btn-primary" :disabled="!canCheck" @click="checkQuality">
@@ -347,13 +393,13 @@ watch(() => [props.actorId, props.memberId, props.accessPurpose], () => {
           <ul style="margin: 0 0 6px; padding-left: 18px">
             <li v-for="prompt in qualityResult.retake_prompts" :key="prompt">{{ prompt }}</li>
           </ul>
-          本次不会上传文件，也不会创建识别任务。
+          {{ isMemberView ? '这张照片不会保存，请重新拍一张。' : '本次不会上传文件，也不会创建识别任务。' }}
         </div>
 
         <template v-if="qualityResult?.decision === 'PASS'">
           <div class="notice ok" role="status">
             <AppIcon name="check" :size="16" />
-            {{ isMemberView ? '照片清楚，可以提交给家庭管理员确认。' : `图片质量通过（配置 ${qualityResult.config_version}），可以创建本地识别任务。` }}
+            {{ isMemberView ? '照片清楚，可以交给家人确认。' : `图片质量通过（配置 ${qualityResult.config_version}），可以创建本地识别任务。` }}
           </div>
           <dl v-if="!isMemberView" class="quality-metrics">
             <div v-for="item in visibleMetrics" :key="item.key">
@@ -362,16 +408,16 @@ watch(() => [props.actorId, props.memberId, props.accessPurpose], () => {
             </div>
           </dl>
           <button type="button" class="btn btn-clay" :disabled="!canQueue" @click="queueVisionTask">
-            {{ state === 'queueing' ? '正在提交' : isMemberView ? '提交给家庭管理员' : '通过并创建识别任务' }}
+            {{ state === 'queueing' ? '正在提交' : isMemberView ? '交给家人确认' : '通过并创建识别任务' }}
             <AppIcon v-if="state !== 'queueing'" name="arrow-right" :size="16" />
           </button>
         </template>
 
         <div v-if="createdTask" class="notice ok" role="status" style="display: block">
-          <strong style="display: block; margin-bottom: 4px">{{ isMemberView ? '照片已提交，等待家庭管理员确认' : '本地识别任务已创建' }}</strong>
+          <strong style="display: block; margin-bottom: 4px">{{ isMemberView ? '照片已交给家人' : '本地识别任务已创建' }}</strong>
           {{ isMemberView
-            ? '管理员确认后，药品信息才会出现在家庭记录中。'
-            : `任务编号 ${createdTask.id} · 当前进入 OCR 待处理队列，不会自动写入健康记录。` }}
+            ? '家人确认后，药品信息才会出现在「我的记录」里。'
+            : `任务编号 ${createdTask.id} · 类型 ${createdTask.task_type?.toUpperCase?.() ?? 'OCR'} · 当前进入 OCR 待处理队列，不会自动写入健康记录。` }}
         </div>
       </div>
     </div>

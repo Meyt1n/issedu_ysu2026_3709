@@ -80,6 +80,20 @@ const canSave = computed(
     isFutureDate(draft.validUntil),
 )
 
+function fieldLabel(value: string): string {
+  return FIELD_OPTIONS.find(item => item.value === value)?.label ?? value
+}
+
+function actionLabel(value: string): string {
+  return ACTION_OPTIONS.find(item => item.value === value)?.label ?? value
+}
+
+function purposeHint(purpose: string): string {
+  if (purpose === 'family-care') return '家庭日常照护'
+  if (purpose === 'emergency-care') return '紧急照护'
+  return purpose
+}
+
 function localDateTimeInput(daysFromNow: number): string {
   const date = new Date()
   date.setDate(date.getDate() + daysFromNow)
@@ -284,13 +298,16 @@ onMounted(() => {
     <section class="card">
       <div class="card-heading">
         <div>
-          <p class="eyebrow">照护者视图</p>
-          <h3 class="card-title">当前身份的可见范围</h3>
+          <p class="eyebrow">当前会话</p>
+          <h3 class="card-title">你的权限范围</h3>
         </div>
-        <span class="pill sky">API 已过滤</span>
+        <span class="pill sky">仅授权可见</span>
       </div>
       <p class="card-note" style="margin-top: -6px">
-        只有 API 决定某位成员或事件是否返回；本页不会推断或展示未授权的字段。你当前可以看到以下成员：
+        登录账号 <strong>{{ session.actorId }}</strong>
+        · 用途 <strong>{{ purposeHint(session.accessPurpose) }}</strong>
+        （{{ session.accessPurpose || '未填' }}）。
+        服务端只返回你被授权的成员与字段，本页不会展示未授权内容。
       </p>
       <ul class="list-plain" style="margin-top: 14px">
         <li v-for="member in session.members" :key="member.id" class="row-card">
@@ -299,17 +316,35 @@ onMounted(() => {
             {{ member.display_name }}
             <span class="pill sage">{{ memberRoleLabel(member.role) }}</span>
           </span>
+          <p class="row-meta" style="margin: 6px 0 0">
+            可见内容由家庭管理员在「授权管理」中配置；用途不一致时会读不到字段。
+          </p>
         </li>
       </ul>
       <div v-if="session.members.length === 0" class="empty-state">
         <AppIcon class="empty-art" name="lock" :size="38" />
-        <strong>当前身份与用途代码下没有可见成员</strong>
+        <strong>当前身份与用途下没有可见成员</strong>
         <p>请与家庭管理员确认授权的成员、字段、动作与用途代码是否匹配。</p>
       </div>
     </section>
   </template>
 
   <template v-else>
+    <section class="card" style="margin-bottom: 16px">
+      <div class="card-heading" style="margin-bottom: 0">
+        <div>
+          <p class="eyebrow">当前会话</p>
+          <h3 class="card-title">管理员权限上下文</h3>
+        </div>
+        <span class="pill pine">可管授权</span>
+      </div>
+      <p class="card-note" style="margin: 10px 0 0">
+        登录账号 <strong>{{ session.actorId }}</strong>
+        · 用途 <strong>{{ purposeHint(session.accessPurpose) }}</strong>（{{ session.accessPurpose || '未填' }}）
+        · 家庭 Owner 可创建、修改与撤回授权；确认/修正复核会以当前身份写入已确认事件。
+      </p>
+    </section>
+
     <p v-if="loadError" class="notice error" role="alert">
       <AppIcon name="alert" :size="16" />
       {{ loadError }}
@@ -351,9 +386,9 @@ onMounted(() => {
                 <span class="pill" :class="grantStatus(authorization).tone">{{ grantStatus(authorization).label }}</span>
               </div>
               <p class="row-meta" style="margin: 0">
-                字段：{{ authorization.data_fields.join('、') }} ·
-                动作：{{ authorization.actions.map(a => ACTION_OPTIONS.find(o => o.value === a)?.label ?? a).join('、') }}<br />
-                用途代码：{{ authorization.purpose }} · 版本 v{{ authorization.version }}
+                字段：{{ authorization.data_fields.map(fieldLabel).join('、') }} ·
+                动作：{{ authorization.actions.map(actionLabel).join('、') }}<br />
+                用途：{{ purposeHint(authorization.purpose) }}（{{ authorization.purpose }}） · 版本 v{{ authorization.version }}
               </p>
               <div class="row-actions">
                 <button
@@ -397,8 +432,8 @@ onMounted(() => {
             <li v-for="scope in authorizationPreview" :key="scope.authorizationId" class="row-card">
               <span class="row-title">{{ scope.memberName }}</span>
               <p class="row-meta" style="margin: 0">
-                可见字段：{{ scope.fields.join('、') }} · 允许动作：{{ scope.actions.join('、') }}<br />
-                用途 {{ scope.purpose }} · 有效至 {{ formatDateTime(scope.validUntil) }}
+                可见字段：{{ scope.fields.map(fieldLabel).join('、') }} · 允许动作：{{ scope.actions.map(actionLabel).join('、') }}<br />
+                用途 {{ purposeHint(scope.purpose) }}（{{ scope.purpose }}） · 有效至 {{ formatDateTime(scope.validUntil) }}
               </p>
             </li>
           </ul>
@@ -489,7 +524,7 @@ onMounted(() => {
           <label class="field">
             用途代码
             <input v-model="draft.purpose" pattern="[A-Za-z0-9][A-Za-z0-9._:-]{0,63}" required placeholder="family-care" />
-            <small>ASCII 代码，1–64 位：字母、数字、点、下划线、冒号或连字符。照护者访问时需携带一致的用途。</small>
+            <small>ASCII 代码，1–64 位。例如 family-care = 家庭日常照护。照护者访问时需携带一致的用途。</small>
           </label>
           <label class="field">
             到期时间

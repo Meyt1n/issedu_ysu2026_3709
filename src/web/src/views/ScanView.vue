@@ -14,7 +14,7 @@ import {
   session,
 } from '../store'
 import { askConfirm } from '../ui/confirm'
-import { formatDateTime, visionStatusLabel } from '../ui/labels'
+import { formatDateTime, fusionStatusLabel, visionStatusLabel } from '../ui/labels'
 import VisionQualityPanel from '../vision/VisionQualityPanel.vue'
 import VisionResultViewer from '../components/VisionResultViewer.vue'
 import { setView } from '../store'
@@ -186,6 +186,8 @@ onBeforeUnmount(() => {
   <VisionQualityPanel
     :actor-id="session.actorId"
     :member-id="session.selectedMemberId || undefined"
+    :access-purpose="session.accessPurpose"
+    audience="admin"
     @task-created="onTaskCreated"
   />
 
@@ -243,13 +245,16 @@ onBeforeUnmount(() => {
         </div>
         <p class="row-meta" style="margin: 0">
           归属成员：{{ task.member_id ? memberNameById.get(task.member_id) ?? task.member_id : '未指定' }} ·
-          创建于 {{ formatDateTime(task.created_at) }} · 任务 {{ task.id.slice(0, 8) }}…
+          创建于 {{ formatDateTime(task.created_at) }} · 文件 {{ task.file_id }}
+        </p>
+        <p class="row-meta" style="margin: 0; font-family: ui-monospace, monospace; font-size: 12px">
+          任务编号 {{ task.id }} · 提交者 {{ task.created_by }} · 用途 {{ session.accessPurpose || '未填' }}
         </p>
         <p v-if="task.status === 'queued'" class="row-meta" style="margin: 0">
-          已进入本地 OCR 队列；worker 会在本机处理，首次加载 PaddleOCR 模型可能需要十几秒。
+          已进入本地 OCR 队列；worker 会在本机处理，首次加载 PaddleOCR 模型可能需要十几秒。识别结果不会自动入档，须人工复核。
         </p>
         <p v-if="task.status === 'running'" class="row-meta" style="margin: 0">
-          本地 OCR 正在处理图片，完成后会自动生成待人工复核的候选结果。
+          本地 OCR 正在处理图片，完成后会自动生成待人工复核的候选结果（仍不会自动写入健康记录）。
         </p>
         <div v-if="task.error_detail" class="notice error vision-task-error" style="margin: 0">
           <AppIcon name="alert" :size="15" />
@@ -274,8 +279,8 @@ onBeforeUnmount(() => {
           <div class="capability-chips">
             <span class="pill sky">证据 {{ task.result.evidence?.length ?? 0 }} 条</span>
             <span class="pill sky">字段 {{ task.result.fields?.length ?? 0 }} 个</span>
-            <span class="pill" :class="task.result.fusion_readiness === 'READY_FOR_FUSION' ? 'pine' : 'gold'">
-              {{ task.result.fusion_readiness }}
+            <span class="pill" :class="task.result.fusion_readiness === 'READY_FOR_FUSION' || task.result.fusion_readiness === 'MATCHED' ? 'pine' : 'gold'">
+              {{ fusionStatusLabel(task.result.fusion_readiness) }}
             </span>
             <span class="pill clay">需人工确认</span>
             <button type="button" class="btn btn-clay btn-small" style="margin-left: auto" @click="setView('review')">
