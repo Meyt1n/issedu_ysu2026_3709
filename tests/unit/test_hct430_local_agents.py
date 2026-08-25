@@ -522,9 +522,9 @@ def test_web_search_no_results_keeps_trace_clear(monkeypatch, body: str) -> None
 
 
 def test_general_plan_runs_knowledge_and_honours_search_opt_in() -> None:
-    """HCT-430 defect fix: a GENERAL flu/seasonal question must still try the
-    reviewed local library, and an explicit user opt-in must never be routed
-    away from the web-search agent (the double gate lives in the agent)."""
+    """HCT-430/HCT-450: GENERAL teaching questions retrieve the reviewed local
+    library; external search stays off until the user opts in (double gate
+    still lives in the web-search agent)."""
     plan = plan_agent_execution("GENERAL", household_id="h", member_id="m")
     assert plan["knowledge"].run is True
     assert plan["database"].run is True
