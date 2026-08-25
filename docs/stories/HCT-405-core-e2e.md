@@ -41,7 +41,9 @@ It also verifies structured Ollama outage and unsafe-output degradation at the H
 | No purchase, consultation, or advertising entry point | Existing HCT-004 redirect scan; `tests/browser/hct405-visible-workflows.spec.ts` | Automated (synthetic browser boundary) |
 | V2 fixed-set comparison and rollback | `test_hct405_vision_review_release.py` | Automated state-transition drill; released-model evaluation remains blocked |
 
-The browser evidence added by this increment is `tests/browser/hct405-visible-workflows.spec.ts`. It covers an owner creating and revoking a synthetic caregiver grant, API-unavailable rendering without a household or health summary, and the local-only/no-promotion boundary. Visible-workflow assertions target `.view-stage h2.hero-greeting` and `aside.sidebar button.nav-item` so they stay unique after the topbar title and lazy-loaded views share the same page names. The tests use synthetic API responses only; they do not represent visual recognition, RAG, model release, deletion propagation, or deployment acceptance.
+The browser evidence added by this increment is `tests/browser/hct405-visible-workflows.spec.ts` and `tests/browser/hct405-real-api.spec.ts` (real-API, env-gated). It covers an owner creating and revoking a synthetic caregiver grant, API-unavailable rendering without a household or health summary, and the local-only/no-promotion boundary. **2026-08-25 门户连续演示**：`tests/e2e/test_hct405_portal_continuous.py` 将 HCT-439 双门户权限与 HCT-206/207 复核桥接串联（成员提交 → 管理员确认 → 成员只看已确认时间线）；`hct405-real-api.spec.ts` 已对齐当前中文门户 UI。
+
+**2026-08-25 A2 规则提醒闭环**：`tests/e2e/test_hct405_member_risk_loop.py` 覆盖「管理员确认过敏/药品 → 规则引擎 → 成员 `listMemberRisks`」；成员前台用 `src/web/src/ui/memberRisk.ts` 包装生活化文案，不展示 `rule_id`/`SEVERE`。 Visible-workflow assertions target `.view-stage h2.hero-greeting` and `aside.sidebar button.nav-item` so they stay unique after the topbar title and lazy-loaded views share the same page names. The tests use synthetic API responses only; they do not represent visual recognition, RAG, model release, deletion propagation, or deployment acceptance.
 
 ## Given / When / Then
 
@@ -66,7 +68,7 @@ The browser evidence added by this increment is `tests/browser/hct405-visible-wo
 - `npm.cmd run test:web`
 - `npm.cmd run test:e2e:web` (uses Playwright Chromium; on this Windows host it uses the installed Edge executable)
 - `npm.cmd run check:web`
-- `uv run pytest tests/e2e/test_hct405_core_flows.py tests/e2e/test_hct405_failure_degradation.py tests/e2e/test_hct405_scenario_manifest.py tests/e2e/test_hct405_vision_review_release.py tests/e2e/test_hct405_deletion_propagation.py`
+- `uv run pytest tests/e2e/test_hct405_core_flows.py tests/e2e/test_hct405_failure_degradation.py tests/e2e/test_hct405_scenario_manifest.py tests/e2e/test_hct405_vision_review_release.py tests/e2e/test_hct405_deletion_propagation.py tests/e2e/test_hct405_portal_continuous.py tests/e2e/test_hct405_member_risk_loop.py`
 - `uv run pytest tests/integration/test_hct405_review_migration.py tests/integration/test_hct405_erasure_migration.py tests/unit/test_hct207_review.py tests/unit/test_hct405_erasure.py tests/contract/test_hct202_quality_api.py tests/contract/test_hct205_evidence_api.py`
 - `HCT405_MYSQL_TEST_URL=<disposable-mysql-8.4-url> uv run pytest tests/integration/test_hct405_review_migration.py::test_review_wiring_upgrade_and_downgrade_on_mysql` (automated in CI)
 - `uv run pytest`

@@ -1,25 +1,50 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import { apiClient } from '../api/client'
 import type { HealthEvent, PlanWorkbenchResponse, RiskListResponse } from '../api/types'
 import AppIcon from '../components/AppIcon.vue'
-import { formatError, requestOptions, selectedMember, session, setView } from '../store'
+import {
+  formatError,
+  onHealthDataRefresh,
+  requestOptions,
+  selectedMember,
+  session,
+  setView,
+} from '../store'
 import { eventTypeLabel, formatDateTime, summarizeEventPayload } from '../ui/labels'
-import { riskLevelLabel } from '../risk/riskView'
+import { memberRiskLevelLabel, memberRiskMessage } from '../ui/memberRisk'
+import { useMemberVisionTracking } from '../ui/useMemberVisionTracking'
 
 const plans = ref<PlanWorkbenchResponse | null>(null)
 const events = ref<HealthEvent[]>([])
 const risks = ref<RiskListResponse | null>(null)
 const loading = ref(false)
 const loadError = ref('')
+let removeHealthRefreshListener: (() => void) | null = null
+
+const {
+  awaitingConfirmationTasks,
+  confirmedTaskIds,
+  hasActiveTasks,
+  taskStatusLabel,
+  taskStatusHint,
+  refreshTracking,
+} = useMemberVisionTracking()
 
 const memberName = computed(() => selectedMember.value?.display_name ?? '家人')
 const nextPlans = computed(() => (plans.value?.plans ?? []).slice(0, 3))
 const recentEvents = computed(() =>
   events.value.filter(event => event.confirmation_status === 'CONFIRMED').slice(-3).reverse(),
 )
-const visibleRisks = computed(() => (risks.value?.alerts ?? []).slice(0, 4))
+const visibleRisks = computed(() =>
+  (risks.value?.alerts ?? []).slice(0, 4).map(alert => ({
+    key: alert.risk_fingerprint || `${alert.rule_id}:${alert.message}`,
+    level: alert.level,
+    levelLabel: memberRiskLevelLabel(alert.level),
+    message: memberRiskMessage(alert),
+  })),
+)
 
 async function loadHome(): Promise<void> {
   const householdId = session.selectedHouseholdId
@@ -46,7 +71,14 @@ async function loadHome(): Promise<void> {
 }
 
 watch(() => [session.selectedHouseholdId, session.selectedMemberId], () => void loadHome())
-onMounted(() => void loadHome())
+onMounted(() => {
+  void loadHome()
+  removeHealthRefreshListener = onHealthDataRefresh(() => {
+    void loadHome()
+    void refreshTracking()
+  })
+})
+onBeforeUnmount(() => removeHealthRefreshListener?.())
 </script>
 
 <template>
@@ -60,6 +92,36 @@ onMounted(() => void loadHome())
     <AppIcon name="info" :size="16" />
     暂时没有读取到最新记录，拍照录药仍然可以使用。
   </p>
+
+  <section v-if="awaitingConfirmationTasks.length" class="card member-pending-card" aria-label="等待家人确认的照片">
+    <div class="card-heading">
+      <div>
+        <p class="eyebrow">等待确认</p>
+        <h3 class="card-title">等待家人确认的照片</h3>
+      </div>
+      <span v-if="hasActiveTasks" class="pill gold">识别中</span>
+      <span v-else class="member-pending-count">{{ awaitingConfirmationTasks.length }} 张</span>
+    </div>
+    <p class="member-pending-intro">这些照片已交给家庭管理员核对，确认后会出现在「我的记录」里。</p>
+    <ul class="list-plain member-status-list">
+      <li v-for="task in awaitingConfirmationTasks" :key="task.id" class="member-status-row">
+        <span
+          class="member-status-icon"
+          :class="confirmedTaskIds.has(task.id) ? 'confirmed' : task.status === 'failed' || task.status === 'timeout' ? 'failed' : 'pending'"
+        >
+          <AppIcon
+            :name="confirmedTaskIds.has(task.id) ? 'check' : task.status === 'failed' || task.status === 'timeout' ? 'alert' : 'scan'"
+            :size="17"
+          />
+        </span>
+        <span><strong>{{ taskStatusLabel(task) }}</strong><small>{{ taskStatusHint(task) }}</small></span>
+      </li>
+    </ul>
+    <button type="button" class="btn btn-ghost btn-small member-pending-link" @click="setView('member-capture')">
+      <AppIcon name="scan" :size="15" />
+      查看拍照进度
+    </button>
+  </section>
 
   <section class="member-quick-grid" aria-label="常用功能">
     <button type="button" class="member-action-card member-action-primary" @click="setView('member-capture')">
@@ -113,8 +175,8 @@ onMounted(() => void loadHome())
     </div>
     <p class="member-risk-intro">这些提醒来自家庭管理员确认过的记录。如果不确定怎么处理，请先问家人或医生。</p>
     <ul class="list-plain member-risk-list">
-      <li v-for="alert in visibleRisks" :key="alert.risk_fingerprint" class="member-risk-row" :class="alert.level">
-        <span class="member-risk-level">{{ riskLevelLabel(alert.level) }}</span>
+      <li v-for="alert in visibleRisks" :key="alert.key" class="member-risk-row" :class="alert.level">
+        <span class="member-risk-level">{{ alert.levelLabel }}</span>
         <span>{{ alert.message }}</span>
       </li>
     </ul>

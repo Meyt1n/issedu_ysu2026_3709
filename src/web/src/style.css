@@ -4106,6 +4106,102 @@ button:focus-visible, a:focus-visible {
 
 .review-thumb:hover { box-shadow: var(--shadow-soft); transform: translateY(-2px) scale(1.02); }
 
+.review-hero-actions {
+  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+}
+
+.review-all-toggle {
+  background: var(--card-soft);
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  font-size: 13px;
+  margin: 0;
+  padding: 8px 12px;
+}
+
+.review-task-list { display: grid; gap: 14px; }
+
+.review-task-card { display: grid; gap: 14px; }
+
+.review-task-main {
+  align-items: start;
+  display: flex;
+  gap: 14px;
+}
+
+.review-task-thumb { flex: 0 0 132px; }
+
+.review-task-thumb-empty {
+  align-items: center;
+  background: color-mix(in srgb, var(--pine) 10%, transparent);
+  border: 1.5px dashed var(--glass-border);
+  border-radius: var(--radius-md);
+  color: var(--pine);
+  display: flex;
+  flex: 0 0 88px;
+  height: 88px;
+  justify-content: center;
+}
+
+.review-task-body { display: grid; flex: 1; gap: 6px; min-width: 0; }
+
+.review-task-title { align-items: center; display: inline-flex; flex-wrap: wrap; gap: 8px; }
+
+.review-task-time { font-size: 12.5px; white-space: nowrap; }
+
+.review-task-meta { margin: 0; }
+
+.review-task-member {
+  color: var(--clay);
+  font-weight: 600;
+  margin-right: 6px;
+}
+
+.review-candidate-stack { gap: 8px; }
+
+.review-candidate-row {
+  align-items: flex-start;
+  background: var(--glass-card-strong);
+  border: 1.5px solid var(--glass-border);
+  border-radius: 9px;
+  margin: 0;
+  padding: 10px 12px;
+}
+
+.review-candidate-copy { display: grid; gap: 2px; }
+
+.review-meta-details summary {
+  color: var(--ink-soft);
+  cursor: pointer;
+  font-size: 12.5px;
+  list-style: none;
+}
+
+.review-meta-details summary::-webkit-details-marker { display: none; }
+
+.review-panel-form { border-top: 1px dashed var(--line); padding-top: 12px; }
+
+.review-settled-row .row-title { align-items: center; display: inline-flex; flex-wrap: wrap; gap: 8px; }
+
+.member-pending-card { margin-bottom: 18px; }
+
+.member-pending-intro {
+  color: var(--ink-soft);
+  line-height: 1.6;
+  margin: 0 0 12px;
+}
+
+.member-pending-count {
+  color: var(--clay);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.member-pending-link { margin-top: 4px; }
+
 /* 扫描过渡动画：激光束 + 取景角 + 呼吸网格 */
 
 .scan-overlay { inset: 0; overflow: hidden; pointer-events: none; position: absolute; }
@@ -4583,6 +4679,9 @@ button:focus-visible, a:focus-visible {
   .member-quick-grid { grid-template-columns: 1fr; }
   .member-plan-row { align-items: start; grid-template-columns: 1fr auto; }
   .member-plan-row small { grid-column: 1 / -1; }
+  .review-task-main { flex-direction: column; }
+  .review-task-thumb,
+  .review-task-thumb-empty { width: 100%; }
 }
 
 .member-help-card { display: grid; gap: 14px; margin-bottom: 16px; }

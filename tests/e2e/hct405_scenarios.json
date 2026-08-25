@@ -196,7 +196,7 @@
         "tests/browser/hct405-visible-workflows.spec.ts",
         "tests/safety/test_hct004_no_redirect.py"
       ],
-      "limitations": ["当前浏览器场景使用合成 API；真实本地 API 浏览器链路仍待验收。"]
+      "limitations": ["当前浏览器场景使用合成 API；真实本地 API 浏览器链路由 `tests/browser/hct405-real-api.spec.ts` 在 REAL_API_E2E=1 时验收。"]
     },
     {
       "id": "HCT405-12",
@@ -212,6 +212,78 @@
       "coverage_tags": ["v2-comparison", "model-rollback", "version-binding"],
       "automated_tests": ["tests/e2e/test_hct405_vision_review_release.py::test_v2_binding_comparison_and_rollback_restore_previous_release"],
       "limitations": ["合成状态演练不代表 V2 已训练、通过固定集或获准发布。"]
+    },
+    {
+      "id": "HCT405-13",
+      "title": "双门户连续演示：成员拍照 → 管理员复核 → 成员只看已确认",
+      "status": "automated_with_limitations",
+      "preconditions": ["合成家庭与绑定成员账号", "签名 adapter evidence", "HCT-439 门户权限边界"],
+      "roles": ["owner", "member", "browser-user"],
+      "steps": [
+        "奶奶账号提交视觉任务",
+        "管理员融合并创建唯一复核任务",
+        "奶奶不能读取复核队列或直接写事件",
+        "管理员确认后写入 CONFIRMED 事件",
+        "奶奶时间线只出现已确认事实"
+      ],
+      "expected_states": [
+        "成员前台 API 边界保持隐藏式 404",
+        "复核确认前成员时间线为空",
+        "确认后事件带 vision_task_id 证据",
+        "浏览器 real-API 用例对齐中文门户 UI"
+      ],
+      "permission_boundary": "成员只能提交本人视觉任务和读取本人已确认范围；复核与事件写入仅管理员。",
+      "audit_evidence": [
+        "tests/e2e/test_hct405_portal_continuous.py",
+        "tests/browser/hct405-real-api.spec.ts",
+        "tests/contract/test_hct439_portal_boundaries.py"
+      ],
+      "cleanup": "pytest fixture 与 Playwright 合成 run 删除临时数据。",
+      "coverage_tags": ["portal-split", "member-capture", "manual-confirm", "timeline-filter"],
+      "automated_tests": [
+        "tests/e2e/test_hct405_portal_continuous.py::test_member_capture_to_owner_confirm_then_member_timeline",
+        "tests/e2e/test_hct405_portal_continuous.py::test_member_cannot_confirm_review_task",
+        "tests/browser/hct405-real-api.spec.ts"
+      ],
+      "limitations": [
+        "合成 adapter 不代表真实 OCR；浏览器 real-API 需 REAL_API_E2E=1 与本地 API。",
+        "acceptance_gate 仍缺部署演练、批准模型固定集和跨组 R3。"
+      ],
+      "acceptance_gate_scenario_id": "vision_scan_to_manual_confirm"
+    },
+    {
+      "id": "HCT405-14",
+      "title": "已确认事实触发规则后，成员前台可见风险提醒",
+      "status": "automated",
+      "preconditions": ["合成家庭", "绑定成员账号", "过敏与药品已确认事件"],
+      "roles": ["owner", "member"],
+      "steps": [
+        "管理员确认过敏事实",
+        "管理员确认冲突药品",
+        "成员读取本人 risks",
+        "成员不能读取他人 risks",
+        "成员不能 ACK_RISK",
+        "未确认药品不进入规则投影"
+      ],
+      "expected_states": [
+        "allergy_conflict 与 duplicate_ingredient 对成员可见",
+        "成员前台文案不暴露 rule_id/SEVERE",
+        "他人范围隐藏式 404"
+      ],
+      "permission_boundary": "风险读取走 has_member_read_access；ACK 仍需 ACK_RISK 授权。",
+      "audit_evidence": [
+        "tests/e2e/test_hct405_member_risk_loop.py",
+        "src/web/src/ui/memberRisk.ts",
+        "tests/browser/hct439-member-portal.spec.ts"
+      ],
+      "cleanup": "pytest fixture 删除临时家庭。",
+      "coverage_tags": ["rules", "member-portal", "confirmed-event", "risk-alert"],
+      "automated_tests": [
+        "tests/e2e/test_hct405_member_risk_loop.py::test_confirmed_allergy_and_drug_surface_member_risk",
+        "tests/e2e/test_hct405_member_risk_loop.py::test_member_cannot_acknowledge_risk_without_grant"
+      ],
+      "limitations": ["合成规则事实不代表正式药品固定集或已发布模型。"],
+      "acceptance_gate_scenario_id": "confirmed_event_to_rule_alert"
     }
   ]
 }
