@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { ApiClient } from './client'
+import { ApiClient, DEMO_SEED_TIMEOUT_MS } from './client'
 
 describe('ApiClient authorization contract', () => {
   it('registers face credentials as multipart without exposing secrets in the URL', async () => {
@@ -361,6 +361,84 @@ describe('ApiClient authorization contract', () => {
       status: 0,
       code: 'DEPENDENCY_UNAVAILABLE',
       message: expect.stringContaining('timed out'),
+    })
+  })
+
+  it('classifies an empty-body 500 from the dev proxy as DEPENDENCY_UNAVAILABLE', async () => {
+    // 复现 API 未启动的标准 dev 场景：Vite 代理对 ECONNREFUSED 返回 500 且响应体为空。
+    const fetcher: typeof fetch = async () =>
+      new Response('', { status: 500, headers: { 'content-type': 'text/plain' } })
+    const client = new ApiClient({ baseUrl: 'http://local.test', fetcher })
+
+    await expect(
+      client.seedFormalDemoHealth({ actorId: 'demo-parent' }),
+    ).rejects.toMatchObject({
+      status: 500,
+      code: 'DEPENDENCY_UNAVAILABLE',
+    })
+  })
+
+  it('classifies an nginx 502 gateway page as DEPENDENCY_UNAVAILABLE', async () => {
+    const fetcher: typeof fetch = async () =>
+      new Response('<html><body>502 Bad Gateway</body></html>', {
+        status: 502,
+        headers: { 'content-type': 'text/html' },
+      })
+    const client = new ApiClient({ baseUrl: 'http://local.test', fetcher })
+
+    await expect(
+      client.listClassroomScenarios({ actorId: 'demo-parent' }),
+    ).rejects.toMatchObject({
+      status: 502,
+      code: 'DEPENDENCY_UNAVAILABLE',
+    })
+  })
+
+  it('keeps real backend 5xx errors distinct from gateway unavailability', async () => {
+    // FastAPI 崩溃返回带正文的 500，业务降级返回 JSON 信封的 503：都不是「API 未启动」。
+    const crashClient = new ApiClient({
+      baseUrl: 'http://local.test',
+      fetcher: async () =>
+        new Response('Internal Server Error', {
+          status: 500,
+          headers: { 'content-type': 'text/plain' },
+        }),
+    })
+    await expect(crashClient.listHouseholds({ actorId: 'owner' })).rejects.toMatchObject({
+      status: 500,
+      code: 'HTTP_ERROR',
+    })
+
+    const degradedClient = new ApiClient({
+      baseUrl: 'http://local.test',
+      fetcher: async () =>
+        new Response(JSON.stringify({ detail: 'FACE_AUTH_UNAVAILABLE' }), { status: 503 }),
+    })
+    await expect(degradedClient.listHouseholds({ actorId: 'owner' })).rejects.toMatchObject({
+      status: 503,
+      message: 'FACE_AUTH_UNAVAILABLE',
+    })
+  })
+
+  it('applies the extended idempotent-seed timeout but honours caller overrides', async () => {
+    // 补种默认超时必须高于普通请求（种子 20+ 事件且幂等可重试），
+    // 同时调用方仍可为测试/特殊场景显式覆盖。
+    expect(DEMO_SEED_TIMEOUT_MS).toBeGreaterThan(15_000)
+
+    const fetcher: typeof fetch = (_input, init) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(new DOMException('The operation was aborted.', 'AbortError'))
+        })
+      })
+    const client = new ApiClient({ baseUrl: 'http://local.test', fetcher })
+
+    await expect(
+      client.seedFormalDemoHealth({ actorId: 'demo-parent', timeoutMs: 40 }),
+    ).rejects.toMatchObject({
+      status: 0,
+      code: 'DEPENDENCY_UNAVAILABLE',
+      message: 'API request timed out after 40ms',
     })
   })
 
