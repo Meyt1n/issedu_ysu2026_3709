@@ -1,9 +1,12 @@
 import type {
   ApiErrorCode,
   ApiErrorEnvelope,
+  AssistantAgentTrace,
   AssistantChatInput,
+  AssistantExternalSource,
   AssistantResponse,
   CapabilityResponse,
+  EvidencePreview,
   HealthEvent,
   HealthResponse,
   Household,
@@ -339,5 +342,172 @@ export class ApiClient {
       { method: 'POST', body: JSON.stringify(input) },
       { timeoutMs: 240_000, ...options },
     )
+  }
+
+  /**
+   * 多智能体流式聊天：与网页端同源 SSE，逐步接收 trace / status / token / done。
+   * 仍不上传音频；仅推送校验后的最终回答文本。若流式不可用，调用方可回退到 assistantChat。
+   */
+  async assistantChatStream(
+    input: AssistantChatInput,
+    handlers: {
+      onTrace?: (trace: AssistantAgentTrace) => void
+      onToken?: (token: string) => void
+      onStatus?: (phase: string) => void
+      onExternalSources?: (sources: AssistantExternalSource[], networkQuery?: string | null) => void
+      onEvidencePreview?: (preview: EvidencePreview) => void
+      onCancelled?: () => void
+    },
+    householdId?: string,
+    memberId?: string,
+    options: RequestOptions = {},
+  ): Promise<AssistantResponse> {
+    const params = new URLSearchParams()
+    if (householdId) params.set('household_id', householdId)
+    if (memberId) params.set('member_id', memberId)
+    const query = params.toString()
+    const headers = new Headers({ Accept: 'text/event-stream', 'Content-Type': 'application/json' })
+
+    const hasAuthProvider = this.authSessionProvider !== undefined
+    const hasPerRequestAuth = Object.prototype.hasOwnProperty.call(options, 'authSession')
+    const authSession = hasPerRequestAuth ? options.authSession : this.authSessionProvider?.()
+    if (authSession) {
+      const expiresAt = Date.parse(authSession.expiresAt)
+      if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+        throw new ApiClientError('登录会话已过期', { status: 401, code: 'SESSION_EXPIRED' })
+      }
+      if (authSession.transport === 'bearer') {
+        if (!authSession.accessToken) {
+          throw new ApiClientError('登录会话已过期', { status: 401, code: 'SESSION_EXPIRED' })
+        }
+        headers.set('Authorization', `Bearer ${authSession.accessToken}`)
+      } else if (authSession.transport !== 'cookie') {
+        headers.set('X-Actor-Id', authSession.actorId)
+      }
+      if (authSession.accessPurpose) headers.set('X-Access-Purpose', authSession.accessPurpose)
+    } else if (!hasAuthProvider) {
+      if (options.actorId) headers.set('X-Actor-Id', options.actorId)
+      if (options.accessPurpose) headers.set('X-Access-Purpose', options.accessPurpose)
+    } else if (options.accessPurpose) {
+      headers.set('X-Access-Purpose', options.accessPurpose)
+    }
+
+    const timeoutMs = options.timeoutMs ?? 240_000
+    const timeoutController = typeof AbortController !== 'undefined' && timeoutMs > 0
+      ? new AbortController()
+      : null
+    const timeoutTimer = timeoutController
+      ? setTimeout(() => timeoutController.abort(), timeoutMs)
+      : null
+    const onExternalAbort = () => timeoutController?.abort()
+    options.signal?.addEventListener('abort', onExternalAbort)
+
+    try {
+      let response: Response
+      try {
+        response = await this.fetcher(
+          `${this.baseUrl}/api/v1/assistant/chat/stream${query ? `?${query}` : ''}`,
+          {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(input),
+            signal: options.signal ?? timeoutController?.signal,
+            credentials: authSession?.transport === 'cookie' ? 'include' : undefined,
+          },
+        )
+      } catch {
+        const aborted = timeoutController?.signal.aborted === true
+        if (aborted) {
+          throw new ApiClientError('请求超时，服务器没有在限定时间内响应', { status: 0, code: 'REQUEST_TIMEOUT' })
+        }
+        throw new ApiClientError('家庭服务器暂时无法访问', { status: 0, code: 'DEPENDENCY_UNAVAILABLE' })
+      }
+
+      if (!response.ok) {
+        const text = await response.text()
+        let body: unknown = null
+        try {
+          body = JSON.parse(text)
+        } catch {
+          body = { detail: text }
+        }
+        const envelope = (body ?? {}) as ApiErrorEnvelope
+        throw new ApiClientError(
+          envelope.error?.message ?? envelope.detail ?? `请求失败（HTTP ${response.status}）`,
+          {
+            status: response.status,
+            code: envelope.error?.code ?? fallbackErrorCode(response.status),
+            requestId: envelope.error?.request_id ?? envelope.request_id ?? response.headers.get('x-request-id'),
+          },
+        )
+      }
+
+      const reader = response.body?.getReader()
+      if (!reader) {
+        throw new ApiClientError('流式响应不可用', { status: 0, code: 'DEPENDENCY_UNAVAILABLE' })
+      }
+
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let finalResponse: AssistantResponse | null = null
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const chunks = buffer.split('\n\n')
+        buffer = chunks.pop() ?? ''
+        for (const chunk of chunks) {
+          if (!chunk.trim()) continue
+          let eventName = 'message'
+          let dataLine = ''
+          for (const line of chunk.split('\n')) {
+            if (line.startsWith('event:')) eventName = line.slice(6).trim()
+            if (line.startsWith('data:')) dataLine = line.slice(5).trim()
+          }
+          if (!dataLine) continue
+          const payload = JSON.parse(dataLine) as Record<string, unknown>
+          if (eventName === 'trace') handlers.onTrace?.(payload.trace as AssistantAgentTrace)
+          if (eventName === 'status') handlers.onStatus?.(String(payload.phase ?? ''))
+          if (eventName === 'token') handlers.onToken?.(String(payload.token ?? ''))
+          if (eventName === 'evidence_preview') {
+            handlers.onEvidencePreview?.(payload as unknown as EvidencePreview)
+          }
+          if (eventName === 'external_sources') {
+            handlers.onExternalSources?.(
+              (payload.external_sources as AssistantExternalSource[]) ?? [],
+              (payload.network_query as string | null | undefined) ?? null,
+            )
+          }
+          if (eventName === 'done') finalResponse = payload.response as AssistantResponse
+          if (eventName === 'cancelled') {
+            handlers.onCancelled?.()
+            throw new ApiClientError('ASSISTANT_STREAM_CANCELLED', {
+              status: 0,
+              code: 'CANCELLED',
+            })
+          }
+          if (eventName === 'error') {
+            const code = String(payload.code ?? '')
+            if (code === 'CANCELLED' || String(payload.message ?? '') === 'CANCELLED') {
+              handlers.onCancelled?.()
+              throw new ApiClientError('ASSISTANT_STREAM_CANCELLED', { status: 0, code: 'CANCELLED' })
+            }
+            throw new ApiClientError(String(payload.message ?? '流式失败'), {
+              status: 0,
+              code: 'DEPENDENCY_UNAVAILABLE',
+            })
+          }
+        }
+      }
+
+      if (!finalResponse) {
+        throw new ApiClientError('流式结束但未收到回答', { status: 0, code: 'DEPENDENCY_UNAVAILABLE' })
+      }
+      return finalResponse
+    } finally {
+      if (timeoutTimer) clearTimeout(timeoutTimer)
+      options.signal?.removeEventListener('abort', onExternalAbort)
+    }
   }
 }

@@ -8,6 +8,7 @@ import SkeletonList from './components/SkeletonList.vue'
 import {
   dismissToast,
   MEMBER_VIEWS,
+  SHARED_VIEWS,
   onHealthDataRefresh,
   refreshPendingReviewCount,
   selectHousehold,
@@ -53,6 +54,7 @@ const VIEW_LOADERS = {
   knowledge: () => import('./views/KnowledgeView.vue'),
   modellab: () => import('./views/ModelLabView.vue'),
   'face-credentials': () => import('./views/FaceCredentialView.vue'),
+  'demo-lab': () => import('./views/DemoLabView.vue'),
 } satisfies Record<ViewName, () => Promise<{ default: Component }>>
 
 const OverviewView = lazyView(VIEW_LOADERS.overview)
@@ -68,6 +70,7 @@ const AuthView = lazyView(VIEW_LOADERS.authorizations)
 const KnowledgeView = lazyView(VIEW_LOADERS.knowledge)
 const ModelLabView = lazyView(VIEW_LOADERS.modellab)
 const FaceCredentialView = lazyView(VIEW_LOADERS['face-credentials'])
+const DemoLabView = lazyView(VIEW_LOADERS['demo-lab'])
 const MemberHomeView = lazyView(VIEW_LOADERS['member-home'])
 const MemberCaptureView = lazyView(VIEW_LOADERS['member-capture'])
 const MemberPlansView = lazyView(VIEW_LOADERS['member-plans'])
@@ -82,6 +85,7 @@ const NAV_ITEMS: Array<{ view: ViewName; label: string; icon: string; group: str
   { view: 'member-plans', label: '服药提醒', icon: 'plan', group: '我的照护' },
   { view: 'member-records', label: '我的记录', icon: 'compass', group: '我的照护' },
   { view: 'member-help', label: '使用帮助', icon: 'info', group: '我的照护' },
+  { view: 'assistant', label: '健康助手', icon: 'assistant', group: '我的照护' },
   { view: 'overview', label: '家庭总览', icon: 'home', group: '日常照护' },
   { view: 'members', label: '成员档案', icon: 'members', group: '日常照护' },
   { view: 'plans', label: '健康计划', icon: 'plan', group: '日常照护' },
@@ -95,6 +99,7 @@ const NAV_ITEMS: Array<{ view: ViewName; label: string; icon: string; group: str
   { view: 'bigscreen', label: '家庭大屏', icon: 'sun', group: '家庭与研发' },
   { view: 'knowledge', label: '知识文档', icon: 'leaf', group: '家庭与研发' },
   { view: 'modellab', label: '模型实验室', icon: 'sparkle', group: '家庭与研发' },
+  { view: 'demo-lab', label: '演示造数', icon: 'sparkle', group: '家庭与研发' },
 ]
 
 const VIEW_COMPONENTS: Record<ViewName, unknown> = {
@@ -116,12 +121,15 @@ const VIEW_COMPONENTS: Record<ViewName, unknown> = {
   knowledge: KnowledgeView,
   modellab: ModelLabView,
   'face-credentials': FaceCredentialView,
+  'demo-lab': DemoLabView,
 }
 
 const visibleNavItems = computed(() => {
   const portalItems =
     session.portal === 'member'
-      ? NAV_ITEMS.filter(item => MEMBER_VIEWS.includes(item.view))
+      ? NAV_ITEMS.filter(
+          item => MEMBER_VIEWS.includes(item.view) || SHARED_VIEWS.includes(item.view),
+        )
       : NAV_ITEMS.filter(item => !MEMBER_VIEWS.includes(item.view))
   return SHOW_ADVANCED_LAB ? portalItems : portalItems.filter(item => item.view !== 'modellab')
 })
@@ -314,17 +322,9 @@ onBeforeUnmount(() => {
       </template>
 
       <div class="sidebar-foot">
-            <p class="privacy-note">
-              <AppIcon name="lock" :size="16" />
-              <span>{{ session.portal === 'admin' ? '家庭健康数据默认不出网，全部保存在本地可信域。' : '健康信息默认只保存在家里，不会自动上网。' }}</span>
-            </p>
-        <p v-if="session.portal === 'admin'" class="privacy-note">
-          <AppIcon name="leaf" :size="16" />
-          <span>管理后台负责复核、授权和记录；当前用途须与授权用途一致，否则读不到字段。</span>
-        </p>
-        <p v-else class="privacy-note">
-          <AppIcon name="leaf" :size="16" />
-          <span>拍完照片交给家人确认，确认后才会出现在你的记录里。</span>
+        <p class="privacy-note">
+          <AppIcon name="lock" :size="16" />
+          <span>{{ session.portal === 'admin' ? '健康数据默认只保存在本地。' : '健康信息只保存在家里 · 详见使用帮助' }}</span>
         </p>
         <button type="button" class="sidebar-collapse" :title="sidebarMini ? '展开导航' : '收起导航'" @click="toggleSidebar">
           <AppIcon name="arrow-right" :size="15" style="transform: rotate(180deg)" />
@@ -343,25 +343,6 @@ onBeforeUnmount(() => {
           <h1 class="topbar-title">{{ activeNav.label }}</h1>
         </div>
         <div class="topbar-side">
-          <button
-            v-if="session.portal === 'admin'"
-            type="button"
-            class="palette-trigger"
-            title="打开命令面板（Ctrl+K）"
-            @click="paletteRef?.show()"
-          >
-            <AppIcon name="compass" :size="15" />
-            <span class="palette-trigger-text">快速跳转</span>
-            <kbd class="palette-kbd">Ctrl</kbd><kbd class="palette-kbd">K</kbd>
-          </button>
-          <span
-            v-if="session.portal === 'admin'"
-            class="api-dot"
-            :title="session.capabilities ? `本地 API 已连接 · 阶段 ${session.capabilities.phase}` : '本地 API 状态未知'"
-          >
-            <i :class="session.capabilities ? 'on' : 'off'" />
-            {{ session.capabilities ? '本地在线' : '状态未知' }}
-          </span>
           <label v-if="householdOptions.length > 0" class="context-select">
             家庭
             <select
@@ -389,7 +370,7 @@ onBeforeUnmount(() => {
             <button
               type="button"
               class="icon-button"
-              title="切换界面主题"
+              :title="session.portal === 'admin' ? '工具与主题' : '切换界面主题'"
               :aria-expanded="themeMenuOpen"
               @click="themeMenuOpen = !themeMenuOpen"
             >
@@ -397,6 +378,24 @@ onBeforeUnmount(() => {
             </button>
             <div v-if="themeMenuOpen" class="theme-backdrop" @click="themeMenuOpen = false" />
             <div v-if="themeMenuOpen" class="theme-menu" role="menu">
+              <template v-if="session.portal === 'admin'">
+                <p class="theme-menu-label">管理工具</p>
+                <button
+                  type="button"
+                  class="theme-option"
+                  role="menuitem"
+                  @click="paletteRef?.show(); themeMenuOpen = false"
+                >
+                  <span class="theme-name">
+                    <strong>快速跳转</strong>
+                    <span>Ctrl + K</span>
+                  </span>
+                </button>
+                <p class="theme-tool-status">
+                  <i :class="session.capabilities ? 'on' : 'off'" />
+                  {{ session.capabilities ? `本地在线 · ${session.capabilities.phase}` : '本地状态未知' }}
+                </p>
+              </template>
               <p class="theme-menu-label">界面主题</p>
               <button
                 v-for="theme in THEMES"
@@ -420,6 +419,7 @@ onBeforeUnmount(() => {
           </div>
           <span
             class="identity-chip"
+            :class="{ admin: session.portal === 'admin' }"
             :title="session.portal === 'admin'
               ? `${currentHouseholdLabel} · ${session.actorId} · 用途 ${session.accessPurpose || '未填'}`
               : `${currentHouseholdLabel} · 当前成员`"
@@ -427,7 +427,7 @@ onBeforeUnmount(() => {
             <AppIcon name="members" :size="16" />
             <span class="identity-person">
               <strong>{{ currentMemberLabel }}</strong>
-              <small v-if="session.portal === 'admin'">
+              <small v-if="session.portal === 'admin'" class="identity-admin-meta">
                 {{ session.actorId }} · {{ session.isOwnerView ? '可管授权' : '仅授权范围' }} · {{ session.accessPurpose || '未填用途' }}
               </small>
               <small v-else>当前家庭成员</small>

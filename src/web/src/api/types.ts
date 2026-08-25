@@ -638,6 +638,43 @@ export interface WeatherResponse {
   reason?: string
 }
 
+export interface HealthNewsItem {
+  id: string
+  kind?: 'seasonal_tip' | 'remote'
+  title: string
+  summary: string
+  tag: string
+  chat_prompt: string
+  source: 'seasonal_calendar' | 'remote_whitelist'
+  source_name?: string | null
+  source_url?: string | null
+  published_at?: string | null
+  fetched_at?: string | null
+}
+
+export interface HealthNewsResponse {
+  status?:
+    | 'ok'
+    | 'stale'
+    | 'local_only'
+    | 'disabled'
+    | 'unconfigured'
+    | 'egress_blocked'
+    | 'rate_limited'
+    | 'timeout'
+    | 'provider_unavailable'
+    | 'invalid_response'
+    | 'error'
+  cache_status?: 'none' | 'miss' | 'fresh' | 'stale'
+  season: string
+  generated_at: string
+  fetched_at?: string | null
+  disclaimer: string
+  degraded_reason?: string | null
+  sources_attempted?: string[]
+  items: HealthNewsItem[]
+}
+
 export interface AssistantChatInput {
   messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>
   model?: string
@@ -645,6 +682,9 @@ export interface AssistantChatInput {
   max_tokens?: number
   agent_mode?: 'single' | 'multi_agent'
   allow_network_search?: boolean
+  query_type_override?: string
+  assistant_session_id?: string
+  clear_session_cache?: boolean
 }
 
 export interface AssistantCitation {
@@ -665,6 +705,7 @@ export interface AssistantAgentTrace {
   duration_ms?: number
   summary?: string
   source_count?: number
+  classifier?: Record<string, unknown>
 }
 
 export interface AssistantExternalSource {
@@ -695,6 +736,29 @@ export interface AssistantAgentCatalog {
   agents: AssistantAgentCatalogItem[]
 }
 
+export interface EvidencePreview {
+  query_type: string
+  database_tools: string[]
+  knowledge_titles: string[]
+  knowledge_count: number
+  external_count: number
+  rule_tools: string[]
+}
+
+export interface WebSearchOpsSnapshot {
+  web_search_enabled: boolean
+  web_search_ready: boolean
+  web_search_provider: string
+  cache_ttl_seconds: number
+  min_interval_seconds: number
+  cache_entries: number
+  cache_hits: number
+  cache_misses: number
+  cache_hit_rate: number
+  rate_limited_hits: number
+  searches: number
+}
+
 export interface AssistantResponse {
   answer: string
   sources: string[]
@@ -715,6 +779,10 @@ export interface AssistantResponse {
   network_query?: string | null
   agent_trace?: AssistantAgentTrace[]
   external_sources?: AssistantExternalSource[]
+  route_explanation?: string | null
+  classifier?: Record<string, unknown> | null
+  evidence_preview?: EvidencePreview | null
+  retrieval_cache_hit?: boolean
 }
 
 export interface AssistantTool {
@@ -754,9 +822,13 @@ export interface KnowledgeRetrieveResult {
   chunk_id?: string
   document_id?: string
   document_title?: string
+  title?: string
   text?: string
   score?: number
   locator?: string | null
+  match_reason?: string
+  matched_terms?: string[]
+  matched_synonyms?: string[]
   [key: string]: unknown
 }
 

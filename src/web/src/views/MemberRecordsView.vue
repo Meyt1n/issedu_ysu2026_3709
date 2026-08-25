@@ -34,7 +34,7 @@ onMounted(() => void loadRecords())
   <section class="page-hero member-portal-hero">
     <p class="eyebrow">我的记录</p>
     <h2 class="hero-greeting">{{ selectedMember?.display_name ?? '我的' }}的健康记录</h2>
-    <p class="hero-sub">这里只展示家人确认过的内容，正在核对的照片不会出现在这里。</p>
+    <p class="hero-sub">只展示家人确认过的内容。</p>
   </section>
   <p v-if="error" class="notice warn" role="status"><AppIcon name="info" :size="16" />暂时无法读取记录，请稍后再试。</p>
   <section class="card">

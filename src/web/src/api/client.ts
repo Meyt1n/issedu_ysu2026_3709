@@ -25,6 +25,7 @@ import type {
   CreateModelVersionBindingInput,
   HardSample,
   HealthEvent,
+  HealthNewsResponse,
   HealthResponse,
   CapabilityResponse,
   DashboardSummary,
@@ -50,6 +51,7 @@ import type {
   RiskDetailResponse,
   RiskListResponse,
   EvidencePipelineResult,
+  EvidencePreview,
   FaceCredential,
   FaceChallenge,
   TrainingConsent,
@@ -60,6 +62,7 @@ import type {
   SubmitVisionEvidenceInput,
   VisionTask,
   WeatherResponse,
+  WebSearchOpsSnapshot,
 } from './types'
 
 export class ApiClientError extends Error {
@@ -852,6 +855,10 @@ export class ApiClient {
     )
   }
 
+  getHealthNews(options?: RequestOptions): Promise<HealthNewsResponse> {
+    return this.request('/api/v1/health-news', undefined, options)
+  }
+
   assistantChat(
     input: AssistantChatInput,
     householdId?: string,
@@ -877,6 +884,8 @@ export class ApiClient {
       onToken?: (token: string) => void
       onStatus?: (phase: string) => void
       onExternalSources?: (sources: AssistantExternalSource[], networkQuery?: string | null) => void
+      onEvidencePreview?: (preview: EvidencePreview) => void
+      onCancelled?: () => void
     },
     householdId?: string,
     memberId?: string,
@@ -943,6 +952,9 @@ export class ApiClient {
         if (eventName === 'trace') handlers.onTrace?.(payload.trace as AssistantAgentTrace)
         if (eventName === 'status') handlers.onStatus?.(String(payload.phase ?? ''))
         if (eventName === 'token') handlers.onToken?.(String(payload.token ?? ''))
+        if (eventName === 'evidence_preview') {
+          handlers.onEvidencePreview?.(payload as unknown as EvidencePreview)
+        }
         if (eventName === 'external_sources') {
           handlers.onExternalSources?.(
             (payload.external_sources as AssistantExternalSource[]) ?? [],
@@ -950,12 +962,20 @@ export class ApiClient {
           )
         }
         if (eventName === 'done') finalResponse = payload.response as AssistantResponse
+        if (eventName === 'cancelled') {
+          handlers.onCancelled?.()
+          throw new ApiClientError('ASSISTANT_STREAM_CANCELLED', {
+            status: 0,
+            code: 'CANCELLED',
+          })
+        }
         if (eventName === 'error') {
           const code = String(payload.code ?? '')
           if (code === 'CANCELLED' || String(payload.message ?? '') === 'CANCELLED') {
-            throw new ApiClientError('Assistant stream cancelled', {
+            handlers.onCancelled?.()
+            throw new ApiClientError('ASSISTANT_STREAM_CANCELLED', {
               status: 0,
-              code: 'DEPENDENCY_UNAVAILABLE',
+              code: 'CANCELLED',
             })
           }
           throw new ApiClientError(String(payload.message ?? 'Stream failed'), {
@@ -981,6 +1001,24 @@ export class ApiClient {
 
   listAssistantAgents(options?: RequestOptions): Promise<AssistantAgentCatalog> {
     return this.request('/api/v1/assistant/agents', undefined, options)
+  }
+
+  getAssistantWebSearchOps(options?: RequestOptions): Promise<WebSearchOpsSnapshot> {
+    return this.request('/api/v1/assistant/web-search/ops', undefined, options)
+  }
+
+  clearAssistantSessionCache(
+    assistantSessionId: string,
+    options?: RequestOptions,
+  ): Promise<{ assistant_session_id: string; cleared_entries: number }> {
+    return this.request(
+      '/api/v1/assistant/session-cache/clear',
+      {
+        method: 'POST',
+        body: JSON.stringify({ assistant_session_id: assistantSessionId }),
+      },
+      options,
+    )
   }
 
   listKnowledgeDocuments(options?: RequestOptions): Promise<KnowledgeDocument[]> {
@@ -1186,6 +1224,58 @@ export class ApiClient {
       undefined,
       options,
     )
+  }
+
+  seedFormalDemoHealth(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.request('/api/v1/demo/formal-health-seed', { method: 'POST' }, options)
+  }
+
+  listClassroomScenarios(
+    options?: RequestOptions,
+  ): Promise<{ scenarios: Array<Record<string, unknown>>; disclaimer?: string }> {
+    return this.request('/api/v1/demo/classroom-scenarios', undefined, options)
+  }
+
+  listKnowledgeStaging(options?: RequestOptions): Promise<{
+    items: Array<Record<string, unknown>>
+    total: number
+    auto_ingest: boolean
+    disclaimer?: string
+  }> {
+    return this.request('/api/v1/knowledge/crawl/staging', undefined, options)
+  }
+
+  knowledgeCrawlStatus(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.request('/api/v1/knowledge/crawl/status', undefined, options)
+  }
+
+  runKnowledgeCrawl(
+    options?: RequestOptions,
+    params?: { dueOnly?: boolean },
+  ): Promise<Record<string, unknown>> {
+    const query = params?.dueOnly ? '?due_only=true' : ''
+    return this.request(`/api/v1/knowledge/crawl/run${query}`, { method: 'POST' }, options)
+  }
+
+  reviewKnowledgeStaging(
+    sourceId: string,
+    input: { approve?: boolean; reject?: boolean; notes?: string },
+    options?: RequestOptions,
+  ): Promise<Record<string, unknown>> {
+    const params = new URLSearchParams()
+    if (input.approve) params.set('approve', 'true')
+    if (input.reject) params.set('reject', 'true')
+    if (input.notes) params.set('notes', input.notes)
+    const query = params.toString()
+    return this.request(
+      `/api/v1/knowledge/crawl/staging/${encodeURIComponent(sourceId)}/review${query ? `?${query}` : ''}`,
+      { method: 'POST' },
+      options,
+    )
+  }
+
+  promoteKnowledgeStaging(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.request('/api/v1/knowledge/crawl/promote', { method: 'POST' }, options)
   }
 }
 

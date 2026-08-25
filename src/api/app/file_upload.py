@@ -215,7 +215,7 @@ async def validate_and_store(upload: UploadFile, owner: str | None = None) -> di
     validate_magic(upload.file, ext)
     file_hash = compute_hash(upload.file)
     storage_key = random_storage_key(ext)
-    dest = store_file(upload.file, storage_key)
+    store_file(upload.file, storage_key)
     if owner is not None:
         record_file_owner(storage_key, owner)
 
@@ -230,5 +230,4 @@ async def validate_and_store(upload: UploadFile, owner: str | None = None) -> di
         "hash_algo": HASH_ALGO,
         "hash": file_hash,
         "extension": ext,
-        "path": str(dest),
     }

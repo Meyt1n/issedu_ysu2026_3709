@@ -192,6 +192,15 @@ def activate_binding(
     Requires comparison_report_hash to be set unless safety_thresholds explicitly
     disables require_comparison_report.
     """
+    locked = session.scalars(
+        select(ModelVersionBinding)
+        .where(ModelVersionBinding.id == binding.id)
+        .with_for_update()
+    ).first()
+    if locked is None:
+        raise ValueError("BINDING_NOT_FOUND")
+    binding = locked
+
     if binding.release_status == "revoked":
         raise ValueError("BINDING_ALREADY_REVOKED")
     if binding.release_status == "active":
@@ -204,7 +213,12 @@ def activate_binding(
     if thresholds.get("require_comparison_report", True) and not binding.comparison_report_hash:
         raise ValueError("COMPARISON_REPORT_REQUIRED")
 
-    # Deactivate any currently active binding for this model_id
+    # Lock siblings for this model_id before flipping active.
+    session.scalars(
+        select(ModelVersionBinding)
+        .where(ModelVersionBinding.model_id == binding.model_id)
+        .with_for_update()
+    ).all()
     _deactivate_active_for_model(session, binding.model_id, actor_id=approved_by)
 
     now = datetime.now(UTC)
@@ -231,6 +245,15 @@ def rollback_binding(
 
     If no previous binding exists or it's also revoked, no active binding remains.
     """
+    locked = session.scalars(
+        select(ModelVersionBinding)
+        .where(ModelVersionBinding.id == binding.id)
+        .with_for_update()
+    ).first()
+    if locked is None:
+        raise ValueError("BINDING_NOT_FOUND")
+    binding = locked
+
     if binding.release_status != "active":
         raise ValueError("BINDING_NOT_ACTIVE")
     if _requires_hct404_release_evidence(binding):
@@ -238,6 +261,12 @@ def rollback_binding(
             raise ValueError("HCT404_ROLLBACK_REASON_REQUIRED")
         if not isinstance(evidence_hash, str) or SHA256_RE.fullmatch(evidence_hash) is None:
             raise ValueError("HCT404_ROLLBACK_EVIDENCE_REQUIRED")
+
+    session.scalars(
+        select(ModelVersionBinding)
+        .where(ModelVersionBinding.model_id == binding.model_id)
+        .with_for_update()
+    ).all()
 
     now = datetime.now(UTC)
     binding.release_status = "revoked"

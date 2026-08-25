@@ -95,13 +95,14 @@ def test_model_binding_governance_requires_identity(client: TestClient) -> None:
 
 def test_model_binding_rollback_attributes_real_actor(client: TestClient) -> None:
     binding_id = _create_binding(client)
+    # Dual-control: activator must differ from creator.
     activated = client.post(
         f"/api/v1/model-version-bindings/{binding_id}/activate",
-        headers=OWNER,
-        json={"approved_by": "audit-owner"},
+        headers=MEMBER,
+        json={"approved_by": "audit-member"},
     )
     assert activated.status_code == 200, activated.text
-    assert activated.json()["approved_by"] == "audit-owner"
+    assert activated.json()["approved_by"] == "audit-member"
 
     # 非创建者、未列入 MODEL_RELEASE_ADMIN_ACTORS 时不得回滚。
     denied = client.post(
@@ -126,11 +127,22 @@ def test_model_binding_rejects_spoofed_approved_by(client: TestClient) -> None:
     binding_id = _create_binding(client)
     response = client.post(
         f"/api/v1/model-version-bindings/{binding_id}/activate",
-        headers=OWNER,
+        headers=MEMBER,
         json={"approved_by": "independent-reviewer"},
     )
     assert response.status_code == 422
     assert response.json()["detail"] == "APPROVED_BY_MUST_MATCH_ACTOR"
+
+
+def test_model_binding_creator_cannot_self_activate(client: TestClient) -> None:
+    binding_id = _create_binding(client)
+    response = client.post(
+        f"/api/v1/model-version-bindings/{binding_id}/activate",
+        headers=OWNER,
+        json={"approved_by": "audit-owner"},
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"] == "RELEASE_DUAL_CONTROL_REQUIRED"
 
 
 # ── 2. 文件所有权与越权访问 ───────────────────────────────────────────

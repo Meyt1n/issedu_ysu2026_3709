@@ -5,6 +5,7 @@ import type { HealthEvent, VisionTask } from '../api/types'
 import { rememberedVisionTasks, requestOptions, session } from '../store'
 import {
   isMemberTaskActive,
+  isMemberTaskNeedsRetake,
   memberVisionStatusHint,
   memberVisionStatusLabel,
 } from './memberStatus'
@@ -12,10 +13,6 @@ import {
 function visionTaskIdFromEvent(event: HealthEvent): string | null {
   const value = event.evidence?.vision_task_id
   return typeof value === 'string' ? value : null
-}
-
-function isTerminalFailure(status: string | null | undefined): boolean {
-  return status === 'failed' || status === 'timeout' || status === 'cancelled'
 }
 
 export function useMemberVisionTracking(options?: { enablePolling?: boolean }) {
@@ -27,11 +24,23 @@ export function useMemberVisionTracking(options?: { enablePolling?: boolean }) {
     trackedTasks.value.some(task => isMemberTaskActive(task.status)),
   )
 
-  const awaitingConfirmationTasks = computed(() =>
+  const needsRetakeTasks = computed(() =>
     trackedTasks.value.filter(task =>
-      !confirmedTaskIds.value.has(task.id) && !isTerminalFailure(task.status),
+      !confirmedTaskIds.value.has(task.id) && isMemberTaskNeedsRetake(task.status),
     ),
   )
+
+  const awaitingConfirmationTasks = computed(() =>
+    trackedTasks.value.filter(task =>
+      !confirmedTaskIds.value.has(task.id) && !isMemberTaskNeedsRetake(task.status),
+    ),
+  )
+
+  /** 首页照片关注区：优先展示需要重拍的，再展示等待家人确认的。 */
+  const homePhotoTasks = computed(() => [
+    ...needsRetakeTasks.value,
+    ...awaitingConfirmationTasks.value,
+  ])
 
   function taskStatusLabel(task: VisionTask): string {
     return memberVisionStatusLabel(task.status, confirmedTaskIds.value.has(task.id))
@@ -39,6 +48,10 @@ export function useMemberVisionTracking(options?: { enablePolling?: boolean }) {
 
   function taskStatusHint(task: VisionTask): string {
     return memberVisionStatusHint(task.status, confirmedTaskIds.value.has(task.id))
+  }
+
+  function taskNeedsRetake(task: VisionTask): boolean {
+    return !confirmedTaskIds.value.has(task.id) && isMemberTaskNeedsRetake(task.status)
   }
 
   async function refreshTracking(): Promise<void> {
@@ -93,9 +106,12 @@ export function useMemberVisionTracking(options?: { enablePolling?: boolean }) {
     trackedTasks,
     confirmedTaskIds,
     hasActiveTasks,
+    needsRetakeTasks,
     awaitingConfirmationTasks,
+    homePhotoTasks,
     taskStatusLabel,
     taskStatusHint,
+    taskNeedsRetake,
     refreshTracking,
   }
 }

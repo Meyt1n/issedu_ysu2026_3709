@@ -539,6 +539,15 @@ onMounted(() => {
       <AppIcon name="chevron-right" :size="18" />
     </RouterLink>
 
+    <RouterLink class="card link-card" to="/me/voice-check">
+      <AppIcon name="sound" :size="22" />
+      <span class="link-card-text">
+        <strong>语音自检</strong>
+        <span class="meta-line">麦克风、中文语音包与联机服务器预检</span>
+      </span>
+      <AppIcon name="chevron-right" :size="18" />
+    </RouterLink>
+
     <section class="card" aria-labelledby="contact-title">
       <div class="h-icon-row">
         <span class="row-icon" data-tone="danger" aria-hidden="true"><AppIcon name="phone" :size="16" /></span>

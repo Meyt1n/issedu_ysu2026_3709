@@ -158,6 +158,32 @@ def enforce_registration_rate_limit(
     keys = [f"register:{actor_id}"]
     if client_key:
         keys.append(f"register-client:{client_key}")
+    _enforce_attempt_keys(db, keys, max_attempts=max_attempts, detail="REGISTER_RATE_LIMITED")
+
+
+def enforce_face_challenge_rate_limit(
+    db: Session,
+    *,
+    household_id: str,
+    client_key: str | None = None,
+    max_attempts: int = MAX_LOGIN_ATTEMPTS,
+) -> None:
+    """Throttle anonymous face-challenge issuance per household and client."""
+    keys = [f"face-challenge:{household_id}"]
+    if client_key:
+        keys.append(f"face-challenge-client:{client_key}")
+    _enforce_attempt_keys(
+        db, keys, max_attempts=max_attempts, detail="FACE_CHALLENGE_RATE_LIMITED"
+    )
+
+
+def _enforce_attempt_keys(
+    db: Session,
+    keys: list[str],
+    *,
+    max_attempts: int,
+    detail: str,
+) -> None:
     for rate_key in keys:
         cutoff = _now() - timedelta(seconds=LOCKOUT_SECONDS)
         db.execute(
@@ -178,7 +204,7 @@ def enforce_registration_rate_limit(
         if count >= max_attempts:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="REGISTER_RATE_LIMITED",
+                detail=detail,
             )
         db.add(AuthRateLimitAttempt(rate_key=rate_key, failed_at=_now()))
     db.flush()
@@ -239,7 +265,10 @@ def authenticate(actor_id: str, password: str, session: Session | None = None) -
     with _session_scope(session) as db:
         _check_rate_limit(db, f"password:{actor_id}")
         account = db.get(AuthAccount, actor_id)
-        if account is None or not verify_password(password, account.password_hash):
+        # Always run a bcrypt verify (dummy hash when missing) so timing does not
+        # reveal whether the actor_id is registered.
+        hashed = account.password_hash if account is not None else _DUMMY_PASSWORD_HASH
+        if account is None or not verify_password(password, hashed):
             _record_failure(db, f"password:{actor_id}")
             db.commit()
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="AUTH_FAILED")

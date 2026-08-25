@@ -1,0 +1,65 @@
+{
+  "version": "1",
+  "description": "受控知识抓取白名单。仅允许 HTTPS 公开教学/科普来源；抓取结果进入 staging，不得自动写入正式 RAG 索引。",
+  "policy": {
+    "https_only": true,
+    "auto_ingest": false,
+    "requires_human_review": true,
+    "max_bytes_per_page": 500000,
+    "user_agent": "HomeCareTwinKnowledgeBot/1.0 (+local-teaching; not-for-diagnosis)",
+    "allowed_hosts": [
+      "www.cdc.gov",
+      "cdc.gov",
+      "www.who.int",
+      "who.int"
+    ]
+  },
+  "sources": [
+    {
+      "id": "fixture-med-storage",
+      "title": "家庭药箱存放教学摘录（本地夹具）",
+      "url": "fixture://knowledge/med-storage.html",
+      "license": "internal-demo",
+      "refresh_hours": 168,
+      "topics": ["存放", "过期", "儿童安全"],
+      "enabled": true
+    },
+    {
+      "id": "fixture-allergy-share",
+      "title": "过敏信息分享边界教学摘录（本地夹具）",
+      "url": "fixture://knowledge/allergy-share.html",
+      "license": "internal-demo",
+      "refresh_hours": 168,
+      "topics": ["过敏", "授权"],
+      "enabled": true
+    },
+    {
+      "id": "fixture-reminder-escalation",
+      "title": "提醒升级与静默窗口教学摘录（本地夹具）",
+      "url": "fixture://knowledge/reminder-escalation.html",
+      "license": "internal-demo",
+      "refresh_hours": 72,
+      "topics": ["提醒", "升级", "静默"],
+      "enabled": true
+    },
+    {
+      "id": "fixture-packaging-check",
+      "title": "包装复核与条码冲突教学摘录（本地夹具）",
+      "url": "fixture://knowledge/packaging-check.html",
+      "license": "internal-demo",
+      "refresh_hours": 168,
+      "topics": ["包装", "条码", "复核"],
+      "enabled": true
+    },
+    {
+      "id": "example-cdc-med-safety",
+      "title": "示例：公开用药安全科普（需 --live 且域名放行）",
+      "url": "https://www.cdc.gov/medication-safety/about/index.html",
+      "license": "public-page-summary-only",
+      "refresh_hours": 336,
+      "topics": ["medication-safety"],
+      "enabled": false,
+      "notes": "默认关闭。启用前须确认许可与摘要改写策略；禁止整页版权复制入库。"
+    }
+  ]
+}

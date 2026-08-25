@@ -52,6 +52,7 @@ from app.auth import (
     create_face_challenge,
     create_face_session,
     create_family_face_challenge,
+    enforce_face_challenge_rate_limit,
     enforce_registration_rate_limit,
     family_face_rate_actor,
     generate_pin_challenge,
@@ -115,6 +116,10 @@ from app.file_upload import (
     validate_size,
 )
 from app.knowledge import KnowledgeDocument, RetrievalQuery
+from app.knowledge_audit_pagination import (
+    decode_knowledge_audit_cursor,
+    encode_knowledge_audit_cursor,
+)
 from app.local_agents import OrchestrationCancelled, get_agent_catalog, run_local_multi_agent
 from app.models import (
     AccessAudit,
@@ -129,6 +134,7 @@ from app.models import (
     VisionTask,
 )
 from app.request_context import current_request_id
+from app.retrieval_cache import clear_actor_session
 from app.review import (
     FusionStatus as ReviewFusionStatus,
 )
@@ -155,6 +161,7 @@ from app.schemas import (
     AccessAuditSummaryRead,
     AssistantRequest,
     AssistantResponse,
+    AssistantSessionCacheClearRequest,
     AuthCredentials,
     AuthorizationCreate,
     AuthorizationRead,
@@ -188,6 +195,7 @@ from app.schemas import (
     HouseholdUpdate,
     KnowledgeDocumentCreate,
     KnowledgeDocumentRead,
+    KnowledgeQueryAuditPageRead,
     KnowledgeQueryAuditRead,
     KnowledgeRetrieveRequest,
     KnowledgeRetrieveResponse,
@@ -219,6 +227,7 @@ from app.schemas import (
     RiskAlertRead,
     RiskDetailResponse,
     RiskListResponse,
+    SecurityDashboardRead,
     SessionIntrospectRead,
     StepUpChallengeRead,
     StepUpChallengeRequest,
@@ -236,6 +245,7 @@ from app.schemas import (
     VisionTaskLeaseRequest,
     VisionTaskRead,
 )
+from app.search_providers import search_ops_snapshot
 from app.security import (
     get_access_purpose,
     get_actor_id,
@@ -436,7 +446,64 @@ def capabilities() -> CapabilityResponse:
         available.append("face-recognition-local")
     else:
         unavailable.append("face-recognition-local")
-    return CapabilityResponse(phase="P0-foundation", available=available, unavailable=unavailable)
+    cfg = get_settings()
+    return CapabilityResponse(
+        phase="P0-foundation",
+        available=available,
+        unavailable=unavailable,
+        knowledge_admin_configured=bool(cfg.knowledge_admin_actor_set),
+        model_release_admin_configured=bool(cfg.model_release_admin_actor_set),
+        model_release_dual_control=cfg.model_release_dual_control,
+        owner_requires_access_purpose=cfg.owner_requires_access_purpose,
+    )
+
+
+@router.get("/meta/security-dashboard", response_model=SecurityDashboardRead)
+def security_dashboard(
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> SecurityDashboardRead:
+    """Aggregate access/auth audit counters for teaching demos (owner-scoped)."""
+    owned = list(
+        session.scalars(select(Household).where(Household.created_by == actor_id)).all()
+    )
+    household_ids = [h.id for h in owned if h.deleted_at is None]
+    if not household_ids:
+        return SecurityDashboardRead(household_count=0)
+
+    audits = list(
+        session.scalars(
+            select(AccessAudit)
+            .where(AccessAudit.household_id.in_(household_ids))
+            .order_by(AccessAudit.created_at.desc())
+            .limit(500)
+        ).all()
+    )
+    allowed = sum(1 for a in audits if a.outcome == "ALLOWED")
+    denied = sum(1 for a in audits if a.outcome == "DENIED")
+    file_cleanups = sum(1 for a in audits if a.action == "DELETE_FILE")
+    auth_failures = sum(
+        1 for a in audits if a.operation == "AUTHENTICATION" and a.outcome == "FAILED"
+    )
+    recent_denied = [
+        {
+            "action": a.action,
+            "reason": a.reason,
+            "actor_id": a.actor_id,
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+        }
+        for a in audits
+        if a.outcome == "DENIED"
+    ][:20]
+    return SecurityDashboardRead(
+        household_count=len(household_ids),
+        access_allowed=allowed,
+        access_denied=denied,
+        file_owner_cleanups=file_cleanups,
+        auth_failures=auth_failures,
+        model_release_events=0,
+        recent_denied=recent_denied,
+    )
 
 
 def _valid_authorizations(
@@ -1825,14 +1892,36 @@ def auth_pin_login(
 
 
 @router.post("/auth/face-challenge", response_model=FaceChallengeRead)
-def auth_face_challenge(payload: FaceChallengeRequest) -> dict[str, Any]:
+def auth_face_challenge(
+    payload: FaceChallengeRequest,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
     """Issue an opaque short-lived challenge; binding is checked at login."""
+    client_host = request.client.host if request.client else None
+    enforce_face_challenge_rate_limit(
+        session,
+        household_id=payload.household_id,
+        client_key=client_host,
+    )
+    session.commit()
     return create_face_challenge(payload.actor_id, payload.household_id)
 
 
 @router.post("/auth/family-face-challenge", response_model=FaceChallengeRead)
-def auth_family_face_challenge(payload: FamilyFaceChallengeRequest) -> dict[str, Any]:
+def auth_family_face_challenge(
+    payload: FamilyFaceChallengeRequest,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
     """Issue a household-scoped challenge; actor identity is resolved later."""
+    client_host = request.client.host if request.client else None
+    enforce_face_challenge_rate_limit(
+        session,
+        household_id=payload.household_id,
+        client_key=client_host,
+    )
+    session.commit()
     return create_family_face_challenge(payload.household_id)
 
 
@@ -3217,6 +3306,127 @@ def get_knowledge_document(
     return doc
 
 
+@router.post("/demo/formal-health-seed")
+def seed_formal_demo_health_endpoint(
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> dict:
+    """Idempotently seed synthetic classroom health facts for demo-parent households.
+
+    Restricted to demo-/test- actors so production-looking accounts cannot trigger
+    teaching fixtures by accident.
+    """
+    from app.formal_demo_plan import FORMAL_OWNER_ACTOR_ID
+    from app.formal_demo_seed import apply_formal_demo_seed
+
+    if not (
+        actor_id == FORMAL_OWNER_ACTOR_ID
+        or actor_id.startswith("demo-")
+        or actor_id.startswith("test-")
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="DEMO_SEED_FORBIDDEN",
+        )
+    return apply_formal_demo_seed(session, actor_id=actor_id)
+
+
+@router.get("/demo/classroom-scenarios")
+def list_classroom_scenarios(
+    actor_id: str = Depends(get_actor_id),
+) -> dict:
+    from app.formal_demo_plan import CLASSROOM_SCENARIOS
+
+    return {
+        "scenarios": CLASSROOM_SCENARIOS,
+        "disclaimer": "课堂剧本仅描述演示路径，不写入真实健康数据。",
+        "actor_id": actor_id,
+    }
+
+
+def _require_knowledge_steward(actor_id: str) -> None:
+    if not (
+        actor_id.startswith("demo-")
+        or actor_id.startswith("test-")
+        or actor_id in {"knowledge-steward", "demo-parent"}
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="KNOWLEDGE_STEWARD_REQUIRED",
+        )
+
+
+@router.get("/knowledge/crawl/staging")
+def list_knowledge_staging(actor_id: str = Depends(get_actor_id)) -> dict:
+    from app.knowledge_crawl import list_staging
+
+    _require_knowledge_steward(actor_id)
+    items = list_staging()
+    return {
+        "items": items,
+        "total": len(items),
+        "auto_ingest": False,
+        "disclaimer": "staging 仅为草稿，正式检索仍须批准晋升并入库。",
+    }
+
+
+@router.get("/knowledge/crawl/status")
+def knowledge_crawl_status(actor_id: str = Depends(get_actor_id)) -> dict:
+    from app.knowledge_crawl import crawl_ops_status
+
+    _require_knowledge_steward(actor_id)
+    return crawl_ops_status()
+
+
+@router.post("/knowledge/crawl/run")
+def run_knowledge_crawl(
+    actor_id: str = Depends(get_actor_id),
+    due_only: bool = False,
+) -> dict:
+    from app.knowledge_crawl import run_crawl
+
+    _require_knowledge_steward(actor_id)
+    # API 强制离线夹具，避免服务端意外出网；远程刷新只走 CLI/CI --live。
+    return run_crawl(live=False, due_only=due_only)
+
+
+@router.post("/knowledge/crawl/staging/{source_id}/review")
+def review_knowledge_staging(
+    source_id: str,
+    actor_id: str = Depends(get_actor_id),
+    approve: bool = False,
+    reject: bool = False,
+    notes: str = "",
+) -> dict:
+    from app.knowledge_crawl import mark_staging_reviewed
+
+    _require_knowledge_steward(actor_id)
+    try:
+        return mark_staging_reviewed(
+            source_id,
+            reviewer=actor_id,
+            notes=notes,
+            approve=approve,
+            reject=reject,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="STAGING_NOT_FOUND"
+        ) from exc
+
+
+@router.post("/knowledge/crawl/promote")
+def promote_knowledge_staging(actor_id: str = Depends(get_actor_id)) -> dict:
+    from app.knowledge_crawl import promote_approved_staging
+
+    _require_knowledge_steward(actor_id)
+    return promote_approved_staging(actor_id=actor_id)
+
+
 @router.post(
     "/knowledge/retrieve",
     response_model=KnowledgeRetrieveResponse,
@@ -3298,6 +3508,90 @@ def list_knowledge_query_audit(
     ]
 
 
+@router.get("/knowledge/query-audit/page", response_model=KnowledgeQueryAuditPageRead)
+def page_knowledge_query_audit(
+    household_id: str | None = Query(default=None, min_length=1, max_length=36),
+    member_id: str | None = Query(default=None, min_length=1, max_length=36),
+    cursor: str | None = Query(default=None, min_length=1),
+    limit: int = Query(default=50, ge=1, le=100),
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> KnowledgeQueryAuditPageRead:
+    """Page privacy-safe query audits without exposing raw query contents."""
+    decoded_cursor = None
+    if cursor is not None:
+        try:
+            decoded_cursor = decode_knowledge_audit_cursor(
+                cursor, secret=settings.cursor_signing_key
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
+        if (
+            decoded_cursor.actor_id != actor_id
+            or decoded_cursor.household_id != household_id
+            or decoded_cursor.member_id != member_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="KNOWLEDGE_AUDIT_CURSOR_INVALID",
+            )
+
+    query = select(RetrievalQuery).where(RetrievalQuery.actor_id == actor_id)
+    if household_id is not None:
+        query = query.where(RetrievalQuery.household_id == household_id)
+    if member_id is not None:
+        query = query.where(RetrievalQuery.member_id == member_id)
+    if decoded_cursor is not None:
+        query = query.where(
+            (RetrievalQuery.created_at < decoded_cursor.created_at)
+            | (
+                (RetrievalQuery.created_at == decoded_cursor.created_at)
+                & (RetrievalQuery.id < decoded_cursor.audit_id)
+            )
+        )
+
+    rows = list(
+        session.scalars(
+            query.order_by(RetrievalQuery.created_at.desc(), RetrievalQuery.id.desc()).limit(
+                limit + 1
+            )
+        ).all()
+    )
+    has_more = len(rows) > limit
+    items = rows[:limit]
+    next_cursor = None
+    if has_more and items:
+        last = items[-1]
+        next_cursor = encode_knowledge_audit_cursor(
+            actor_id=actor_id,
+            household_id=household_id,
+            member_id=member_id,
+            created_at=last.created_at,
+            audit_id=last.id,
+            secret=settings.cursor_signing_key,
+        )
+    return KnowledgeQueryAuditPageRead(
+        items=[
+            KnowledgeQueryAuditRead(
+                id=entry.id,
+                query_digest=entry.query_digest,
+                query_length=entry.query_length,
+                household_id=entry.household_id,
+                member_id=entry.member_id,
+                returned_count=entry.returned_count,
+                top_chunk_count=len(entry.top_chunk_ids or []),
+                created_at=entry.created_at,
+            )
+            for entry in items
+        ],
+        next_cursor=next_cursor,
+        has_more=has_more,
+    )
+
+
 @router.delete("/knowledge/documents/{doc_id}")
 def delete_knowledge_document(
     doc_id: str,
@@ -3353,6 +3647,60 @@ def list_assistant_agents(
     """Describe the local agent graph and its explicit network-search gate."""
     del actor_id  # The catalog contains no household or member data.
     return get_agent_catalog(settings)
+
+
+@router.get("/assistant/web-search/ops")
+def get_assistant_web_search_ops(
+    actor_id: str = Depends(get_actor_id),
+) -> dict[str, Any]:
+    """Return query-free search metrics to authorised local operators."""
+    current_settings = get_settings()
+    admins = current_settings.knowledge_admin_actor_set
+    production = current_settings.app_env.strip().casefold() in {"prod", "production"}
+    if (admins and actor_id not in admins) or (not admins and production):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="ASSISTANT_OPS_FORBIDDEN",
+        )
+    return search_ops_snapshot(current_settings)
+
+
+@router.post("/assistant/session-cache/clear")
+def clear_assistant_session_cache(
+    payload: AssistantSessionCacheClearRequest,
+    actor_id: str = Depends(get_actor_id),
+) -> dict[str, Any]:
+    """Clear only the caller's scopes for one opaque assistant session id."""
+    assistant_session_id = payload.assistant_session_id.strip()
+    if not assistant_session_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="ASSISTANT_SESSION_ID_REQUIRED",
+        )
+    removed = clear_actor_session(
+        assistant_session_id=assistant_session_id,
+        actor_id=actor_id,
+    )
+    return {
+        "assistant_session_id": assistant_session_id,
+        "cleared_entries": removed,
+    }
+
+
+@router.get("/health-news")
+async def list_health_news(
+    actor_id: str = Depends(get_actor_id),
+) -> dict:
+    """Return home-screen health news (whitelist remote + seasonal fallback).
+
+    Default adapter mode is local/seasonal only.  When enabled with an
+    allowlist, public titles are fetched over HTTPS without any household
+    fields.  Failures degrade to seasonal cards instead of inventing news.
+    """
+    del actor_id
+    from app.health_news_adapter import fetch_health_news
+
+    return await fetch_health_news()
 
 
 def _summarize_event_payload(payload: dict | None) -> str:
@@ -3487,6 +3835,9 @@ def assistant_chat(
             max_tokens=payload.max_tokens,
             temperature=payload.temperature,
             allow_network_search=payload.allow_network_search,
+            query_type_override=payload.query_type_override,
+            assistant_session_id=payload.assistant_session_id,
+            clear_session_cache=payload.clear_session_cache,
             sensitive_values=[member_display_name],
         )
     else:
@@ -3558,6 +3909,9 @@ def assistant_chat_stream(
                     "network_query": network_query,
                 }))
 
+            def on_evidence_preview(preview: dict[str, Any]) -> None:
+                event_queue.put(("evidence_preview", preview))
+
             result = run_local_multi_agent(
                 worker_session,
                 messages=messages,
@@ -3569,22 +3923,26 @@ def assistant_chat_stream(
                 max_tokens=payload.max_tokens,
                 temperature=payload.temperature,
                 allow_network_search=payload.allow_network_search,
+                query_type_override=payload.query_type_override,
+                assistant_session_id=payload.assistant_session_id,
+                clear_session_cache=payload.clear_session_cache,
                 sensitive_values=[member_display_name],
                 on_trace=on_trace,
                 on_synthesis_token=on_token,
                 on_status=on_status,
                 on_external_sources=on_external_sources,
+                on_evidence_preview=on_evidence_preview,
                 cancel_event=cancel_event,
             )
             if cancel_event.is_set():
                 worker_session.rollback()
-                event_queue.put(("error", {"message": "CANCELLED", "code": "CANCELLED"}))
+                event_queue.put(("cancelled", {"code": "CANCELLED"}))
             else:
                 worker_session.commit()
                 event_queue.put(("done", {"response": result}))
         except OrchestrationCancelled:
             worker_session.rollback()
-            event_queue.put(("error", {"message": "CANCELLED", "code": "CANCELLED"}))
+            event_queue.put(("cancelled", {"code": "CANCELLED"}))
         except Exception as exc:
             worker_session.rollback()
             logger.exception("assistant chat stream failed")
@@ -5504,9 +5862,26 @@ def invalidate_export_manifest_endpoint(
 from app import model_binding as _mb  # noqa: E402
 
 
-def _can_govern_model_release(actor_id: str, binding: _mb.ModelVersionBinding) -> bool:
-    """Release activate/rollback: configured admins, else only the binding creator."""
-    admins = get_settings().model_release_admin_actor_set
+def _can_govern_model_release(
+    actor_id: str,
+    binding: _mb.ModelVersionBinding,
+    *,
+    action: str = "rollback",
+) -> bool:
+    """Authorize model release governance.
+
+    - Dual-control activate: activator must differ from creator; when
+      ``MODEL_RELEASE_ADMIN_ACTORS`` is set the activator must be listed.
+    - Rollback / non-dual: creator, or listed release admins.
+    """
+    settings = get_settings()
+    admins = settings.model_release_admin_actor_set
+    if action == "activate" and settings.model_release_dual_control:
+        if actor_id == binding.created_by:
+            return False
+        if admins:
+            return actor_id in admins
+        return True
     if admins:
         return actor_id in admins
     return binding.created_by == actor_id
@@ -5529,6 +5904,9 @@ def _mb_raise_val(err: str) -> NoReturn:
         "HCT404_COMPARISON_HASH_MISMATCH": 422,
         "HCT404_ROLLBACK_REASON_REQUIRED": 422,
         "HCT404_ROLLBACK_EVIDENCE_REQUIRED": 422,
+        "RELEASE_DUAL_CONTROL_REQUIRED": 422,
+        "RELEASE_ADMIN_REQUIRED": 403,
+        "KNOWLEDGE_ADMIN_REQUIRED": 403,
     }
     status_code_val = 422
     for prefix, code in mapping.items():
@@ -5616,10 +5994,28 @@ def activate_model_binding_endpoint(
     actor_id: str = Depends(get_actor_id),
     session: Session = Depends(get_session),
 ) -> ModelVersionBindingRead:
-    """Activate a model release. High-risk governance: identity + role required."""
+    """Activate a model release. Dual-control: activator must not be the creator."""
     binding = _mb.get_binding(session, binding_id)
-    if binding is None or not _can_govern_model_release(actor_id, binding):
+    if binding is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="BINDING_NOT_FOUND")
+    settings = get_settings()
+    if settings.model_release_dual_control and actor_id == binding.created_by:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="RELEASE_DUAL_CONTROL_REQUIRED",
+        )
+    if not _can_govern_model_release(actor_id, binding, action="activate"):
+        detail = (
+            "RELEASE_ADMIN_REQUIRED"
+            if settings.model_release_admin_actor_set
+            else "BINDING_NOT_FOUND"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN
+            if detail == "RELEASE_ADMIN_REQUIRED"
+            else status.HTTP_404_NOT_FOUND,
+            detail=detail,
+        )
     if payload.approved_by != actor_id:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -5652,8 +6048,20 @@ def rollback_model_binding_endpoint(
 ) -> ModelVersionBindingRead:
     """Roll back a model release, attributed to the authenticated caller."""
     binding = _mb.get_binding(session, binding_id)
-    if binding is None or not _can_govern_model_release(actor_id, binding):
+    if binding is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="BINDING_NOT_FOUND")
+    if not _can_govern_model_release(actor_id, binding, action="rollback"):
+        detail = (
+            "RELEASE_ADMIN_REQUIRED"
+            if get_settings().model_release_admin_actor_set
+            else "BINDING_NOT_FOUND"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN
+            if detail == "RELEASE_ADMIN_REQUIRED"
+            else status.HTTP_404_NOT_FOUND,
+            detail=detail,
+        )
     try:
         _mb.rollback_binding(
             session,

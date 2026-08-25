@@ -109,10 +109,25 @@ foreach ($desired in $desiredMembers) {
     owner_actor_id = $AdminActorId
     members = @($members | Where-Object { $_.display_name -in @("爷爷", "奶奶") } | Select-Object id, display_name, actor_id, role)
     next = @(
+        "已尝试写入关联的虚构病史/过敏/药品/计划（幂等）；可用风险页与关系图核对。"
         "用 $AdminActorId 登录后打开 人脸凭证，为爷爷和奶奶各采集 2～3 帧动态画面。"
         "绑定本机家庭后退出，选择 正式账号登录 → 人脸识别，系统会在本家庭内 1:N 匹配。"
         "使用 docs/demo/vision-samples 中的合成药盒完成 扫描 → 人工复核 → 确认保存。"
     )
 } | ConvertTo-Json -Depth 8
 
-Write-Host "Demo family is ready. This script never creates face templates or health events; those remain explicit UI actions."
+Write-Host "Seeding interconnected synthetic health events (disease/allergy/med/plan)..."
+$seedArgs = @(
+    "run", "python", "scripts/seed_formal_demo_health.py",
+    "--base", $ApiBaseUrl,
+    "--password", $AdminPassword
+)
+try {
+    & uv @seedArgs
+    if ($LASTEXITCODE -ne 0) { throw "seed_formal_demo_health.py failed with exit $LASTEXITCODE" }
+} catch {
+    Write-Warning "Health seed skipped or failed: $_"
+    Write-Host "You can retry: uv run python scripts/seed_formal_demo_health.py --base $ApiBaseUrl"
+}
+
+Write-Host "Demo family is ready. Face templates remain explicit UI actions; health facts above are synthetic teaching data only."

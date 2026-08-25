@@ -1,4 +1,4 @@
-import type { RecognitionStatus, RiskLevel, TaskLevel, TaskStatus } from './types'
+import type { CaregiverEscalationStatus, RecognitionStatus, RiskLevel, TaskLevel, TaskStatus } from './types'
 
 export type Tone = 'danger' | 'warn' | 'info' | 'calm' | 'neutral'
 
@@ -73,6 +73,31 @@ export function taskStatusLabel(status: TaskStatus): string {
     case 'SKIPPED': return '已跳过'
     case 'ESCALATED': return '已升级照护者'
     default: return '未知'
+  }
+}
+
+export function caregiverEscalationStatusLabel(status: CaregiverEscalationStatus): string {
+  switch (status) {
+    case 'CREATED': return '已创建，等待通知回执'
+    case 'QUEUED': return '已排队通知授权照护者'
+    case 'VIEWED': return '授权照护者已查看'
+    case 'PROCESSED': return '授权照护者已处理'
+    case 'FAILED': return '通知失败'
+    case 'UNAVAILABLE': return '未发送升级通知'
+    case 'UNKNOWN': return '服务端返回未知状态'
+    default: return '未知状态'
+  }
+}
+
+export function caregiverEscalationStatusTone(status: CaregiverEscalationStatus): Tone {
+  switch (status) {
+    case 'QUEUED':
+    case 'VIEWED':
+    case 'PROCESSED': return 'calm'
+    case 'FAILED':
+    case 'UNAVAILABLE': return 'warn'
+    case 'UNKNOWN': return 'danger'
+    default: return 'info'
   }
 }
 

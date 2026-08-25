@@ -105,6 +105,98 @@ describe('联机模式任务推导（与主仓库事件语义对齐）', () => {
     ]
     expect(deriveTasksFromEvents(events, 'm1', '王秀兰')).toHaveLength(0)
   })
+
+  it('只消费服务端升级事件，并在无授权通知时失败关闭', () => {
+    const events = [
+      makeEvent({ id: 'p1', event_type: 'plan_created', payload: { drug: 'A药', schedule: '每日' } }),
+      makeEvent({
+        id: 'e1',
+        event_type: 'care_escalated',
+        payload: {
+          plan_event_id: 'p1',
+          automation_key: 'escalate:p1:2026-08-13T00:00:00Z',
+          reason: 'MISSED_DOSE_ESCALATION',
+          due_at: '2026-08-13T01:00:00Z',
+          notify_caregivers: false,
+        },
+      }),
+    ]
+
+    const [task] = deriveTasksFromEvents(events, 'm1', '王秀兰')
+    expect(task).toMatchObject({
+      status: 'ESCALATED',
+      escalation: {
+        status: 'UNAVAILABLE',
+        target: 'NONE',
+        reason: '服务端记录了连续未确认任务，需要授权照护者关注。',
+        auditEventId: 'e1',
+        dueAt: '2026-08-13T01:00:00Z',
+      },
+    })
+    expect(task?.escalation?.nextStep).toContain('120')
+  })
+
+  it('有效授权只展示服务端通知回执，不展示照护者身份或授权 ID', () => {
+    const events = [
+      makeEvent({ id: 'p1', event_type: 'plan_created', payload: { drug: 'A药' } }),
+      makeEvent({
+        id: 'e1',
+        event_type: 'care_escalated',
+        payload: { plan_event_id: 'p1', automation_key: 'auto-1', reason: 'MISSED_DOSE_ESCALATION', notify_caregivers: true },
+      }),
+      makeEvent({
+        id: 'n1',
+        event_type: 'caregiver_notified',
+        payload: {
+          plan_event_id: 'p1',
+          escalation_automation_key: 'auto-1',
+          recipient_actor_id: 'caregiver-secret',
+          authorization_id: 'auth-secret',
+          delivery_status: 'QUEUED',
+        },
+      }),
+    ]
+
+    const [task] = deriveTasksFromEvents(events, 'm1', '王秀兰')
+    expect(task?.escalation).toMatchObject({
+      status: 'QUEUED',
+      target: 'AUTHORIZED_CAREGIVER',
+      auditEventId: 'e1',
+      notificationEventId: 'n1',
+    })
+    expect(JSON.stringify(task?.escalation)).not.toContain('caregiver-secret')
+    expect(JSON.stringify(task?.escalation)).not.toContain('auth-secret')
+  })
+
+  it('只有通知回执能证明目标有效；升级意图没有回执时不展示照护者目标', () => {
+    const events = [
+      makeEvent({ id: 'p1', event_type: 'plan_created', payload: { drug: 'A药' } }),
+      makeEvent({
+        id: 'e1',
+        event_type: 'care_escalated',
+        payload: { plan_event_id: 'p1', reason: 'MISSED_DOSE_ESCALATION', notify_caregivers: true },
+      }),
+    ]
+
+    const [task] = deriveTasksFromEvents(events, 'm1', '王秀兰')
+    expect(task?.escalation).toMatchObject({
+      status: 'CREATED',
+      target: 'NONE',
+      nextStep: '等待服务端通知回执；当前不显示照护者身份，也不尝试本地通知。',
+    })
+  })
+
+  it('动作发生在升级之后时，不把旧升级重新显示为当前状态', () => {
+    const events = [
+      makeEvent({ id: 'p1', event_type: 'plan_created', payload: { drug: 'A药' } }),
+      makeEvent({ id: 'e1', event_type: 'care_escalated', payload: { plan_event_id: 'p1', notify_caregivers: true }, occurred_at: '2026-08-13T01:00:00Z' }),
+      makeEvent({ id: 'a1', event_type: 'plan_confirmed', payload: { plan_event_id: 'p1' }, occurred_at: '2026-08-13T02:00:00Z' }),
+    ]
+
+    const [task] = deriveTasksFromEvents(events, 'm1', '王秀兰')
+    expect(task?.status).toBe('CONFIRMED')
+    expect(task?.escalation).toBeUndefined()
+  })
 })
 
 describe('联机会话初始化边界', () => {
@@ -659,6 +751,21 @@ describe('任务操作历史推导（MOB-135）', () => {
     const entries = deriveTaskActionHistory(events, 'm1', '成员')
     expect(entries.map(entry => entry.eventId)).toEqual(['a-valid', 'a-invalid'])
     expect(entries[1]?.serverTime).toBe('not-a-date')
+  })
+
+  it('升级与通知事件作为服务端审计回执进入历史，不携带授权者敏感标识', () => {
+    const events = [
+      makeEvent({ id: 'p1', event_type: 'plan_created', payload: { drug: 'A药', schedule: '每日' } }),
+      makeEvent({ id: 'e1', event_type: 'care_escalated', payload: { plan_event_id: 'p1', reason: 'MISSED_DOSE_ESCALATION' }, occurred_at: '2026-08-22T01:00:00Z' }),
+      makeEvent({ id: 'n1', event_type: 'caregiver_notified', payload: { plan_event_id: 'p1', recipient_actor_id: 'private-caregiver', authorization_id: 'private-auth', delivery_status: 'QUEUED' }, occurred_at: '2026-08-22T02:00:00Z' }),
+    ]
+
+    const entries = deriveTaskActionHistory(events, 'm1', '成员')
+    expect(entries.map(entry => entry.eventId)).toEqual(['n1', 'e1'])
+    expect(entries[0]).toMatchObject({ action: 'caregiver_notify', actionLabel: '通知授权照护者', finalStatus: 'ESCALATED', receipt: 'RECEIPTED' })
+    expect(entries[1]).toMatchObject({ action: 'escalate', actionLabel: '升级照护者', finalStatus: 'ESCALATED', receipt: 'RECEIPTED' })
+    expect(JSON.stringify(entries)).not.toContain('private-caregiver')
+    expect(JSON.stringify(entries)).not.toContain('private-auth')
   })
 })
 

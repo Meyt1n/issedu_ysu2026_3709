@@ -1,6 +1,14 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
-import { clearChatSession, clearChatSessionsForActor, loadChatSession, saveChatSession } from './chatSession'
+import {
+  clearChatSession,
+  clearChatSessionsForActor,
+  getAssistantSessionId,
+  loadChatSession,
+  regenerateAssistantSessionId,
+  saveChatSession,
+  sessionEntryToStored,
+} from './chatSession'
 
 describe('assistant tab session storage', () => {
   beforeEach(() => {
@@ -61,5 +69,29 @@ describe('assistant tab session storage', () => {
     const entries = loadChatSession('parent-1', 'household-1', 'member-1')
     expect(entries).toHaveLength(24)
     expect(entries.at(-1)?.content).toBe('29')
+  })
+
+  it('keeps an opaque assistant id stable per scope and rotates it on demand', () => {
+    const first = getAssistantSessionId('parent-1', 'household-1', 'member-1')
+    const stable = getAssistantSessionId('parent-1', 'household-1', 'member-1')
+    const otherMember = getAssistantSessionId('parent-1', 'household-1', 'member-2')
+    const rotated = regenerateAssistantSessionId('parent-1', 'household-1', 'member-1')
+
+    expect(first).toBe(stable)
+    expect(otherMember).not.toBe(first)
+    expect(rotated).not.toBe(first)
+    expect(getAssistantSessionId('parent-1', 'household-1', 'member-1')).toBe(rotated)
+  })
+
+  it('persists the route explanation with the scoped transcript', () => {
+    const stored = sessionEntryToStored({
+      role: 'assistant',
+      content: '已核对。',
+      routeExplanation: '显式按用药安全路径检索。',
+    })
+    saveChatSession('parent-1', 'household-1', 'member-1', [stored])
+
+    expect(loadChatSession('parent-1', 'household-1', 'member-1')[0]?.routeExplanation)
+      .toBe('显式按用药安全路径检索。')
   })
 })

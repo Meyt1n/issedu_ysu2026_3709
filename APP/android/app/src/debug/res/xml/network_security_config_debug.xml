@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
     <!-- Debug only: APP-layer URL validation still rejects public cleartext targets. -->
-    <base-config cleartextTrafficPermitted="true" />
+    <!-- The bundled CA is a synthetic local fixture; it is never part of Release. -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="@raw/controlled_https_ca" />
+        </trust-anchors>
+    </base-config>
 </network-security-config>

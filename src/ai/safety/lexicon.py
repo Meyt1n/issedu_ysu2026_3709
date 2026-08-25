@@ -10,6 +10,8 @@ of truth here; ``tool_call`` imports the shared tuples.
 
 from __future__ import annotations
 
+import re
+
 # Emergency descriptions: route to URGENT and escalate.
 URGENT_ROUTE_TERMS: tuple[str, ...] = (
     "呼吸困难",
@@ -20,7 +22,40 @@ URGENT_ROUTE_TERMS: tuple[str, ...] = (
     "严重过敏",
 )
 
-# High-risk medication questions must retrieve member facts + reviewed knowledge.
+# Symptom / “what medicine for …” guidance: explain approved knowledge +
+# allergy/disease history.  Household formulary is optional enrichment.
+SYMPTOM_MEDICATION_INTENT_TERMS: tuple[str, ...] = (
+    "吃什么药",
+    "用什么药",
+    "吃点什么药",
+    "该吃什么药",
+    "应该吃什么药",
+    "可以吃什么药",
+    "吃啥药",
+    "开什么药",
+    "用啥药",
+)
+
+SYMPTOM_CONTEXT_TERMS: tuple[str, ...] = (
+    "感冒",
+    "发烧",
+    "发热",
+    "咳嗽",
+    "头疼",
+    "头痛",
+    "腹泻",
+    "喉咙痛",
+    "咽痛",
+    "流鼻涕",
+    "鼻塞",
+    "乏力",
+    "不舒服",
+    "过敏",
+    "皮疹",
+)
+
+# High-risk individual medication decisions: stop/switch/dose/interaction.
+# These still require reviewed knowledge and must not become prescriptions.
 MEDICATION_SAFETY_ROUTE_TERMS: tuple[str, ...] = (
     "能不能一起吃",
     "能否一起吃",
@@ -52,6 +87,10 @@ MEDICATION_SAFETY_ROUTE_TERMS: tuple[str, ...] = (
     "少吃了",
     "忘吃药",
     "忘记吃药",
+    "拿错药",
+    "多吞了",
+    "吞多了",
+    "吃了两倍",
     "别再吃",
     "可以停用",
     "先停药",
@@ -59,13 +98,16 @@ MEDICATION_SAFETY_ROUTE_TERMS: tuple[str, ...] = (
     "可以停药",
     "改吃什么",
     "换成别的药",
+    "开个处方",
+    "开处方",
+    "帮我开药",
+    "调整一下剂量",
 )
 
 # Follow-up prompts must not invite dosage / stop / switch decisions.
 FOLLOW_UP_RISK_TERMS: tuple[str, ...] = MEDICATION_SAFETY_ROUTE_TERMS + (
     "几粒",
     "几片",
-    "应该吃",
     "补双倍",
     "一起吃",
     "诊断",
@@ -108,6 +150,10 @@ DATA_EXFILTRATION_TERMS: tuple[str, ...] = (
     "银行卡号",
 )
 
+TEACHING_REMINDER = (
+    "【教学提醒】以上内容仅供居家照护教学演示，不能替代医生或药师的诊断与个体用药指导。"
+)
+
 
 def medical_boundary_hits(text: str) -> list[str]:
     """Return boundary terms that appear in ``text`` (case-insensitive for Latin)."""
@@ -116,6 +162,12 @@ def medical_boundary_hits(text: str) -> list[str]:
     lowered = text.casefold()
     hits: list[str] = []
     for term in MEDICAL_BOUNDARY_TERMS:
+        if term == "处方":
+            # Teaching answers often mention OTC「非处方」资料; that must not
+            # trip the prescription boundary.
+            if re.search(r"(?<!非)处方", text):
+                hits.append(term)
+            continue
         needle = term.casefold()
         if needle in lowered or term in text:
             hits.append(term)

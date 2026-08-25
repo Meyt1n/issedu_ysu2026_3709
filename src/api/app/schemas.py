@@ -32,7 +32,7 @@ class PinLoginCredentials(BaseModel):
 
 class FaceChallengeRequest(BaseModel):
     household_id: str = Field(min_length=1, max_length=120)
-    actor_id: str = Field(min_length=1, max_length=120)
+    actor_id: str = Field(min_length=1, max_length=120, pattern=ACTOR_ID_PATTERN)
 
 
 class FamilyFaceChallengeRequest(BaseModel):
@@ -138,6 +138,22 @@ class CapabilityResponse(BaseModel):
     phase: str
     available: list[str]
     unavailable: list[str]
+    knowledge_admin_configured: bool = False
+    model_release_admin_configured: bool = False
+    model_release_dual_control: bool = True
+    owner_requires_access_purpose: bool = False
+
+
+class SecurityDashboardRead(BaseModel):
+    """Teaching-oriented security counters for households owned by the caller."""
+
+    household_count: int = 0
+    access_allowed: int = 0
+    access_denied: int = 0
+    file_owner_cleanups: int = 0
+    auth_failures: int = 0
+    model_release_events: int = 0
+    recent_denied: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class HouseholdCreate(BaseModel):
@@ -799,6 +815,12 @@ class KnowledgeQueryAuditRead(BaseModel):
     created_at: datetime
 
 
+class KnowledgeQueryAuditPageRead(BaseModel):
+    items: list[KnowledgeQueryAuditRead]
+    next_cursor: str | None = None
+    has_more: bool
+
+
 # ── HCT-403: Ollama tool calling schemas ────────────────────────────
 
 
@@ -816,6 +838,17 @@ class AssistantCitation(BaseModel):
     locator: str | None = None
 
 
+AssistantQueryType = Literal[
+    "URGENT",
+    "MEDICATION_SAFETY",
+    "SYMPTOM_MEDICATION",
+    "MEDICATION_RECORD",
+    "FAMILY_RECORD",
+    "RULE_EVIDENCE",
+    "GENERAL",
+]
+
+
 class AssistantRequest(BaseModel):
     messages: list[dict[str, Any]] = Field(min_length=1)
     model: str | None = Field(default=None, max_length=64)
@@ -826,6 +859,27 @@ class AssistantRequest(BaseModel):
     # change legacy tool-call tests or integrations unexpectedly.
     agent_mode: Literal["single", "multi_agent"] = "single"
     allow_network_search: bool = False
+    query_type_override: AssistantQueryType | None = None
+    assistant_session_id: str | None = Field(default=None, max_length=64)
+    clear_session_cache: bool = False
+
+    @field_validator("messages")
+    @classmethod
+    def reject_client_system_role(cls, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Clients may only send user/assistant turns; system prompt is server-owned."""
+        for message in messages:
+            if not isinstance(message, dict):
+                raise ValueError("ASSISTANT_MESSAGE_INVALID")
+            role = message.get("role")
+            if role == "system":
+                raise ValueError("ASSISTANT_SYSTEM_ROLE_FORBIDDEN")
+            if role not in {"user", "assistant"}:
+                raise ValueError("ASSISTANT_ROLE_INVALID")
+        return messages
+
+
+class AssistantSessionCacheClearRequest(BaseModel):
+    assistant_session_id: str = Field(min_length=1, max_length=64)
 
 
 class AssistantResponse(BaseModel):
@@ -848,6 +902,10 @@ class AssistantResponse(BaseModel):
     network_query: str | None = None
     agent_trace: list[dict[str, Any]] = Field(default_factory=list)
     external_sources: list[dict[str, Any]] = Field(default_factory=list)
+    route_explanation: str | None = None
+    classifier: dict[str, Any] | None = None
+    evidence_preview: dict[str, Any] | None = None
+    retrieval_cache_hit: bool = False
 
 
 # ── HCT-208: Correction diff schemas ──────────────────────────────────

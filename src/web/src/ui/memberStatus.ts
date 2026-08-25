@@ -53,3 +53,22 @@ export function memberVisionStatusHint(
 export function isMemberTaskActive(status: string | null | undefined): boolean {
   return status === 'queued' || status === 'running'
 }
+
+/**
+ * 需要重拍：失败/超时/取消，以及无法映射为「处理中 / 等待家人」的未知状态。
+ * 与 memberVisionStatusLabel 的兜底文案保持一致，避免出现「没看清楚」却仍显示「看看进度」。
+ */
+export function isMemberTaskNeedsRetake(status: string | null | undefined): boolean {
+  if (isMemberTaskActive(status)) return false
+  if (
+    status === 'succeeded'
+    || status === 'REVIEW_REQUIRED'
+    || status === 'PENDING_REVIEW'
+    || status === 'REVIEW'
+    || status === 'CONFLICT'
+    || status === 'UNKNOWN'
+  ) {
+    return false
+  }
+  return true
+}

@@ -1,0 +1,18 @@
+{
+  "manifest_version": "1",
+  "status": "approved",
+  "approval_note": "示例清单：仅含合成脱敏说明书摘要样例，演示正式知识接入路径；替换为真实获批资料前须完成许可与审核记录。",
+  "documents": [
+    {
+      "path": "samples/教学用脱敏说明书摘要-示例.md",
+      "title": "教学用脱敏说明书摘要（示例）",
+      "source": "homecare-approved-kb-sample",
+      "license": "internal-demo",
+      "version": "sample-insert-v1",
+      "permission_scope": {
+        "internal": true
+      },
+      "content_sha256": "1f6e9e65631e251c1f74c6c2cdfde8acfd1cf337c1daf7a10e4ff45b76242ab8"
+    }
+  ]
+}

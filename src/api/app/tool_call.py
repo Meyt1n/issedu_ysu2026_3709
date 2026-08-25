@@ -24,14 +24,15 @@ from typing import Any, Literal
 from urllib.parse import urlparse
 
 import httpx
+from ai.safety.classifier import classify_question_dual_detail
 from ai.safety.lexicon import (
     DATA_EXFILTRATION_TERMS,
     FOLLOW_UP_RISK_TERMS,
     MEDICAL_BOUNDARY_TERMS,
-    MEDICATION_SAFETY_ROUTE_TERMS,
-    URGENT_ROUTE_TERMS,
+    TEACHING_REMINDER,
     medical_boundary_hits,
 )
+from ai.safety.seasonal_context import seasonal_care_context
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlalchemy.orm import Session
 
@@ -66,26 +67,32 @@ _DEGRADE_TEMPLATE = """当前助手服务暂时不可用。您可以：
 ASSISTANT_SYSTEM_PROMPT = (
     "/no_think\n"
     "你是「家健镜」家庭健康助手，运行在家庭本地设备上，服务于家庭照护的教学演示。"
-    "首要任务是基于本轮已授权工具结果和已审核知识，直接、完整地回答用户问题。\n"
+    "首要任务是基于本轮已授权工具结果和已审核知识，直接、完整、有人情味地回答用户问题。\n"
     "不要逐条复述或检查这些规则，不要展示分析草稿或内部推理；尽快只输出最终 JSON。\n"
     "回答要求：\n"
-    "1. answer 必须是 1 至 6 句自然、完整的简体中文；绝不能只输出 hello、healthy、"
-    "cannot_answer、unknown、DIRECT、REFUSE 等标签，也不要复述内部路由名称。\n"
-    "2. 只依据系统消息中的本地事实、工具结果、规则结果与文档片段回答。资料不足时，"
-    "明确说明缺少哪项资料和可以去哪个本地页面核对，不能猜测或补造事实。\n"
-    "3. 用户问当前药品时，只列出已确认记录中明确出现的药名、规格等字段；如果只有"
-    "medication_added 事件但没有药名，就回答「存在已确认的用药记录，但当前证据未提供"
-    "药名和规格」。\n"
-    "4. 用户问症状时，不诊断疾病；可复述用户描述、提示记录发生时间和伴随情况，并建议"
-    "必要时联系医生。出现呼吸困难、意识异常、疑似中毒等紧急描述时 escalate=true。\n"
-    "5. 用户问药品能否同服、停药、换药或剂量时，必须先调用成员状态/用药记录工具，"
-    "再调用 retrieve_knowledge 查询已审核的本地药品文档；不自行判断，只解释已命中的确定性规则"
-    "或授权文档。没有对应知识片段就明确无法判断，并建议咨询医生或药师。\n"
-    "6. 普通问候要用简短中文正常回应；不得把问候误识别为健康结论。\n"
+    "1. answer 必须是 2 至 8 句自然、完整的简体中文，像家里靠谱长辈或照护伙伴在说话："
+    "先共情再给依据；绝不能只输出 hello、healthy、cannot_answer、unknown、DIRECT、REFUSE "
+    "等标签，也不要复述内部路由名称。\n"
+    "2. 只依据系统消息中的本地事实、工具结果、规则结果、文档片段，以及（若有）已授权联网参考。"
+    "资料不足时说明缺什么、去哪个本地页面核对，不能猜测或补造事实；尤其不要编造「正在流行的"
+    "具体病毒名称或病例数」。\n"
+    "3. 用户问「家里正在用哪些药 / 用药记录 / 扫描的药」时，只列出已确认记录中的药名与规格；"
+    "如果只有 medication_added 事件但没有药名，就说明证据未提供药名。\n"
+    "4. 用户问「感冒/发烧等症状该了解哪些常用药资料」时：优先 retrieve_knowledge，并调用 "
+    "get_member_state 核对过敏史与疾病史；结合系统给出的【季节情境】说一两句换季/受凉等生活提醒，"
+    "语气体贴。家庭药箱里的已确认药品若相关可一并提及，但不是作答前提。若有已授权联网参考提到"
+    "近期季节性呼吸道情况，可温和转述为「外面近期常见提醒」，并标明这只是参考不是确诊。"
+    "不得下诊断，不得写成「你必须吃某某药」的个体处方。\n"
+    "5. 用户问药品能否同服、停药、换药或个体剂量（一次吃多少、漏服补服等）时：先核对成员"
+    "过敏/疾病/已确认用药（如有），再 retrieve_knowledge；只解释已命中的规则或文档，"
+    "不自行决定是否同服、停换或具体片数。没有知识片段就明确无法判断并建议咨询医生或药师。\n"
+    "6. 普通问候要用简短中文正常、亲切地回应；不得把问候误识别为健康结论。\n"
     "7. 需要更多事实时优先调用白名单工具。sources 只能填写本轮工具结果真实提供的"
-    "事件 ID、规则编号或知识片段 ID；没有依据时使用空数组，禁止伪造引用。\n"
-    "8. 绝不做诊断、开处方、决定用药剂量或建议停药换药；不提供购买链接、问诊导流或外部网址。\n"
-    "9. 用温和、口语化的简体中文，先给依据再给解释，回答控制在 300 字以内。\n"
+    "事件 ID、规则编号或知识片段 ID；"
+    "联网参考不要写入 sources。没有依据时使用空数组，禁止伪造引用。\n"
+    "8. 绝不做诊断、开处方、决定个体用药剂量或建议停药换药；不提供购买链接、问诊导流或外部网址。\n"
+    "9. 用温和、口语化的简体中文，先关心处境再给依据，回答控制在 360 字以内。"
+    "症状用药类与用药安全类回答末尾由系统附加教学提醒，你不必重复粘贴提醒原文。\n"
     "10. 输出必须是一个 JSON 对象，且只有 JSON，格式："
     '{"answer": "回答正文", "sources": ["引用的依据标识"], '
     '"confidence": "high|medium|low", "escalate": false}。'
@@ -337,6 +344,15 @@ register_tool(
 )
 
 register_tool(
+    name="get_care_plan_status",
+    description="Get today's authorised care-plan status and pending actions (read-only).",
+    params={
+        "household_id": {"type": "string", "description": "Household UUID"},
+        "member_id": {"type": "string", "description": "Member UUID"},
+    },
+)
+
+register_tool(
     name="get_document_metadata",
     description="Get metadata for a specific knowledge document.",
     params={
@@ -471,8 +487,12 @@ class OllamaClient:
         with httpx.Client(timeout=timeout or REQUEST_TIMEOUT, trust_env=False) as client:
             with client.stream("POST", f"{self.base_url}/api/chat", json=payload) as resp:
                 resp.raise_for_status()
+                if cancel_check is not None and cancel_check():
+                    resp.close()
+                    raise RuntimeError("OLLAMA_CANCELLED")
                 for line in resp.iter_lines():
                     if cancel_check is not None and cancel_check():
+                        resp.close()
                         raise RuntimeError("OLLAMA_CANCELLED")
                     if not line:
                         continue
@@ -535,6 +555,7 @@ def _latest_user_query(messages: list[dict[str, Any]]) -> str:
 
 _QUESTION_TYPES = {
     "MEDICATION_SAFETY": "用药安全核对",
+    "SYMPTOM_MEDICATION": "症状用药资料解释",
     "MEDICATION_RECORD": "用药记录查询",
     "FAMILY_RECORD": "家庭健康档案查询",
     "RULE_EVIDENCE": "规则与证据查询",
@@ -543,37 +564,40 @@ _QUESTION_TYPES = {
 }
 
 
-def classify_question(query: str) -> str:
-    """Classify the latest question with a deterministic, local safety route.
+def classify_question_detail(query: str, override: str | None = None) -> dict[str, Any]:
+    """Classify the latest question with lexicon + optional local model.
 
     This is a routing hint, not a medical conclusion.  High-risk medication
     questions are intentionally routed to both member facts and approved
     knowledge retrieval before Ollama is allowed to produce an answer.
+    ``SYMPTOM_MEDICATION``（“感冒吃什么药”类资料解释）走批准知识 + 过敏/疾病史。
+
+    HCT-442: lexicon is always on. When ``AGENT_CLASSIFIER_ENABLED=true`` and
+    Ollama is loopback, a short local classification pass merges by severity
+    (prefer MEDICATION_SAFETY / URGENT). Model failure falls back to lexicon.
     """
-    normalized = re.sub(r"\s+", "", query.casefold())
-    if any(term in normalized for term in URGENT_ROUTE_TERMS):
-        return "URGENT"
-    if any(term in normalized for term in ("一起吃", "一同服用", "共同服用")) and any(
-        term in normalized for term in ("药", "阿莫西林", "布洛芬", "处方")
-    ):
-        return "MEDICATION_SAFETY"
-    if any(term in normalized for term in MEDICATION_SAFETY_ROUTE_TERMS):
-        return "MEDICATION_SAFETY"
-    if any(term in normalized for term in (
-        "吃什么药", "正在用药", "在用药", "用药记录", "药品记录", "药品清单",
-        "扫描的药", "刚才扫描", "有哪些药", "药名", "用药",
-    )):
-        return "MEDICATION_RECORD"
-    if any(term in normalized for term in (
-        "家庭档案", "健康档案", "健康记录", "最近发生", "最近有哪些", "过敏史",
-        "疾病记录", "成员信息", "健康变化", "健康事件",
-    )):
-        return "FAMILY_RECORD"
-    if any(term in normalized for term in (
-        "规则", "提醒依据", "风险依据", "引用", "来源", "证据", "依据",
-    )):
-        return "RULE_EVIDENCE"
-    return "GENERAL"
+    try:
+        from app.config import get_settings
+
+        settings = get_settings()
+        return classify_question_dual_detail(
+            query,
+            model_enabled=bool(settings.agent_classifier_enabled),
+            is_loopback_url=is_loopback_ollama_url,
+            ollama_base_url=settings.ollama_base_url,
+            ollama_model=settings.ollama_model,
+            ollama_timeout=float(settings.agent_classifier_timeout_seconds),
+            chat_factory=lambda base_url: OllamaClient(base_url=base_url),
+            override=override,
+        )
+    except Exception:  # noqa: BLE001 — routing must never fail open to crash
+        logger.exception("dual classifier failed; falling back to lexicon")
+        return classify_question_dual_detail(query, override=override)
+
+
+def classify_question(query: str) -> str:
+    """Return the merged routing label for backwards-compatible callers."""
+    return str(classify_question_detail(query)["merged"])
 
 
 def question_type_label(query_type: str) -> str:
@@ -581,11 +605,20 @@ def question_type_label(query_type: str) -> str:
 
 
 def risk_notice_for_question(query_type: str) -> str | None:
-    if query_type == "MEDICATION_SAFETY":
-        return "用药安全信息仅用于核对本地记录和已审核资料，请务必咨询医生或药师。"
+    if query_type in {"MEDICATION_SAFETY", "SYMPTOM_MEDICATION"}:
+        return "用药相关说明仅供教学演示，请结合过敏史并咨询医生或药师；不能替代个体诊疗。"
     if query_type == "URGENT":
         return "如出现紧急症状，请及时联系医务人员；本助手不能替代紧急救治。"
     return None
+
+
+def append_teaching_reminder(answer: str, query_type: str) -> str:
+    """Append a fixed teaching disclaimer for medication-oriented answers."""
+    if query_type not in {"MEDICATION_SAFETY", "SYMPTOM_MEDICATION"}:
+        return answer
+    if "教学提醒" in answer:
+        return answer
+    return f"{answer.rstrip()}\n\n{TEACHING_REMINDER}"
 
 
 def is_loopback_ollama_url(url: str) -> bool:
@@ -846,31 +879,15 @@ def _authorized_member_events(
     member/field/action/purpose check used by the ordinary timeline endpoint
     is repeated immediately before tool data is read.
     """
-    from app.models import Household, Member
-    from app.security import has_authorized_action
-
-    if not household_id or not member_id:
-        return None, "TOOL_SCOPE_DENIED"
-    household = session.get(Household, household_id)
-    member = session.get(Member, member_id)
-    if (
-        household is None
-        or member is None
-        or household.deleted_at is not None
-        or member.deleted_at is not None
-        or member.household_id != household_id
-    ):
-        return None, "TOOL_SCOPE_DENIED"
-    if not has_authorized_action(
+    scope_error = validate_member_tool_scope(
         session,
-        household,
-        member_id,
-        actor_id,
-        "READ_EVENTS",
-        "health_events",
-        access_purpose,
-    ):
-        return None, "TOOL_SCOPE_DENIED"
+        actor_id=actor_id,
+        household_id=household_id,
+        member_id=member_id,
+        access_purpose=access_purpose,
+    )
+    if scope_error:
+        return None, scope_error
 
     from app.projection import get_timeline
 
@@ -880,6 +897,43 @@ def _authorized_member_events(
     if limit is not None:
         events = events[-max(1, min(limit, 20)):]
     return events, None
+
+
+def validate_member_tool_scope(
+    session: Session,
+    *,
+    actor_id: str,
+    household_id: str | None,
+    member_id: str | None,
+    access_purpose: str | None,
+) -> str | None:
+    """Recheck current member authorization before serving cached tool data."""
+    from app.models import Household, Member
+    from app.security import has_authorized_action
+
+    if not household_id or not member_id:
+        return "TOOL_SCOPE_DENIED"
+    household = session.get(Household, household_id)
+    member = session.get(Member, member_id)
+    if (
+        household is None
+        or member is None
+        or household.deleted_at is not None
+        or member.deleted_at is not None
+        or member.household_id != household_id
+    ):
+        return "TOOL_SCOPE_DENIED"
+    if not has_authorized_action(
+        session,
+        household,
+        member_id,
+        actor_id,
+        "READ_EVENTS",
+        "health_events",
+        access_purpose,
+    ):
+        return "TOOL_SCOPE_DENIED"
+    return None
 
 
 _SAFE_EVENT_PAYLOAD_KEYS = (
@@ -1170,6 +1224,117 @@ def _execute_get_risk_alerts(
     }
 
 
+def _execute_get_care_plan_status(
+    session: Session,
+    *,
+    actor_id: str,
+    household_id: str | None,
+    member_id: str | None,
+    access_purpose: str | None,
+) -> dict[str, Any]:
+    """Return a compact, authorised slice of the server plan workbench."""
+    from datetime import UTC, datetime
+    from zoneinfo import ZoneInfo
+
+    from app.care_plan import build_plan_workbench
+    from app.models import Household
+
+    events, error = _authorized_member_events(
+        session,
+        actor_id=actor_id,
+        household_id=household_id,
+        member_id=member_id,
+        access_purpose=access_purpose,
+    )
+    if error:
+        return {
+            "error": error,
+            "today_plans": [],
+            "missed": [],
+            "pending_confirm": [],
+            "sources": [],
+        }
+
+    household = session.get(Household, household_id)
+    if household is None or household.deleted_at is not None:
+        return {
+            "error": "TOOL_SCOPE_DENIED",
+            "today_plans": [],
+            "missed": [],
+            "pending_confirm": [],
+            "sources": [],
+        }
+
+    now = datetime.now(UTC)
+    local_today = now.astimezone(ZoneInfo(household.time_zone)).date()
+    workbench = build_plan_workbench(
+        events or [],
+        time_zone=household.time_zone,
+        now=now,
+    )
+
+    def compact(item: dict[str, Any]) -> dict[str, Any]:
+        next_action = item.get("next_action_at")
+        last_action = item.get("last_action")
+        compact_last_action = None
+        if isinstance(last_action, dict):
+            recorded_at = last_action.get("recorded_at")
+            compact_last_action = {
+                "action": last_action.get("action"),
+                "recorded_at": (
+                    recorded_at.isoformat()
+                    if hasattr(recorded_at, "isoformat")
+                    else recorded_at
+                ),
+                "reason": last_action.get("reason"),
+            }
+        return {
+            "plan_event_id": item.get("plan_event_id"),
+            "drug": item.get("drug"),
+            "schedule": item.get("schedule"),
+            "dose": item.get("dose"),
+            "times": item.get("times") or [],
+            "status": item.get("status"),
+            "next_action_at": (
+                next_action.isoformat()
+                if hasattr(next_action, "isoformat")
+                else next_action
+            ),
+            "last_action": compact_last_action,
+        }
+
+    today_plans = [
+        compact(item)
+        for item in workbench
+        if hasattr(item.get("next_action_at"), "astimezone")
+        and item["next_action_at"].astimezone(ZoneInfo(household.time_zone)).date()
+        == local_today
+    ]
+    missed = [
+        compact(item)
+        for item in workbench
+        if isinstance(item.get("last_action"), dict)
+        and item["last_action"].get("action") == "MISS"
+    ]
+    pending_confirm = [
+        compact(item)
+        for item in workbench
+        if "CONFIRM" in (item.get("allowed_actions") or [])
+    ]
+    sources = list(dict.fromkeys(
+        str(item["plan_event_id"])
+        for item in [*today_plans, *missed, *pending_confirm]
+        if item.get("plan_event_id")
+    ))
+    return {
+        "today_plans": today_plans,
+        "missed": missed,
+        "pending_confirm": pending_confirm,
+        "sources": sources,
+        "total": len(workbench),
+    }
+
+
 def _execute_retrieve_knowledge(
     session: Session,
     *,
@@ -1302,6 +1467,7 @@ def execute_whitelisted_tool(
         "get_member_state",
         "get_applied_rules",
         "get_risk_alerts",
+        "get_care_plan_status",
     }:
         if not household_id or not member_id:
             return {"error": "TOOL_SCOPE_DENIED"}
@@ -1356,6 +1522,14 @@ def execute_whitelisted_tool(
         )
     if name == "get_risk_alerts":
         return _execute_get_risk_alerts(
+            session,
+            actor_id=actor_id,
+            household_id=household_id,
+            member_id=member_id,
+            access_purpose=access_purpose,
+        )
+    if name == "get_care_plan_status":
+        return _execute_get_care_plan_status(
             session,
             actor_id=actor_id,
             household_id=household_id,
@@ -1422,11 +1596,22 @@ def run_assistant(
         f"【本轮问题类型：{question_type_label(query_type)}】"
         "这是后端安全路由提示，不是需要复述给用户的内容。"
     )
-    if query_type == "MEDICATION_SAFETY":
+    if query_type == "SYMPTOM_MEDICATION":
         routing_hint += (
-            "必须先调用 get_member_state 或 get_health_events 获取已确认用药记录，"
-            "再调用 retrieve_knowledge 检索已审核药品文档；没有知识片段不得回答"
-            "能否同服、停药、换药或剂量。"
+            "优先调用 retrieve_knowledge 检索已审核症状/药品知识卡，并调用 "
+            "get_member_state 核对过敏史与疾病史。家庭已确认用药若与问题相关可补充说明，"
+            "但不是作答前提。请结合下方【季节情境】说得更贴近当下生活（换季、着凉、休息保暖等），"
+            "语气共情；若工具结果或系统未提供具体流行病毒信息，不要自行编造病毒名。"
+            "依据知识卡做一般性资料解释，不下诊断、不开个体处方、不写具体片数。"
+            "没有命中知识片段时说明资料不足并建议咨询医生或药师。"
+            f"\n{seasonal_care_context()}"
+        )
+    elif query_type == "MEDICATION_SAFETY":
+        routing_hint += (
+            "先调用 get_member_state 或 get_health_events 核对过敏/疾病/已确认用药（如有），"
+            "再调用 retrieve_knowledge。没有知识片段不得回答能否同服、停药、换药或个体剂量；"
+            "有知识片段时只解释文档与规则，不给出个体医嘱。家庭药箱不是唯一依据。"
+            "语气仍保持关心与口语化，但内容必须克制。"
         )
     elif query_type in {"MEDICATION_RECORD", "FAMILY_RECORD"}:
         routing_hint += (
@@ -1548,7 +1733,9 @@ def run_assistant(
         return degraded("CITATION_NOT_FOUND")
     if allowed_citations and not matched_citations:
         return degraded("EVIDENCE_REQUIRED")
-    if query_type == "MEDICATION_SAFETY" and not matched_citations:
+    # Symptom guidance and high-risk medication questions need reviewed
+    # knowledge citations.  Household formulary / event IDs are optional.
+    if query_type in {"MEDICATION_SAFETY", "SYMPTOM_MEDICATION"} and not matched_citations:
         return degraded("EVIDENCE_REQUIRED")
     if any(token not in allowed_fact_sources for token in unknown_sources):
         return degraded("CITATION_NOT_FOUND")
@@ -1558,7 +1745,7 @@ def run_assistant(
     ]
     escalated = parsed.escalate or query_type == "URGENT"
     return {
-        "answer": parsed.answer,
+        "answer": append_teaching_reminder(parsed.answer, query_type),
         "sources": [item["chunk_id"] for item in matched_citations] + fact_sources,
         "citations": matched_citations,
         "suggested_questions": suggest_follow_up_questions(

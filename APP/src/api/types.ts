@@ -172,6 +172,9 @@ export interface AssistantChatInput {
   max_tokens?: number
   agent_mode?: 'single' | 'multi_agent'
   allow_network_search?: boolean
+  query_type_override?: string
+  assistant_session_id?: string
+  clear_session_cache?: boolean
 }
 
 export interface AssistantCitation {
@@ -181,6 +184,37 @@ export interface AssistantCitation {
   document_title?: string | null
   text?: string | null
   locator?: string | null
+}
+
+export interface AssistantAgentTrace {
+  agent_id: string
+  role?: string
+  status?: string
+  local?: boolean
+  network_used?: boolean
+  duration_ms?: number
+  summary?: string | null
+  /** 流式事件中的补充说明（与主仓库 SSE trace 对齐）。 */
+  detail?: string | null
+  source_count?: number
+  classifier?: Record<string, unknown>
+}
+
+export interface AssistantExternalSource {
+  title: string
+  url?: string | null
+  snippet?: string | null
+  domain?: string
+  source?: string
+}
+
+export interface EvidencePreview {
+  query_type: string
+  database_tools: string[]
+  knowledge_titles: string[]
+  knowledge_count: number
+  external_count: number
+  rule_tools: string[]
 }
 
 export interface AssistantResponse {
@@ -196,4 +230,15 @@ export interface AssistantResponse {
   route?: string | null
   query_type?: string | null
   risk_notice?: string | null
+  orchestration_mode?: 'single' | 'multi_agent' | null
+  orchestration_id?: string | null
+  all_agents_local?: boolean
+  network_used?: boolean
+  network_query?: string | null
+  agent_trace?: AssistantAgentTrace[]
+  external_sources?: AssistantExternalSource[]
+  route_explanation?: string | null
+  classifier?: Record<string, unknown> | null
+  evidence_preview?: EvidencePreview | null
+  retrieval_cache_hit?: boolean
 }

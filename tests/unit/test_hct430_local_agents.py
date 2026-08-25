@@ -8,6 +8,7 @@ from app.config import Settings
 from app.egress_guard import is_web_search_egress_allowed
 from app.local_agents import (
     _database_agent,
+    _knowledge_agent,
     _web_search_agent,
     get_agent_catalog,
     plan_agent_execution,
@@ -15,6 +16,59 @@ from app.local_agents import (
     run_local_multi_agent,
 )
 from app.search_providers import parse_search_results
+
+
+def test_knowledge_agent_reports_no_hit_as_completed(db_session) -> None:
+    """A no-hit retrieval is a normal outcome, not a blocked pipeline step."""
+    from app.knowledge import add_document
+
+    add_document(
+        db_session,
+        title="演示知识",
+        content="阿莫西林 说明书 用法用量",
+        source="synthetic-local",
+        created_by="u1",
+    )
+    db_session.commit()
+
+    result, trace = _knowledge_agent(
+        db_session,
+        query="天气温度",
+        actor_id="u1",
+        household_id=None,
+        member_id=None,
+        access_purpose=None,
+    )
+
+    assert result.get("error") == "NO_RELEVANT_RESULTS"
+    assert trace["status"] == "completed"
+    assert "暂无" in trace["summary"]
+
+
+def test_knowledge_agent_reports_permission_denial_as_blocked(db_session) -> None:
+    from app.knowledge import add_document
+
+    add_document(
+        db_session,
+        title="他人私有知识",
+        content="阿莫西林 说明书 用法用量",
+        source="synthetic-local",
+        created_by="someone-else",
+        permission_scope={"created_by": "someone-else"},
+    )
+    db_session.commit()
+
+    result, trace = _knowledge_agent(
+        db_session,
+        query="阿莫西林 用法",
+        actor_id="u1",
+        household_id=None,
+        member_id=None,
+        access_purpose=None,
+    )
+
+    assert result.get("error") == "NO_AUTHORISED_DOCUMENTS"
+    assert trace["status"] == "blocked"
 
 
 def test_web_query_redacts_identity_values_and_ids() -> None:
@@ -128,7 +182,11 @@ def test_database_agent_only_uses_approved_read_tools(monkeypatch) -> None:
         access_purpose="assistant",
     )
 
-    assert set(calls) == {"get_member_state", "get_health_events"}
+    assert set(calls) == {
+        "get_member_state",
+        "get_health_events",
+        "get_care_plan_status",
+    }
     assert set(facts) == set(calls)
     assert trace["local"] is True
     assert trace["status"] == "completed"
@@ -166,16 +224,19 @@ def test_plan_routes_agents_by_question_type() -> None:
     # Without a selected member the database step never widens its scope.
     plan = plan_agent_execution("MEDICATION_SAFETY", household_id=None, member_id=None)
     assert plan["database"].run is False
+    assert plan["rules"].run is False
     assert plan["knowledge"].run is True
 
     # Medication safety needs the approved knowledge chunks plus member facts.
     plan = plan_agent_execution("MEDICATION_SAFETY", household_id="h", member_id="m")
     assert plan["database"].run is True
+    assert plan["rules"].run is True
     assert plan["knowledge"].run is True
 
     # Rule evidence is answered from the deterministic rule records.
     plan = plan_agent_execution("RULE_EVIDENCE", household_id="h", member_id="m")
     assert plan["database"].run is True
+    assert plan["rules"].run is True
     assert plan["knowledge"].run is False
     # ...unless no member is selected, then generic knowledge still helps.
     plan = plan_agent_execution("RULE_EVIDENCE", household_id=None, member_id=None)
@@ -210,6 +271,7 @@ def test_greeting_fast_path_never_touches_model_or_tools(monkeypatch) -> None:
     assert "generating" in phases
     statuses = {trace["agent_id"]: trace["status"] for trace in result["agent_trace"]}
     assert statuses["database"] == "skipped"
+    assert statuses["rules"] == "skipped"
     assert statuses["knowledge"] == "skipped"
     assert statuses["web_search"] == "skipped"
     assert statuses["synthesis"] == "completed"
@@ -220,7 +282,7 @@ def test_multi_agent_skips_knowledge_for_rule_evidence(monkeypatch) -> None:
 
     def fake_database(session, **kwargs):
         calls.append("database")
-        return {"get_applied_rules": {"sources": ["RULE-1"]}}, {
+        return {"get_member_state": {"sources": ["event-1"]}}, {
             "agent_id": "database", "role": "健康档案核对", "status": "completed",
             "local": True, "network_used": False, "duration_ms": 1,
             "summary": "", "source_count": 1,
@@ -228,6 +290,14 @@ def test_multi_agent_skips_knowledge_for_rule_evidence(monkeypatch) -> None:
 
     def fake_knowledge(session, **kwargs):
         raise AssertionError("knowledge must be skipped for rule evidence")
+
+    def fake_rules(session, **kwargs):
+        calls.append("rules")
+        return {"get_applied_rules": {"sources": ["RULE-1"]}}, {
+            "agent_id": "rules", "role": "规则依据核对", "status": "completed",
+            "local": True, "network_used": False, "duration_ms": 1,
+            "summary": "", "source_count": 1,
+        }
 
     def fake_synthesis(**kwargs):
         calls.append("synthesis")
@@ -246,6 +316,7 @@ def test_multi_agent_skips_knowledge_for_rule_evidence(monkeypatch) -> None:
 
     monkeypatch.setattr("app.local_agents._database_agent", fake_database)
     monkeypatch.setattr("app.local_agents._knowledge_agent", fake_knowledge)
+    monkeypatch.setattr("app.local_agents._rules_agent", fake_rules)
     monkeypatch.setattr("app.local_agents._synthesis_agent", fake_synthesis)
 
     result = run_local_multi_agent(
@@ -256,8 +327,9 @@ def test_multi_agent_skips_knowledge_for_rule_evidence(monkeypatch) -> None:
         member_id="member",
     )
 
-    assert calls == ["database", "synthesis"]
+    assert calls == ["database", "rules", "synthesis"]
     statuses = {trace["agent_id"]: trace["status"] for trace in result["agent_trace"]}
+    assert statuses["rules"] == "completed"
     assert statuses["knowledge"] == "skipped"
     assert statuses["web_search"] == "skipped"
     assert result["query_type"] == "RULE_EVIDENCE"
@@ -317,6 +389,7 @@ def test_general_plan_skips_knowledge_and_web_search() -> None:
     assert plan["knowledge"].run is False
     assert plan["web_search"].run is False
     assert plan["database"].run is True
+    assert plan["rules"].run is False
 
 
 def test_medication_safety_short_circuits_without_knowledge(monkeypatch) -> None:
@@ -390,9 +463,14 @@ def test_compact_local_evidence_keeps_query_relevant_fields() -> None:
     assert "notes" not in med
     assert "get_applied_rules" not in med
 
-    rules = _compact_local_evidence(database, knowledge, query_type="RULE_EVIDENCE")
+    rules = _compact_local_evidence(
+        database,
+        knowledge,
+        query_type="RULE_EVIDENCE",
+        rules={"get_applied_rules": database["get_applied_rules"]},
+    )
     assert "RULE-1" in rules
-    assert "get_member_state" not in rules
+    assert "get_member_state" in rules
 
 
 def test_synthesis_streams_only_validated_answer(monkeypatch) -> None:

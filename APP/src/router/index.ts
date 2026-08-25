@@ -42,6 +42,12 @@ export const router = createRouter({
       meta: { title: '无障碍设置' },
     },
     {
+      path: '/me/voice-check',
+      name: 'voice-check',
+      component: () => import('@/views/VoiceCheckView.vue'),
+      meta: { title: '语音自检' },
+    },
+    {
       path: '/me/privacy',
       name: 'privacy',
       component: () => import('@/views/PrivacyView.vue'),

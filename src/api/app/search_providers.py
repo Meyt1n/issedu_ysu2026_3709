@@ -12,7 +12,7 @@ import re
 import threading
 import time
 from html.parser import HTMLParser
-from typing import Protocol
+from typing import Any, Protocol
 from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
@@ -41,6 +41,12 @@ _MEDICAL_DOMAIN_HINTS = (
 _CACHE_LOCK = threading.Lock()
 _SEARCH_CACHE: dict[str, tuple[float, list[dict[str, str]]]] = {}
 _LAST_SEARCH_AT = 0.0
+_METRICS = {
+    "cache_hits": 0,
+    "cache_misses": 0,
+    "rate_limited": 0,
+    "searches": 0,
+}
 
 
 class SearchRateLimited(RuntimeError):
@@ -56,6 +62,7 @@ def _enforce_min_interval(settings: Settings) -> None:
         now = time.monotonic()
         wait = interval - (now - _LAST_SEARCH_AT)
         if wait > 0:
+            _METRICS["rate_limited"] += 1
             raise SearchRateLimited(f"search rate limited for {wait:.2f}s")
         _LAST_SEARCH_AT = now
 
@@ -225,11 +232,14 @@ def _cache_get(key: str, ttl_seconds: float) -> list[dict[str, str]] | None:
     with _CACHE_LOCK:
         entry = _SEARCH_CACHE.get(key)
         if not entry:
+            _METRICS["cache_misses"] += 1
             return None
         expires_at, payload = entry
         if expires_at < now:
             _SEARCH_CACHE.pop(key, None)
+            _METRICS["cache_misses"] += 1
             return None
+        _METRICS["cache_hits"] += 1
         return [dict(item) for item in payload]
 
 
@@ -255,6 +265,47 @@ def clear_search_cache() -> None:
         _LAST_SEARCH_AT = 0.0
 
 
+def search_ops_snapshot(settings: Settings | None = None) -> dict[str, Any]:
+    """Read-only ops metrics for admin surfaces (no query text)."""
+    from app.egress_guard import is_web_search_egress_allowed
+
+    cfg = settings
+    if cfg is None:
+        from app.config import get_settings
+
+        cfg = get_settings()
+    ready = False
+    if cfg.agent_web_search_enabled:
+        ready = is_web_search_egress_allowed(cfg.agent_web_search_url.strip(), cfg)
+    with _CACHE_LOCK:
+        hits = int(_METRICS["cache_hits"])
+        misses = int(_METRICS["cache_misses"])
+        rate_limited = int(_METRICS["rate_limited"])
+        searches = int(_METRICS["searches"])
+        cache_entries = len(_SEARCH_CACHE)
+    total_lookups = hits + misses
+    hit_rate = (hits / total_lookups) if total_lookups else 0.0
+    return {
+        "web_search_enabled": bool(cfg.agent_web_search_enabled),
+        "web_search_ready": ready,
+        "web_search_provider": cfg.agent_web_search_provider,
+        "cache_ttl_seconds": float(cfg.agent_web_search_cache_ttl_seconds or 0),
+        "min_interval_seconds": float(cfg.agent_web_search_min_interval_seconds or 0),
+        "cache_entries": cache_entries,
+        "cache_hits": hits,
+        "cache_misses": misses,
+        "cache_hit_rate": round(hit_rate, 4),
+        "rate_limited_hits": rate_limited,
+        "searches": searches,
+    }
+
+
+def reset_search_ops_metrics() -> None:
+    with _CACHE_LOCK:
+        for key in _METRICS:
+            _METRICS[key] = 0
+
+
 class DuckDuckGoHtmlProvider:
     """Parse DuckDuckGo's HTML result page (default provider)."""
 
@@ -263,7 +314,7 @@ class DuckDuckGoHtmlProvider:
         with httpx.Client(
             timeout=settings.agent_web_search_timeout_seconds,
             follow_redirects=False,
-            trust_env=True,
+            trust_env=False,
             headers={"User-Agent": "HomeCareTwin-local-agent/1.0"},
         ) as client:
             response = client.get(settings.agent_web_search_url.strip(), params=params)
@@ -284,7 +335,7 @@ class SearXNGProvider:
         with httpx.Client(
             timeout=settings.agent_web_search_timeout_seconds,
             follow_redirects=False,
-            trust_env=True,
+            trust_env=False,
             headers={"User-Agent": "HomeCareTwin-local-agent/1.0"},
         ) as client:
             response = client.get(endpoint, params=params)
@@ -321,6 +372,8 @@ def execute_web_search(query: str, *, settings: Settings) -> list[dict[str, str]
         )
 
     _enforce_min_interval(settings)
+    with _CACHE_LOCK:
+        _METRICS["searches"] += 1
     raw = get_search_provider(settings).search(query, settings=settings)
     ranked = rank_search_results(
         query, raw, max_results=settings.agent_web_search_max_results
