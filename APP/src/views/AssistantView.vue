@@ -1,22 +1,32 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
+import { activeProvider } from '@/data'
+import type { MemberSummary } from '@/data/types'
 import AppIcon from '@/components/AppIcon.vue'
 import { ApiClientError } from '@/api/client'
 import type { AssistantResponse } from '@/api/types'
 import { createLiveApiClient } from '@/data'
-import { createSpeaker, useSpeech } from '@/composables/useSpeech'
 import {
-  containsWakePhrase,
-  createSpeechRecognition,
+  clearChatSession,
+  createDictationController,
   DEFAULT_WAKE_PHRASE,
+  getSpeakingIndex,
+  getSpeakingSegments,
   isSpeechInputSupported,
-  latestTranscriptFromEvent,
-  transcriptAfterWakePhrase,
-  transcriptFromEvent,
-  VOICE_RESTART_DELAY_MS,
-  type SpeechRecognitionLike,
+  jumpSpeakingSegment,
+  loadVoicePreferences,
+  memberNameHotwordPairs,
+  loadChatSession,
+  saveChatSession,
+  sessionEntryToStored,
+  skipSpeakingSegment,
+  speakText,
+  stopSpeaking,
+  type DictationController,
+  type DictationMode,
+  type StoredChatEntry,
 } from '@/composables/useVoiceInput'
 import { useA11y } from '@/stores/accessibility'
 import { useSession } from '@/stores/session'
@@ -30,12 +40,8 @@ interface ChatEntry {
   suggestedQuestions?: string[]
 }
 
-type VoiceMode = 'off' | 'wake' | 'active'
-
 const { session } = useSession()
 const { settings } = useA11y()
-const speech = useSpeech()
-const manualSpeaker = createSpeaker(() => true)
 
 const history = ref<ChatEntry[]>([])
 const draft = ref('')
@@ -43,28 +49,40 @@ const sending = ref(false)
 const sendError = ref('')
 const voiceError = ref('')
 const voicePreview = ref('')
-const voiceMode = ref<VoiceMode>('off')
+const voiceMode = ref<DictationMode>('off')
 const speakingIndex = ref<number | null>(null)
+const speakingProgress = ref('')
+const needMicGesture = ref(false)
 const chatEnd = ref<HTMLElement | null>(null)
+const draftInput = ref<HTMLTextAreaElement | null>(null)
+const sendButton = ref<HTMLButtonElement | null>(null)
+const memberSummaries = ref<MemberSummary[]>([])
+const speakingSegmentIndex = ref(0)
 
 const speechInputSupported = isSpeechInputSupported()
-const listening = computed(() => voiceMode.value !== 'off')
+const memberHotwordExtras = computed(() =>
+  memberNameHotwordPairs(memberSummaries.value.map(member => member.name)),
+)
+const listening = computed(() => voiceMode.value === 'wake' || voiceMode.value === 'active')
 const liveMode = computed(() => session.dataMode === 'live')
 const serverLabel = computed(() => session.serverBaseUrl.trim() || '（未填写服务器地址）')
 const assistantReady = computed(() => liveMode.value && Boolean(session.serverBaseUrl.trim()))
 
 const voiceStatusLabel = computed(() => {
-  if (voiceMode.value === 'wake') return '等待唤醒：请说「小燕小燕」'
-  if (voiceMode.value === 'active') return '已唤醒，正在听写到输入框'
-  return ''
+  if (voiceMode.value === 'wake') return `正在聆听唤醒词：「${DEFAULT_WAKE_PHRASE}」`
+  if (voiceMode.value === 'active') return '已唤醒，识别中的文字会实时填入草稿'
+  if (voiceMode.value === 'ready') return '已听完，请确认草稿后发送'
+  return needMicGesture.value ? '点按下方按钮一次以开启麦克风聆听' : ''
 })
 
-let recognition: SpeechRecognitionLike | null = null
-let voiceSessionId = 0
-let voiceStopRequested = false
-let voiceFatalError = false
-let voiceDraftPrefix = ''
-let voiceRestartTimer: ReturnType<typeof setTimeout> | null = null
+const voiceButtonLabel = computed(() => {
+  if (voiceMode.value === 'wake') return '等待唤醒'
+  if (voiceMode.value === 'active') return '停止语音'
+  if (voiceMode.value === 'ready') return '重新聆听'
+  return needMicGesture.value ? '允许麦克风并聆听' : '开启唤醒'
+})
+
+let dictation: DictationController | null = null
 
 function scrollToEnd(): void {
   void nextTick(() => chatEnd.value?.scrollIntoView({ block: 'end', behavior: 'smooth' }))
@@ -77,159 +95,158 @@ function requestOptions() {
   }
 }
 
-function stopVoiceInput(): void {
-  voiceStopRequested = true
-  voiceFatalError = false
-  voiceSessionId += 1
-  voiceMode.value = 'off'
-  voicePreview.value = ''
-  if (voiceRestartTimer) {
-    clearTimeout(voiceRestartTimer)
-    voiceRestartTimer = null
-  }
-  const current = recognition
-  recognition = null
-  current?.abort()
+function persistChatSession(): void {
+  saveChatSession(
+    session.actorId,
+    session.currentHouseholdId,
+    session.currentMemberId,
+    history.value.map((entry) => sessionEntryToStored(entry)),
+  )
 }
 
-function scheduleVoiceRecognition(sessionId: number): void {
-  if (voiceRestartTimer) clearTimeout(voiceRestartTimer)
-  voiceRestartTimer = setTimeout(() => {
-    voiceRestartTimer = null
-    if (sessionId !== voiceSessionId || voiceStopRequested || voiceFatalError || !listening.value) return
-    startVoiceRecognition(sessionId)
-  }, VOICE_RESTART_DELAY_MS)
+function restoreChatSession(entries: StoredChatEntry[]): void {
+  history.value = entries.map((entry) => ({
+    role: entry.role,
+    content: entry.content,
+    degraded: entry.degraded,
+    degradeReason: entry.degradeReason,
+    sources: entry.sources,
+    suggestedQuestions: entry.suggestedQuestions,
+  }))
+  scrollToEnd()
 }
 
-function startVoiceRecognition(sessionId: number): void {
-  const nextRecognition = createSpeechRecognition('zh-CN', {
-    continuous: true,
-    interimResults: true,
-    maxAlternatives: 3,
+function ensureDictation(): DictationController {
+  if (dictation) return dictation
+  dictation = createDictationController({
+    onModeChange: (mode) => {
+      voiceMode.value = mode
+    },
+    onPreview: (text) => {
+      voicePreview.value = text
+    },
+    onDraft: (text) => {
+      draft.value = text
+    },
+    onError: (message) => {
+      voiceError.value = message
+    },
+    onNeedGesture: () => {
+      needMicGesture.value = true
+    },
+    onUtteranceComplete: () => {
+      needMicGesture.value = false
+      void nextTick(() => sendButton.value?.focus())
+      if (loadVoicePreferences().confirmSound) {
+        speakText('好的，请确认后发送')
+      }
+    },
+  }, {
+    getHotwordExtras: () => memberHotwordExtras.value,
+    getPreferences: () => loadVoicePreferences(),
   })
-  if (!nextRecognition) {
-    voiceFatalError = true
-    voiceMode.value = 'off'
-    voiceError.value = '当前设备不支持连续语音输入，请改用文字输入。'
-    return
-  }
+  return dictation
+}
 
-  nextRecognition.onstart = () => {
-    if (sessionId !== voiceSessionId) return
-    voiceError.value = ''
-  }
-  nextRecognition.onresult = (event) => {
-    if (sessionId !== voiceSessionId) return
-    const latest = latestTranscriptFromEvent(event)
-    const transcript = transcriptFromEvent(event)
-    if (!latest && !transcript) return
-
-    if (voiceMode.value === 'wake') {
-      const wakeProbe = latest || transcript
-      if (!containsWakePhrase(wakeProbe) && !containsWakePhrase(transcript)) {
-        voicePreview.value = `正在聆听：${wakeProbe || transcript}`
-        return
-      }
-      voiceMode.value = 'active'
-      voiceDraftPrefix = draft.value.trim() ? `${draft.value.trim()} ` : ''
-    }
-
-    const spokenSource = containsWakePhrase(transcript)
-      ? transcript
-      : containsWakePhrase(latest)
-        ? latest
-        : transcript
-    const spoken = containsWakePhrase(spokenSource)
-      ? transcriptAfterWakePhrase(spokenSource)
-      : spokenSource.trim()
-    if (spoken) {
-      draft.value = `${voiceDraftPrefix}${spoken}`.trimStart()
-      voicePreview.value = `正在输入：${spoken}`
-    } else {
-      voicePreview.value = '已唤醒，请说出问题'
-    }
-  }
-  nextRecognition.onerror = (event) => {
-    if (sessionId !== voiceSessionId) return
-    const error = event.error ?? ''
-    if (error === 'no-speech' || error === 'aborted') return
-    if (error === 'not-allowed' || error === 'service-not-allowed') {
-      voiceFatalError = true
-      voiceStopRequested = true
-      voiceMode.value = 'off'
-      voiceError.value = '麦克风权限未开启，请允许后重试，或改用文字输入。'
-      return
-    }
-    if (error === 'audio-capture') {
-      voiceFatalError = true
-      voiceStopRequested = true
-      voiceMode.value = 'off'
-      voiceError.value = '没有检测到可用麦克风，请检查设备或改用文字输入。'
-      return
-    }
-    voiceError.value = '语音识别暂时中断，正在重试；也可改用文字输入。'
-  }
-  nextRecognition.onend = () => {
-    if (sessionId !== voiceSessionId) return
-    if (recognition === nextRecognition) recognition = null
-    if (!voiceStopRequested && !voiceFatalError && listening.value) {
-      if (voiceMode.value === 'active') {
-        voiceDraftPrefix = draft.value.trim() ? `${draft.value.trim()} ` : ''
-      }
-      scheduleVoiceRecognition(sessionId)
-    }
-  }
-
-  recognition = nextRecognition
-  try {
-    nextRecognition.start()
-  } catch {
-    if (sessionId !== voiceSessionId) return
-    voiceFatalError = true
-    voiceStopRequested = true
-    voiceMode.value = 'off'
-    recognition = null
-    voiceError.value = '语音输入未能启动，请稍后重试或改用文字输入。'
+function onDraftFocus(): void {
+  if (voiceMode.value === 'active' || voiceMode.value === 'wake') {
+    ensureDictation().pause()
   }
 }
 
-function toggleVoiceInput(): void {
-  if (listening.value) {
-    stopVoiceInput()
-    return
+function editDraftLine(): void {
+  ensureDictation().pause()
+  void nextTick(() => draftInput.value?.focus())
+}
+
+function redoVoiceDraft(): void {
+  ensureDictation().redoDictation()
+}
+
+function jumpSpeechSegment(index: number): void {
+  if (jumpSpeakingSegment(index)) {
+    speakingSegmentIndex.value = getSpeakingIndex()
   }
-  voiceError.value = ''
+}
+
+const activeSpeakingSegments = computed(() =>
+  speakingIndex.value !== null ? [...getSpeakingSegments()] : [],
+)
+
+async function loadMemberHotwords(): Promise<void> {
+  try {
+    memberSummaries.value = await activeProvider().listMembers()
+  } catch {
+    memberSummaries.value = []
+  }
+}
+
+function stopVoiceInput(): void {
+  dictation?.stop()
+  voicePreview.value = ''
+  needMicGesture.value = false
+}
+
+async function beginWakeListening(): Promise<void> {
   if (!speechInputSupported) {
     voiceError.value = '当前浏览器/WebView 不支持语音输入，请改用文字。'
     return
   }
-  // 听说互斥：开始听之前先停朗读，避免麦克风把合成语音写进草稿。
-  speech.stop()
-  manualSpeaker.stop()
-  speakingIndex.value = null
-  voiceDraftPrefix = draft.value.trim() ? `${draft.value.trim()} ` : ''
-  voicePreview.value = ''
-  voiceStopRequested = false
-  voiceFatalError = false
-  const sessionId = ++voiceSessionId
-  voiceMode.value = 'wake'
-  startVoiceRecognition(sessionId)
+  if (speakingIndex.value !== null) {
+    stopSpeaking()
+    speakingIndex.value = null
+    speakingProgress.value = ''
+  }
+  needMicGesture.value = false
+  voiceError.value = ''
+  ensureDictation().startWake(draft.value)
+}
+
+async function bootstrapVoice(): Promise<void> {
+  if (!speechInputSupported) return
+  await ensureDictation().tryAutoStart()
+}
+
+function toggleVoiceInput(): void {
+  if (voiceMode.value === 'wake' || voiceMode.value === 'active') {
+    stopVoiceInput()
+    return
+  }
+  void beginWakeListening()
 }
 
 function toggleSpeech(index: number, content: string): void {
   if (speakingIndex.value === index) {
-    manualSpeaker.stop()
-    speech.stop()
+    stopSpeaking()
     speakingIndex.value = null
+    speakingProgress.value = ''
     return
   }
   if (listening.value) stopVoiceInput()
+  speakingProgress.value = ''
+  speakingSegmentIndex.value = 0
   speakingIndex.value = index
-  const started = manualSpeaker.speak(content)
+  const started = speakText(content, {
+    onFinished: () => {
+      if (speakingIndex.value === index) {
+        speakingIndex.value = null
+        speakingProgress.value = ''
+        speakingSegmentIndex.value = 0
+      }
+    },
+    onProgress: (progress) => {
+      speakingSegmentIndex.value = progress.index
+      speakingProgress.value = `正在朗读 ${progress.index + 1}/${progress.total}`
+    },
+  })
   if (!started) {
     speakingIndex.value = null
     voiceError.value = '当前无法语音播报，请阅读文字回答。可先安装 Natural 类中文语音包。'
   }
+}
+
+function skipCurrentSpeechSegment(): void {
+  skipSpeakingSegment()
 }
 
 function applySuggested(question: string): void {
@@ -242,11 +259,12 @@ async function send(text?: string): Promise<void> {
   if (!content || sending.value) return
 
   stopVoiceInput()
-  manualSpeaker.stop()
-  speech.stop()
+  stopSpeaking()
   speakingIndex.value = null
+  speakingProgress.value = ''
 
   history.value.push({ role: 'user', content })
+  persistChatSession()
   draft.value = ''
   sending.value = true
   sendError.value = ''
@@ -260,8 +278,10 @@ async function send(text?: string): Promise<void> {
       degraded: true,
       degradeReason: 'demo_mode',
     })
+    persistChatSession()
     sending.value = false
     scrollToEnd()
+    if (!needMicGesture.value) void beginWakeListening()
     return
   }
 
@@ -272,8 +292,10 @@ async function send(text?: string): Promise<void> {
       degraded: true,
       degradeReason: 'missing_server',
     })
+    persistChatSession()
     sending.value = false
     scrollToEnd()
+    if (!needMicGesture.value) void beginWakeListening()
     return
   }
 
@@ -285,72 +307,150 @@ async function send(text?: string): Promise<void> {
       degraded: true,
       degradeReason: 'auth_required',
     })
+    persistChatSession()
     sending.value = false
     scrollToEnd()
+    if (!needMicGesture.value) void beginWakeListening()
     return
   }
 
+  const streamingEntry: ChatEntry = { role: 'assistant', content: '' }
+  history.value.push(streamingEntry)
+  const entryIndex = history.value.length - 1
+
+  const chatInput = {
+    messages: history.value
+      .slice(0, -1)
+      .map((entry) => ({ role: entry.role, content: entry.content })),
+    max_tokens: 1024,
+    agent_mode: 'multi_agent' as const,
+    allow_network_search: false,
+  }
+
+  const applyReply = (reply: AssistantResponse) => {
+    const entry = history.value[entryIndex]!
+    entry.content = reply.answer
+    entry.degraded = reply.degraded
+    entry.degradeReason = reply.degrade_reason
+    entry.sources = reply.sources
+    entry.suggestedQuestions = (reply.suggested_questions ?? []).filter(
+      (item) => typeof item === 'string' && item.trim(),
+    )
+    persistChatSession()
+    scrollToEnd()
+    if (settings.voiceBroadcast) {
+      speakingIndex.value = entryIndex
+      speakingProgress.value = ''
+      speakingSegmentIndex.value = 0
+      if (
+        !speakText(reply.answer, {
+          onFinished: () => {
+            if (speakingIndex.value === entryIndex) {
+              speakingIndex.value = null
+              speakingProgress.value = ''
+              speakingSegmentIndex.value = 0
+            }
+          },
+          onProgress: (progress) => {
+            speakingSegmentIndex.value = progress.index
+            speakingProgress.value = `正在朗读 ${progress.index + 1}/${progress.total}`
+          },
+        })
+      ) {
+        speakingIndex.value = null
+      }
+    }
+  }
+
   try {
-    const messages = history.value.map((entry) => ({ role: entry.role, content: entry.content }))
-    const reply: AssistantResponse = await client.assistantChat(
+    const reply = await client.assistantChatStream(
+      chatInput,
       {
-        messages,
-        max_tokens: 1024,
-        agent_mode: 'multi_agent',
-        allow_network_search: false,
+        onToken: (token) => {
+          const entry = history.value[entryIndex]
+          if (!entry || !token) return
+          entry.content += token
+          scrollToEnd()
+        },
       },
       session.currentHouseholdId || undefined,
       session.currentMemberId || undefined,
       requestOptions(),
     )
-    history.value.push({
-      role: 'assistant',
-      content: reply.answer,
-      degraded: reply.degraded,
-      degradeReason: reply.degrade_reason,
-      sources: reply.sources,
-      suggestedQuestions: (reply.suggested_questions ?? []).filter((item) => typeof item === 'string' && item.trim()),
-    })
-    scrollToEnd()
-    // 长辈「语音播报」开启时，在用户主动发送后自动朗读最新回答。
-    if (settings.voiceBroadcast) {
-      const lastIndex = history.value.length - 1
-      speakingIndex.value = lastIndex
-      if (!manualSpeaker.speak(reply.answer)) speakingIndex.value = null
+    applyReply(reply)
+  } catch {
+    if (history.value[entryIndex]?.role === 'assistant' && !history.value[entryIndex]?.content) {
+      history.value.pop()
     }
-  } catch (cause) {
-    const message =
-      cause instanceof ApiClientError
-        ? cause.message
-        : '家庭服务器暂时无法回答。请确认电脑后端已启动，且手机与电脑在同一局域网。'
-    sendError.value = message
-    history.value.push({
-      role: 'assistant',
-      content:
-        '本地模型或其依赖当前不可用，无法生成回答。家庭事实、任务与提醒不受影响，可直接在对应页面查看。',
-      degraded: true,
-      degradeReason: 'request_failed',
-    })
-    scrollToEnd()
+    try {
+      const reply = await client.assistantChat(
+        chatInput,
+        session.currentHouseholdId || undefined,
+        session.currentMemberId || undefined,
+        requestOptions(),
+      )
+      sendError.value = '流式不可用，已改为整包回答'
+      applyReply(reply)
+    } catch (cause) {
+      const message =
+        cause instanceof ApiClientError
+          ? cause.message
+          : '家庭服务器暂时无法回答。请确认电脑后端已启动，且手机与电脑在同一局域网。'
+      sendError.value = message
+      history.value.push({
+        role: 'assistant',
+        content:
+          '本地模型或其依赖当前不可用，无法生成回答。家庭事实、任务与提醒不受影响，可直接在对应页面查看。',
+        degraded: true,
+        degradeReason: 'request_failed',
+      })
+      persistChatSession()
+      scrollToEnd()
+    }
   } finally {
     sending.value = false
+    if (!needMicGesture.value) void beginWakeListening()
   }
 }
 
 function clearChat(): void {
   stopVoiceInput()
-  manualSpeaker.stop()
-  speech.stop()
+  stopSpeaking()
   speakingIndex.value = null
+  speakingProgress.value = ''
   history.value = []
   draft.value = ''
   sendError.value = ''
   voiceError.value = ''
+  clearChatSession(session.actorId, session.currentHouseholdId, session.currentMemberId)
 }
 
+function onVisibilityChange(): void {
+  if (document.visibilityState === 'hidden') stopVoiceInput()
+}
+
+watch(
+  () => [session.actorId, session.currentHouseholdId, session.currentMemberId] as const,
+  ([actorId, householdId, memberId]) => {
+    stopVoiceInput()
+    stopSpeaking()
+    speakingIndex.value = null
+    restoreChatSession(loadChatSession(actorId, householdId, memberId))
+  },
+  { immediate: true },
+)
+
+onMounted(() => {
+  void loadMemberHotwords()
+  void bootstrapVoice()
+  document.addEventListener('visibilitychange', onVisibilityChange)
+})
+
 onBeforeUnmount(() => {
-  stopVoiceInput()
-  manualSpeaker.stop()
+  document.removeEventListener('visibilitychange', onVisibilityChange)
+  dictation?.dispose()
+  dictation = null
+  stopSpeaking()
 })
 </script>
 
@@ -361,9 +461,10 @@ onBeforeUnmount(() => {
         <p class="eyebrow">随身助手</p>
         <h1>语音提问</h1>
         <p class="lede">
-          与网页端相同：先点「开启唤醒」，再说「{{ DEFAULT_WAKE_PHRASE }}」；识别文字只进草稿，点发送后才请求家庭服务器。
+          进入本页后会自动尝试聆听；首次需点按允许麦克风，再说「{{ DEFAULT_WAKE_PHRASE }}」。识别只进草稿，确认后点发送。
         </p>
       </div>
+      <RouterLink class="ghost-link" to="/me/voice-check">语音自检</RouterLink>
       <RouterLink class="ghost-link" to="/me">联机设置</RouterLink>
     </header>
 
@@ -375,12 +476,13 @@ onBeforeUnmount(() => {
       <p class="meta-line">
         {{
           liveMode
-            ? '将请求你电脑上的 /api/v1/assistant/chat；音频不会上传。'
+            ? '将流式请求你电脑上的 /api/v1/assistant/chat/stream；音频不会上传。'
             : '演示模式不调用后端。切换联机并填写电脑局域网地址后即可对话。'
         }}
       </p>
       <p v-if="assistantReady && liveMode" class="meta-line">
         家庭 {{ session.currentHouseholdId || '未选' }} · 成员 {{ session.currentMemberId || '未选' }}
+        · 会话按身份/家庭/成员隔离（仅本标签页）
       </p>
     </section>
 
@@ -397,7 +499,7 @@ onBeforeUnmount(() => {
         <p class="bubble-role">{{ entry.role === 'user' ? '我' : '助手' }}</p>
         <p class="bubble-text">{{ entry.content }}</p>
         <p v-if="entry.degraded" class="meta-line">降级说明：{{ entry.degradeReason || '受控降级' }}</p>
-        <div v-if="entry.role === 'assistant'" class="bubble-actions">
+        <div v-if="entry.role === 'assistant' && entry.content" class="bubble-actions">
           <button
             type="button"
             class="btn btn-secondary"
@@ -406,6 +508,30 @@ onBeforeUnmount(() => {
           >
             {{ speakingIndex === index ? '停止朗读' : '朗读回答' }}
           </button>
+          <button
+            v-if="speakingIndex === index && speakingProgress"
+            type="button"
+            class="btn btn-secondary"
+            @click="skipCurrentSpeechSegment"
+          >
+            {{ speakingProgress }} · 跳过本句
+          </button>
+          <div
+            v-if="speakingIndex === index && activeSpeakingSegments.length > 1"
+            class="speech-segment-chips"
+            aria-label="朗读分段跳转"
+          >
+            <button
+              v-for="(segment, segmentIndex) in activeSpeakingSegments"
+              :key="`${segmentIndex}-${segment.slice(0, 12)}`"
+              type="button"
+              class="chip"
+              :class="{ active: speakingSegmentIndex === segmentIndex }"
+              @click="jumpSpeechSegment(segmentIndex)"
+            >
+              第 {{ segmentIndex + 1 }} 句
+            </button>
+          </div>
         </div>
         <div v-if="entry.suggestedQuestions?.length" class="suggestions">
           <button
@@ -424,6 +550,9 @@ onBeforeUnmount(() => {
 
     <p v-if="sendError" class="error-line" role="alert">{{ sendError }}</p>
     <p v-if="voiceError" class="error-line" role="status">{{ voiceError }}</p>
+    <p v-if="needMicGesture && !listening" class="voice-status" role="status">
+      需要一次点按开启麦克风后，才会自动等待「{{ DEFAULT_WAKE_PHRASE }}」。
+    </p>
     <p v-if="voicePreview" class="voice-preview" role="status">{{ voicePreview }}</p>
     <p v-if="voiceStatusLabel" class="voice-status" role="status">{{ voiceStatusLabel }}</p>
 
@@ -431,29 +560,42 @@ onBeforeUnmount(() => {
       <label class="sr-only" for="assistant-draft">问题草稿</label>
       <textarea
         id="assistant-draft"
+        ref="draftInput"
         v-model="draft"
         rows="3"
         placeholder="输入问题，或语音唤醒后口述…"
         :disabled="sending"
+        @focus="onDraftFocus"
       />
-      <div class="composer-actions">
+      <div v-if="voiceMode === 'ready'" class="ready-actions" role="group" aria-label="口述确认">
+        <button ref="sendButton" type="submit" class="btn btn-primary btn-large" :disabled="sending || !draft.trim()">
+          发送
+        </button>
+        <button type="button" class="btn btn-secondary" @click="editDraftLine">
+          改一句
+        </button>
+        <button type="button" class="btn btn-secondary" @click="redoVoiceDraft">
+          重说
+        </button>
+      </div>
+      <div v-else class="composer-actions">
         <button
           type="button"
           class="btn btn-secondary mic-btn"
           :class="{ listening, active: voiceMode === 'active' }"
           :disabled="sending || !speechInputSupported"
           :aria-pressed="listening"
-          :aria-label="listening ? '停止语音唤醒' : '开启语音唤醒'"
-          :title="speechInputSupported ? '先点击开启，再说小燕小燕' : '当前不支持语音输入'"
+          :aria-label="listening ? '停止语音唤醒' : voiceButtonLabel"
+          :title="speechInputSupported ? '进入页面自动聆听；首次需点按允许麦克风' : '当前不支持语音输入'"
           @click="toggleVoiceInput"
         >
           <AppIcon name="mic" :size="22" />
-          {{ listening ? (voiceMode === 'active' ? '听写中' : '等待唤醒') : '开启唤醒' }}
+          {{ voiceButtonLabel }}
         </button>
         <button type="button" class="btn btn-secondary" :disabled="sending || history.length === 0" @click="clearChat">
           清空
         </button>
-        <button type="submit" class="btn btn-primary" :disabled="sending || !draft.trim()">
+        <button ref="sendButton" type="submit" class="btn btn-primary" :disabled="sending || !draft.trim()">
           {{ sending ? '发送中…' : '发送' }}
         </button>
       </div>
@@ -472,7 +614,9 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   gap: 12px;
   align-items: flex-start;
+  flex-wrap: wrap;
 }
+.page-header .ghost-link { margin-left: auto; }
 .eyebrow {
   margin: 0;
   font-size: 0.78rem;
@@ -519,6 +663,16 @@ onBeforeUnmount(() => {
 .bubble-role { margin: 0; font-size: 0.8rem; font-weight: 700; color: var(--muted); }
 .bubble-text { margin: 0; white-space: pre-wrap; line-height: 1.5; }
 .bubble-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.speech-segment-chips { display: flex; flex-wrap: wrap; gap: 8px; width: 100%; }
+.speech-segment-chips .chip.active {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.ready-actions {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr 1fr;
+  gap: 8px;
+}
+.ready-actions .btn-large { min-height: 52px; font-size: 1.05rem; }
 .suggestions { display: flex; flex-wrap: wrap; gap: 8px; }
 .chip {
   border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
@@ -551,6 +705,9 @@ onBeforeUnmount(() => {
 .mic-btn.active {
   background: color-mix(in srgb, var(--accent) 22%, var(--surface));
 }
+.mic-btn.ready {
+  outline: 2px solid color-mix(in srgb, var(--accent) 35%, transparent);
+}
 .error-line { color: var(--danger, #b42318); margin: 0; }
 .voice-preview, .voice-status { margin: 0; color: var(--muted); }
 .sr-only {
@@ -565,5 +722,6 @@ onBeforeUnmount(() => {
 }
 @media (max-width: 380px) {
   .composer-actions { grid-template-columns: 1fr; }
+  .ready-actions { grid-template-columns: 1fr; }
 }
 </style>

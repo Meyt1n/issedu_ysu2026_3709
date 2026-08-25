@@ -1,9 +1,18 @@
 <script setup lang="ts">
-import { useRouter } from 'vue-router'
+import { computed, ref } from 'vue'
+import { RouterLink, useRouter } from 'vue-router'
 
 import AppIcon from '@/components/AppIcon.vue'
 import SwitchRow from '@/components/SwitchRow.vue'
 import { createSpeaker } from '@/composables/useSpeech'
+import {
+  inspectChineseVoicePacks,
+  loadVoicePreferences,
+  saveVoicePreferences,
+  SILENCE_PRESETS,
+  type VoicePackReport,
+  type VoicePreferences,
+} from '@/composables/useVoiceInput'
 import {
   useA11y,
   type FontScale,
@@ -23,6 +32,30 @@ const {
 } = useA11y()
 
 const feedbackSpeaker = createSpeaker(() => true)
+const voiceReport = ref<VoicePackReport | null>(null)
+const voiceChecking = ref(false)
+const voicePrefs = ref<VoicePreferences>(loadVoicePreferences())
+
+const silencePresetId = computed(() => {
+  const match = SILENCE_PRESETS.find(
+    preset => preset.silenceMs === voicePrefs.value.silenceMs
+      && preset.continuationSilenceMs === voicePrefs.value.continuationSilenceMs,
+  )
+  return match?.id ?? 'custom'
+})
+
+function applySilencePreset(presetId: string): void {
+  const preset = SILENCE_PRESETS.find(item => item.id === presetId)
+  if (!preset) return
+  voicePrefs.value = saveVoicePreferences({
+    silenceMs: preset.silenceMs,
+    continuationSilenceMs: preset.continuationSilenceMs,
+  })
+}
+
+function toggleVoicePref<K extends keyof VoicePreferences>(key: K, value: VoicePreferences[K]): void {
+  voicePrefs.value = saveVoicePreferences({ [key]: value })
+}
 
 const FONT_OPTIONS: Array<{ value: FontScale; label: string }> = [
   { value: 'standard', label: '标准' },
@@ -48,6 +81,15 @@ function onVoiceChange(enabled: boolean): void {
 
 function tryVoice(): void {
   feedbackSpeaker.speak('语音播报测试：家健镜会用语音读出重要提醒和操作结果。')
+}
+
+async function checkVoicePacks(): Promise<void> {
+  voiceChecking.value = true
+  try {
+    voiceReport.value = await inspectChineseVoicePacks()
+  } finally {
+    voiceChecking.value = false
+  }
 }
 </script>
 
@@ -121,10 +163,50 @@ function tryVoice(): void {
         :model-value="settings.voiceBroadcast"
         @update:model-value="onVoiceChange"
       />
-      <button type="button" class="btn btn-quiet" @click="tryVoice">
-        <AppIcon name="sound" :size="18" />
-        试听一段
-      </button>
+      <h3 class="subheading">助手听写偏好</h3>
+      <label class="pref-row">
+        <span>静音结束</span>
+        <select :value="silencePresetId" @change="applySilencePreset(($event.target as HTMLSelectElement).value)">
+          <option v-for="preset in SILENCE_PRESETS" :key="preset.id" :value="preset.id">
+            {{ preset.label }}
+          </option>
+        </select>
+      </label>
+      <SwitchRow
+        title="听写确认音"
+        description="口述结束后轻量播报「好的，请确认后发送」（可关闭）"
+        :model-value="voicePrefs.confirmSound"
+        @update:model-value="value => toggleVoicePref('confirmSound', value)"
+      />
+      <SwitchRow
+        title="双次唤醒确认"
+        description="连续识别两次「小燕小燕」才进入听写，降低误唤醒"
+        :model-value="voicePrefs.doubleWake"
+        @update:model-value="value => toggleVoicePref('doubleWake', value)"
+      />
+      <div class="voice-actions">
+        <button type="button" class="btn btn-quiet" @click="tryVoice">
+          <AppIcon name="sound" :size="18" />
+          试听一段
+        </button>
+        <button type="button" class="btn btn-quiet" :disabled="voiceChecking" @click="checkVoicePacks">
+          <AppIcon name="sound" :size="18" />
+          {{ voiceChecking ? '检测中…' : '检查中文语音包' }}
+        </button>
+      </div>
+      <div v-if="voiceReport" class="voice-report" role="status">
+        <p>{{ voiceReport.guidance }}</p>
+        <p v-if="voiceReport.names.length" class="meta-line">
+          本机中文音色：{{ voiceReport.names.slice(0, 6).join('；') }}
+          <template v-if="voiceReport.names.length > 6">…</template>
+        </p>
+        <p class="meta-line">
+          听感准备说明见仓库
+          <code>docs/demo/中文语音包与听感准备说明.md</code>
+          （安装 Natural 类简体中文包可改善机械感）。
+        </p>
+      </div>
+      <RouterLink class="ghost-link" to="/me/voice-check">打开完整语音预检页</RouterLink>
     </section>
 
     <section class="card">
@@ -156,4 +238,40 @@ function tryVoice(): void {
   box-shadow: inset 0 1px 0 var(--hilite);
 }
 html[data-contrast='high'] .font-preview { border: 2px solid #000; background: #fff; }
+.voice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.voice-report {
+  margin-top: 10px;
+  display: grid;
+  gap: 6px;
+}
+.voice-report p { margin: 0; line-height: 1.45; }
+.subheading { margin: 12px 0 8px; font-size: 0.95rem; }
+.pref-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+  font-size: 0.92rem;
+}
+.pref-row select {
+  min-height: var(--tap);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+.ghost-link {
+  display: inline-flex;
+  margin-top: 10px;
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: none;
+  min-height: var(--tap);
+  align-items: center;
+}
+.meta-line { color: var(--c-ink-soft); font-size: 0.9rem; }
 </style>
