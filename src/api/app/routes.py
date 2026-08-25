@@ -215,9 +215,11 @@ from app.schemas import (
     TrainingConsentRevoke,
     VisionFusionRead,
     VisionQualityRead,
+    VisionTaskClaimRequest,
     VisionTaskCleanupRead,
     VisionTaskCleanupRequest,
     VisionTaskCreate,
+    VisionTaskLeaseRequest,
     VisionTaskRead,
 )
 from app.security import (
@@ -238,10 +240,13 @@ from app.vision_tasks import (
     VISION_MEDIA_TYPES,
     VisionTaskStatus,
     _file_digest,
+    assert_vision_task_lease,
+    claim_vision_tasks,
     cleanup_expired_video_files,
     create_vision_task,
     get_vision_task,
     list_vision_tasks,
+    renew_vision_task_lease,
     retry_vision_task,
     transition_status,
 )
@@ -3783,6 +3788,10 @@ def submit_vision_evidence_endpoint(
         action="WRITE_EVENTS",
         access_purpose=access_purpose,
     )
+    # HCT-441: once a worker has claimed the task, only that worker may
+    # publish evidence while its lease is still live.  Unclaimed queued
+    # tasks remain compatible with older local adapters.
+    assert_vision_task_lease(task, actor_id)
     if task.status in {
         VisionTaskStatus.SUCCEEDED,
         VisionTaskStatus.FAILED,
@@ -3990,6 +3999,29 @@ def list_my_vision_tasks_endpoint(
     return list(session.scalars(stmt).all())
 
 
+@router.post("/vision-tasks/claim", response_model=list[VisionTaskRead])
+def claim_vision_tasks_endpoint(
+    payload: VisionTaskClaimRequest,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> list[VisionTask]:
+    """Atomically claim this worker's queued tasks with expiring leases.
+
+    The actor header is both the task creator scope and the worker identity;
+    no worker can claim another actor's jobs.  Expired leases are recovered
+    before the next batch is selected, and exhausted jobs become ``timeout``.
+    """
+    tasks = claim_vision_tasks(
+        session,
+        actor_id=actor_id,
+        limit=min(payload.limit, settings.vision_worker_claim_batch_size),
+        lease_seconds=payload.lease_seconds or settings.vision_worker_lease_seconds,
+        max_attempts=settings.vision_worker_max_attempts,
+    )
+    session.commit()
+    return tasks
+
+
 @router.get("/vision-tasks/{task_id}", response_model=VisionTaskRead)
 def get_vision_task_endpoint(
     task_id: str,
@@ -4004,6 +4036,34 @@ def get_vision_task_endpoint(
         action="READ_EVENTS",
         access_purpose=access_purpose,
     )
+
+
+@router.post("/vision-tasks/{task_id}/lease", response_model=VisionTaskRead)
+def renew_vision_task_lease_endpoint(
+    task_id: str,
+    payload: VisionTaskLeaseRequest,
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> VisionTask:
+    """Renew a live worker lease immediately before publishing evidence."""
+    task = _require_vision_task_access(
+        session,
+        task_id,
+        actor_id=actor_id,
+        action="WRITE_EVENTS",
+        access_purpose=access_purpose,
+    )
+    if task.created_by != actor_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="VISION_TASK_NOT_FOUND")
+    renewed = renew_vision_task_lease(
+        session,
+        task,
+        worker_id=actor_id,
+        lease_seconds=payload.lease_seconds or settings.vision_worker_lease_seconds,
+    )
+    session.commit()
+    return renewed
 
 
 @router.get("/households/{household_id}/vision-tasks", response_model=list[VisionTaskRead])

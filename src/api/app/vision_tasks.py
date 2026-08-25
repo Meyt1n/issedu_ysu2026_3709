@@ -21,7 +21,7 @@ from typing import Any
 
 from fastapi import HTTPException
 from fastapi import status as http_status
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -114,6 +114,255 @@ def _as_utc(value: datetime | None, *, fallback: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def _lease_deadline(now: datetime, lease_seconds: int) -> datetime:
+    if lease_seconds < 30:
+        raise ValueError("VISION_LEASE_SECONDS_INVALID")
+    return now + timedelta(seconds=lease_seconds)
+
+
+def assert_vision_task_lease(
+    task: VisionTask,  # type: ignore[name-defined]
+    worker_id: str,
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Reject evidence from a worker whose claim was lost or expired.
+
+    Legacy callers that transition a queued task directly still work because
+    an unclaimed task has no owner.  Once a worker claims a task, however,
+    every terminal write must come from that worker while its lease is live.
+    """
+
+    if task.lease_owner is None:
+        return
+    current = _as_utc(now, fallback=_now())
+    expires_at = _as_utc(task.lease_expires_at, fallback=current)
+    if task.lease_owner != worker_id or expires_at <= current:
+        raise HTTPException(
+            status_code=http_status.HTTP_409_CONFLICT,
+            detail="VISION_TASK_LEASE_LOST",
+        )
+
+
+def recover_expired_vision_tasks(
+    session: Session,
+    *,
+    actor_id: str | None = None,
+    limit: int = 100,
+    max_attempts: int = 3,
+    now: datetime | None = None,
+) -> int:
+    """Requeue expired leases and timeout tasks that exhausted their budget.
+
+    Each update includes the observed status and expiry, so two workers can
+    run recovery concurrently without reviving a task that another worker
+    has already reclaimed.
+    """
+
+    if limit <= 0 or max_attempts <= 0:
+        raise ValueError("VISION_RECOVERY_LIMIT_INVALID")
+    current = _as_utc(now, fallback=_now())
+    stmt = (
+        select(VisionTask)
+        .where(
+            VisionTask.status == VisionTaskStatus.RUNNING,
+            VisionTask.lease_expires_at.is_not(None),
+            VisionTask.lease_expires_at <= current,
+        )
+        .order_by(VisionTask.lease_expires_at.asc())
+        .limit(min(limit, 1_000))
+    )
+    if actor_id is not None:
+        stmt = stmt.where(VisionTask.created_by == actor_id)
+
+    recovered = 0
+    for task in session.scalars(stmt).all():
+        if (task.attempt_count or 0) >= max_attempts:
+            values = {
+                "status": VisionTaskStatus.TIMEOUT,
+                "error_code": "WORKER_MAX_ATTEMPTS",
+                "error_message": "Worker lease expired too many times; manual retry required.",
+                "finished_at": current,
+                "lease_owner": None,
+                "lease_expires_at": None,
+                "updated_at": current,
+            }
+        else:
+            values = {
+                "status": VisionTaskStatus.QUEUED,
+                "lease_owner": None,
+                "lease_expires_at": None,
+                "updated_at": current,
+            }
+        updated = session.execute(
+            update(VisionTask)
+            .where(
+                VisionTask.id == task.id,
+                VisionTask.status == VisionTaskStatus.RUNNING,
+                VisionTask.lease_expires_at <= current,
+            )
+            .values(**values)
+            .execution_options(synchronize_session=False)
+        )
+        recovered += int(updated.rowcount == 1)
+    return recovered
+
+
+def claim_vision_task(
+    session: Session,
+    task: VisionTask,  # type: ignore[name-defined]
+    *,
+    worker_id: str,
+    lease_seconds: int,
+    max_attempts: int = 3,
+    now: datetime | None = None,
+) -> VisionTask:
+    """Atomically claim one queued task or reclaim an expired lease."""
+
+    if not worker_id.strip():
+        raise ValueError("VISION_WORKER_ID_REQUIRED")
+    if max_attempts <= 0:
+        raise ValueError("VISION_MAX_ATTEMPTS_INVALID")
+    current = _as_utc(now, fallback=_now())
+    deadline = _lease_deadline(current, lease_seconds)
+    if task.status in _TERMINAL_STATUSES:
+        raise HTTPException(
+            status_code=http_status.HTTP_409_CONFLICT,
+            detail=f"VISION_TASK_NOT_CLAIMABLE_{task.status.upper()}",
+        )
+
+    attempt_count = task.attempt_count or 0
+    if attempt_count >= max_attempts and task.status == VisionTaskStatus.RUNNING:
+        raise HTTPException(
+            status_code=http_status.HTTP_409_CONFLICT,
+            detail="VISION_TASK_MAX_ATTEMPTS",
+        )
+
+    claimable = or_(
+        VisionTask.status == VisionTaskStatus.QUEUED,
+        and_(
+            VisionTask.status == VisionTaskStatus.RUNNING,
+            VisionTask.lease_expires_at.is_not(None),
+            VisionTask.lease_expires_at <= current,
+        ),
+    )
+    updated = session.execute(
+        update(VisionTask)
+        .where(VisionTask.id == task.id, claimable)
+        .values(
+            status=VisionTaskStatus.RUNNING,
+            lease_owner=worker_id,
+            lease_expires_at=deadline,
+            started_at=task.started_at or current,
+            attempt_count=VisionTask.attempt_count + 1,
+            error_code=None,
+            error_message=None,
+            updated_at=current,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if updated.rowcount != 1:
+        session.refresh(task)
+        if task.status == VisionTaskStatus.RUNNING and task.lease_owner:
+            detail = "VISION_TASK_LEASE_HELD"
+        else:
+            detail = "VISION_TASK_CLAIM_CONFLICT"
+        raise HTTPException(status_code=http_status.HTTP_409_CONFLICT, detail=detail)
+    session.refresh(task)
+    logger.info(
+        "VISION_TASK_CLAIMED task=%s worker=%s attempt=%d lease_until=%s",
+        task.id,
+        worker_id,
+        task.attempt_count,
+        task.lease_expires_at,
+    )
+    return task
+
+
+def claim_vision_tasks(
+    session: Session,
+    *,
+    actor_id: str,
+    limit: int = 10,
+    lease_seconds: int = 900,
+    max_attempts: int = 3,
+    now: datetime | None = None,
+) -> list[VisionTask]:
+    """Recover this worker's stale jobs, then atomically claim a batch."""
+
+    if limit <= 0:
+        raise ValueError("VISION_CLAIM_LIMIT_INVALID")
+    current = _as_utc(now, fallback=_now())
+    recover_expired_vision_tasks(
+        session,
+        actor_id=actor_id,
+        limit=min(limit * 2, 1_000),
+        max_attempts=max_attempts,
+        now=current,
+    )
+    candidates = list(
+        session.scalars(
+            select(VisionTask)
+            .where(
+                VisionTask.created_by == actor_id,
+                VisionTask.status == VisionTaskStatus.QUEUED,
+            )
+            .order_by(VisionTask.created_at.asc())
+            .limit(min(limit, 100))
+        ).all()
+    )
+    claimed: list[VisionTask] = []
+    for task in candidates:
+        try:
+            claimed.append(
+                claim_vision_task(
+                    session,
+                    task,
+                    worker_id=actor_id,
+                    lease_seconds=lease_seconds,
+                    max_attempts=max_attempts,
+                    now=current,
+                )
+            )
+        except HTTPException:
+            # Another worker won the conditional update; keep claiming the
+            # remaining batch rather than failing the whole poll request.
+            continue
+    return claimed
+
+
+def renew_vision_task_lease(
+    session: Session,
+    task: VisionTask,  # type: ignore[name-defined]
+    *,
+    worker_id: str,
+    lease_seconds: int,
+    now: datetime | None = None,
+) -> VisionTask:
+    """Extend a live lease; an expired or foreign lease cannot be renewed."""
+
+    current = _as_utc(now, fallback=_now())
+    deadline = _lease_deadline(current, lease_seconds)
+    updated = session.execute(
+        update(VisionTask)
+        .where(
+            VisionTask.id == task.id,
+            VisionTask.status == VisionTaskStatus.RUNNING,
+            VisionTask.lease_owner == worker_id,
+            VisionTask.lease_expires_at > current,
+        )
+        .values(lease_expires_at=deadline, updated_at=current)
+        .execution_options(synchronize_session=False)
+    )
+    if updated.rowcount != 1:
+        raise HTTPException(
+            status_code=http_status.HTTP_409_CONFLICT,
+            detail="VISION_TASK_LEASE_LOST",
+        )
+    session.refresh(task)
+    return task
 
 
 def cleanup_expired_video_files(
@@ -299,17 +548,15 @@ def transition_status(
 
     if next_status == VisionTaskStatus.RUNNING:
         values["started_at"] = _now()
-    elif next_status in (
-        VisionTaskStatus.SUCCEEDED,
-        VisionTaskStatus.FAILED,
-        VisionTaskStatus.TIMEOUT,
-    ):
+    elif next_status in _TERMINAL_STATUSES:
         values["finished_at"] = _now()
         if result is not None:
             values["result"] = result
         if error_code:
             values["error_code"] = error_code
             values["error_message"] = error_message or _ERROR_CODES.get(error_code, "")
+        values["lease_owner"] = None
+        values["lease_expires_at"] = None
 
     # Version tracking — recorded on terminal transitions
     if next_status in (
@@ -342,6 +589,10 @@ def transition_status(
         task.started_at = values["started_at"]
     if "finished_at" in values:
         task.finished_at = values["finished_at"]
+    if "lease_owner" in values:
+        task.lease_owner = values["lease_owner"]
+    if "lease_expires_at" in values:
+        task.lease_expires_at = values["lease_expires_at"]
     for field in (
         "model_version",
         "preprocess_version",
@@ -387,6 +638,9 @@ def retry_vision_task(session: Session, task: VisionTask) -> VisionTask:  # noqa
             result=None,
             started_at=None,
             finished_at=None,
+            lease_owner=None,
+            lease_expires_at=None,
+            attempt_count=0,
             updated_at=now,
         )
     )

@@ -1,8 +1,8 @@
-"""Resident vision worker: polls queued vision tasks and processes them.
+"""Resident vision worker: claims leased vision tasks and processes them.
 
 Runs inside the family trusted domain, next to the API. The web UI only
 performs the quality gate, uploads the image and creates a vision task;
-this worker picks up ``queued`` tasks for the configured actors, downloads
+this worker claims ``queued`` tasks for the configured actors, downloads
 the original image, runs the local engines (PaddleOCR full-image OCR,
 optional YOLO box assist, OpenCV barcode decoding, rule/LLM field
 proposals) and submits signed evidence. The server then fuses candidates
@@ -111,9 +111,9 @@ class Worker:
         processed = 0
         for actor in self.actors:
             try:
-                response = self.http.get(
-                    f"{self.api}/vision-tasks",
-                    params={"task_status": "queued", "limit": 10},
+                response = self.http.post(
+                    f"{self.api}/vision-tasks/claim",
+                    json={"limit": 10},
                     headers={"X-Actor-ID": actor},
                     timeout=30,
                 )
@@ -209,6 +209,17 @@ class Worker:
         payload = json.loads(request.model_dump_json())
         payload["adapter_receipt"] = receipt
 
+        # Inference can take longer than the default polling interval.  Renew
+        # immediately before the terminal write so a second worker cannot
+        # publish evidence after reclaiming an expired lease.
+        lease = self.http.post(
+            f"{self.api}/vision-tasks/{task_id}/lease",
+            json={},
+            headers=headers,
+            timeout=30,
+        )
+        lease.raise_for_status()
+
         evidence = self.http.post(
             f"{self.api}/vision-tasks/{task_id}/evidence",
             json=payload,
@@ -232,7 +243,7 @@ def main() -> int:
     parser.add_argument(
         "--actors",
         default=os.environ.get("HCT_WORKER_ACTORS", "demo-parent"),
-        help="comma separated actor ids whose queued tasks this worker serves",
+        help="comma separated actor ids whose vision tasks this worker claims",
     )
     parser.add_argument("--interval", type=float, default=5.0)
     parser.add_argument("--once", action="store_true", help="single poll pass then exit")
@@ -262,7 +273,7 @@ def main() -> int:
         video_sample_interval_ms=args.video_sample_interval_ms,
         video_max_frames=args.video_max_frames,
     )
-    log(f"watching queued tasks for actors={actors} api={args.api}")
+    log(f"claiming leased tasks for actors={actors} api={args.api}")
     while True:
         processed = worker.poll_once()
         if args.once:
