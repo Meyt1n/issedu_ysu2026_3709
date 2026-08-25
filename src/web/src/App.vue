@@ -19,6 +19,7 @@ import {
 import { householdOptionLabel, memberVisibleHouseholds } from './ui/demoData'
 import { SHOW_ADVANCED_LAB } from './ui/featureFlags'
 import { activeNavItem, groupNavItems, NAV_ITEMS, visibleNavItemsFor } from './ui/navigation'
+import { installRipple, vMagnet } from './ui/motion'
 import { THEMES, applyTheme, currentTheme, type ThemeId } from './ui/themes'
 // 欢迎页是首屏必经路径，保持同步加载；十二个业务视图按需拆包，
 // 首屏只下载当前视图的代码，切换视图时由 Vite 预构建的 chunk 即时载入。
@@ -195,20 +196,50 @@ async function onHouseholdChange(event: Event): Promise<void> {
   await selectHousehold(target.value)
 }
 
+/* ── 光标追光 ── */
+
+const glowEl = ref<HTMLElement | null>(null)
+let glowFrame = 0
+let glowHandler: ((event: PointerEvent) => void) | null = null
 let removeHealthRefreshListener: (() => void) | null = null
 
 onMounted(() => {
+  installRipple()
   removeHealthRefreshListener = onHealthDataRefresh(() => {
     if (session.portal === 'admin') void refreshPendingReviewCount()
   })
+
+  const motionOk =
+    globalThis.matchMedia?.('(hover: hover)').matches &&
+    !globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+  if (!motionOk) return
+
+  glowHandler = (event: PointerEvent) => {
+    cancelAnimationFrame(glowFrame)
+    glowFrame = requestAnimationFrame(() => {
+      glowEl.value?.style.setProperty(
+        'transform',
+        `translate3d(${event.clientX}px, ${event.clientY}px, 0)`,
+      )
+    })
+  }
+  window.addEventListener('pointermove', glowHandler, { passive: true })
 })
 
 onBeforeUnmount(() => {
   removeHealthRefreshListener?.()
+  if (glowHandler) window.removeEventListener('pointermove', glowHandler)
+  cancelAnimationFrame(glowFrame)
 })
 </script>
 
 <template>
+  <div class="bg-wash" aria-hidden="true" />
+  <div class="aurora" aria-hidden="true"><span /><span /><span /></div>
+  <div class="fireflies" aria-hidden="true"><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /></div>
+  <div class="leaves" aria-hidden="true"><i /><i /><i /><i /></div>
+  <div ref="glowEl" class="cursor-glow" aria-hidden="true" />
+
   <main v-if="session.status !== 'ready'" lang="zh-CN">
     <WelcomeView />
   </main>
@@ -216,7 +247,7 @@ onBeforeUnmount(() => {
   <div v-else class="app-frame" :class="{ mini: sidebarMini }">
     <aside class="sidebar">
       <div class="brand">
-        <span class="brand-mark"><AppIcon name="home" :size="19" /></span>
+        <span class="brand-mark"><AppIcon name="home" :size="24" /></span>
         <div>
           <div class="brand-name">家健镜</div>
           <div class="brand-sub">HomeCare Twin</div>
@@ -234,7 +265,7 @@ onBeforeUnmount(() => {
               :title="sidebarMini ? item.label : undefined"
               @click="setView(item.view)"
             >
-              <AppIcon :name="item.icon" :size="17" />
+              <AppIcon :name="item.icon" :size="19" />
               <span class="nav-label">{{ item.label }}</span>
               <span
                 v-if="item.view === 'review' && session.pendingReviewCount > 0"
@@ -284,6 +315,7 @@ onBeforeUnmount(() => {
           </label>
           <button
             v-if="session.portal === 'admin' && session.currentView !== 'members'"
+            v-magnet="3"
             type="button"
             class="btn btn-clay btn-small"
             title="到成员档案手工记录一条健康事实"

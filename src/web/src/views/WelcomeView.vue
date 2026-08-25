@@ -22,6 +22,21 @@ import {
 import { SHOW_DEV_LOGIN } from '../ui/featureFlags'
 import { THEMES, applyTheme, currentTheme } from '../ui/themes'
 
+const artRx = ref('0deg')
+const artRy = ref('0deg')
+
+function onStageMove(event: PointerEvent): void {
+  const target = event.currentTarget as HTMLElement
+  const rect = target.getBoundingClientRect()
+  artRy.value = `${(((event.clientX - rect.left) / rect.width - 0.5) * 5).toFixed(2)}deg`
+  artRx.value = `${((0.5 - (event.clientY - rect.top) / rect.height) * 5).toFixed(2)}deg`
+}
+
+function onStageLeave(): void {
+  artRx.value = '0deg'
+  artRy.value = '0deg'
+}
+
 const actorId = ref(session.actorId)
 const accessPurpose = ref(session.accessPurpose || 'family-care')
 const password = ref('')
@@ -33,12 +48,7 @@ const faceFrames = ref<File[]>([])
 // 开发演示入口默认只在开发环境出现；本地教学 Compose 构建通过
 // VITE_SHOW_DEV_LOGIN=true 显式保留（与后端 ALLOW_DEV_ACTOR_HEADER 对齐）。
 const showDevelopmentEntry = SHOW_DEV_LOGIN
-// 正式账号登录是默认入口；只有上一次会话确实使用过开发身份时才回到开发演示。
-const authMode = ref<'development' | 'session'>(
-  showDevelopmentEntry && session.authMode === 'development' && session.actorId
-    ? 'development'
-    : 'session',
-)
+const authMode = ref<'development' | 'session'>(showDevelopmentEntry ? session.authMode : 'session')
 const credentialMode = ref<'password' | 'pin' | 'face'>(
   initialBoundFaceHouseholdId ? 'face' : 'password',
 )
@@ -274,7 +284,12 @@ async function submitCreate(): Promise<void> {
 </script>
 
 <template>
-  <div class="welcome-stage" style="align-content: center; gap: 26px">
+  <div
+    class="welcome-stage"
+    style="align-content: center; gap: 26px"
+    @pointermove="onStageMove"
+    @pointerleave="onStageLeave"
+  >
     <div class="welcome-inner">
       <section class="welcome-intro">
         <span class="welcome-badge">
@@ -289,9 +304,11 @@ async function submitCreate(): Promise<void> {
           家健镜帮家人记下用药和提醒，发现需要核对的情况，
           再用清楚明白的方式告诉每一位照护者。
         </p>
-        <div class="welcome-art">
+        <div class="welcome-art" :style="{ '--par-rx': artRx, '--par-ry': artRy }">
           <img :src="welcomeHero" alt="温馨的家庭照护插画：家人围坐在洒满阳光的窗边" />
           <span class="art-caption">本地家庭插画 · 不上传原图</span>
+          <span class="art-float f1"><AppIcon name="lock" :size="13" />数据不出网</span>
+          <span class="art-float f2"><AppIcon name="heart" :size="13" />记错了也能改</span>
         </div>
         <div class="welcome-chip-row">
           <span class="welcome-chip"><AppIcon name="timeline" :size="14" />记错了也能改</span>
@@ -307,8 +324,8 @@ async function submitCreate(): Promise<void> {
       >
         <h2>进入家庭空间</h2>
         <div class="segmented-control" role="group" aria-label="选择登录方式">
-          <button type="button" :class="{ active: authMode === 'session' }" @click="authMode = 'session'">正式账号登录</button>
           <button v-if="showDevelopmentEntry" type="button" :class="{ active: authMode === 'development' }" @click="authMode = 'development'">开发演示</button>
+          <button type="button" :class="{ active: authMode === 'session' }" @click="authMode = 'session'">正式账号登录</button>
         </div>
         <p v-if="authMode === 'development'" class="form-sub">仅用于非生产本地演示，使用开发身份标识；不会建立正式会话。</p>
         <p v-else class="form-sub">用家里的账号进入。登录信息只留在当前页面，关掉后需要重新登录。</p>
