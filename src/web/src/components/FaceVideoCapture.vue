@@ -1,13 +1,25 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
+
+import { isSpeechOutputSupported, speakText, stopSpeaking } from '../assistant/voice'
+import {
+  FACE_CAPTURE_STEPS,
+  faceCaptureDoneSpeech,
+  faceCaptureIntro,
+  faceStepLabel,
+  type FaceCaptureMode,
+} from '../ui/faceCaptureGuidance'
 
 const props = withDefaults(defineProps<{
   disabled?: boolean
-  mode?: 'login' | 'registration'
+  mode?: FaceCaptureMode
   showFallback?: boolean
+  /** Default on for elder-friendly coaching; user can mute. */
+  voiceEnabled?: boolean
 }>(), {
   mode: 'login',
   showFallback: true,
+  voiceEnabled: true,
 })
 
 const emit = defineEmits<{
@@ -19,7 +31,21 @@ const video = ref<HTMLVideoElement | null>(null)
 const capturing = ref(false)
 const error = ref('')
 const progress = ref('')
+const stepIndex = ref(-1)
+const countdown = ref(0)
+const voiceOn = ref(props.voiceEnabled && isSpeechOutputSupported())
+const voiceSupported = isSpeechOutputSupported()
 let stream: MediaStream | null = null
+
+const intro = computed(() => faceCaptureIntro(props.mode))
+const activeStep = computed(() => (stepIndex.value >= 0 ? FACE_CAPTURE_STEPS[stepIndex.value] : null))
+const overlayLabel = computed(() => {
+  if (countdown.value > 0) return String(countdown.value)
+  if (activeStep.value) return activeStep.value.title
+  if (capturing.value) return '正在打开摄像头…'
+  return '把脸放进圆圈'
+})
+const modeLabel = computed(() => (props.mode === 'registration' ? '录入人脸' : '刷脸登录'))
 
 function stopCamera(): void {
   for (const track of stream?.getTracks() ?? []) track.stop()
@@ -31,6 +57,17 @@ function wait(milliseconds: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, milliseconds))
 }
 
+function speak(text: string): void {
+  if (!voiceOn.value || !text.trim()) return
+  speakText(text)
+}
+
+async function speakAndPause(text: string, pauseMs: number): Promise<void> {
+  speak(text)
+  const estimated = Math.min(5200, Math.max(pauseMs, text.length * 95))
+  await wait(estimated)
+}
+
 async function waitForVideoReady(element: HTMLVideoElement): Promise<void> {
   const deadline = Date.now() + 2500
   while (element.videoWidth <= 0 || element.videoHeight <= 0) {
@@ -39,13 +76,26 @@ async function waitForVideoReady(element: HTMLVideoElement): Promise<void> {
   }
 }
 
+async function runCountdown(seconds: number): Promise<void> {
+  for (let value = seconds; value >= 1; value -= 1) {
+    countdown.value = value
+    speak(String(value))
+    await wait(900)
+  }
+  countdown.value = 0
+}
+
 async function capture(): Promise<void> {
   if (props.disabled || capturing.value) return
   error.value = ''
-  progress.value = '正在打开摄像头…'
+  progress.value = '正在打开摄像头，请稍等…'
+  stepIndex.value = -1
+  countdown.value = 0
   capturing.value = true
   try {
     if (!navigator.mediaDevices?.getUserMedia) throw new Error('CAMERA_UNAVAILABLE')
+    await speakAndPause(intro.value.speech, 2200)
+
     stream = await navigator.mediaDevices.getUserMedia({
       video: {
         facingMode: 'user',
@@ -58,7 +108,7 @@ async function capture(): Promise<void> {
     video.value.srcObject = stream
     await video.value.play()
     await waitForVideoReady(video.value)
-    await wait(500)
+    await wait(400)
 
     const canvas = document.createElement('canvas')
     const width = Math.min(video.value.videoWidth, 960)
@@ -68,60 +118,177 @@ async function capture(): Promise<void> {
     const context = canvas.getContext('2d')
     if (!context) throw new Error('CAMERA_UNAVAILABLE')
 
-    // 活体校验要求相邻帧有可测量的姿态变化，因此逐帧引导用户轻微转头，
-    // 而不是提示“保持不动”。
-    const framePrompts = [
-      '请正对镜头，让整张脸位于画面中央',
-      '很好，请将头部轻轻向左转一点',
-      '最后一帧，请将头部轻轻转回或向右一点',
-    ]
     const frames: File[] = []
-    for (let index = 0; index < 3; index += 1) {
-      progress.value = `${framePrompts[index]}（正在采集 ${index + 1}/3）`
+    for (let index = 0; index < FACE_CAPTURE_STEPS.length; index += 1) {
+      const step = FACE_CAPTURE_STEPS[index]
+      stepIndex.value = index
+      progress.value = `${faceStepLabel(index)}：${step.title}`
+      await speakAndPause(`${faceStepLabel(index)}。${step.speech}`, 2600)
+      await runCountdown(3)
+      progress.value = `${faceStepLabel(index)}：正在拍照…`
       context.drawImage(video.value, 0, 0, width, height)
       const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.9))
       if (!blob) throw new Error('CAMERA_UNAVAILABLE')
       frames.push(new File([blob], `face-${props.mode}-${index + 1}.jpg`, { type: 'image/jpeg' }))
-      if (index < 2) await wait(650)
+      if (index < FACE_CAPTURE_STEPS.length - 1) await wait(500)
     }
-    progress.value = '采集完成，正在提交本地安全校验…'
+
+    progress.value = props.mode === 'registration'
+      ? '采集完成，正在本地安全校验…'
+      : '采集完成，正在识别，请稍等…'
+    await speakAndPause(faceCaptureDoneSpeech(props.mode), 1200)
     emit('captured', frames)
   } catch (cause) {
+    stopSpeaking()
     error.value = cause instanceof DOMException && cause.name === 'NotAllowedError'
-      ? '摄像头权限被拒绝，请在浏览器地址栏允许摄像头后重试，或改用 PIN/密码登录。'
+      ? '摄像头权限被拒绝。请家人在浏览器地址栏点一下允许摄像头，或改用 PIN/密码登录。'
       : cause instanceof DOMException && cause.name === 'NotFoundError'
-        ? '没有检测到可用的摄像头设备，请改用 PIN/密码登录。'
+        ? '没有找到摄像头。请接好摄像头，或改用 PIN/密码登录。'
         : props.mode === 'registration'
-          ? '摄像头不可用，请检查权限后重新采集。'
-          : '摄像头不可用或画面质量不足，请改用 PIN 登录。'
+          ? '摄像头打不开。请检查权限后重试，也可以让家人帮忙。'
+          : '摄像头打不开或画面不好，请改用 PIN 登录，也可以让家人帮忙。'
+    speak(error.value)
     if (props.showFallback) emit('fallback')
   } finally {
     stopCamera()
     capturing.value = false
+    stepIndex.value = -1
+    countdown.value = 0
     progress.value = ''
   }
 }
 
-onBeforeUnmount(stopCamera)
+function toggleVoice(): void {
+  voiceOn.value = !voiceOn.value
+  if (!voiceOn.value) {
+    stopSpeaking()
+    return
+  }
+  speak('已打开语音提示')
+}
+
+function useFallback(): void {
+  stopSpeaking()
+  stopCamera()
+  emit('fallback')
+}
+
+onBeforeUnmount(() => {
+  stopSpeaking()
+  stopCamera()
+})
 </script>
 
 <template>
-  <div class="face-capture">
-    <video ref="video" class="face-preview" muted playsinline aria-label="摄像头预览" />
-    <p class="form-sub">
-      {{ mode === 'registration'
-        ? '请在光线均匀的环境下，让本人距离摄像头约半米、看向镜头并按提示缓慢转动头部；系统会采集三帧动态画面，视频只在本地内存中处理。'
-        : '请保持光线均匀、距离摄像头约半米，按提示缓慢转动头部；画面保持完全不动会被活体校验拒绝。' }}
-    </p>
-    <p v-if="progress" class="notice" role="status" aria-live="polite">{{ progress }}</p>
+  <div class="face-capture face-capture--elder" data-testid="face-video-capture">
+    <header class="face-capture-intro">
+      <div class="face-capture-intro-top">
+        <p class="face-capture-eyebrow">{{ modeLabel }} · 本地安全</p>
+        <span class="face-capture-badge" :class="voiceOn ? 'is-on' : 'is-off'">
+          {{ voiceSupported ? (voiceOn ? '语音已开' : '语音已关') : '无语音设备' }}
+        </span>
+      </div>
+      <p class="face-capture-intro-title">{{ intro.title }}</p>
+      <ol class="face-capture-bullets">
+        <li v-for="item in intro.bullets" :key="item">
+          <span class="face-capture-bullet-mark" aria-hidden="true" />
+          <span>{{ item }}</span>
+        </li>
+      </ol>
+    </header>
+
+    <div
+      class="face-stage"
+      :class="{
+        'is-live': capturing,
+        'is-countdown': countdown > 0,
+        'is-idle': !capturing,
+      }"
+    >
+      <video
+        ref="video"
+        class="face-preview"
+        muted
+        playsinline
+        aria-label="摄像头预览，请把脸放进中间圆圈"
+      />
+      <div class="face-stage-vignette" aria-hidden="true" />
+      <div class="face-guide" aria-hidden="true">
+        <div class="face-guide-ring">
+          <div class="face-guide-oval" />
+        </div>
+        <div class="face-guide-markers">
+          <i /><i /><i /><i />
+        </div>
+      </div>
+
+      <div
+        v-if="countdown > 0"
+        class="face-countdown"
+        role="status"
+        aria-live="assertive"
+      >
+        {{ countdown }}
+      </div>
+
+      <div class="face-stage-banner" role="status" aria-live="polite">
+        <p class="face-stage-kicker">
+          {{ activeStep ? faceStepLabel(stepIndex) : capturing ? '准备中' : '准备开始' }}
+        </p>
+        <strong :class="{ 'is-count': countdown > 0 }">{{ overlayLabel }}</strong>
+        <span v-if="activeStep && countdown === 0">{{ activeStep.hint }}</span>
+        <span v-else-if="!capturing">坐稳后点下面的大按钮开始</span>
+      </div>
+
+      <div class="face-step-rail" aria-hidden="true">
+        <div
+          v-for="(step, index) in FACE_CAPTURE_STEPS"
+          :key="step.title"
+          class="face-step-chip"
+          :class="{
+            done: stepIndex > index,
+            current: stepIndex === index,
+          }"
+        >
+          <em>{{ index + 1 }}</em>
+          <span>{{ index === 0 ? '正对' : index === 1 ? '左转' : '右转' }}</span>
+        </div>
+      </div>
+    </div>
+
+    <p v-if="progress" class="notice face-progress" role="status" aria-live="polite">{{ progress }}</p>
     <p v-if="error" class="notice error" role="alert">{{ error }}</p>
+
     <div class="face-capture-actions">
-      <button type="button" class="btn btn-primary" :disabled="disabled || capturing" @click="capture">
-        {{ capturing ? '正在采集动态画面' : mode === 'registration' ? '开始动态采集' : '开始摄像头验证' }}
+      <button
+        type="button"
+        class="btn btn-primary face-capture-start"
+        :disabled="disabled || capturing"
+        @click="capture"
+      >
+        {{ capturing ? '请按提示做，不要走开' : mode === 'registration' ? '开始录入（有语音提示）' : '开始刷脸（有语音提示）' }}
       </button>
-      <button v-if="showFallback" type="button" class="btn btn-ghost btn-small" :disabled="capturing" @click="emit('fallback')">
+      <button
+        v-if="voiceSupported"
+        type="button"
+        class="btn btn-ghost btn-small face-voice-toggle"
+        :aria-pressed="voiceOn"
+        @click="toggleVoice"
+      >
+        {{ voiceOn ? '关闭语音' : '打开语音' }}
+      </button>
+      <button
+        v-if="showFallback"
+        type="button"
+        class="btn btn-ghost btn-small"
+        :disabled="capturing"
+        @click="useFallback"
+      >
         使用 PIN 登录
       </button>
     </div>
+    <p class="face-capture-footnote">
+      画面只在本机内存里处理，不会上传人脸照片。听不清或不会操作时，请点“使用 PIN 登录”，让家人帮忙也可以。
+    </p>
   </div>
 </template>
