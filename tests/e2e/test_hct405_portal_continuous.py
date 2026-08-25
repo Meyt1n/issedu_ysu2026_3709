@@ -7,12 +7,10 @@ Maps to acceptance-gate scenario ``vision_scan_to_manual_confirm``.
 
 from __future__ import annotations
 
-import hashlib
 import json
 
 import cv2
 import numpy as np
-import pytest
 from ai.vision.evidence_pipeline import EvidencePipelineRequest, issue_adapter_receipt
 from fastapi.testclient import TestClient
 
