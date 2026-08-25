@@ -5,10 +5,12 @@ from __future__ import annotations
 from app.config import Settings
 from app.search_providers import (
     DuckDuckGoHtmlProvider,
+    FixtureSearchProvider,
     SearXNGProvider,
     clear_search_cache,
     execute_web_search,
     get_search_provider,
+    is_fixture_search_provider,
     rank_search_results,
 )
 
@@ -58,8 +60,51 @@ def test_searxng_provider_parses_json_results(monkeypatch) -> None:
 def test_get_search_provider_selects_backend() -> None:
     duck = Settings(agent_web_search_provider="duckduckgo_html")
     searx = Settings(agent_web_search_provider="searxng")
+    fixture = Settings(agent_web_search_provider="fixture")
     assert isinstance(get_search_provider(duck), DuckDuckGoHtmlProvider)
     assert isinstance(get_search_provider(searx), SearXNGProvider)
+    assert isinstance(get_search_provider(fixture), FixtureSearchProvider)
+    assert is_fixture_search_provider(fixture) is True
+    assert is_fixture_search_provider(duck) is False
+
+
+def test_fixture_provider_serves_offline_teaching_results(monkeypatch) -> None:
+    """Fixture search must not construct any HTTP client and must self-label."""
+
+    class _NoNetwork:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("fixture provider must never open an HTTP client")
+
+    monkeypatch.setattr("app.search_providers.httpx.Client", _NoNetwork)
+    settings = Settings(
+        agent_web_search_provider="fixture",
+        agent_web_search_max_results=3,
+    )
+    results = FixtureSearchProvider().search("药箱 过期 存放", settings=settings)
+
+    assert results
+    assert len(results) <= 3
+    assert results[0]["url"] == "https://fixture.invalid/med-storage"
+    assert all(item["source"] == "teaching_fixture" for item in results)
+    assert all("教学夹具" in f"{item['title']}{item['snippet']}" for item in results)
+
+
+def test_fixture_provider_falls_back_to_generic_entries() -> None:
+    settings = Settings(agent_web_search_provider="fixture")
+    results = FixtureSearchProvider().search("zzz-no-overlap-zzz", settings=settings)
+    assert results, "demo queries should always show the reference layout"
+
+
+def test_fixture_execute_web_search_skips_rate_limit() -> None:
+    clear_search_cache()
+    settings = Settings(
+        agent_web_search_provider="fixture",
+        agent_web_search_cache_ttl_seconds=0,
+        agent_web_search_min_interval_seconds=30,
+    )
+    first = execute_web_search("第一次夹具查询", settings=settings)
+    second = execute_web_search("第二次夹具查询", settings=settings)
+    assert first and second
 
 
 def test_execute_web_search_delegates_to_provider(monkeypatch) -> None:

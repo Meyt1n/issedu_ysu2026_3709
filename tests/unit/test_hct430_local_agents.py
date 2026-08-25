@@ -220,6 +220,99 @@ def test_agent_catalog_reports_web_search_readiness() -> None:
     assert misconfigured["web_search_ready"] is False
 
 
+def test_agent_catalog_explains_unavailable_reason_and_enable_hint() -> None:
+    """The catalog must say why search is off and how to turn it on."""
+    disabled = get_agent_catalog(Settings())
+    assert disabled["web_search_unavailable_reason"] == "DEPLOYMENT_DISABLED"
+    assert "AGENT_WEB_SEARCH_ENABLED" in disabled["web_search_enable_hint"]
+    assert disabled["web_search_offline_fixture"] is False
+
+    egress_blocked = get_agent_catalog(Settings(
+        agent_web_search_enabled=True,
+        agent_web_search_allowed_domains="other.example",
+        agent_web_search_url="https://example.com/search",
+    ))
+    assert egress_blocked["web_search_unavailable_reason"] == "EGRESS_BLOCKED"
+    assert "AGENT_WEB_SEARCH_ALLOWED_DOMAINS" in egress_blocked["web_search_enable_hint"]
+
+    ready = get_agent_catalog(Settings(
+        agent_web_search_enabled=True,
+        agent_web_search_allowed_domains="example.com",
+        agent_web_search_url="https://example.com/search",
+    ))
+    assert ready["web_search_ready"] is True
+    assert ready["web_search_unavailable_reason"] == "OPT_IN_REQUIRED"
+
+    fixture = get_agent_catalog(Settings(
+        agent_web_search_enabled=True,
+        agent_web_search_provider="fixture",
+    ))
+    assert fixture["web_search_ready"] is True
+    assert fixture["web_search_offline_fixture"] is True
+    assert fixture["web_search_unavailable_reason"] == "OPT_IN_REQUIRED"
+    assert "教学夹具" in fixture["web_search_enable_hint"]
+
+
+def test_chat_stream_wraps_connection_errors_for_structured_degrade(monkeypatch) -> None:
+    """An unreachable Ollama must degrade, not crash the whole chat request."""
+    import httpx
+    import pytest as _pytest
+
+    from app.tool_call import OllamaClient
+
+    class _RefusingClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def stream(self, *_args, **_kwargs):
+            raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr("app.tool_call.httpx.Client", _RefusingClient)
+    stream = OllamaClient().chat_stream(
+        model="local-model",
+        messages=[{"role": "user", "content": "测试"}],
+    )
+    with _pytest.raises(RuntimeError, match="OLLAMA_UNAVAILABLE"):
+        list(stream)
+
+
+def test_web_search_agent_with_fixture_provider_stays_offline(monkeypatch) -> None:
+    """Dual opt-in with the fixture provider works without any egress."""
+
+    class _NoNetwork:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("fixture provider must never open an HTTP client")
+
+    monkeypatch.setattr("app.search_providers.httpx.Client", _NoNetwork)
+    from app.search_providers import clear_search_cache
+
+    clear_search_cache()
+    results, trace, safe_query = _web_search_agent(
+        "药箱里的药过期了怎么处理",
+        sensitive_values=[],
+        allow_network_search=True,
+        settings=Settings(
+            agent_web_search_enabled=True,
+            agent_web_search_provider="fixture",
+            agent_web_search_cache_ttl_seconds=0,
+        ),
+    )
+
+    assert results, "fixture provider should return teaching references"
+    assert trace["status"] == "completed"
+    assert trace["network_used"] is False
+    assert "教学夹具" in trace["summary"]
+    assert safe_query is not None
+    assert all(item["source"] == "teaching_fixture" for item in results)
+    assert all(item["domain"] == "fixture.invalid" for item in results)
+
+
 def test_plan_routes_agents_by_question_type() -> None:
     # Without a selected member the database step never widens its scope.
     plan = plan_agent_execution("MEDICATION_SAFETY", household_id=None, member_id=None)

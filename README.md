@@ -98,6 +98,29 @@ scripts/start.ps1 web
 
 `VISION_ADAPTER_SIGNING_KEY` 必须与 worker 的 `HCT_ADAPTER_SIGNING_KEY` 相同（示例均为 `dev-only-change-me`）。v5 尚未完成正式评估，输出只用于教学演示。
 
+### 可选：启用联网搜索与刷新知识库
+
+两项能力默认关闭/受限，详细步骤见[本地部署与 Demo 操作指南 §4.2/§4.3](docs/本地部署与Demo操作指南.md)。
+
+**联网搜索**（部署开关 + 每次请求勾选，双重开启）：在 `.env` 设置后重启 API，再到助手页勾选「补充联网参考」。
+
+```dotenv
+AGENT_WEB_SEARCH_ENABLED=true
+# 离线课堂演示（完全不出网）：
+AGENT_WEB_SEARCH_PROVIDER=fixture
+# 真实联网改为 duckduckgo_html 并配置 AGENT_WEB_SEARCH_ALLOWED_DOMAINS
+```
+
+外部结果只作为「外部参考（非本地审核证据）」展示，查询自动脱敏，健康数据不出网。
+
+**知识库刷新**（受控爬虫，永不 auto_ingest）：以 `demo-parent` 等知识管理员身份打开「知识文档」页，用「一键教学闭环：抓取 → 批准 → 晋升」，随后按页面提示执行 dry-run 入库；等价 CLI：
+
+```powershell
+uv run python scripts/crawl_knowledge_sources.py            # 抓取白名单夹具到 staging
+uv run python scripts/promote_knowledge_staging.py promote --actor-id knowledge-steward
+uv run python scripts/ingest_local_knowledge.py --manifest docs/knowledge/approved/incoming/正式知识清单.crawl.json --source-root docs/knowledge/approved --actor-id knowledge-steward --index-version approved-crawl-v1 --dry-run
+```
+
 ### 提交前检查
 
 ```powershell

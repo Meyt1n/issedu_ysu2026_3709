@@ -43,12 +43,21 @@
 - **正式知识：** `docs/knowledge/approved/` 提供脱敏说明书摘要接入路径与 example 清单，禁止 PDF 直接进入 `docs/demo`。
 - **持续更新：** 白名单爬虫按 `refresh_hours` 到期刷新 → staging 审核/拒绝 → 晋升 → dry-run 入库；API/Web/CI 默认仅夹具，远程需 CLI `--live`；`tests/unit/test_knowledge_crawl.py`。
 
+## 2026-08-25 增量（爬虫运营可发现性与权限引导）
+
+针对「用户不知道知识爬虫如何启用」的反馈补齐运营闭环，安全默认不变（API 强制离线夹具、永不 auto_ingest）：
+
+- **权限引导**：非 steward 访问 `/api/v1/knowledge/crawl/*` 仍返回 403 `KNOWLEDGE_STEWARD_REQUIRED`，但 Web 知识页现在显示明确的「需要知识管理员身份」引导（切换 `demo-parent`/`knowledge-steward`/`demo-*`，或配置 `KNOWLEDGE_ADMIN_ACTORS`），不再静默显示空列表；steward 判定新增 `.env` 的 `KNOWLEDGE_ADMIN_ACTORS` 名单（`src/api/app/routes.py::_require_knowledge_steward`）。
+- **一键教学闭环**：知识页新增「一键教学闭环：抓取 → 批准 → 晋升」按钮（仅处理本地夹具草稿），完成后展示可复制的 `ingest_local_knowledge.py --dry-run` 命令；正式入库仍须人工执行 dry-run。
+- **文档**：crawl README 新增「谁可以操作」权限表；本地部署指南新增 §4.3「如何刷新知识库」；README 新增快速短节。
+- 对应测试：`tests/unit/test_knowledge_crawl.py`（403 原因契约、`KNOWLEDGE_ADMIN_ACTORS` 放行）、`src/web/src/knowledge/crawlPanel.test.ts`（403 → 引导、待批草稿筛选、闭环摘要文案）。
+
 ## 测试证据
 
 - `tests/unit/test_hct401_knowledge.py`（含 IDF 负权重回归、覆盖度排序、章节分块定位三项新增用例）
 - `tests/unit/test_local_knowledge_ingest.py`（含仓库清单入库与主题检索断言）
 - `tests/unit/test_hct401_knowledge_gold.py`（金标集、同义词扩展、正式知识 example 哈希）
-- `tests/unit/test_knowledge_crawl.py`（白名单抓取、到期刷新、域名闸门、审核拒绝、晋升）
+- `tests/unit/test_knowledge_crawl.py`（白名单抓取、到期刷新、域名闸门、审核拒绝、晋升、403 原因契约、管理员名单放行）
 - `tests/unit/test_hct430_local_agents.py`（知识 agent 无命中/越权 trace 状态）
 - `tests/e2e/test_hct405_failure_degradation.py`
 - `tests/e2e/test_hct405_deletion_propagation.py`
