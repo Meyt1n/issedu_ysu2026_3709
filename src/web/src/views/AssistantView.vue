@@ -16,10 +16,12 @@ import {
   createSpeechRecognition,
   isSpeechInputSupported,
   isSpeechOutputSupported,
+  latestTranscriptFromEvent,
   speakText,
   stopSpeaking,
   transcriptAfterWakePhrase,
   transcriptFromEvent,
+  VOICE_RESTART_DELAY_MS,
   type SpeechRecognitionLike,
 } from '../assistant/voice'
 import AppIcon from '../components/AppIcon.vue'
@@ -386,14 +388,14 @@ function scheduleVoiceRecognition(sessionId: number): void {
     voiceRestartTimer = null
     if (sessionId !== voiceSessionId || voiceStopRequested || voiceFatalError || !listening.value) return
     startVoiceRecognition(sessionId)
-  }, 80)
+  }, VOICE_RESTART_DELAY_MS)
 }
 
 function startVoiceRecognition(sessionId: number): void {
   const nextRecognition = createSpeechRecognition('zh-CN', {
     continuous: true,
     interimResults: true,
-    maxAlternatives: 1,
+    maxAlternatives: 3,
   })
   if (!nextRecognition) {
     voiceFatalError = true
@@ -408,20 +410,30 @@ function startVoiceRecognition(sessionId: number): void {
   }
   nextRecognition.onresult = event => {
     if (sessionId !== voiceSessionId) return
+    // 唤醒看最新 interim 片段，降低“说完一整句才切 active”的延迟。
+    const latest = latestTranscriptFromEvent(event)
     const transcript = transcriptFromEvent(event)
-    if (!transcript) return
+    if (!latest && !transcript) return
 
     if (voiceMode.value === 'wake') {
-      if (!containsWakePhrase(transcript)) {
-        voicePreview.value = `正在聆听：${transcript}`
+      const wakeProbe = latest || transcript
+      if (!containsWakePhrase(wakeProbe) && !containsWakePhrase(transcript)) {
+        voicePreview.value = `正在聆听：${wakeProbe || transcript}`
         return
       }
       voiceMode.value = 'active'
+      // 唤醒瞬间清空预览前缀噪声，后续只保留提问内容。
+      voiceDraftPrefix = draft.value.trim() ? `${draft.value.trim()} ` : ''
     }
 
-    const spoken = containsWakePhrase(transcript)
-      ? transcriptAfterWakePhrase(transcript)
-      : transcript.trim()
+    const spokenSource = containsWakePhrase(transcript)
+      ? transcript
+      : containsWakePhrase(latest)
+        ? latest
+        : transcript
+    const spoken = containsWakePhrase(spokenSource)
+      ? transcriptAfterWakePhrase(spokenSource)
+      : spokenSource.trim()
     if (spoken) {
       // interimResults=true means this is intentionally updated before the
       // browser marks the utterance final; it never submits the message.
@@ -456,6 +468,11 @@ function startVoiceRecognition(sessionId: number): void {
     if (sessionId !== voiceSessionId) return
     if (recognition === nextRecognition) recognition = null
     if (!voiceStopRequested && !voiceFatalError && listening.value) {
+      // 浏览器识别会话结束后其结果列表会清空；把已写入的草稿折叠进前缀，
+      // 重启聆听时继续追加，而不是覆盖之前说过的内容。
+      if (voiceMode.value === 'active') {
+        voiceDraftPrefix = draft.value.trim() ? `${draft.value.trim()} ` : ''
+      }
       scheduleVoiceRecognition(sessionId)
     }
   }
@@ -484,6 +501,11 @@ function toggleVoiceInput(): void {
     return
   }
 
+  // 听说互斥：开始聆听前停止朗读，避免麦克风把合成语音写进草稿。
+  if (speakingIndex.value !== null) {
+    stopSpeaking()
+    speakingIndex.value = null
+  }
   voiceDraftPrefix = draft.value.trim() ? `${draft.value.trim()} ` : ''
   voicePreview.value = ''
   voiceStopRequested = false
@@ -500,6 +522,8 @@ function toggleSpeech(index: number, content: string): void {
     return
   }
   voiceError.value = ''
+  // 听说互斥：朗读回答前先停止语音输入，识别不会把播报内容当作提问。
+  if (listening.value) stopVoiceInput()
   const started = speakText(content, () => {
     if (speakingIndex.value === index) speakingIndex.value = null
   })
