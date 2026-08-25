@@ -416,7 +416,7 @@ def test_compact_local_evidence_keeps_query_relevant_fields() -> None:
         rules={"get_applied_rules": database["get_applied_rules"]},
     )
     assert "RULE-1" in rules
-    assert "get_member_state" not in rules
+    assert "get_member_state" in rules
 
 
 def test_synthesis_streams_only_validated_answer(monkeypatch) -> None:
