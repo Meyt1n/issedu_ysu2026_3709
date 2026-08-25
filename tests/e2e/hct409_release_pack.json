@@ -6,6 +6,7 @@
   "do_not_close_issue": true,
   "commands": {
     "api_perf": "uv run python scripts/hct409_api_perf.py",
+    "vision_perf": "uv run python scripts/hct440_vision_perf.py",
     "backend_tests": "uv run pytest",
     "safety_pack": "uv run pytest tests/safety tests/e2e/test_hct405_deletion_propagation.py tests/e2e/test_hct405_core_flows.py tests/e2e/test_hct405_failure_degradation.py",
     "secret_scan": "gitleaks detect (CI job Secret scan)",
@@ -25,6 +26,7 @@
     "tests/e2e/test_hct405_failure_degradation.py",
     "tests/e2e/test_hct405_deletion_propagation.py",
     "tests/unit/test_hct409_release_gate.py",
+    "tests/unit/test_hct440_vision_perf.py",
     "docs/reviews/hct409-risk-register.json",
     "docs/reviews/hct409-pip-audit-allowlist.json"
   ],
