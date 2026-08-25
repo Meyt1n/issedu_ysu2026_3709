@@ -28,6 +28,8 @@ from dataclasses import dataclass
 from threading import Event
 from typing import Any
 
+from ai.safety.seasonal_context import seasonal_care_context
+
 from app.config import Settings, get_settings
 from app.db import SessionLocal
 from app.egress_guard import is_web_search_egress_allowed
@@ -41,6 +43,7 @@ from app.tool_call import (
     _looks_like_knowledge_citation,
     _parse_assistant_output,
     _unmatched_source_tokens,
+    append_teaching_reminder,
     build_degrade_response,
     classify_question,
     degrade_result,
@@ -307,7 +310,13 @@ def _database_agent(
     names: list[str]
     if query_type == "RULE_EVIDENCE":
         names = ["get_applied_rules", "get_risk_alerts"]
-    elif query_type in {"MEDICATION_SAFETY", "MEDICATION_RECORD", "FAMILY_RECORD", "URGENT"}:
+    elif query_type in {
+        "MEDICATION_SAFETY",
+        "SYMPTOM_MEDICATION",
+        "MEDICATION_RECORD",
+        "FAMILY_RECORD",
+        "URGENT",
+    }:
         names = ["get_member_state", "get_health_events"]
     else:
         names = ["get_member_state"]
@@ -442,9 +451,13 @@ def _web_search_agent(
 
 def _compact_external_sources(results: list[dict[str, str]]) -> str:
     if not results:
-        return "无外部搜索结果；不要编造外部来源。"
+        return (
+            "无外部搜索结果；不要编造外部来源，也不要捏造「最近流行某某病毒」。"
+            "仍可用【季节情境】做换季、着凉等生活化共情。"
+        )
     lines = [
         "外部搜索结果仅供补充参考，不是已审核本地证据；不要在 sources 中引用它们，也不要输出网址。"
+        "若摘要提到季节性呼吸道/流感样情况，可用口语转述为「最近外面常见的提醒」，并说明仅供参考。"
     ]
     for idx, item in enumerate(results[:3], 1):
         snippet = (item.get("snippet") or "无摘要")[:80]
@@ -483,7 +496,7 @@ def _compact_local_evidence(
             for key in ("get_applied_rules", "get_risk_alerts")
             if key in database
         }
-    elif query_type in {"MEDICATION_SAFETY", "MEDICATION_RECORD"}:
+    elif query_type in {"MEDICATION_SAFETY", "SYMPTOM_MEDICATION", "MEDICATION_RECORD"}:
         selected = {
             key: database[key]
             for key in ("get_member_state", "get_health_events")
@@ -494,9 +507,14 @@ def _compact_local_evidence(
         if isinstance(state, dict) and isinstance(state.get("state"), dict):
             slim_state = dict(state)
             raw = state["state"]
+            preferred = (
+                ("allergies", "diseases", "drugs", "plans")
+                if query_type == "SYMPTOM_MEDICATION"
+                else ("drugs", "allergies", "plans", "diseases")
+            )
             slim_state["state"] = {
                 key: raw.get(key)
-                for key in ("drugs", "allergies", "plans", "diseases")
+                for key in preferred
                 if key in raw
             } or raw
             selected["get_member_state"] = slim_state
@@ -638,10 +656,19 @@ def _synthesis_agent(
         f"【问题类型：{query_type}】只输出最终 JSON，不要复述内部智能体名称。"
         "sources 只能引用 database_agent 返回的 sources 或 knowledge_agent 返回的 chunk_id。"
     )
-    if query_type == "MEDICATION_SAFETY":
+    if query_type == "SYMPTOM_MEDICATION":
+        routing_hint += (
+            "这是症状用药资料问题：以已审核知识卡为主，结合过敏史/疾病史说明；"
+            "家庭药箱不是前提。请结合【季节情境】共情换季/着凉等生活处境，语气亲切有温度；"
+            "若有联网参考，只能把近期季节性呼吸道提醒当补充参考，禁止编造具体病毒名或确诊。"
+            "不下诊断、不开个体处方、不写具体片数。"
+            f"\n{seasonal_care_context()}"
+        )
+    elif query_type == "MEDICATION_SAFETY":
         routing_hint += (
             "这是用药安全问题，必须以本地已审核知识片段为依据；如果没有知识片段，"
-            "明确说明无法判断，不得用外部搜索结果替代。"
+            "明确说明无法判断，不得用外部搜索结果替代。家庭药箱不是唯一依据。"
+            "语气关心但内容克制。"
         )
     synthesis_system = "\n\n".join([
         ASSISTANT_SYSTEM_PROMPT,
@@ -703,7 +730,7 @@ def _synthesis_agent(
         return degraded("CITATION_NOT_FOUND")
     if allowed_citations and not matched_citations:
         return degraded("EVIDENCE_REQUIRED")
-    if query_type == "MEDICATION_SAFETY" and not matched_citations:
+    if query_type in {"MEDICATION_SAFETY", "SYMPTOM_MEDICATION"} and not matched_citations:
         return degraded("EVIDENCE_REQUIRED")
     if any(token not in allowed_fact_sources for token in unknown_sources):
         return degraded("CITATION_NOT_FOUND")
@@ -712,7 +739,7 @@ def _synthesis_agent(
     escalated = parsed.escalate or query_type == "URGENT"
     result = {
         **base,
-        "answer": parsed.answer,
+        "answer": append_teaching_reminder(parsed.answer, query_type),
         "sources": [item["chunk_id"] for item in matched_citations] + fact_sources,
         "citations": matched_citations,
         "suggested_questions": suggest_follow_up_questions(messages, escalate=escalated),
@@ -964,7 +991,7 @@ def run_local_multi_agent(
 
     _ensure_active()
     if (
-        query_type == "MEDICATION_SAFETY"
+        query_type in {"MEDICATION_SAFETY", "SYMPTOM_MEDICATION"}
         and plan["knowledge"].run
         and not _knowledge_has_evidence(knowledge)
     ):

@@ -29,9 +29,13 @@ from ai.safety.lexicon import (
     FOLLOW_UP_RISK_TERMS,
     MEDICAL_BOUNDARY_TERMS,
     MEDICATION_SAFETY_ROUTE_TERMS,
+    SYMPTOM_CONTEXT_TERMS,
+    SYMPTOM_MEDICATION_INTENT_TERMS,
+    TEACHING_REMINDER,
     URGENT_ROUTE_TERMS,
     medical_boundary_hits,
 )
+from ai.safety.seasonal_context import seasonal_care_context
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlalchemy.orm import Session
 
@@ -66,26 +70,32 @@ _DEGRADE_TEMPLATE = """当前助手服务暂时不可用。您可以：
 ASSISTANT_SYSTEM_PROMPT = (
     "/no_think\n"
     "你是「家健镜」家庭健康助手，运行在家庭本地设备上，服务于家庭照护的教学演示。"
-    "首要任务是基于本轮已授权工具结果和已审核知识，直接、完整地回答用户问题。\n"
+    "首要任务是基于本轮已授权工具结果和已审核知识，直接、完整、有人情味地回答用户问题。\n"
     "不要逐条复述或检查这些规则，不要展示分析草稿或内部推理；尽快只输出最终 JSON。\n"
     "回答要求：\n"
-    "1. answer 必须是 1 至 6 句自然、完整的简体中文；绝不能只输出 hello、healthy、"
-    "cannot_answer、unknown、DIRECT、REFUSE 等标签，也不要复述内部路由名称。\n"
-    "2. 只依据系统消息中的本地事实、工具结果、规则结果与文档片段回答。资料不足时，"
-    "明确说明缺少哪项资料和可以去哪个本地页面核对，不能猜测或补造事实。\n"
-    "3. 用户问当前药品时，只列出已确认记录中明确出现的药名、规格等字段；如果只有"
-    "medication_added 事件但没有药名，就回答「存在已确认的用药记录，但当前证据未提供"
-    "药名和规格」。\n"
-    "4. 用户问症状时，不诊断疾病；可复述用户描述、提示记录发生时间和伴随情况，并建议"
-    "必要时联系医生。出现呼吸困难、意识异常、疑似中毒等紧急描述时 escalate=true。\n"
-    "5. 用户问药品能否同服、停药、换药或剂量时，必须先调用成员状态/用药记录工具，"
-    "再调用 retrieve_knowledge 查询已审核的本地药品文档；不自行判断，只解释已命中的确定性规则"
-    "或授权文档。没有对应知识片段就明确无法判断，并建议咨询医生或药师。\n"
-    "6. 普通问候要用简短中文正常回应；不得把问候误识别为健康结论。\n"
+    "1. answer 必须是 2 至 8 句自然、完整的简体中文，像家里靠谱长辈或照护伙伴在说话："
+    "先共情再给依据；绝不能只输出 hello、healthy、cannot_answer、unknown、DIRECT、REFUSE "
+    "等标签，也不要复述内部路由名称。\n"
+    "2. 只依据系统消息中的本地事实、工具结果、规则结果、文档片段，以及（若有）已授权联网参考。"
+    "资料不足时说明缺什么、去哪个本地页面核对，不能猜测或补造事实；尤其不要编造「正在流行的"
+    "具体病毒名称或病例数」。\n"
+    "3. 用户问「家里正在用哪些药 / 用药记录 / 扫描的药」时，只列出已确认记录中的药名与规格；"
+    "如果只有 medication_added 事件但没有药名，就说明证据未提供药名。\n"
+    "4. 用户问「感冒/发烧等症状该了解哪些常用药资料」时：优先 retrieve_knowledge，并调用 "
+    "get_member_state 核对过敏史与疾病史；结合系统给出的【季节情境】说一两句换季/受凉等生活提醒，"
+    "语气体贴。家庭药箱里的已确认药品若相关可一并提及，但不是作答前提。若有已授权联网参考提到"
+    "近期季节性呼吸道情况，可温和转述为「外面近期常见提醒」，并标明这只是参考不是确诊。"
+    "不得下诊断，不得写成「你必须吃某某药」的个体处方。\n"
+    "5. 用户问药品能否同服、停药、换药或个体剂量（一次吃多少、漏服补服等）时：先核对成员"
+    "过敏/疾病/已确认用药（如有），再 retrieve_knowledge；只解释已命中的规则或文档，"
+    "不自行决定是否同服、停换或具体片数。没有知识片段就明确无法判断并建议咨询医生或药师。\n"
+    "6. 普通问候要用简短中文正常、亲切地回应；不得把问候误识别为健康结论。\n"
     "7. 需要更多事实时优先调用白名单工具。sources 只能填写本轮工具结果真实提供的"
-    "事件 ID、规则编号或知识片段 ID；没有依据时使用空数组，禁止伪造引用。\n"
-    "8. 绝不做诊断、开处方、决定用药剂量或建议停药换药；不提供购买链接、问诊导流或外部网址。\n"
-    "9. 用温和、口语化的简体中文，先给依据再给解释，回答控制在 300 字以内。\n"
+    "事件 ID、规则编号或知识片段 ID；"
+    "联网参考不要写入 sources。没有依据时使用空数组，禁止伪造引用。\n"
+    "8. 绝不做诊断、开处方、决定个体用药剂量或建议停药换药；不提供购买链接、问诊导流或外部网址。\n"
+    "9. 用温和、口语化的简体中文，先关心处境再给依据，回答控制在 360 字以内。"
+    "症状用药类与用药安全类回答末尾由系统附加教学提醒，你不必重复粘贴提醒原文。\n"
     "10. 输出必须是一个 JSON 对象，且只有 JSON，格式："
     '{"answer": "回答正文", "sources": ["引用的依据标识"], '
     '"confidence": "high|medium|low", "escalate": false}。'
@@ -535,6 +545,7 @@ def _latest_user_query(messages: list[dict[str, Any]]) -> str:
 
 _QUESTION_TYPES = {
     "MEDICATION_SAFETY": "用药安全核对",
+    "SYMPTOM_MEDICATION": "症状用药资料解释",
     "MEDICATION_RECORD": "用药记录查询",
     "FAMILY_RECORD": "家庭健康档案查询",
     "RULE_EVIDENCE": "规则与证据查询",
@@ -546,9 +557,11 @@ _QUESTION_TYPES = {
 def classify_question(query: str) -> str:
     """Classify the latest question with a deterministic, local safety route.
 
-    This is a routing hint, not a medical conclusion.  High-risk medication
-    questions are intentionally routed to both member facts and approved
-    knowledge retrieval before Ollama is allowed to produce an answer.
+    This is a routing hint, not a medical conclusion.
+
+    * ``MEDICATION_SAFETY`` — individual dose / stop / switch / interaction.
+    * ``SYMPTOM_MEDICATION`` — “what medicine for a cold” style guidance from
+      approved knowledge + allergy/disease history (household formulary optional).
     """
     normalized = re.sub(r"\s+", "", query.casefold())
     if any(term in normalized for term in URGENT_ROUTE_TERMS):
@@ -559,9 +572,15 @@ def classify_question(query: str) -> str:
         return "MEDICATION_SAFETY"
     if any(term in normalized for term in MEDICATION_SAFETY_ROUTE_TERMS):
         return "MEDICATION_SAFETY"
+    medicine_intent = any(term in normalized for term in SYMPTOM_MEDICATION_INTENT_TERMS)
+    symptom_context = any(term in normalized for term in SYMPTOM_CONTEXT_TERMS)
+    if medicine_intent or (
+        symptom_context and any(term in normalized for term in ("药", "用药", "吃药"))
+    ):
+        return "SYMPTOM_MEDICATION"
     if any(term in normalized for term in (
-        "吃什么药", "正在用药", "在用药", "用药记录", "药品记录", "药品清单",
-        "扫描的药", "刚才扫描", "有哪些药", "药名", "用药",
+        "正在用药", "在用药", "用药记录", "药品记录", "药品清单",
+        "扫描的药", "刚才扫描", "有哪些药", "药名", "家里有什么药", "家庭药箱",
     )):
         return "MEDICATION_RECORD"
     if any(term in normalized for term in (
@@ -581,11 +600,20 @@ def question_type_label(query_type: str) -> str:
 
 
 def risk_notice_for_question(query_type: str) -> str | None:
-    if query_type == "MEDICATION_SAFETY":
-        return "用药安全信息仅用于核对本地记录和已审核资料，请务必咨询医生或药师。"
+    if query_type in {"MEDICATION_SAFETY", "SYMPTOM_MEDICATION"}:
+        return "用药相关说明仅供教学演示，请结合过敏史并咨询医生或药师；不能替代个体诊疗。"
     if query_type == "URGENT":
         return "如出现紧急症状，请及时联系医务人员；本助手不能替代紧急救治。"
     return None
+
+
+def append_teaching_reminder(answer: str, query_type: str) -> str:
+    """Append a fixed teaching disclaimer for medication-oriented answers."""
+    if query_type not in {"MEDICATION_SAFETY", "SYMPTOM_MEDICATION"}:
+        return answer
+    if "教学提醒" in answer:
+        return answer
+    return f"{answer.rstrip()}\n\n{TEACHING_REMINDER}"
 
 
 def is_loopback_ollama_url(url: str) -> bool:
@@ -1422,11 +1450,22 @@ def run_assistant(
         f"【本轮问题类型：{question_type_label(query_type)}】"
         "这是后端安全路由提示，不是需要复述给用户的内容。"
     )
-    if query_type == "MEDICATION_SAFETY":
+    if query_type == "SYMPTOM_MEDICATION":
         routing_hint += (
-            "必须先调用 get_member_state 或 get_health_events 获取已确认用药记录，"
-            "再调用 retrieve_knowledge 检索已审核药品文档；没有知识片段不得回答"
-            "能否同服、停药、换药或剂量。"
+            "优先调用 retrieve_knowledge 检索已审核症状/药品知识卡，并调用 "
+            "get_member_state 核对过敏史与疾病史。家庭已确认用药若与问题相关可补充说明，"
+            "但不是作答前提。请结合下方【季节情境】说得更贴近当下生活（换季、着凉、休息保暖等），"
+            "语气共情；若工具结果或系统未提供具体流行病毒信息，不要自行编造病毒名。"
+            "依据知识卡做一般性资料解释，不下诊断、不开个体处方、不写具体片数。"
+            "没有命中知识片段时说明资料不足并建议咨询医生或药师。"
+            f"\n{seasonal_care_context()}"
+        )
+    elif query_type == "MEDICATION_SAFETY":
+        routing_hint += (
+            "先调用 get_member_state 或 get_health_events 核对过敏/疾病/已确认用药（如有），"
+            "再调用 retrieve_knowledge。没有知识片段不得回答能否同服、停药、换药或个体剂量；"
+            "有知识片段时只解释文档与规则，不给出个体医嘱。家庭药箱不是唯一依据。"
+            "语气仍保持关心与口语化，但内容必须克制。"
         )
     elif query_type in {"MEDICATION_RECORD", "FAMILY_RECORD"}:
         routing_hint += (
@@ -1548,7 +1587,9 @@ def run_assistant(
         return degraded("CITATION_NOT_FOUND")
     if allowed_citations and not matched_citations:
         return degraded("EVIDENCE_REQUIRED")
-    if query_type == "MEDICATION_SAFETY" and not matched_citations:
+    # Symptom guidance and high-risk medication questions need reviewed
+    # knowledge citations.  Household formulary / event IDs are optional.
+    if query_type in {"MEDICATION_SAFETY", "SYMPTOM_MEDICATION"} and not matched_citations:
         return degraded("EVIDENCE_REQUIRED")
     if any(token not in allowed_fact_sources for token in unknown_sources):
         return degraded("CITATION_NOT_FOUND")
@@ -1558,7 +1599,7 @@ def run_assistant(
     ]
     escalated = parsed.escalate or query_type == "URGENT"
     return {
-        "answer": parsed.answer,
+        "answer": append_teaching_reminder(parsed.answer, query_type),
         "sources": [item["chunk_id"] for item in matched_citations] + fact_sources,
         "citations": matched_citations,
         "suggested_questions": suggest_follow_up_questions(
