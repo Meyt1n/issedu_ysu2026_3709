@@ -447,6 +447,24 @@ def capabilities() -> CapabilityResponse:
     else:
         unavailable.append("face-recognition-local")
     cfg = get_settings()
+    # HCT-201: the teaching-demo master data (INTERNAL_TEACHING_DEMO scope) is
+    # available only when an operator approved a version whose checked snapshot
+    # actually loads.  The formal released drug set stays UNRELEASED until
+    # scripts/hct201_fixed_set_gate.py passes with real approval evidence, so
+    # it is declared unavailable unconditionally here (fail-closed honesty).
+    teaching_master_ready = any(
+        load_master_data_snapshot(
+            version,
+            root=Path(settings.master_data_root),
+            approved_versions=settings.master_data_approved_version_set,
+        ).available
+        for version in settings.master_data_approved_version_set
+    )
+    if teaching_master_ready:
+        available.append("master-data-teaching-demo")
+    else:
+        unavailable.append("master-data-teaching-demo")
+    unavailable.append("hct201-formal-drug-set")
     return CapabilityResponse(
         phase="P0-foundation",
         available=available,

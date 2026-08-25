@@ -5,7 +5,11 @@ committed) in the checked ``hct-master-data/v1`` format with a canonical
 SHA-256, so ``load_master_data_snapshot`` accepts it once the version is
 approved via ``MASTER_DATA_APPROVED_VERSIONS=demo-cn-en-v1``.
 
-The records are synthetic teaching data (no real product master data).
+The records are synthetic teaching data (no real product master data).  The
+snapshot carries machine-readable INTERNAL_TEACHING_DEMO scope markers from
+``docs/data/HCT-201-教学演示批准范围-V1.md``: it may power local teaching
+demos, but it is not — and must never be registered as — the formal HCT-201
+released drug set, which stays UNRELEASED until the fixed-set gate passes.
 
 Usage:
     uv run python scripts/setup_vision_demo.py
@@ -19,6 +23,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SNAPSHOT_DIR = REPO_ROOT / "data" / "master-data"
 VERSION = "demo-cn-en-v1"
+APPROVAL_REF = "docs/data/HCT-201-教学演示批准范围-V1.md"
 
 RECORDS = [
     {
@@ -67,12 +72,22 @@ def canonical(payload: dict) -> bytes:
     ).encode("utf-8")
 
 
-def main() -> None:
+def build_snapshot() -> dict:
+    """Build the teaching-demo snapshot with its canonical SHA-256.
+
+    The extra ``approval_scope`` / ``*_eligible`` keys are honest scope
+    markers (they participate in the hash): this snapshot is approved for
+    INTERNAL_TEACHING_DEMO only and can never satisfy the formal HCT-201
+    fixed-set gate.
+    """
     snapshot = {
         "schema_version": "hct-master-data/v1",
         "version": VERSION,
         "approval_status": "APPROVED",
-        "approval_ref": "docs/demo/受控演示知识说明（教学合成数据）",
+        "approval_scope": "INTERNAL_TEACHING_DEMO",
+        "formal_release_eligible": False,
+        "production_eligible": False,
+        "approval_ref": APPROVAL_REF,
         "revocation_status": "ACTIVE",
         "records": RECORDS,
         "interactions": [
@@ -87,13 +102,24 @@ def main() -> None:
         ],
     }
     snapshot["sha256"] = hashlib.sha256(canonical(snapshot)).hexdigest()
+    return snapshot
 
-    SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
-    target = SNAPSHOT_DIR / f"{VERSION}.json"
+
+def write_snapshot(target_dir: Path) -> Path:
+    snapshot = build_snapshot()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / f"{VERSION}.json"
     target.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+    return target
+
+
+def main() -> None:
+    target = write_snapshot(SNAPSHOT_DIR)
+    snapshot = json.loads(target.read_text(encoding="utf-8"))
     print(f"master-data snapshot written: {target}")
     print(f"records: {len(RECORDS)} · sha256: {snapshot['sha256'][:16]}…")
     print()
+    print("该快照仅限教学演示（INTERNAL_TEACHING_DEMO），不是 HCT-201 正式药品集。")
     print("启动后端时需要批准该版本（示例）：")
     print('  $env:MASTER_DATA_APPROVED_VERSIONS = "demo-cn-en-v1"')
 

@@ -196,6 +196,36 @@ Web Demo 可直接演示同一流程：
 
 Windows 本地开发代理固定使用 `127.0.0.1`，避免 `localhost` 解析为 IPv6 而 API 仅监听 IPv4。API 启动脚本和容器必须同时包含 `src/api` 与 `src` 的 Python 导入路径，否则质量模块无法加载。
 
+### 4.2 HCT-201 教学演示主数据（INTERNAL_TEACHING_DEMO）
+
+药品主数据分两条完全独立的路径，演示与文档必须诚实区分：
+
+- **教学演示路径（可开启）**：合成主数据 `demo-cn-en-v1`，批准范围为
+  [HCT-201 教学演示批准范围 V1](data/HCT-201-教学演示批准范围-V1.md)（`INTERNAL_TEACHING_DEMO`，
+  `formal_release_eligible: false`）。快照内容全部为合成教学数据，无真实药品来源。
+- **正式药品集（仍 UNRELEASED）**：`scripts/hct201_fixed_set_gate.py` 保持 fail-closed；在来源授权、
+  真实实体/会话分组、fixed/unknown/conflict 冻结、删除演练与 R3 复核证据齐备前，任何人不得把教学
+  范围或隔离候选登记为正式发布集。
+
+开启教学演示路径（默认关闭，fail-closed）：
+
+```bash
+# 1. 生成合成教学快照（写入 data/master-data/demo-cn-en-v1.json，该目录不入库）
+uv run python scripts/setup_vision_demo.py
+
+# 2. 在 .env 中批准该版本（Compose 会把变量透传给 api 容器，
+#    并把 ./data/master-data 以只读方式挂载进容器）
+# MASTER_DATA_APPROVED_VERSIONS=demo-cn-en-v1
+
+# 3. 重启 API / 重新执行 up 后验证：
+curl http://localhost:8000/api/v1/meta/capabilities
+```
+
+`/api/v1/meta/capabilities` 会诚实反映两条路径：教学快照已批准且校验通过时 `available` 包含
+`master-data-teaching-demo`；`hct201-formal-drug-set` 始终在 `unavailable`，直到正式门禁以真实证据
+通过。快照的加载校验（版本白名单、schema、SHA-256、批准/撤销状态）不会因教学范围放宽；识别候选
+仍必须人工确认后才能入档。
+
 ## 5. 后续必须补齐
 
 - 正式 Ollama 业务工具、输出 Schema、模型登记、GPU/CPU 和模型权重哈希；

@@ -43,6 +43,13 @@ $env:NO_PROXY = "127.0.0.1,localhost"
 ```
 
 启动 API 时同样带上 `MASTER_DATA_APPROVED_VERSIONS`。若使用 `.env`，把该行写进去后重启后端。
+Docker Compose 部署同样支持：api 服务会透传 `.env` 中的 `MASTER_DATA_APPROVED_VERSIONS`
+并以只读方式挂载 `./data/master-data`，先在宿主机生成快照再 `up` 即可。
+
+> 诚实边界：`demo-cn-en-v1` 是 `INTERNAL_TEACHING_DEMO` 批准范围内的合成教学主数据
+> （见 [HCT-201 教学演示批准范围](../../data/HCT-201-教学演示批准范围-V1.md)）。
+> HCT-201 正式药品集仍为 UNRELEASED，`/api/v1/meta/capabilities` 中
+> `hct201-formal-drug-set` 恒为 unavailable，直到正式门禁以真实证据通过。
 
 可选 YOLO（仓库外权重，自行填写绝对路径）：
 
