@@ -78,3 +78,18 @@
 
 - 助手多会话为标签页本地能力（sessionStorage），关闭标签页即清空；不提供跨设备会话同步（本地优先边界）。
 - 3D 效果为 CSS/SVG 实现的轻量深度感，不是真实 3D 渲染。
+
+## 验证记录（2026-08-25，本分支 `cursor/hct450-screenshot-ui-fixes-6901`）
+
+- `npm run check:web`：通过（tsc 无错误）。
+- `npm run test:web`：通过（23 个文件 / 158 个用例，含 `chatSession` 多会话新增单测）。
+- `npm run build:web`：通过（Vite 产物正常，助手页 chunk 59.2 kB gzip 21.5 kB）。
+- `npx playwright test`（合成 API）：37 通过 / 6 跳过（需真实后端的 `hct405-real-api`、`local-api-smoke`）/ 2 失败。
+  两个失败用例（`hct418` 的「扫描质量门控到人工确认」与「空数据、未授权和服务异常都显示恢复入口」）在
+  `origin/master`（dfee711）上以完全相同的方式失败——期望文案「确认候选」「需要先填写开发身份」与现有页面
+  文案「确认保存」「此操作需要正式账号会话」漂移，属 PR #450/#452 回退遗留，与本 Story 改动无关，未在本
+  Story 范围内私自改测试语义，留待维护者裁决。
+- 回归修复：助手页全幅化后，`.view-container > *` 的卡片入场动画（`translateY(14px)`）会在入场期间于裁剪
+  容器内产生 14px 纵向滚动溢出，导致 `hct418`「纵向滚动收进视口内容区」用例在动画窗口内测量时失败；已为
+  `.view-container.view-assistant > *` 豁免卡片入场（页面级过渡仍在），用例恢复通过。
+- `git diff --check`：通过（无空白错误）。
