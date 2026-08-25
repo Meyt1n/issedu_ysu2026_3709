@@ -107,7 +107,7 @@ from app.file_upload import (
     validate_magic,
     validate_size,
 )
-from app.knowledge import KnowledgeDocument
+from app.knowledge import KnowledgeDocument, RetrievalQuery
 from app.local_agents import get_agent_catalog, run_local_multi_agent
 from app.models import (
     AccessAudit,
@@ -180,6 +180,7 @@ from app.schemas import (
     HouseholdUpdate,
     KnowledgeDocumentCreate,
     KnowledgeDocumentRead,
+    KnowledgeQueryAuditRead,
     KnowledgeRetrieveRequest,
     KnowledgeRetrieveResponse,
     MemberAccountBindingUpdate,
@@ -3112,6 +3113,34 @@ def retrieve_knowledge(
             degraded=True,
             degrade_reason=reason,
         )
+
+
+@router.get("/knowledge/query-audit", response_model=list[KnowledgeQueryAuditRead])
+def list_knowledge_query_audit(
+    limit: int = Query(default=50, ge=1, le=100),
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> list[KnowledgeQueryAuditRead]:
+    """Return only the caller's privacy-safe retrieval audit summaries."""
+    entries = session.scalars(
+        select(RetrievalQuery)
+        .where(RetrievalQuery.actor_id == actor_id)
+        .order_by(RetrievalQuery.created_at.desc())
+        .limit(limit)
+    ).all()
+    return [
+        KnowledgeQueryAuditRead(
+            id=entry.id,
+            query_digest=entry.query_digest,
+            query_length=entry.query_length,
+            household_id=entry.household_id,
+            member_id=entry.member_id,
+            returned_count=entry.returned_count,
+            top_chunk_count=len(entry.top_chunk_ids or []),
+            created_at=entry.created_at,
+        )
+        for entry in entries
+    ]
 
 
 @router.delete("/knowledge/documents/{doc_id}")

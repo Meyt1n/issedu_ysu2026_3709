@@ -739,6 +739,21 @@ class KnowledgeRetrieveResponse(BaseModel):
     degrade_reason: str | None = None
 
 
+class KnowledgeQueryAuditRead(BaseModel):
+    """Minimal actor-scoped retrieval audit; never returns query text."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    query_digest: str = Field(min_length=64, max_length=64)
+    query_length: int = Field(ge=0)
+    household_id: str | None = None
+    member_id: str | None = None
+    returned_count: int = Field(ge=0)
+    top_chunk_count: int = Field(ge=0)
+    created_at: datetime
+
+
 # ── HCT-403: Ollama tool calling schemas ────────────────────────────
 
 

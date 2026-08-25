@@ -8,6 +8,7 @@ import json
 import logging
 import math
 import re
+import unicodedata
 from collections import Counter
 from datetime import UTC, datetime
 
@@ -69,7 +70,11 @@ class RetrievalQuery(Base):
     __tablename__ = "retrieval_query"
 
     id = Column(String(36), primary_key=True, default=new_id)
-    query_text = Column(Text, nullable=False)
+    # HCT-442: query text is intentionally not retained.  Keep the nullable
+    # legacy column so the migration can redact historical rows in place.
+    query_text = Column(Text, nullable=True)
+    query_digest = Column(String(64), nullable=False, index=True)
+    query_length = Column(Integer, nullable=False, default=0)
     actor_id = Column(String(120), nullable=False)
     household_id = Column(String(36), nullable=True)
     member_id = Column(String(36), nullable=True)
@@ -118,6 +123,18 @@ def _tf(text: str) -> dict[str, int]:
 
 def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def query_audit_fingerprint(query_text: str) -> tuple[str, int]:
+    """Return a stable, non-reversible audit digest and normalized length.
+
+    Unicode compatibility normalization and whitespace folding make harmless
+    formatting differences correlate without retaining the user's health
+    question.  The digest is not used as an authorization token.
+    """
+
+    normalized = " ".join(unicodedata.normalize("NFKC", query_text).split())
+    return _content_hash(normalized), len(normalized)
 
 
 # ── Permission check ───────────────────────────────────────────────────
@@ -325,8 +342,11 @@ def log_query(
     top_chunk_ids: list | None = None,
     returned_count: int = 0,
 ) -> RetrievalQuery:
+    digest, query_length = query_audit_fingerprint(query_text)
     entry = RetrievalQuery(
-        query_text=query_text[:1000],
+        query_text=None,
+        query_digest=digest,
+        query_length=query_length,
         actor_id=actor_id,
         household_id=household_id,
         member_id=member_id,
