@@ -266,4 +266,60 @@ describe('请求回执追踪与超时区分（MOB-144）', () => {
     expect(body).not.toMatch(/audio|microphone|media/i)
     expect(reply.answer).toContain('受约束')
   })
+
+  it('assistantChatStream 解析 SSE status/token/done，并支持取消', async () => {
+    let url = ''
+    let accept = ''
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('event: status\ndata: {"phase":"routing"}\n\n'))
+        controller.enqueue(encoder.encode('event: token\ndata: {"token":"本地"}\n\n'))
+        controller.enqueue(
+          encoder.encode(
+            'event: done\ndata: {"response":{"answer":"本地回答","sources":[],"confidence":"low","escalate":false,"degraded":false,"query_type":"GENERAL","agent_trace":[{"agent_id":"router","role":"路由","status":"completed","local":true,"network_used":false}]}}\n\n',
+          ),
+        )
+        controller.close()
+      },
+    })
+    const phases: string[] = []
+    const tokens: string[] = []
+    const client = new ApiClient({
+      baseUrl: 'http://192.168.1.8:8000',
+      fetcher: async (input, init) => {
+        url = String(input)
+        accept = new Headers(init?.headers).get('Accept') ?? ''
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'text/event-stream' }),
+          body: stream,
+          text: async () => '',
+        } as unknown as Response
+      },
+    })
+
+    const reply = await client.assistantChatStream(
+      {
+        messages: [{ role: 'user', content: '你好' }],
+        agent_mode: 'multi_agent',
+        allow_network_search: false,
+      },
+      {
+        onStatus: (phase) => phases.push(phase),
+        onToken: (token) => tokens.push(token),
+      },
+      'hh-1',
+      'm-1',
+    )
+
+    expect(url).toContain('/api/v1/assistant/chat/stream')
+    expect(url).toContain('household_id=hh-1')
+    expect(accept).toBe('text/event-stream')
+    expect(phases).toEqual(['routing'])
+    expect(tokens).toEqual(['本地'])
+    expect(reply.answer).toBe('本地回答')
+    expect(reply.agent_trace?.[0]?.agent_id).toBe('router')
+  })
 })

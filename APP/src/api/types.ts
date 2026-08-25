@@ -183,6 +183,25 @@ export interface AssistantCitation {
   locator?: string | null
 }
 
+export interface AssistantAgentTrace {
+  agent_id: string
+  role: string
+  status: string
+  local: boolean
+  network_used: boolean
+  duration_ms?: number
+  summary?: string
+  source_count?: number
+}
+
+export interface AssistantExternalSource {
+  title: string
+  url: string
+  snippet?: string
+  domain?: string
+  source?: string
+}
+
 export interface AssistantResponse {
   answer: string
   sources: string[]
@@ -196,4 +215,11 @@ export interface AssistantResponse {
   route?: string | null
   query_type?: string | null
   risk_notice?: string | null
+  orchestration_mode?: 'single' | 'multi_agent' | null
+  orchestration_id?: string | null
+  all_agents_local?: boolean
+  network_used?: boolean
+  network_query?: string | null
+  agent_trace?: AssistantAgentTrace[]
+  external_sources?: AssistantExternalSource[]
 }
