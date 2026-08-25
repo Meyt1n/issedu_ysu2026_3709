@@ -273,7 +273,10 @@ onMounted(() => void loadTasks())
         <h2 class="hero-greeting">人工复核中心</h2>
         <p class="hero-sub">
           成员提交的药盒照片会在这里排队。对照原图确认药品名称和用法后，才会写入家庭健康记录。
-          当前登录 <strong>{{ session.actorId }}</strong> · 用途 {{ session.accessPurpose || '未填' }}。
+        </p>
+        <p class="hero-sub review-session-meta">
+          当前登录 <strong>{{ session.actorId }}</strong>
+          · 用途 <strong>{{ session.accessPurpose || '未填' }}</strong>
         </p>
       </div>
       <div class="review-hero-actions">

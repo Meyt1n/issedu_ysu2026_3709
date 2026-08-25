@@ -61,14 +61,14 @@ const stepStates = computed(() => {
     return [
       { label: '选照片', state: hasFile ? 'done' : 'current' },
       {
-        label: '看看清不清楚',
+        label: '看清不清楚',
         state: passed ? 'done' : flow === 'checking' ? 'current' : hasFile ? 'current' : 'idle',
       },
       {
         label: '交给家人',
         state: flow === 'queued' ? 'done' : passed ? 'current' : 'idle',
       },
-      { label: '等家人确认', state: 'idle' },
+      { label: '等确认', state: 'idle' },
     ]
   }
   return [
@@ -78,10 +78,10 @@ const stepStates = computed(() => {
       state: passed ? 'done' : flow === 'checking' ? 'current' : hasFile ? 'current' : 'idle',
     },
     {
-      label: '创建识别任务',
+      label: '创建任务',
       state: flow === 'queued' ? 'done' : passed ? 'current' : 'idle',
     },
-    { label: '人工复核后入档', state: 'idle' },
+    { label: '复核入档', state: 'idle' },
   ]
 })
 
@@ -254,7 +254,7 @@ watch(() => [props.actorId, props.memberId, props.accessPurpose], () => {
             ? (
               state === 'idle' ? '还没选照片'
               : state === 'ready' ? '还没检查'
-              : state === 'checking' ? '正在看清不清楚'
+              : state === 'checking' ? '正在检查'
               : state === 'retake' ? '请重新拍'
               : state === 'passed' ? '照片可以了'
               : state === 'queueing' ? '正在提交'

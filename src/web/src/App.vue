@@ -420,6 +420,7 @@ onBeforeUnmount(() => {
           </div>
           <span
             class="identity-chip"
+            :class="{ admin: session.portal === 'admin' }"
             :title="session.portal === 'admin'
               ? `${currentHouseholdLabel} · ${session.actorId} · 用途 ${session.accessPurpose || '未填'}`
               : `${currentHouseholdLabel} · 当前成员`"
@@ -427,7 +428,7 @@ onBeforeUnmount(() => {
             <AppIcon name="members" :size="16" />
             <span class="identity-person">
               <strong>{{ currentMemberLabel }}</strong>
-              <small v-if="session.portal === 'admin'">
+              <small v-if="session.portal === 'admin'" class="identity-admin-meta">
                 {{ session.actorId }} · {{ session.isOwnerView ? '可管授权' : '仅授权范围' }} · {{ session.accessPurpose || '未填用途' }}
               </small>
               <small v-else>当前家庭成员</small>

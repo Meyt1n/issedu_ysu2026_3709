@@ -471,27 +471,35 @@ button:focus-visible, a:focus-visible {
   border-radius: 999px;
   box-shadow: inset 0 1px 0 var(--glass-highlight);
   display: inline-flex;
+  flex: 0 1 auto;
   font-size: 13px;
   font-weight: 600;
   gap: 8px;
+  max-width: min(100%, 420px);
+  min-width: 0;
   padding: 6px 8px 6px 14px;
+}
+
+.identity-chip.admin {
+  border-radius: 18px;
 }
 
 .identity-person {
   display: grid;
-  gap: 1px;
-  line-height: 1.15;
+  flex: 1 1 auto;
+  gap: 2px;
+  line-height: 1.2;
   min-width: 0;
 }
 
 .identity-person strong {
-  max-width: 110px;
+  max-width: 160px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.identity-person small {
+.identity-person > small:not(.identity-admin-meta) {
   color: var(--ink-faint);
   font-size: 10.5px;
   font-weight: 500;
@@ -501,12 +509,27 @@ button:focus-visible, a:focus-visible {
   white-space: nowrap;
 }
 
+.identity-admin-meta {
+  color: var(--ink-faint);
+  display: block;
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.35;
+  max-width: 240px;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: unset;
+  white-space: normal;
+}
+
 .identity-chip .role-tag {
   background: var(--pine-tint);
   border-radius: 999px;
   color: var(--pine-deep);
+  flex: 0 0 auto;
   font-size: 11.5px;
   padding: 3px 9px;
+  white-space: nowrap;
 }
 
 .identity-chip .role-tag.caregiver { background: var(--sky-tint); color: var(--sky); }
@@ -535,6 +558,7 @@ button:focus-visible, a:focus-visible {
   min-height: 0;
   margin: 0 auto;
   max-width: 1180px;
+  overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 30px 34px 46px;
@@ -605,7 +629,9 @@ button:focus-visible, a:focus-visible {
   color: var(--ink-faint);
   flex: 0 0 auto;
   font-size: 12.5px;
+  line-height: 1.55;
   margin-top: auto;
+  overflow-wrap: anywhere;
   padding: 18px 34px 26px;
   text-align: center;
 }
@@ -634,9 +660,15 @@ button:focus-visible, a:focus-visible {
   gap: 14px;
   justify-content: space-between;
   margin-bottom: 18px;
+  min-width: 0;
 }
 
-.card-heading .heading-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 9px; }
+.card-heading > div:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.card-heading .heading-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 9px; flex: 0 1 auto; }
 
 .eyebrow {
   color: var(--clay);
@@ -654,7 +686,7 @@ button:focus-visible, a:focus-visible {
 
 .card-note { color: var(--ink-soft); font-size: 13.5px; line-height: 1.65; margin: 8px 0 0; }
 
-.page-hero { display: grid; gap: 6px; }
+.page-hero { display: grid; gap: 6px; min-width: 0; }
 
 .page-hero .hero-greeting {
   font-family: var(--font-display);
@@ -662,9 +694,16 @@ button:focus-visible, a:focus-visible {
   font-weight: 700;
   letter-spacing: 0.5px;
   margin: 0;
+  overflow-wrap: anywhere;
 }
 
-.page-hero .hero-sub { color: var(--ink-soft); font-size: 14.5px; margin: 0; }
+.page-hero .hero-sub {
+  color: var(--ink-soft);
+  font-size: 14.5px;
+  line-height: 1.55;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
 
 /* ---------- 状态胶囊 ---------- */
 
@@ -940,8 +979,8 @@ button:focus-visible, a:focus-visible {
   transform: translateY(-1.5px);
 }
 
-.row-card .row-top { align-items: center; display: flex; flex-wrap: wrap; gap: 9px; justify-content: space-between; }
-.row-card .row-title { align-items: center; display: flex; flex-wrap: wrap; gap: 9px; font-size: 14.5px; font-weight: 700; }
+.row-card .row-top { align-items: center; display: flex; flex-wrap: wrap; gap: 9px; justify-content: space-between; min-width: 0; }
+.row-card .row-title { align-items: center; display: flex; flex: 1 1 auto; flex-wrap: wrap; gap: 9px; font-size: 14.5px; font-weight: 700; min-width: 0; overflow-wrap: anywhere; }
 .row-card .row-meta { color: var(--ink-soft); font-size: 12.8px; line-height: 1.6; overflow-wrap: anywhere; }
 .row-card .row-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; }
 
@@ -1365,7 +1404,10 @@ button:focus-visible, a:focus-visible {
   font-size: 12.5px;
   font-weight: 650;
   gap: 7px;
+  line-height: 1.3;
+  max-width: 100%;
   padding: 6px 13px;
+  white-space: normal;
 }
 
 .step-chip.done { background: var(--pine-tint); color: var(--pine-deep); }
@@ -4128,8 +4170,10 @@ button:focus-visible, a:focus-visible {
 .review-hero-actions {
   align-items: end;
   display: flex;
+  flex: 0 1 auto;
   flex-wrap: wrap;
   gap: 12px 16px;
+  min-width: 0;
 }
 
 .review-all-toggle {
@@ -4173,6 +4217,11 @@ button:focus-visible, a:focus-visible {
 
 .review-task-meta { margin: 0; }
 
+.review-session-meta {
+  font-size: 13px !important;
+  margin-top: 4px !important;
+}
+
 .review-task-member {
   color: var(--clay);
   font-weight: 600;
@@ -4187,10 +4236,21 @@ button:focus-visible, a:focus-visible {
   border: 1.5px solid var(--glass-border);
   border-radius: 9px;
   margin: 0;
+  min-width: 0;
   padding: 10px 12px;
 }
 
-.review-candidate-copy { display: grid; gap: 2px; }
+.review-candidate-copy {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 2px;
+  min-width: 0;
+}
+
+.review-candidate-copy strong,
+.review-candidate-copy span {
+  overflow-wrap: anywhere;
+}
 
 .review-meta-details summary {
   color: var(--ink-soft);
@@ -4206,6 +4266,30 @@ button:focus-visible, a:focus-visible {
 .review-settled-row .row-title { align-items: center; display: inline-flex; flex-wrap: wrap; gap: 8px; }
 
 .member-pending-card { margin-bottom: 18px; }
+
+.auth-grant-pair {
+  align-items: center;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.auth-actor-id {
+  background: var(--paper-deep);
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  font-weight: 600;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  padding: 1px 6px;
+}
+
+.mono-wrap {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 
 .member-pending-intro {
   color: var(--ink-soft);
@@ -4518,8 +4602,18 @@ button:focus-visible, a:focus-visible {
   .nav-item { font-size: 13px; padding: 8px 11px; white-space: nowrap; }
 
   .topbar { flex-wrap: wrap; padding: 12px 18px; }
+  .topbar-side { max-width: 100%; }
+  .identity-chip {
+    max-width: 100%;
+  }
+  .identity-admin-meta {
+    max-width: 200px;
+  }
   .view-container { padding: 20px 18px 40px; }
+  .app-footer { padding: 14px 18px 20px; }
   .chat-bubble { max-width: 92%; }
+  .member-quick-grid { grid-template-columns: 1fr; }
+  .page-hero .hero-greeting { font-size: 26px; }
 }
 
 /* 短视口、系统缩放或浏览器缩放后的紧凑档；不改变页面信息层级。 */
@@ -4650,15 +4744,25 @@ button:focus-visible, a:focus-visible {
 .member-capture-status { margin-top: 18px; }
 .member-status-list { display: grid; gap: 10px; }
 .member-status-row {
-  align-items: center;
+  align-items: flex-start;
   background: var(--card-soft);
   border: 1px solid var(--glass-border);
   border-radius: 14px;
   display: flex;
   gap: 12px;
+  min-width: 0;
   padding: 12px 14px;
 }
-.member-status-row > span:last-child { display: grid; gap: 3px; }
+.member-status-row > span:last-child {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 3px;
+  min-width: 0;
+}
+.member-status-row strong,
+.member-status-row small {
+  overflow-wrap: anywhere;
+}
 .member-status-row small { color: var(--ink-soft); }
 .member-status-icon {
   align-items: center;

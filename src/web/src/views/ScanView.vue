@@ -247,7 +247,7 @@ onBeforeUnmount(() => {
           归属成员：{{ task.member_id ? memberNameById.get(task.member_id) ?? task.member_id : '未指定' }} ·
           创建于 {{ formatDateTime(task.created_at) }} · 文件 {{ task.file_id }}
         </p>
-        <p class="row-meta" style="margin: 0; font-family: ui-monospace, monospace; font-size: 12px">
+        <p class="row-meta mono-wrap" style="margin: 0; font-family: ui-monospace, monospace; font-size: 12px">
           任务编号 {{ task.id }} · 提交者 {{ task.created_by }} · 用途 {{ session.accessPurpose || '未填' }}
         </p>
         <p v-if="task.status === 'queued'" class="row-meta" style="margin: 0">

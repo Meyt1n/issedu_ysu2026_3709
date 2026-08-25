@@ -379,9 +379,11 @@ onMounted(() => {
             <li v-for="authorization in authorizations" :key="authorization.id" class="row-card">
               <div class="row-top">
                 <span class="row-title">
-                  {{ memberNames.get(authorization.member_id) ?? '已授权成员' }}
-                  <AppIcon name="arrow-right" :size="14" style="color: var(--ink-faint)" />
-                  {{ authorization.grantee_actor_id }}
+                  <span class="auth-grant-pair">
+                    {{ memberNames.get(authorization.member_id) ?? '已授权成员' }}
+                    <AppIcon name="arrow-right" :size="14" style="color: var(--ink-faint)" />
+                    <code class="auth-actor-id">{{ authorization.grantee_actor_id }}</code>
+                  </span>
                 </span>
                 <span class="pill" :class="grantStatus(authorization).tone">{{ grantStatus(authorization).label }}</span>
               </div>
