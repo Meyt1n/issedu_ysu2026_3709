@@ -83,15 +83,19 @@ from app.event_service import (
 )
 from app.face_credentials import (
     FACE_CONSENT_VERSION,
-    FACE_MATCH_THRESHOLD,
-    FAMILY_FACE_MATCH_MARGIN,
     LEGACY_FACE_ALGORITHM_VERSION,
+    V2_FACE_ALGORITHM_VERSION,
+    aggregate_match_scores,
     check_face_liveness,
     decrypt_template,
     encrypt_template,
     extract_face_template,
     extract_legacy_face_template,
+    extract_v2_face_template,
     face_template_similarity,
+    family_match_margin_for,
+    match_threshold_for,
+    ranking_margin,
 )
 from app.file_upload import (
     compute_hash,
@@ -257,6 +261,15 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1")
 settings = get_settings()
+
+
+def _face_extractor_for_algorithm(algorithm_version: str):
+    """Resolve extractors via this module so contract tests can monkeypatch them."""
+    if algorithm_version == LEGACY_FACE_ALGORITHM_VERSION:
+        return extract_legacy_face_template
+    if algorithm_version == V2_FACE_ALGORITHM_VERSION:
+        return extract_v2_face_template
+    return extract_face_template
 
 
 def _raise_resource_not_found() -> NoReturn:
@@ -1763,7 +1776,7 @@ async def auth_face_login(
 ) -> dict[str, Any]:
     """Match an in-memory motion sequence and issue the normal Bearer session."""
     try:
-        rate_key = check_face_rate_limit(household_id, actor_id)
+        rate_key = check_face_rate_limit(household_id, actor_id, session)
     except HTTPException:
         _record_authentication_audit(
             session,
@@ -1776,7 +1789,7 @@ async def auth_face_login(
         raise
 
     def failed(reason: str = "FACE_AUTH_FAILED") -> NoReturn:
-        record_face_failure(rate_key)
+        record_face_failure(rate_key, session)
         _record_authentication_audit(
             session,
             household_id=household_id,
@@ -1829,11 +1842,7 @@ async def auth_face_login(
             )
             if not quality["allow_downstream"]:
                 failed("FRAME_QUALITY_INVALID")
-            extractor = (
-                extract_legacy_face_template
-                if credential.algorithm_version == LEGACY_FACE_ALGORITHM_VERSION
-                else extract_face_template
-            )
+            extractor = _face_extractor_for_algorithm(credential.algorithm_version)
             template, _ = extractor(data)
             templates.append(template)
         try:
@@ -1857,10 +1866,13 @@ async def auth_face_login(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="FACE_AUTH_UNAVAILABLE",
             ) from exc
-        best_similarity = max(
-            face_template_similarity(template, stored_template) for template in templates
+        # Every frame of the motion sequence must independently match the
+        # stored template; a single injected photo of the account holder among
+        # unrelated motion frames must not be enough to log in.
+        match_score = aggregate_match_scores(
+            [face_template_similarity(template, stored_template) for template in templates]
         )
-        if best_similarity < FACE_MATCH_THRESHOLD:
+        if match_score < match_threshold_for(credential.algorithm_version):
             failed()
     except HTTPException:
         raise
@@ -1884,7 +1896,7 @@ async def auth_face_login(
             frame_bytes[index] = b""
         templates.clear()
 
-    clear_face_failures(rate_key)
+    clear_face_failures(rate_key, session)
     _record_authentication_audit(
         session,
         household_id=household_id,
@@ -1910,7 +1922,7 @@ async def auth_family_face_login(
     """Identify one member inside the already bound household (1:N)."""
     rate_actor = family_face_rate_actor()
     try:
-        rate_key = check_face_rate_limit(household_id, rate_actor)
+        rate_key = check_face_rate_limit(household_id, rate_actor, session)
     except HTTPException:
         _record_authentication_audit(
             session,
@@ -1923,7 +1935,7 @@ async def auth_family_face_login(
         raise
 
     def failed(reason: str = "FACE_AUTH_FAILED") -> NoReturn:
-        record_face_failure(rate_key)
+        record_face_failure(rate_key, session)
         _record_authentication_audit(
             session,
             household_id=household_id,
@@ -1982,15 +1994,11 @@ async def auth_family_face_login(
             if not quality["allow_downstream"]:
                 failed("FRAME_QUALITY_INVALID")
 
-        # A household may contain legacy v1 and current v2 credentials during
+        # A household may contain legacy v1/v2 and current v3 credentials during
         # migration, so derive each feature representation only once per
         # algorithm version and keep all raw frames in memory only.
         for algorithm_version in {credential.algorithm_version for credential in credentials}:
-            extractor = (
-                extract_legacy_face_template
-                if algorithm_version == LEGACY_FACE_ALGORITHM_VERSION
-                else extract_face_template
-            )
+            extractor = _face_extractor_for_algorithm(algorithm_version)
             extracted = [extractor(data)[0] for data in frame_bytes]
             try:
                 check_face_liveness(extracted)
@@ -2000,30 +2008,44 @@ async def auth_family_face_login(
                 failed("FACE_MATCH_FAILED")
             templates_by_algorithm[algorithm_version] = extracted
 
-        candidates: list[tuple[float, str]] = []
+        candidates: list[tuple[float, float, str, str]] = []
         decrypt_failures = 0
         for credential in credentials:
             try:
                 stored_template = decrypt_template(credential.encrypted_template)
                 templates = templates_by_algorithm[credential.algorithm_version]
-                score = max(
-                    face_template_similarity(template, stored_template) for template in templates
+                # Same rule as 1:1 login: all frames must match one member.
+                score = aggregate_match_scores(
+                    [
+                        face_template_similarity(template, stored_template)
+                        for template in templates
+                    ]
                 )
             except (HTTPException, ValueError, KeyError):
                 decrypt_failures += 1
                 continue
-            candidates.append((score, credential.actor_id))
+            candidates.append(
+                (
+                    ranking_margin(score, credential.algorithm_version),
+                    score,
+                    credential.actor_id,
+                    credential.algorithm_version,
+                )
+            )
         if not candidates:
             if decrypt_failures:
                 raise RuntimeError("FACE_CREDENTIALS_UNAVAILABLE")
             failed("CREDENTIAL_UNAVAILABLE")
 
         candidates.sort(key=lambda item: item[0], reverse=True)
-        best_score, best_actor_id = candidates[0]
-        second_score = candidates[1][0] if len(candidates) > 1 else None
-        if best_score < FACE_MATCH_THRESHOLD:
+        best_margin, best_score, best_actor_id, best_algorithm = candidates[0]
+        second_margin = candidates[1][0] if len(candidates) > 1 else None
+        if best_margin < 0 or best_score < match_threshold_for(best_algorithm):
             failed("NO_MATCH")
-        if second_score is not None and best_score - second_score < FAMILY_FACE_MATCH_MARGIN:
+        if (
+            second_margin is not None
+            and best_margin - second_margin < family_match_margin_for(best_algorithm)
+        ):
             # A close race between two family members is not safe to resolve
             # automatically; the UI falls back to PIN/explicit account login.
             failed("AMBIGUOUS_MATCH")
@@ -2051,7 +2073,7 @@ async def auth_family_face_login(
             templates.clear()
         templates_by_algorithm.clear()
 
-    clear_face_failures(rate_key)
+    clear_face_failures(rate_key, session)
     _record_authentication_audit(
         session,
         household_id=household_id,
@@ -2251,6 +2273,19 @@ async def register_face_credential(
     if active is not None and not replace_existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="FACE_CREDENTIAL_EXISTS")
 
+    # Verify the PIN/password/step-up confirmation before touching any
+    # biometric pixels: without a valid second factor the endpoint must not
+    # act as a face-quality/liveness oracle or burn CPU on frame processing.
+    _confirm_face_registration(
+        actor_id=actor_id,
+        household_id=household.id,
+        session_token=session_token,
+        confirmation_method=confirmation_method,
+        confirmation_code=confirmation_code,
+        confirmation_challenge_id=confirmation_challenge_id,
+        session=session,
+    )
+
     # ``file`` remains accepted for one release so old local clients do not
     # break. The web UI always sends a 2–3 frame dynamic sequence.
     uploads = list(frames)
@@ -2328,21 +2363,15 @@ async def register_face_credential(
             detail="FACE_FRAME_INVALID",
         )
 
-    _confirm_face_registration(
-        actor_id=actor_id,
-        household_id=household.id,
-        session_token=session_token,
-        confirmation_method=confirmation_method,
-        confirmation_code=confirmation_code,
-        confirmation_challenge_id=confirmation_challenge_id,
-        session=session,
-    )
     now = datetime.now(UTC)
     previous_version = active.credential_version if active is not None else 0
     if active is not None:
         active.status = "REVOKED"
         active.revoked_at = now
         active.encrypted_template = b""
+        # Rebinding replaces the trusted template, so household-scoped
+        # sessions issued under the previous credential stop working now.
+        revoke_household_sessions(household.id, {target}, session)
         session.flush()
 
     credential = FaceCredential(
@@ -2409,6 +2438,10 @@ def revoke_face_credential(
         credential.status = "DELETED"
         credential.revoked_at = datetime.now(UTC)
         credential.encrypted_template = b""
+        # HCT-426: revoking the credential must also cut live access that was
+        # obtained with it, so the account's household-scoped sessions
+        # (face/PIN issued) become invalid immediately.
+        revoke_household_sessions(household.id, {credential.actor_id}, session)
         session.add(
             AccessAudit(
                 household_id=household.id,

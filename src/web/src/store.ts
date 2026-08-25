@@ -166,7 +166,17 @@ export function formatError(cause: unknown): string {
     if (cause.status === 503 && cause.message === 'FACE_DETECTOR_UNAVAILABLE') {
       return '本地人脸检测器暂不可用，请重启 API 服务后重试。'
     }
-    if (cause.status === 429) return '尝试过于频繁，请稍后再试。'
+    if (cause.status === 503 && cause.message === 'FACE_AUTH_UNAVAILABLE') {
+      return '人脸识别服务暂时不可用，本次未创建会话；请改用 PIN 或账号密码登录。'
+    }
+    if (cause.status === 429) {
+      const lockMatch = /^LOCKED:(\d+)$/.exec(cause.message)
+      if (lockMatch) {
+        const waitMinutes = Math.max(1, Math.ceil(Number(lockMatch[1]) / 60))
+        return `连续失败次数过多，已临时锁定，请约 ${waitMinutes} 分钟后再试，或改用账号密码登录。`
+      }
+      return '尝试过于频繁，请稍后再试。'
+    }
   }
   return '请求未能完成，页面不会显示未经授权的健康数据。'
 }
