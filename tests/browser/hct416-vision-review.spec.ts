@@ -169,8 +169,7 @@ async function installSyntheticApi(page: Page, terminal: 'failed' | 'succeeded')
 
 async function enterFamilySpace(page: Page): Promise<void> {
   await page.goto('/')
-  await expect(page.getByRole('button', { name: '开发演示' })).toBeVisible({ timeout: 20_000 })
-  await page.getByRole('button', { name: '开发演示' }).click()
+  await expect(page.getByRole('button', { name: '进入家庭空间' })).toBeVisible({ timeout: 20_000 })
   await page.getByLabel('开发身份标识').fill('owner-1')
   await page.getByRole('button', { name: '进入家庭空间' }).click()
   await expect(page.locator('.app-frame')).toBeVisible({ timeout: 20_000 })

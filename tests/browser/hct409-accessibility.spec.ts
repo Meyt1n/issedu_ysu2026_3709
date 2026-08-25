@@ -114,7 +114,6 @@ async function installSyntheticApi(page: Page): Promise<void> {
 }
 
 async function loadOwnerView(page: Page): Promise<void> {
-  await page.getByRole('button', { name: '开发演示' }).click()
   await page.getByLabel('开发身份标识').fill('owner-1')
   await page.getByRole('button', { name: '进入家庭空间' }).click()
   await expect(page.getByRole('heading', { name: '家庭总览' })).toBeVisible()
@@ -156,7 +155,7 @@ test.describe('axe automated WCAG 2.1 AA scans', () => {
     await expect(page.getByRole('heading', { name: '家庭成员状态' })).toBeVisible()
     await expect(page.getByText('Synthetic medicine', { exact: true })).toHaveCount(2)
     await expect(page.getByText('识别候选，不是健康事实')).toBeVisible()
-    await expect(page.locator('.ov-member strong')).toHaveText('Synthetic member')
+    await expect(page.locator('.home-dashboard-member strong')).toHaveText('Synthetic member')
   })
 
   test('risk view explains budget suppression from the server summary', async ({ page }) => {
@@ -171,7 +170,6 @@ test.describe('axe automated WCAG 2.1 AA scans', () => {
   test('offline error state has no violations', async ({ page }) => {
     await page.route('**/api/v1/households', route => route.abort('failed'))
     await page.goto('/')
-    await page.getByRole('button', { name: '开发演示' }).click()
     await page.getByLabel('开发身份标识').fill('owner-1')
     await page.getByRole('button', { name: '进入家庭空间' }).click()
     await expect(page.getByRole('alert')).toContainText('本地 API 服务不可用')
@@ -194,12 +192,10 @@ test.describe('keyboard path and focus visibility', () => {
     await installSyntheticApi(page)
     await page.goto('/')
 
-    // 正式账号登录排在第一位并默认选中（HCT-448：正式登录为主视觉），开发演示为次要入口。
-    await page.keyboard.press('Tab')
-    await expect(page.getByRole('button', { name: '正式账号登录' })).toBeFocused()
     await page.keyboard.press('Tab')
     await expect(page.getByRole('button', { name: '开发演示' })).toBeFocused()
-    await page.keyboard.press('Enter')
+    await page.keyboard.press('Tab')
+    await expect(page.getByRole('button', { name: '正式账号登录' })).toBeFocused()
     await page.keyboard.press('Tab')
     await expect(page.getByLabel('开发身份标识')).toBeFocused()
     await page.keyboard.type('owner-1')
@@ -235,7 +231,6 @@ test.describe('keyboard path and focus visibility', () => {
     await installSyntheticApi(page)
     await page.goto('/')
 
-    await page.getByRole('button', { name: '开发演示' }).click()
     const identity = page.getByLabel('开发身份标识')
     await identity.focus()
     const outline = await identity.evaluate(element => {
@@ -252,7 +247,6 @@ test.describe('form errors', () => {
     await installSyntheticApi(page)
     await page.goto('/')
 
-    await page.getByRole('button', { name: '开发演示' }).click()
     await expect(page.getByRole('button', { name: '进入家庭空间' })).toBeDisabled()
   })
 
@@ -260,7 +254,6 @@ test.describe('form errors', () => {
     await installSyntheticApi(page)
     await page.goto('/')
 
-    await page.getByRole('button', { name: '开发演示' }).click()
     const purpose = page.getByLabel('访问用途代码')
     await expect(purpose).toHaveAttribute('aria-describedby', 'purpose-format-hint')
     await expect(purpose).toHaveAttribute('aria-invalid', 'false')

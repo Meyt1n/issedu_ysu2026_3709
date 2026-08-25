@@ -140,6 +140,8 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
     暂时没有读取到最新记录，拍照录药仍然可以使用。
   </p>
 
+  <HealthNewsPanel />
+
   <section v-if="visibleRisks.length" class="card member-risk-card" aria-label="需要留意的情况">
     <div class="card-heading">
       <div>
@@ -249,7 +251,7 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
         <h3 class="card-title">最近指标</h3>
       </div>
     </div>
-    <p class="member-risk-intro">以下为家人确认过的居家观察记录，仅供参考，不能当作诊断结论。</p>
+    <p class="member-risk-intro">以下为已确认的教学观察值，仅供记录展示，不能当作诊断结论。</p>
     <ul class="list-plain member-list">
       <li v-for="event in recentMetrics" :key="event.id" class="row-card">
         <strong>{{ metricSummary(event) }}</strong>
@@ -257,6 +259,4 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
       </li>
     </ul>
   </section>
-
-  <HealthNewsPanel />
 </template>

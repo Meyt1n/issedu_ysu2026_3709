@@ -208,7 +208,6 @@ async function installSyntheticApi(page: Page, qualityDecision: 'PASS' | 'RETAKE
 
 async function enterFamilySpace(page: Page): Promise<void> {
   await page.goto('/')
-  await page.getByRole('button', { name: '开发演示' }).click()
   await page.getByLabel('开发身份标识').fill('e2e-owner')
   await page.getByRole('button', { name: '进入家庭空间' }).click()
   await expect(page.locator('.app-frame')).toBeVisible()
@@ -341,7 +340,6 @@ test('模型实验室展示发布阻断，不把候选版本伪装成已发布',
 test('离线时不进入家庭空间，也不渲染旧健康摘要', async ({ page }) => {
   await page.route('**/api/v1/households', route => route.abort('failed'))
   await page.goto('/')
-  await page.getByRole('button', { name: '开发演示' }).click()
   await page.getByLabel('开发身份标识').fill('e2e-owner')
   await page.getByRole('button', { name: '进入家庭空间' }).click()
   await expect(page.getByRole('alert')).toContainText('本地 API 服务不可用')
@@ -356,7 +354,6 @@ test('空数据、未授权和服务异常都显示恢复入口', async ({ page 
     body: JSON.stringify([]),
   }))
   await page.goto('/')
-  await page.getByRole('button', { name: '开发演示' }).click()
   await page.getByLabel('开发身份标识').fill('e2e-empty')
   await page.getByRole('button', { name: '进入家庭空间' }).click()
   await expect(page.getByRole('heading', { name: '创建你的家庭' })).toBeVisible()
@@ -369,7 +366,6 @@ test('空数据、未授权和服务异常都显示恢复入口', async ({ page 
     contentType: 'application/json',
     body: JSON.stringify({ detail: 'AUTH_REQUIRED' }),
   }))
-  await page.getByRole('button', { name: '开发演示' }).click()
   await page.getByLabel('开发身份标识').fill('e2e-unauthorized')
   await page.getByRole('button', { name: '进入家庭空间' }).click()
   await expect(page.getByRole('alert')).toContainText('需要先填写开发身份')
@@ -381,7 +377,6 @@ test('空数据、未授权和服务异常都显示恢复入口', async ({ page 
     contentType: 'application/json',
     body: JSON.stringify({ detail: 'UPSTREAM_TIMEOUT' }),
   }))
-  await page.getByRole('button', { name: '开发演示' }).click()
   await page.getByLabel('开发身份标识').fill('e2e-timeout')
   await page.getByRole('button', { name: '进入家庭空间' }).click()
   await expect(page.getByRole('alert')).toContainText('请求未能完成')

@@ -11,11 +11,13 @@ import type {
   RiskListResponse,
   WeatherResponse,
 } from '../api/types'
+import emptyCorner from '../assets/empty-corner.jpg'
 import AppIcon from '../components/AppIcon.vue'
 import CountUp from '../components/CountUp.vue'
 import HealthNewsPanel from '../components/HealthNewsPanel.vue'
 import SkeletonList from '../components/SkeletonList.vue'
 import WeatherActionPanel from '../components/WeatherActionPanel.vue'
+import { vTilt } from '../ui/tilt'
 import {
   formatError,
   onHealthDataRefresh,
@@ -60,9 +62,6 @@ const eventsCount = computed(() => {
 const pendingReviews = computed(
   () => reviewTasks.value.filter(task => task.status === 'PENDING_REVIEW').length,
 )
-const householdName = computed(
-  () => session.households.find(h => h.id === session.selectedHouseholdId)?.name ?? '家庭',
-)
 
 type DashboardView = 'review' | 'risks' | 'plans'
 
@@ -82,7 +81,7 @@ const orderedPlans = computed(() =>
 
 const todayPlans = computed(() => {
   const today = orderedPlans.value.filter(plan => isSameLocalDay(plan.next_action_at))
-  return (today.length > 0 ? today : orderedPlans.value).slice(0, 5)
+  return (today.length > 0 ? today : orderedPlans.value).slice(0, 4)
 })
 
 const hasTodayPlans = computed(() => orderedPlans.value.some(plan => isSameLocalDay(plan.next_action_at)))
@@ -263,110 +262,147 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
 </script>
 
 <template>
-  <header class="ov-head">
-    <div class="ov-head-row">
-      <div class="page-hero">
-        <h2 class="hero-greeting">{{ greeting }}，{{ selectedMember?.display_name ?? session.actorId }}</h2>
-        <p class="hero-sub">
-          {{ householdName }} 的健康工作台 · 当前关注 {{ selectedMember?.display_name ?? '家人' }} 的近况。
-        </p>
-      </div>
-      <div class="ov-head-tools">
-        <div class="ov-toolbar" role="group" aria-label="常用操作">
-          <button type="button" class="btn btn-ghost btn-small" @click="setView('scan')">
-            <AppIcon name="scan" :size="15" />
-            扫描药盒
-          </button>
-          <button type="button" class="btn btn-ghost btn-small" @click="setView('members')">
-            <AppIcon name="plus" :size="15" />
-            记一条事实
-          </button>
-          <button type="button" class="btn btn-ghost btn-small" @click="setView('risks')">
-            <AppIcon name="shield" :size="15" />
-            用药安全
-          </button>
+  <section class="page-hero">
+    <div class="card-heading" style="margin-bottom: 0">
+      <div style="align-items: center; display: flex; gap: 18px">
+        <span class="seal" aria-hidden="true"><i>家</i><i>的</i><i>温</i><i>度</i></span>
+        <div>
+          <h2 class="hero-greeting"><span class="gradient-text">{{ greeting }}</span>，{{ selectedMember?.display_name ?? session.actorId }}</h2>
+          <svg class="brush-underline" viewBox="0 0 220 12" aria-hidden="true">
+            <path d="M4 8 C 46 3, 92 11, 128 6 S 196 4, 216 7" />
+          </svg>
+          <p class="hero-sub">
+            这里是 {{ session.households.find(h => h.id === session.selectedHouseholdId)?.name ?? '家庭' }} 的健康近况，先看看
+            {{ selectedMember?.display_name ?? '家人' }} 最近的变化。
+          </p>
         </div>
-        <label class="context-select">
-          成员
-          <select :value="session.selectedMemberId" :disabled="loading" @change="onMemberChange">
-            <option v-for="member in session.members" :key="member.id" :value="member.id">
-              {{ member.display_name }}
-            </option>
-          </select>
-        </label>
       </div>
+      <label class="context-select">
+        成员
+        <select :value="session.selectedMemberId" :disabled="loading" @change="onMemberChange">
+          <option v-for="member in session.members" :key="member.id" :value="member.id">
+            {{ member.display_name }}
+          </option>
+        </select>
+      </label>
     </div>
-
-    <section class="stat-strip" aria-label="家庭健康概况">
-      <div class="stat-cell pine">
-        <span class="cell-cap"><AppIcon name="members" :size="14" />家庭成员</span>
-        <span class="cell-num"><CountUp :value="session.members.length" /><small>位</small></span>
-        <span class="cell-sub">{{ session.isOwnerView ? '管理员视图，可管理授权' : '仅显示已授权成员' }}</span>
-      </div>
-      <div class="stat-cell sky">
-        <span class="cell-cap"><AppIcon name="timeline" :size="14" />已确认事件</span>
-        <span class="cell-num"><CountUp :value="eventsCount" /><small>条</small></span>
-        <span class="cell-sub">{{ selectedMember?.display_name ?? '当前成员' }}的事实记录</span>
-      </div>
-      <div class="stat-cell" :class="(risks?.severe_count ?? 0) > 0 ? 'rose' : 'gold'">
-        <span class="cell-cap"><AppIcon name="shield" :size="14" />风险信号</span>
-        <span class="cell-num"><CountUp :value="risks?.total ?? 0" /><small>个</small></span>
-        <span class="cell-sub">严重 {{ risks?.severe_count ?? 0 }} · 警告 {{ risks?.warning_count ?? 0 }}</span>
-      </div>
-      <div class="stat-cell clay">
-        <span class="cell-cap"><AppIcon name="review" :size="14" />待人工复核</span>
-        <span class="cell-num"><CountUp :value="pendingReviews" /><small>项</small></span>
-        <span class="cell-sub">识别候选需确认后才入档</span>
-      </div>
-    </section>
-  </header>
+  </section>
 
   <p v-if="loadError" class="notice error" role="alert">
     <AppIcon name="alert" :size="16" />
     {{ loadError }}
   </p>
 
-  <div class="ov-columns">
-    <section class="ov-panel" aria-labelledby="pending-overview-title">
-      <div class="ov-panel-head">
+  <HealthNewsPanel />
+
+  <section class="stat-strip" aria-label="家庭健康概况">
+    <div class="stat-cell pine">
+      <span class="cell-cap"><AppIcon name="members" :size="14" />家庭成员</span>
+      <span class="cell-num"><CountUp :value="session.members.length" /><small>位</small></span>
+      <span class="cell-sub">{{ session.isOwnerView ? '管理员视图，可管理授权' : '仅显示已授权成员' }}</span>
+    </div>
+    <div class="stat-cell sky">
+      <span class="cell-cap"><AppIcon name="timeline" :size="14" />已确认事件</span>
+      <span class="cell-num"><CountUp :value="eventsCount" /><small>条</small></span>
+      <span class="cell-sub">{{ selectedMember?.display_name ?? '当前成员' }}的事实记录</span>
+    </div>
+    <div class="stat-cell" :class="(risks?.severe_count ?? 0) > 0 ? 'rose' : 'gold'">
+      <span class="cell-cap"><AppIcon name="shield" :size="14" />风险信号</span>
+      <span class="cell-num"><CountUp :value="risks?.total ?? 0" /><small>个</small></span>
+      <span class="cell-sub">严重 {{ risks?.severe_count ?? 0 }} · 警告 {{ risks?.warning_count ?? 0 }}</span>
+    </div>
+    <div class="stat-cell clay">
+      <span class="cell-cap"><AppIcon name="review" :size="14" />待人工复核</span>
+      <span class="cell-num"><CountUp :value="pendingReviews" /><small>项</small></span>
+      <span class="cell-sub">识别候选需确认后才入档</span>
+    </div>
+  </section>
+
+  <section class="quick-actions" aria-label="快捷入口">
+    <button v-tilt="4" type="button" class="quick-card clay" @click="setView('scan')">
+      <span class="quick-icon"><AppIcon name="scan" :size="22" /></span>
+      <span class="quick-text">
+        <strong>扫描药盒</strong>
+        <span>拍照识别，人工确认后入档</span>
+      </span>
+      <AppIcon class="quick-arrow" name="arrow-right" :size="17" />
+    </button>
+    <button v-tilt="4" type="button" class="quick-card pine" @click="setView('members')">
+      <span class="quick-icon"><AppIcon name="plus" :size="22" /></span>
+      <span class="quick-text">
+        <strong>记一条事实</strong>
+        <span>用药、过敏、报告手工录入</span>
+      </span>
+      <AppIcon class="quick-arrow" name="arrow-right" :size="17" />
+    </button>
+    <button v-tilt="4" type="button" class="quick-card sky" @click="setView('risks')">
+      <span class="quick-icon"><AppIcon name="shield" :size="22" /></span>
+      <span class="quick-text">
+        <strong>查看用药安全</strong>
+        <span>规则命中与证据链</span>
+      </span>
+      <AppIcon class="quick-arrow" name="arrow-right" :size="17" />
+    </button>
+  </section>
+
+  <section class="home-dashboard-grid home-dashboard-primary" aria-label="今日家庭健康摘要">
+    <div class="home-dashboard-weather" aria-label="今日天气">
+      <WeatherActionPanel
+        :weather="weather"
+        :loading="weatherLoading"
+        @refresh="loadWeather"
+      />
+    </div>
+
+    <section class="home-dashboard-card" aria-labelledby="pending-overview-title">
+      <div class="sec-head">
+        <span class="sec-no">01</span>
         <h3 id="pending-overview-title">待确认事项</h3>
-        <span class="ov-panel-count">{{ pendingOverviewCount }}</span>
-        <button type="button" class="ov-panel-link" @click="setView('review')">
+        <span class="sec-line" />
+        <button type="button" class="btn btn-ghost btn-small" @click="setView('review')">
           查看
-          <AppIcon name="arrow-right" :size="13" />
+          <AppIcon name="arrow-right" :size="14" />
         </button>
       </div>
-      <ul v-if="pendingOverviewItems.length > 0" class="ov-list">
+      <div class="home-dashboard-count">
+        <strong>{{ pendingOverviewCount }}</strong>
+        <span>项需要留意</span>
+      </div>
+      <ul v-if="pendingOverviewItems.length > 0" class="home-dashboard-list">
         <li v-for="item in pendingOverviewItems" :key="item.id">
-          <button type="button" class="ov-row ov-row-action" @click="setView(item.view)">
+          <button type="button" class="home-dashboard-list-row" @click="setView(item.view)">
             <span class="pill" :class="item.tone">{{ item.label }}</span>
-            <span class="ov-row-detail">{{ item.detail }}</span>
-            <AppIcon name="arrow-right" :size="13" />
+            <span class="home-dashboard-list-detail">{{ item.detail }}</span>
+            <AppIcon name="arrow-right" :size="14" />
           </button>
         </li>
       </ul>
-      <p v-else class="ov-empty">当前没有待复核、待知晓或升级提醒事项。</p>
+      <p v-else class="home-dashboard-empty">当前没有待复核、待知晓或升级提醒事项。</p>
     </section>
+  </section>
 
-    <section class="ov-panel" aria-labelledby="medication-overview-title">
-      <div class="ov-panel-head">
+  <section class="home-dashboard-grid home-dashboard-secondary" aria-label="家庭健康动态">
+    <section class="home-dashboard-card" aria-labelledby="medication-overview-title">
+      <div class="sec-head">
+        <span class="sec-no">02</span>
         <h3 id="medication-overview-title">今日用药</h3>
-        <button type="button" class="ov-panel-link" @click="setView('plans')">
+        <span class="sec-line" />
+        <button type="button" class="btn btn-ghost btn-small" @click="setView('plans')">
           用药计划
-          <AppIcon name="arrow-right" :size="13" />
+          <AppIcon name="arrow-right" :size="14" />
         </button>
       </div>
-      <p class="ov-caption">
+      <p class="home-dashboard-caption">
         {{ selectedMember?.display_name ?? '当前成员' }} ·
         {{ hasTodayPlans ? '今日已确认计划' : '今日暂无计划，展示近期已确认计划' }}
       </p>
       <SkeletonList v-if="loading" :rows="3" />
-      <p v-else-if="todayPlans.length === 0" class="ov-empty">
+      <p v-else-if="todayPlans.length === 0" class="home-dashboard-empty">
         暂无可展示的已确认用药计划，识别候选不会自动进入这里。
       </p>
-      <ul v-else class="ov-list">
-        <li v-for="plan in todayPlans" :key="plan.plan_event_id" class="ov-row">
-          <div class="ov-row-main">
+      <ul v-else class="home-dashboard-list">
+        <li v-for="plan in todayPlans" :key="plan.plan_event_id" class="home-dashboard-plan-row">
+          <div>
             <strong>{{ plan.drug }}</strong>
             <span>{{ plan.schedule }} · 下次 {{ formatDateTime(plan.next_action_at) }}</span>
           </div>
@@ -375,19 +411,83 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
       </ul>
     </section>
 
-    <section class="ov-panel" aria-labelledby="recent-overview-title">
-      <div class="ov-panel-head">
-        <h3 id="recent-overview-title">近期变化</h3>
-        <button type="button" class="ov-panel-link" @click="setView('members')">
-          完整档案
-          <AppIcon name="arrow-right" :size="13" />
+    <section class="home-dashboard-card" aria-labelledby="recent-scan-overview-title">
+      <div class="sec-head">
+        <span class="sec-no">03</span>
+        <h3 id="recent-scan-overview-title">最近识别的药品</h3>
+        <span class="sec-line" />
+        <button type="button" class="btn btn-ghost btn-small" @click="setView('review')">
+          人工复核
+          <AppIcon name="arrow-right" :size="14" />
         </button>
       </div>
-      <SkeletonList v-if="loading" :rows="4" />
-      <p v-else-if="recentEvents.length === 0" class="ov-empty">
-        还没有已确认的健康事件，可以先到「视觉扫描」拍摄药盒或在「成员档案」手工录入。
+      <p class="home-dashboard-caption">只展示最近识别任务的候选结果，确认后才会成为健康事实。</p>
+      <p v-if="recentMedicationCandidates.length === 0" class="home-dashboard-empty">
+        还没有识别任务，可以先到视觉扫描拍摄药盒。
       </p>
-      <ul v-else class="timeline ov-timeline">
+      <ul v-else class="home-dashboard-list">
+        <li v-for="candidate in recentMedicationCandidates" :key="candidate.id" class="home-dashboard-plan-row">
+          <div>
+            <strong>{{ candidate.drugName }}</strong>
+            <span>{{ candidate.status }} · {{ candidate.fusionStatus }} · {{ relativeTime(candidate.createdAt) }}</span>
+          </div>
+          <span class="pill clay">识别候选</span>
+        </li>
+      </ul>
+    </section>
+  </section>
+
+  <section class="home-dashboard-card home-dashboard-members" aria-labelledby="member-overview-title">
+    <div class="sec-head">
+      <span class="sec-no">04</span>
+      <h3 id="member-overview-title">家庭成员状态</h3>
+      <span class="sec-line" />
+      <button type="button" class="btn btn-ghost btn-small" @click="setView('members')">
+        查看档案
+        <AppIcon name="arrow-right" :size="14" />
+      </button>
+    </div>
+    <div v-if="memberOverviewRows.length > 0" class="home-dashboard-member-grid">
+      <button
+        v-for="member in memberOverviewRows"
+        :key="member.id"
+        type="button"
+        class="home-dashboard-member"
+        :class="{ selected: member.id === session.selectedMemberId }"
+        @click="selectMember(member.id)"
+      >
+        <span class="home-dashboard-member-head">
+          <strong>{{ member.name }}</strong>
+          <span class="pill" :class="member.tone">{{ member.status }}</span>
+        </span>
+        <span class="home-dashboard-member-role">{{ member.role }}</span>
+        <span class="home-dashboard-member-meta">
+          {{ member.eventCount }} 条已同步事件 · {{ member.updatedAt ? relativeTime(member.updatedAt) : '等待状态投影' }}
+        </span>
+      </button>
+    </div>
+    <p v-else class="home-dashboard-empty">当前身份下没有可展示的家庭成员。</p>
+  </section>
+
+  <div class="grid-main-side" style="gap: 34px">
+    <section aria-label="近期变化">
+      <div class="sec-head">
+        <span class="sec-no">01</span>
+        <h3>近期变化</h3>
+        <span class="sec-line" />
+        <button type="button" class="btn btn-ghost btn-small" @click="setView('members')">
+          完整档案
+          <AppIcon name="arrow-right" :size="14" />
+        </button>
+      </div>
+
+      <SkeletonList v-if="loading" :rows="4" />
+      <div v-else-if="recentEvents.length === 0" class="empty-state">
+        <img class="empty-illustration" :src="emptyCorner" alt="" aria-hidden="true" />
+        <strong>还没有已确认的健康事件</strong>
+        <p>可以先到「视觉扫描」拍摄一个药盒，或在「成员档案」手工录入一条健康事实。</p>
+      </div>
+      <ul v-else class="timeline">
         <li v-for="event in recentEvents" :key="event.id" class="timeline-row">
           <span class="timeline-dot" :class="eventTone(event.event_type)" />
           <div class="timeline-body">
@@ -403,338 +503,257 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
         </li>
       </ul>
     </section>
-  </div>
 
-  <div class="ov-band" aria-label="环境与资讯">
-    <WeatherActionPanel
-      :weather="weather"
-      :loading="weatherLoading"
-      @refresh="loadWeather"
-    />
-    <HealthNewsPanel />
-  </div>
-
-  <div class="ov-columns ov-columns-two">
-    <section class="ov-panel" aria-labelledby="member-overview-title">
-      <div class="ov-panel-head">
-        <h3 id="member-overview-title">家庭成员状态</h3>
-        <button type="button" class="ov-panel-link" @click="setView('members')">
-          查看档案
-          <AppIcon name="arrow-right" :size="13" />
-        </button>
-      </div>
-      <ul v-if="memberOverviewRows.length > 0" class="ov-list">
-        <li v-for="member in memberOverviewRows" :key="member.id">
-          <button
-            type="button"
-            class="ov-row ov-row-action ov-member"
-            :class="{ selected: member.id === session.selectedMemberId }"
-            @click="selectMember(member.id)"
+    <aside class="side-rail">
+      <div class="rail-block">
+        <span class="rail-title"><AppIcon name="lock" :size="15" />本地运行状态</span>
+        <span class="rail-line">
+          <strong>{{ session.capabilities ? 'API 已连接' : 'API 状态未知' }}</strong>
+          · 阶段 {{ session.capabilities?.phase ?? '未知' }}<br />
+          网络出口默认拒绝，天气仅发送城市代码。
+        </span>
+        <div class="capability-chips">
+          <span v-for="cap in session.capabilities?.available ?? []" :key="cap" class="pill sage">{{ cap }}</span>
+          <span
+            v-for="cap in session.capabilities?.unavailable ?? []"
+            :key="cap"
+            class="pill plain"
+            :title="'能力未启用：' + cap"
           >
-            <span class="ov-row-main">
-              <strong>{{ member.name }}</strong>
-              <span>{{ member.role }} · {{ member.eventCount }} 条已同步事件 · {{ member.updatedAt ? relativeTime(member.updatedAt) : '等待状态投影' }}</span>
-            </span>
-            <span class="pill" :class="member.tone">{{ member.status }}</span>
-          </button>
-        </li>
-      </ul>
-      <p v-else class="ov-empty">当前身份下没有可展示的家庭成员。</p>
-    </section>
+            {{ cap }} · 未启用
+          </span>
+        </div>
+      </div>
 
-    <section class="ov-panel" aria-labelledby="recent-scan-overview-title">
-      <div class="ov-panel-head">
-        <h3 id="recent-scan-overview-title">最近识别的药品</h3>
-        <button type="button" class="ov-panel-link" @click="setView('review')">
-          人工复核
-          <AppIcon name="arrow-right" :size="13" />
+      <div class="rail-block">
+        <span class="rail-title"><AppIcon name="key" :size="15" />谁能看到这些数据</span>
+        <span class="rail-line">
+          {{ session.isOwnerView
+            ? '你是家庭管理员，可以为子女或照护者配置字段级授权，并随时撤回。'
+            : '你是授权照护者，仅能看到授权范围内的成员与字段，范围与到期时间以授权记录为准。' }}
+        </span>
+        <button
+          v-if="session.isOwnerView"
+          type="button"
+          class="btn btn-ghost btn-small"
+          style="justify-self: start"
+          @click="setView('authorizations')"
+        >
+          管理授权
+          <AppIcon name="arrow-right" :size="14" />
         </button>
       </div>
-      <p class="ov-caption">只展示最近识别任务的候选结果，确认后才会成为健康事实。</p>
-      <p v-if="recentMedicationCandidates.length === 0" class="ov-empty">
-        还没有识别任务，可以先到视觉扫描拍摄药盒。
-      </p>
-      <ul v-else class="ov-list">
-        <li v-for="candidate in recentMedicationCandidates" :key="candidate.id" class="ov-row">
-          <div class="ov-row-main">
-            <strong>{{ candidate.drugName }}</strong>
-            <span>{{ candidate.status }} · {{ candidate.fusionStatus }} · {{ relativeTime(candidate.createdAt) }}</span>
-          </div>
-          <span class="pill clay">识别候选</span>
-        </li>
-      </ul>
-    </section>
+    </aside>
   </div>
-
-  <section class="ov-status" aria-label="本地运行与授权状态">
-    <span class="ov-status-item">
-      <AppIcon name="lock" :size="14" />
-      <strong>{{ session.capabilities ? 'API 已连接' : 'API 状态未知' }}</strong>
-      · 阶段 {{ session.capabilities?.phase ?? '未知' }} · 网络出口默认拒绝，天气仅发送城市代码
-    </span>
-    <span class="ov-status-chips">
-      <span v-for="cap in session.capabilities?.available ?? []" :key="cap" class="pill sage">{{ cap }}</span>
-      <span
-        v-for="cap in session.capabilities?.unavailable ?? []"
-        :key="cap"
-        class="pill plain"
-        :title="'能力未启用：' + cap"
-      >
-        {{ cap }} · 未启用
-      </span>
-    </span>
-    <span class="ov-status-item">
-      <AppIcon name="key" :size="14" />
-      {{ session.isOwnerView
-        ? '你是家庭管理员，可以配置字段级授权并随时撤回。'
-        : '你是授权照护者，仅能看到授权范围内的成员与字段。' }}
-    </span>
-    <button
-      v-if="session.isOwnerView"
-      type="button"
-      class="ov-panel-link"
-      @click="setView('authorizations')"
-    >
-      管理授权
-      <AppIcon name="arrow-right" :size="13" />
-    </button>
-  </section>
 </template>
 
 <style scoped>
-/* 总览工作台：等权分栏、细线分区，不叠卡片。 */
-.ov-head {
+.home-dashboard-grid {
   display: grid;
-  gap: 16px;
+  gap: 20px;
+  margin-top: 22px;
 }
 
-.ov-head-row {
-  align-items: flex-end;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px 18px;
-  justify-content: space-between;
-}
-
-.ov-head-tools {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.ov-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.ov-columns {
+.home-dashboard-primary {
   align-items: stretch;
-  display: grid;
-  gap: 16px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1.25fr) minmax(360px, 0.75fr);
 }
 
-.ov-columns-two {
+.home-dashboard-secondary {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.ov-band {
-  align-items: stretch;
-  display: grid;
-  gap: 16px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.ov-panel {
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  display: flex;
-  flex-direction: column;
+.home-dashboard-weather {
   min-width: 0;
-  padding: 16px 18px;
 }
 
-.ov-panel-head {
-  align-items: center;
-  border-bottom: 1px solid var(--line-soft);
+.home-dashboard-card {
+  min-width: 0;
+  padding: 22px;
+  border: 1px solid rgba(190, 167, 125, 0.28);
+  border-radius: 22px;
+  background: rgba(255, 252, 243, 0.76);
+  box-shadow: 0 14px 34px rgba(94, 71, 42, 0.06);
+}
+
+.home-dashboard-card .sec-head {
+  margin-top: 0;
+}
+
+.home-dashboard-count {
   display: flex;
-  gap: 10px;
-  margin-bottom: 12px;
-  padding-bottom: 10px;
+  align-items: baseline;
+  gap: 8px;
+  margin: 12px 0 16px;
+  color: var(--ink-muted, #877966);
 }
 
-.ov-panel-head h3 {
-  font-size: 15px;
-  letter-spacing: 0.3px;
-  margin: 0;
-}
-
-.ov-panel-count {
-  color: var(--clay-deep);
-  font-family: var(--font-numeric);
-  font-size: 18px;
-  font-variant-numeric: tabular-nums;
-  font-weight: 700;
+.home-dashboard-count strong {
+  color: var(--ink, #3f3a31);
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 38px;
   line-height: 1;
 }
 
-.ov-panel-link {
-  align-items: center;
-  background: transparent;
-  border: 0;
-  border-radius: 7px;
-  color: var(--pine-deep);
-  cursor: pointer;
-  display: inline-flex;
-  font-size: 12.5px;
-  font-weight: 650;
-  gap: 4px;
-  margin-left: auto;
-  padding: 4px 7px;
+.home-dashboard-count span {
+  color: var(--ink-soft, #6d6659);
 }
 
-.ov-panel-link:hover { background: var(--pine-tint); }
-
-.ov-caption {
-  color: var(--ink-soft);
-  font-size: 12.5px;
-  line-height: 1.55;
-  margin: 0 0 10px;
+.home-dashboard-caption,
+.home-dashboard-empty {
+  margin: 8px 0 16px;
+  color: var(--ink-soft, #6d6659);
+  font-size: 13px;
+  line-height: 1.65;
 }
 
-.ov-list {
+.home-dashboard-list {
   display: grid;
-  gap: 6px;
-  list-style: none;
+  gap: 9px;
   margin: 0;
   padding: 0;
+  list-style: none;
 }
 
-.ov-row {
-  align-items: center;
-  border-bottom: 1px solid var(--line-soft);
+.home-dashboard-list-row,
+.home-dashboard-plan-row {
   display: flex;
+  align-items: center;
   gap: 10px;
-  min-width: 0;
-  padding: 8px 2px;
   width: 100%;
-}
-
-.ov-list > li:last-child .ov-row,
-.ov-list > li:last-child.ov-row { border-bottom: 0; }
-
-.ov-row-action {
-  background: transparent;
-  border-left: 0;
-  border-right: 0;
-  border-top: 0;
-  border-radius: 6px;
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid rgba(190, 167, 125, 0.2);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.42);
   color: inherit;
-  cursor: pointer;
   text-align: left;
-  transition: background 0.16s ease;
 }
 
-.ov-row-action:hover { background: var(--paper-deep); }
+.home-dashboard-list-row {
+  cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+}
 
-.ov-member.selected { background: var(--pine-tint); }
+.home-dashboard-list-row:hover,
+.home-dashboard-list-row:focus-visible {
+  border-color: rgba(52, 104, 88, 0.42);
+  background: rgba(238, 247, 239, 0.84);
+  outline: none;
+  transform: translateY(-1px);
+}
 
-.ov-row-detail {
-  color: var(--ink-soft);
+.home-dashboard-list-detail {
+  min-width: 0;
   flex: 1;
+  overflow: hidden;
+  color: var(--ink-soft, #6d6659);
   font-size: 13px;
   line-height: 1.45;
-  min-width: 0;
-  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.ov-row-main {
+.home-dashboard-plan-row {
+  justify-content: space-between;
+}
+
+.home-dashboard-plan-row > div {
   display: grid;
-  flex: 1;
-  gap: 2px;
   min-width: 0;
+  gap: 4px;
 }
 
-.ov-row-main strong {
-  font-size: 13.5px;
+.home-dashboard-plan-row strong {
   overflow: hidden;
+  color: var(--ink, #3f3a31);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.ov-row-main span:not(.pill) {
-  color: var(--ink-soft);
+.home-dashboard-plan-row span:not(.pill) {
+  overflow: hidden;
+  color: var(--ink-soft, #6d6659);
   font-size: 12px;
-  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.ov-row > .app-icon { color: var(--ink-faint); flex: 0 0 auto; }
-.ov-row .pill { flex: 0 0 auto; }
-
-.ov-empty {
-  color: var(--ink-soft);
-  font-size: 13px;
-  line-height: 1.6;
-  margin: 4px 0 0;
+.home-dashboard-members {
+  margin-top: 22px;
 }
 
-.ov-timeline .timeline-body { padding-bottom: 12px; }
+.home-dashboard-member-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
 
-/* 本地/授权状态：细长状态条，不再是孤立右栏。 */
-.ov-status {
-  align-items: center;
-  border-top: 1px solid var(--line);
-  color: var(--ink-soft);
+.home-dashboard-member {
+  display: grid;
+  gap: 8px;
+  padding: 15px;
+  border: 1px solid rgba(190, 167, 125, 0.24);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.4);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.home-dashboard-member:hover,
+.home-dashboard-member:focus-visible,
+.home-dashboard-member.selected {
+  border-color: rgba(52, 104, 88, 0.48);
+  background: rgba(238, 247, 239, 0.74);
+  outline: none;
+}
+
+.home-dashboard-member-head {
   display: flex;
-  flex-wrap: wrap;
-  font-size: 12.5px;
-  gap: 8px 18px;
-  line-height: 1.5;
-  padding: 12px 2px 0;
-}
-
-.ov-status-item {
   align-items: center;
-  display: inline-flex;
-  gap: 6px;
+  justify-content: space-between;
+  gap: 8px;
 }
 
-.ov-status-item .app-icon { color: var(--clay); flex: 0 0 auto; }
-.ov-status-item strong { color: var(--ink); }
-
-.ov-status-chips {
-  align-items: center;
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 6px;
+.home-dashboard-member-role,
+.home-dashboard-member-meta {
+  color: var(--ink-soft, #6d6659);
+  font-size: 12px;
 }
 
-/* 状态胶囊加深文字颜色以满足 WCAG AA 对比度（axe 验收路径）。 */
-.ov-panel .pill.pine { background: var(--pine-tint); color: #244d40; }
-.ov-panel .pill.clay { background: var(--clay-tint); color: #7f3925; }
-.ov-panel .pill.gold { background: var(--gold-tint); color: #6f4e08; }
-.ov-panel .pill.rose { background: var(--rose-tint); color: #7e2330; }
-.ov-panel .pill.plain { background: var(--paper-deep); color: #4f493f; }
-.ov-status .pill.sage { background: var(--sage-tint); color: #3c5241; }
-.ov-status .pill.plain { background: var(--paper-deep); color: #4f493f; }
+/* These compact status pills are also used in the keyboard/axe acceptance path. */
+.home-dashboard-card .pill.pine { background: var(--pine-tint); color: #244d40; }
+.home-dashboard-card .pill.clay { background: var(--clay-tint); color: #7f3925; }
+.home-dashboard-card .pill.gold { background: var(--gold-tint); color: #6f4e08; }
+.home-dashboard-card .pill.rose { background: var(--rose-tint); color: #7e2330; }
+.home-dashboard-card .pill.plain { background: var(--paper-deep); color: #4f493f; }
 
-@media (max-width: 1180px) {
-  .ov-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-
-@media (max-width: 900px) {
-  .ov-band { grid-template-columns: 1fr; }
+@media (max-width: 1050px) {
+  .home-dashboard-primary {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 760px) {
-  .ov-columns, .ov-columns-two { grid-template-columns: 1fr; }
-  .ov-row-detail, .ov-row-main span:not(.pill) { white-space: normal; }
+  .home-dashboard-secondary {
+    grid-template-columns: 1fr;
+  }
+
+  .home-dashboard-card {
+    padding: 17px;
+    border-radius: 17px;
+  }
+
+  .home-dashboard-primary,
+  .home-dashboard-secondary {
+    gap: 14px;
+    margin-top: 14px;
+  }
+
+  .home-dashboard-list-detail {
+    white-space: normal;
+  }
 }
 </style>

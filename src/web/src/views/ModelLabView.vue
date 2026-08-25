@@ -316,7 +316,7 @@ onMounted(() => {
   <section class="page-hero">
     <div class="card-heading" style="margin-bottom: 0">
       <div>
-        <h2 class="hero-greeting">模型实验室</h2>
+        <h2 class="hero-greeting gradient-text">模型实验室</h2>
         <p class="hero-sub">
           面向管理员与研发：版本绑定、固定集对照、发布与回滚、困难样本池与训练同意。此页不展示任何家庭健康正文。
         </p>

@@ -111,7 +111,7 @@ const tickerText = computed(() => {
   if (pendingReviews.value > 0) {
     parts.push(`还有 ${pendingReviews.value} 条识别候选等待人工复核`)
   }
-  parts.push('家庭健康记录 · 不提供诊断、处方或用药决策')
+  parts.push('教学演示系统 · 不提供诊断、处方或用药决策')
   return parts.join('　　·　　')
 })
 
@@ -479,7 +479,7 @@ onBeforeUnmount(() => {
 
     <div class="bs-footer">
       {{ loading ? '正在刷新聚合数据…' : lastUpdated ? `每 30 秒自动刷新 · 上次更新 ${lastUpdated.toLocaleTimeString('zh-CN')}` : '' }}
-      · 家庭记录参考，不用于诊断或治疗
+      · 教学演示，不用于诊断或治疗
     </div>
   </div>
 
