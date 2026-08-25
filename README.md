@@ -100,27 +100,25 @@ scripts/start.ps1 web
 
 ### 可选：启用联网搜索与刷新知识库
 
-两项能力默认关闭/受限，详细步骤见[本地部署与 Demo 操作指南 §4.2/§4.3](docs/本地部署与Demo操作指南.md)。
+两项能力默认关闭/受限。**按步骤启用请看专文：**
 
-**联网搜索**（部署开关 + 每次请求勾选，双重开启）：在 `.env` 设置后重启 API，再到助手页勾选「补充联网参考」。
+→ [联网搜索与知识库刷新启用指南](docs/demo/联网搜索与知识库刷新启用指南.md)
+
+（环境说明亦可对照[本地部署与 Demo 操作指南 §4.2/§4.3](docs/本地部署与Demo操作指南.md)。）
+
+**最短路径（课堂演示）：**
+
+1. `.env` 写入并重启 API：
 
 ```dotenv
 AGENT_WEB_SEARCH_ENABLED=true
-# 离线课堂演示（完全不出网）：
 AGENT_WEB_SEARCH_PROVIDER=fixture
-# 真实联网改为 duckduckgo_html 并配置 AGENT_WEB_SEARCH_ALLOWED_DOMAINS
 ```
 
-外部结果只作为「外部参考（非本地审核证据）」展示，查询自动脱敏，健康数据不出网。
+2. 网页 Actor 填 `demo-parent` → 助手页勾选「补充联网参考」→ 提问。
+3. 同一身份打开「知识文档」→「一键教学闭环：抓取 → 批准 → 晋升」→ 按页面提示做 dry-run 入库。
 
-**知识库刷新**（受控爬虫，永不 auto_ingest）：以 `demo-parent` 等知识管理员身份打开「知识文档」页，用「一键教学闭环：抓取 → 批准 → 晋升」，随后按页面提示执行 dry-run 入库；等价 CLI：
-
-```powershell
-uv run python scripts/crawl_knowledge_sources.py            # 抓取白名单夹具到 staging
-uv run python scripts/promote_knowledge_staging.py promote --actor-id knowledge-steward
-uv run python scripts/ingest_local_knowledge.py --manifest docs/knowledge/approved/incoming/正式知识清单.crawl.json --source-root docs/knowledge/approved --actor-id knowledge-steward --index-version approved-crawl-v1 --dry-run
-```
-
+外部结果只作为「外部参考（非本地审核证据）」；爬虫**永不 auto_ingest**。
 ### 提交前检查
 
 ```powershell
