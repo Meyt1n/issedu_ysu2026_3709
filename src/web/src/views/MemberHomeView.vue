@@ -4,6 +4,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { apiClient } from '../api/client'
 import type { HealthEvent, PlanWorkbenchResponse, RiskListResponse } from '../api/types'
 import AppIcon from '../components/AppIcon.vue'
+import HealthNewsPanel from '../components/HealthNewsPanel.vue'
 import {
   formatError,
   onHealthDataRefresh,
@@ -92,6 +93,8 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
     <AppIcon name="info" :size="16" />
     暂时没有读取到最新记录，拍照录药仍然可以使用。
   </p>
+
+  <HealthNewsPanel />
 
   <section v-if="awaitingConfirmationTasks.length" class="card member-pending-card" aria-label="等待家人确认的照片">
     <div class="card-heading">

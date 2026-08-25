@@ -638,6 +638,22 @@ export interface WeatherResponse {
   reason?: string
 }
 
+export interface HealthNewsItem {
+  id: string
+  title: string
+  summary: string
+  tag: string
+  chat_prompt: string
+  source: 'seasonal_calendar'
+}
+
+export interface HealthNewsResponse {
+  generated_at: string
+  season: string
+  items: HealthNewsItem[]
+  disclaimer: string
+}
+
 export interface AssistantChatInput {
   messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>
   model?: string

@@ -8,6 +8,7 @@ import SkeletonList from './components/SkeletonList.vue'
 import {
   dismissToast,
   MEMBER_VIEWS,
+  SHARED_VIEWS,
   onHealthDataRefresh,
   refreshPendingReviewCount,
   selectHousehold,
@@ -82,6 +83,7 @@ const NAV_ITEMS: Array<{ view: ViewName; label: string; icon: string; group: str
   { view: 'member-plans', label: '服药提醒', icon: 'plan', group: '我的照护' },
   { view: 'member-records', label: '我的记录', icon: 'compass', group: '我的照护' },
   { view: 'member-help', label: '使用帮助', icon: 'info', group: '我的照护' },
+  { view: 'assistant', label: '健康助手', icon: 'assistant', group: '我的照护' },
   { view: 'overview', label: '家庭总览', icon: 'home', group: '日常照护' },
   { view: 'members', label: '成员档案', icon: 'members', group: '日常照护' },
   { view: 'plans', label: '健康计划', icon: 'plan', group: '日常照护' },
@@ -121,7 +123,9 @@ const VIEW_COMPONENTS: Record<ViewName, unknown> = {
 const visibleNavItems = computed(() => {
   const portalItems =
     session.portal === 'member'
-      ? NAV_ITEMS.filter(item => MEMBER_VIEWS.includes(item.view))
+      ? NAV_ITEMS.filter(
+          item => MEMBER_VIEWS.includes(item.view) || SHARED_VIEWS.includes(item.view),
+        )
       : NAV_ITEMS.filter(item => !MEMBER_VIEWS.includes(item.view))
   return SHOW_ADVANCED_LAB ? portalItems : portalItems.filter(item => item.view !== 'modellab')
 })

@@ -26,6 +26,7 @@ import {
 } from '../assistant/voice'
 import AppIcon from '../components/AppIcon.vue'
 import {
+  consumeAssistantSeedPrompt,
   formatError,
   requestOptions,
   selectMember,
@@ -403,6 +404,11 @@ watch(
 
 onMounted(() => {
   void loadAgentCatalog()
+  const seeded = consumeAssistantSeedPrompt()
+  if (seeded) {
+    draft.value = seeded
+    void send(seeded)
+  }
 })
 
 function stopVoiceInput(): void {
