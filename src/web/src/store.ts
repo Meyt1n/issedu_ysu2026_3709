@@ -141,9 +141,9 @@ export function formatError(cause: unknown): string {
     }
     if (cause.code === 'DEPENDENCY_UNAVAILABLE') {
       return (
-        '本地 API 服务不可用：无法连接本地 API，本次没有改变任何数据。请确认 API 已启动'
-        + '（scripts/start.ps1 api 或 Compose 的 api 服务）、端口配置正确，'
-        + '并用 /health 验证后重试。'
+        '本地 API 服务不可用，本次没有改变任何数据。无法连接本地 API：'
+        + '请确认 API 已在 8000 端口运行（本地进程 scripts/start api，'
+        + '或 Docker Compose 的 api 服务处于 healthy），并用 /health 验证后重试。'
       )
     }
     if (cause.message === 'KNOWLEDGE_STEWARD_REQUIRED') {

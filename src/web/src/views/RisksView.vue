@@ -83,7 +83,7 @@ function jumpToSourceEvent(source: { id?: string }): void {
     /* ignore */
   }
   setView('members')
-  pushToast('已打开成员档案；请在时间线中定位来源事件', 'info')
+  pushToast('info', '已打开成员档案；请在时间线中定位来源事件')
 }
 
 async function loadRisks(): Promise<void> {

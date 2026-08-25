@@ -122,12 +122,30 @@ function parseErrorBody(body: unknown, status: number, requestId: string | null)
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000
 
 /**
+ * 演示补种一次会追加 20+ 条演示事件；慢盘 MySQL/远程隧道下可能超过默认超时。
+ * 种子使用固定幂等键，超时后重试不会产生重复数据，因此单独放宽这次写请求。
+ */
+export const DEMO_SEED_TIMEOUT_MS = 30_000
+
+/**
  * 人脸注册/登录（multipart 三帧）的专用超时：本地 YuNet+SFace 推理通常只要
  * 1~3 秒，但首次使用时服务端可能要从 OpenCV Zoo 下载约 37MB 的 SFace 权重，
  * 慢网络下远超默认 15 秒——之前直接被中止并误报「本地 API 不可用」（HCT-424）。
  * 只放宽人脸这几条调用，不放宽全局默认值；仍然有界，挂死请求可恢复。
  */
 export const FACE_REQUEST_TIMEOUT_MS = 120_000
+
+/**
+ * 识别「网关层不可用」：请求根本没有到达本地 API，而是被中间代理挡回。
+ * - Vite dev 代理在 API 未启动（ECONNREFUSED）时返回 500 且响应体为空；
+ * - Compose 的 Nginx 在 api 容器不可达时返回 502/504（HTML 错误页）。
+ * 真实后端错误（FastAPI HTTPException/崩溃）都带响应体，且业务错误是 JSON
+ * 信封，因此不会被误判。这样页面才能把「API 未启动」与业务失败分开提示。
+ */
+function isGatewayUnavailable(status: number, rawBody: string): boolean {
+  if (status === 502 || status === 504) return true
+  return (status === 500 || status === 503) && rawBody.trim() === ''
+}
 
 export class ApiClient {
   private readonly baseUrl: string
@@ -203,6 +221,13 @@ export class ApiClient {
 
     if (!response.ok) {
       if (response.status === 401) this.unauthorizedHandler?.()
+      if (isGatewayUnavailable(response.status, text)) {
+        throw new ApiClientError('API service is unavailable behind the local proxy', {
+          status: response.status,
+          code: 'DEPENDENCY_UNAVAILABLE',
+          requestId,
+        })
+      }
       throw parseErrorBody(body, response.status, requestId)
     }
     return body as T
@@ -1247,7 +1272,11 @@ export class ApiClient {
   }
 
   seedFormalDemoHealth(options?: RequestOptions): Promise<Record<string, unknown>> {
-    return this.request('/api/v1/demo/formal-health-seed', { method: 'POST' }, options)
+    return this.request(
+      '/api/v1/demo/formal-health-seed',
+      { method: 'POST' },
+      { timeoutMs: DEMO_SEED_TIMEOUT_MS, ...options },
+    )
   }
 
   listClassroomScenarios(
