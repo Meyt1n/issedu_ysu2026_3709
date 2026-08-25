@@ -45,6 +45,7 @@ const overlayLabel = computed(() => {
   if (capturing.value) return '正在打开摄像头…'
   return '把脸放进圆圈'
 })
+const modeLabel = computed(() => (props.mode === 'registration' ? '录入人脸' : '刷脸登录'))
 
 function stopCamera(): void {
   for (const track of stream?.getTracks() ?? []) track.stop()
@@ -63,7 +64,6 @@ function speak(text: string): void {
 
 async function speakAndPause(text: string, pauseMs: number): Promise<void> {
   speak(text)
-  // Give slow speech time to finish before the next action; length-based floor.
   const estimated = Math.min(5200, Math.max(pauseMs, text.length * 95))
   await wait(estimated)
 }
@@ -181,14 +181,30 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="face-capture face-capture--elder" data-testid="face-video-capture">
-    <div class="face-capture-intro">
+    <header class="face-capture-intro">
+      <div class="face-capture-intro-top">
+        <p class="face-capture-eyebrow">{{ modeLabel }} · 本地安全</p>
+        <span class="face-capture-badge" :class="voiceOn ? 'is-on' : 'is-off'">
+          {{ voiceSupported ? (voiceOn ? '语音已开' : '语音已关') : '无语音设备' }}
+        </span>
+      </div>
       <p class="face-capture-intro-title">{{ intro.title }}</p>
       <ol class="face-capture-bullets">
-        <li v-for="item in intro.bullets" :key="item">{{ item }}</li>
+        <li v-for="item in intro.bullets" :key="item">
+          <span class="face-capture-bullet-mark" aria-hidden="true" />
+          <span>{{ item }}</span>
+        </li>
       </ol>
-    </div>
+    </header>
 
-    <div class="face-stage" :class="{ 'is-live': capturing }">
+    <div
+      class="face-stage"
+      :class="{
+        'is-live': capturing,
+        'is-countdown': countdown > 0,
+        'is-idle': !capturing,
+      }"
+    >
       <video
         ref="video"
         class="face-preview"
@@ -196,24 +212,47 @@ onBeforeUnmount(() => {
         playsinline
         aria-label="摄像头预览，请把脸放进中间圆圈"
       />
+      <div class="face-stage-vignette" aria-hidden="true" />
       <div class="face-guide" aria-hidden="true">
-        <div class="face-guide-oval" />
-        <div class="face-guide-crosshair" />
+        <div class="face-guide-ring">
+          <div class="face-guide-oval" />
+        </div>
+        <div class="face-guide-markers">
+          <i /><i /><i /><i />
+        </div>
       </div>
+
+      <div
+        v-if="countdown > 0"
+        class="face-countdown"
+        role="status"
+        aria-live="assertive"
+      >
+        {{ countdown }}
+      </div>
+
       <div class="face-stage-banner" role="status" aria-live="polite">
-        <strong>{{ overlayLabel }}</strong>
-        <span v-if="activeStep">{{ activeStep.hint }}</span>
+        <p class="face-stage-kicker">
+          {{ activeStep ? faceStepLabel(stepIndex) : capturing ? '准备中' : '准备开始' }}
+        </p>
+        <strong :class="{ 'is-count': countdown > 0 }">{{ overlayLabel }}</strong>
+        <span v-if="activeStep && countdown === 0">{{ activeStep.hint }}</span>
         <span v-else-if="!capturing">坐稳后点下面的大按钮开始</span>
       </div>
-      <div class="face-step-dots" aria-hidden="true">
-        <i
-          v-for="(_, index) in FACE_CAPTURE_STEPS"
-          :key="index"
+
+      <div class="face-step-rail" aria-hidden="true">
+        <div
+          v-for="(step, index) in FACE_CAPTURE_STEPS"
+          :key="step.title"
+          class="face-step-chip"
           :class="{
             done: stepIndex > index,
             current: stepIndex === index,
           }"
-        />
+        >
+          <em>{{ index + 1 }}</em>
+          <span>{{ index === 0 ? '正对' : index === 1 ? '左转' : '右转' }}</span>
+        </div>
       </div>
     </div>
 
@@ -232,7 +271,7 @@ onBeforeUnmount(() => {
       <button
         v-if="voiceSupported"
         type="button"
-        class="btn btn-ghost btn-small"
+        class="btn btn-ghost btn-small face-voice-toggle"
         :aria-pressed="voiceOn"
         @click="toggleVoice"
       >
