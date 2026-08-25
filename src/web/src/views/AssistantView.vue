@@ -440,6 +440,11 @@ function startVoiceRecognition(sessionId: number): void {
     if (sessionId !== voiceSessionId) return
     if (recognition === nextRecognition) recognition = null
     if (!voiceStopRequested && !voiceFatalError && listening.value) {
+      // 浏览器识别会话结束后其结果列表会清空；把已写入的草稿折叠进前缀，
+      // 重启聆听时继续追加，而不是覆盖之前说过的内容。
+      if (voiceMode.value === 'active') {
+        voiceDraftPrefix = draft.value.trim() ? `${draft.value.trim()} ` : ''
+      }
       scheduleVoiceRecognition(sessionId)
     }
   }
@@ -468,6 +473,11 @@ function toggleVoiceInput(): void {
     return
   }
 
+  // 听说互斥：开始聆听前停止朗读，避免麦克风把合成语音写进草稿。
+  if (speakingIndex.value !== null) {
+    stopSpeaking()
+    speakingIndex.value = null
+  }
   voiceDraftPrefix = draft.value.trim() ? `${draft.value.trim()} ` : ''
   voicePreview.value = ''
   voiceStopRequested = false
@@ -484,6 +494,8 @@ function toggleSpeech(index: number, content: string): void {
     return
   }
   voiceError.value = ''
+  // 听说互斥：朗读回答前先停止语音输入，识别不会把播报内容当作提问。
+  if (listening.value) stopVoiceInput()
   const started = speakText(content, () => {
     if (speakingIndex.value === index) speakingIndex.value = null
   })
