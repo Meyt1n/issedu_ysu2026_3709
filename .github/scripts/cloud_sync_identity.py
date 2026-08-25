@@ -68,6 +68,12 @@ IDENTITIES: dict[str, dict[str, Any]] = {
 DIRECT_MAINTENANCE_PATH_PREFIXES = ("doc/", "docs/")
 DIRECT_MAINTENANCE_FILE_STATUSES = {"added", "modified"}
 
+# Cursor Agent commits are created on behalf of the PR owner.  They may only
+# inherit a registered member identity when the commit message explicitly
+# names that member as a co-author; an arbitrary member-to-member mismatch must
+# remain rejected.
+AUTOMATION_LOGINS = {"cursoragent"}
+
 
 def _text(value: object) -> str:
     return value.strip() if isinstance(value, str) else ""
@@ -92,10 +98,40 @@ def resolve_login_identity(github_login: str) -> dict[str, Any]:
     return _identity_for_login(normalized_login)
 
 
+def _has_registered_coauthor(identity: dict[str, Any], commit: dict[str, Any]) -> bool:
+    message = (commit.get("commit") or {}).get("message")
+    if not isinstance(message, str):
+        return False
+
+    github_login = identity["github_login"].casefold()
+    known_names = {value.casefold() for value in identity["git_names"]}
+    known_names.add(github_login)
+    known_emails = {value.casefold() for value in identity["git_emails"]}
+    noreply_email = f"{github_login}@users.noreply.github.com"
+    known_emails.add(noreply_email)
+
+    for line in message.splitlines():
+        prefix = "co-authored-by:"
+        if not line.strip().casefold().startswith(prefix):
+            continue
+        value = line.strip()[len(prefix):].strip()
+        if "<" not in value or not value.endswith(">"):
+            continue
+        name, email = value[:-1].rsplit("<", 1)
+        if name.strip().casefold() in known_names or email.strip().casefold() in known_emails:
+            return True
+    return False
+
+
 def _commit_matches(identity: dict[str, Any], commit: dict[str, Any]) -> bool:
     linked_login = _text((commit.get("author") or {}).get("login"))
     if linked_login:
-        return linked_login.casefold() == identity["github_login"].casefold()
+        if linked_login.casefold() == identity["github_login"].casefold():
+            return True
+        return (
+            linked_login.casefold() in AUTOMATION_LOGINS
+            and _has_registered_coauthor(identity, commit)
+        )
 
     git_author = (commit.get("commit") or {}).get("author") or {}
     git_email = _text(git_author.get("email")).casefold()
@@ -112,7 +148,7 @@ def resolve_commit_identity(commit: dict[str, Any]) -> dict[str, Any]:
     """Resolve one GitHub commit to exactly one configured internal identity."""
 
     linked_login = _text((commit.get("author") or {}).get("login"))
-    if linked_login:
+    if linked_login and linked_login.casefold() not in AUTOMATION_LOGINS:
         identity = _identity_for_login(linked_login)
         if not _commit_matches(identity, commit):
             raise IdentityError(
