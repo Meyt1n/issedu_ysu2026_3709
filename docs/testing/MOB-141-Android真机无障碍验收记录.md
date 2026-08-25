@@ -20,7 +20,7 @@
 | Android 版本 | 待填写 |
 | Android System WebView 版本 | 待填写 |
 | TalkBack 版本 | 待填写 |
-| 中文 TTS 引擎与版本 | 待填写；应标明是否可用 |
+| 中文 TTS 引擎与版本 | 待填写；应标明是否可用；是否已装 Natural 类中文包见 [听感准备说明](../demo/中文语音包与听感准备说明.md) |
 | APK 文件名与版本 | 待填写 |
 | APK SHA-256 | 待填写；PowerShell：`Get-FileHash app-debug.apk -Algorithm SHA256` |
 | APK 安装方式 | 待填写；例如受控 USB 安装 |

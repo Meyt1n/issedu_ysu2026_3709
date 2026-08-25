@@ -94,6 +94,7 @@ scripts/start.ps1 web
 1. 用上面的路径 B 或 Compose 起 API/Web（默认端口 **8000 / 5173 或 8080**）。
 2. 按 [视觉演示说明](docs/demo/vision-samples/README.md) 自备 PaddleOCR 环境、生成 `demo-cn-en-v1`、启动 `scripts/vision_worker.py`，上传本目录合成药盒。
 3. 按 [本地大模型闭环](docs/demo/local-llm-v5.md) 在仓库外准备 Ollama 模型，设置 `OLLAMA_MODEL` 后重启 API；先在自己建的成员上确认一条用药再提问。
+4. 若演示助手「朗读回答」或随身版长辈播报：先按 [中文语音包与听感准备说明](docs/demo/中文语音包与听感准备说明.md) 在本机安装 Natural 类中文 TTS；仓库不附带语音包，仅有机械默认音色时听感改善有限。
 
 `VISION_ADAPTER_SIGNING_KEY` 必须与 worker 的 `HCT_ADAPTER_SIGNING_KEY` 相同（示例均为 `dev-only-change-me`）。v5 尚未完成正式评估，输出只用于教学演示。
 
