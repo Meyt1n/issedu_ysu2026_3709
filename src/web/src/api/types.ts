@@ -338,7 +338,10 @@ export interface RequestOptions {
   accessPurpose?: string
   idempotencyKey?: string
   signal?: AbortSignal
-  /** 单次请求超时（毫秒）。超时视为本地 API 不可用，写请求可凭幂等键安全重试。 */
+  /**
+   * 单次请求超时（毫秒）。超时返回 `REQUEST_TIMEOUT`（服务端可能仍在处理，
+   * 不等同于「API 不可用」）；连接失败才返回 `DEPENDENCY_UNAVAILABLE`。
+   */
   timeoutMs?: number
 }
 

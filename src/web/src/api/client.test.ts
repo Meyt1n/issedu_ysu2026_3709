@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { ApiClient, DEMO_SEED_TIMEOUT_MS } from './client'
+import { ApiClient, DEMO_SEED_TIMEOUT_MS, FACE_REQUEST_TIMEOUT_MS } from './client'
 
 describe('ApiClient authorization contract', () => {
   it('registers face credentials as multipart without exposing secrets in the URL', async () => {
@@ -345,8 +345,9 @@ describe('ApiClient authorization contract', () => {
     }
   })
 
-  it('converts a hung request into DEPENDENCY_UNAVAILABLE instead of pending forever', async () => {
+  it('converts a hung request into REQUEST_TIMEOUT instead of pending forever', async () => {
     // 复现 dev 代理丢失响应的场景：fetch 永不 resolve，只能被超时信号中止。
+    // 超时必须区别于「服务不可用」：服务端可能仍在处理（HCT-424 误报根因）。
     const fetcher: typeof fetch = (_input, init) =>
       new Promise<Response>((_resolve, reject) => {
         init?.signal?.addEventListener('abort', () => {
@@ -359,7 +360,7 @@ describe('ApiClient authorization contract', () => {
       client.listHouseholds({ actorId: 'owner', timeoutMs: 40 }),
     ).rejects.toMatchObject({
       status: 0,
-      code: 'DEPENDENCY_UNAVAILABLE',
+      code: 'REQUEST_TIMEOUT',
       message: expect.stringContaining('timed out'),
     })
   })
@@ -437,9 +438,56 @@ describe('ApiClient authorization contract', () => {
       client.seedFormalDemoHealth({ actorId: 'demo-parent', timeoutMs: 40 }),
     ).rejects.toMatchObject({
       status: 0,
-      code: 'DEPENDENCY_UNAVAILABLE',
+      code: 'REQUEST_TIMEOUT',
       message: 'API request timed out after 40ms',
     })
+  })
+
+  it('keeps DEPENDENCY_UNAVAILABLE for connection failures that are not timeouts', async () => {
+    const fetcher: typeof fetch = async () => {
+      throw new TypeError('Failed to fetch')
+    }
+    const client = new ApiClient({ baseUrl: 'http://local.test', fetcher })
+
+    await expect(client.listHouseholds({ actorId: 'owner' })).rejects.toMatchObject({
+      status: 0,
+      code: 'DEPENDENCY_UNAVAILABLE',
+      message: 'API service is unavailable',
+    })
+  })
+
+  it('gives face register and login multipart calls the longer face timeout', async () => {
+    // HCT-424：人脸三帧请求首次可能触发服务端模型下载，默认 15 秒会误中止
+    // 并显示「本地 API 不可用」；这里只放宽人脸调用，其它请求保持默认。
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout')
+    try {
+      const fetcher: typeof fetch = async input => new Response(
+        JSON.stringify(String(input).includes('face-credentials')
+          ? { id: 'credential-1', status: 'ACTIVE' }
+          : { actor_id: 'owner', household_id: 'home', session_token: 's'.repeat(40), expires_at: 123 }),
+        { status: String(input).includes('face-credentials') ? 201 : 200 },
+      )
+      const client = new ApiClient({ baseUrl: 'http://local.test', fetcher })
+      const frame = new File(['frame'], 'frame.jpg', { type: 'image/jpeg' })
+
+      await client.registerFaceCredential('home-1', [frame, frame, frame], {
+        consent: true,
+        confirmationMethod: 'pin',
+        confirmationCode: '123456',
+      }, { sessionToken: 's'.repeat(40) })
+      await client.loginWithFace('home-1', 'owner', 'c'.repeat(32), [frame, frame])
+      await client.loginWithFamilyFace('home-1', 'c'.repeat(32), [frame, frame])
+      await client.listHouseholds({ actorId: 'owner' })
+
+      expect(timeoutSpy.mock.calls.map(call => call[0])).toEqual([
+        FACE_REQUEST_TIMEOUT_MS,
+        FACE_REQUEST_TIMEOUT_MS,
+        FACE_REQUEST_TIMEOUT_MS,
+        15_000,
+      ])
+    } finally {
+      timeoutSpy.mockRestore()
+    }
   })
 
   it('propagates caller-initiated aborts without masking them as unavailability', async () => {

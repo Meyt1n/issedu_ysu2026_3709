@@ -1363,18 +1363,22 @@ onBeforeUnmount(() => {
       </section>
 
       <div ref="chatWindow" class="chat-window">
-      <div v-if="history.length === 0" class="empty-state">
-        <AppIcon class="empty-art" name="assistant" :size="40" />
-        <strong>向家庭助手提问</strong>
-        <p>助手会调用本地事实、规则与知识文档回答；没有证据时会拒答并提示联系医生或药师。</p>
-        <div class="row-actions" style="justify-content: center">
+      <div class="chat-thread" :class="{ empty: history.length === 0 }">
+      <div v-if="history.length === 0" class="assistant-empty">
+        <span class="assistant-empty-art" aria-hidden="true">
+          <AppIcon name="assistant" :size="30" />
+        </span>
+        <strong class="assistant-empty-title">向家庭助手提问</strong>
+        <p class="assistant-empty-sub">回答只依据这个家庭的本地事实与已审核资料；证据不足会明说。</p>
+        <div class="assistant-empty-suggestions">
           <button
             v-for="suggestion in SUGGESTIONS"
             :key="suggestion"
             type="button"
-            class="btn btn-ghost btn-small"
+            class="assistant-suggestion"
             @click="useSuggestedQuestion(suggestion)"
           >
+            <AppIcon name="sparkle" :size="13" aria-hidden="true" />
             {{ suggestion }}
           </button>
         </div>
@@ -1430,6 +1434,9 @@ onBeforeUnmount(() => {
                 依据标识：{{ source }}
               </span>
             </template>
+            <span v-if="(entry.citations?.length ?? 0) > 0" class="chat-meta-label">
+              依据 · {{ entry.citations?.length }} 条
+            </span>
             <details
               v-for="citation in entry.citations ?? []"
               :key="`${citation.document_id}:${citation.chunk_id}`"
@@ -1460,11 +1467,11 @@ onBeforeUnmount(() => {
             </details>
           </div>
           <div
-            v-if="entry.role === 'assistant' && !isStreaming(entry) && (entry.suggestedQuestions?.length ?? 0) > 0"
+            v-if="entry.role === 'assistant' && !isStreaming(entry) && index === history.length - 1 && (entry.suggestedQuestions?.length ?? 0) > 0"
             class="chat-follow-ups"
             aria-label="相关追问"
           >
-            <span class="chat-follow-ups-label">你还可以问：</span>
+            <span class="chat-follow-ups-label">你还可以问</span>
             <button
               v-for="question in entry.suggestedQuestions"
               :key="question"
@@ -1478,39 +1485,40 @@ onBeforeUnmount(() => {
           </div>
           <div
             v-if="entry.role === 'assistant' && !isStreaming(entry) && entry.content"
-            class="chat-follow-ups"
-            aria-label="用药安全复核"
+            class="chat-message-actions"
+            aria-label="回答操作"
           >
+            <template v-if="speechOutputSupported">
+              <button
+                type="button"
+                class="btn btn-ghost btn-small"
+                :aria-label="speakingIndex === index ? '停止朗读回答' : '朗读回答'"
+                :aria-pressed="speakingIndex === index"
+                @click="toggleSpeech(index, entry.content)"
+              >
+                <AppIcon :name="speakingIndex === index ? 'close' : 'volume'" :size="14" />
+                {{ speakingIndex === index ? '停止朗读' : '朗读回答' }}
+              </button>
+              <button
+                v-if="speakingIndex === index && speakingProgress"
+                type="button"
+                class="btn btn-ghost btn-small"
+                @click="skipCurrentSpeechSegment"
+              >
+                {{ speakingProgress }} · 跳过本句
+              </button>
+            </template>
             <button
               type="button"
-              class="btn btn-ghost btn-small chat-follow-up"
+              class="btn btn-ghost btn-small"
               :disabled="sending"
               @click="resendAsMedicationSafety(index)"
             >
+              <AppIcon name="shield" :size="14" />
               按用药安全再查一次
             </button>
-          </div>
-          <div v-if="entry.role === 'assistant' && !isStreaming(entry) && speechOutputSupported" class="chat-voice-actions">
-            <button
-              type="button"
-              class="btn btn-ghost btn-small"
-              :aria-label="speakingIndex === index ? '停止朗读回答' : '朗读回答'"
-              :aria-pressed="speakingIndex === index"
-              @click="toggleSpeech(index, entry.content)"
-            >
-              <AppIcon :name="speakingIndex === index ? 'close' : 'volume'" :size="14" />
-              {{ speakingIndex === index ? '停止朗读' : '朗读回答' }}
-            </button>
-            <button
-              v-if="speakingIndex === index && speakingProgress"
-              type="button"
-              class="btn btn-ghost btn-small"
-              @click="skipCurrentSpeechSegment"
-            >
-              {{ speakingProgress }} · 跳过本句
-            </button>
             <div
-              v-if="speakingIndex === index && activeSpeakingSegments.length > 1"
+              v-if="speechOutputSupported && speakingIndex === index && activeSpeakingSegments.length > 1"
               class="speech-segment-chips"
               aria-label="朗读分段跳转"
             >
@@ -1569,6 +1577,7 @@ onBeforeUnmount(() => {
           <span class="thinking-wave" aria-hidden="true"><i /><i /><i /><i /></span>
           <span class="thinking-text">{{ thinkingText }}</span>
         </div>
+      </div>
       </div>
     </div>
 
@@ -1630,7 +1639,7 @@ onBeforeUnmount(() => {
         <textarea
           ref="draftInput"
           v-model="draft"
-          rows="3"
+          rows="2"
           placeholder="例如：最近的用药提醒是依据什么？（回答仅供参考，不构成医疗建议）"
           @focus="onDraftFocus"
           @keydown.enter.exact.prevent="send()"
@@ -1679,14 +1688,21 @@ onBeforeUnmount(() => {
           <button
             v-if="sending"
             type="button"
-            class="btn btn-ghost"
+            class="btn btn-ghost btn-small"
             aria-label="停止生成本次回答"
             @click="cancelActiveSend(true)"
           >
             停止
           </button>
-          <button ref="sendButton" type="submit" class="btn btn-primary" :disabled="!canSend">
-            {{ sending ? '发送中' : '发送' }}
+          <button
+            ref="sendButton"
+            type="submit"
+            class="assistant-send"
+            :disabled="!canSend"
+            :aria-label="sending ? '发送中' : '发送'"
+            :title="sending ? '正在生成回答' : '发送（Enter）'"
+          >
+            <AppIcon name="arrow-up" :size="18" />
           </button>
         </div>
       </form>
@@ -1938,8 +1954,10 @@ AGENT_WEB_SEARCH_ALLOWED_DOMAINS=html.duckduckgo.com
 .assistant-thread.active .assistant-thread-open {
   background: var(--card, #fffcf3);
   border-color: color-mix(in srgb, var(--pine, #38665a) 34%, transparent);
-  box-shadow: 0 6px 16px rgba(94, 71, 42, 0.08);
+  box-shadow: inset 3px 0 0 var(--pine, #38665a), 0 6px 16px rgba(94, 71, 42, 0.08);
 }
+
+.assistant-thread.active .assistant-thread-open strong { color: var(--pine-deep, #2a5045); }
 
 .assistant-thread-delete {
   align-items: center;
@@ -2056,15 +2074,18 @@ AGENT_WEB_SEARCH_ALLOWED_DOMAINS=html.duckduckgo.com
   overflow-y: auto;
 }
 
+/* 输入区：与阅读列同宽居中的大圆角输入卡（类主流 AI 前端 composer）。 */
 .assistant-composer {
-  background: color-mix(in srgb, var(--card, #fffcf3) 88%, transparent);
+  background: color-mix(in srgb, var(--card, #fffcf3) 94%, transparent);
   border: 1px solid var(--line, rgba(190, 167, 125, 0.4));
-  border-radius: 18px;
-  box-shadow: 0 10px 26px rgba(94, 71, 42, 0.07);
+  border-radius: 22px;
+  box-shadow: 0 12px 30px rgba(94, 71, 42, 0.08);
   flex-direction: column;
-  gap: 9px;
+  gap: 8px;
+  margin-inline: auto;
   margin-top: 4px;
-  padding: 12px 14px;
+  padding: 13px 15px 11px;
+  width: min(100%, 820px);
 }
 
 .assistant-composer textarea {
@@ -2072,8 +2093,10 @@ AGENT_WEB_SEARCH_ALLOWED_DOMAINS=html.duckduckgo.com
   border: 0;
   box-shadow: none;
   font-size: 15px;
-  min-height: 68px;
+  line-height: 1.6;
+  min-height: 48px;
   outline: none;
+  padding: 2px 2px 0;
   width: 100%;
 }
 
@@ -2086,17 +2109,132 @@ AGENT_WEB_SEARCH_ALLOWED_DOMAINS=html.duckduckgo.com
 .assistant-composer .assistant-composer-actions {
   align-items: center;
   flex-wrap: wrap;
+  gap: 8px;
   width: 100%;
 }
 
 .assistant-composer .assistant-composer-actions > .btn {
+  border-radius: 999px;
   flex: 0 0 auto;
-  height: 42px;
-  min-width: 96px;
   width: auto;
 }
 
 .assistant-composer-spacer { flex: 1 1 auto; }
+
+/* 圆形主发送按钮（↑），与文本框同卡右下角。 */
+.assistant-send {
+  align-items: center;
+  background: linear-gradient(160deg, var(--btn-primary-from, #38665a), var(--btn-primary-to, #2a5045));
+  border: 0;
+  border-radius: 50%;
+  box-shadow: 0 6px 14px rgba(42, 80, 69, 0.28);
+  color: #f6f1e4;
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 40px;
+  justify-content: center;
+  transition: box-shadow 0.16s ease, opacity 0.16s ease, transform 0.16s ease;
+  width: 40px;
+}
+
+.assistant-send:hover:not(:disabled) {
+  box-shadow: 0 8px 18px rgba(42, 80, 69, 0.34);
+  transform: translateY(-1px);
+}
+
+.assistant-send:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--pine, #38665a) 45%, transparent);
+  outline-offset: 2px;
+}
+
+.assistant-send:disabled {
+  box-shadow: none;
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+/* 主区内的提示条与语音状态条与阅读列同宽居中。 */
+.assistant-main > .notice,
+.assistant-main > .voice-session-panel {
+  margin-inline: auto;
+  width: min(100%, 820px);
+}
+
+/* 空状态：吉祥物 + 一句短提示 + 建议胶囊，压缩纵向留白。 */
+.assistant-empty {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  margin: auto 0;
+  padding: clamp(20px, 7vh, 64px) 12px 16px;
+  text-align: center;
+}
+
+.assistant-empty-art {
+  align-items: center;
+  background: linear-gradient(150deg, var(--pine-tint, #e3ece7), var(--sage-tint, #e6ede4));
+  border: 1px solid color-mix(in srgb, var(--pine, #38665a) 20%, transparent);
+  border-radius: 50%;
+  box-shadow: 0 10px 24px rgba(56, 102, 90, 0.14);
+  color: var(--pine-deep, #2a5045);
+  display: flex;
+  height: 58px;
+  justify-content: center;
+  margin-bottom: 2px;
+  width: 58px;
+}
+
+.assistant-empty-title {
+  color: var(--ink, #37332b);
+  font-family: var(--font-display);
+  font-size: clamp(19px, 2vw, 23px);
+  letter-spacing: 0.5px;
+}
+
+.assistant-empty-sub {
+  color: var(--ink-soft, #6d6659);
+  font-size: 13.5px;
+  line-height: 1.6;
+  margin: 0;
+  max-width: 46ch;
+}
+
+.assistant-empty-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 8px;
+}
+
+.assistant-suggestion {
+  align-items: center;
+  background: color-mix(in srgb, var(--card, #fffcf3) 82%, transparent);
+  border: 1px solid var(--line, rgba(190, 167, 125, 0.4));
+  border-radius: 999px;
+  color: var(--ink-soft, #6d6659);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 13px;
+  font-weight: 600;
+  gap: 6px;
+  line-height: 1.4;
+  padding: 8px 14px;
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.16s ease;
+}
+
+.assistant-suggestion .app-icon { color: var(--clay, #c26744); flex: 0 0 auto; }
+
+.assistant-suggestion:hover,
+.assistant-suggestion:focus-visible {
+  background: var(--card, #fffcf3);
+  border-color: color-mix(in srgb, var(--pine, #38665a) 36%, transparent);
+  color: var(--pine-deep, #2a5045);
+  outline: none;
+  transform: translateY(-1px);
+}
 
 .assistant-net-toggle {
   align-items: center;
@@ -2187,6 +2325,11 @@ AGENT_WEB_SEARCH_ALLOWED_DOMAINS=html.duckduckgo.com
 @media (prefers-reduced-motion: reduce) {
   .assistant-settings { animation: none; }
   .assistant-status-chip.busy .app-icon { animation: none; }
+  .assistant-send,
+  .assistant-suggestion { transition: none; }
+  .assistant-send:hover:not(:disabled),
+  .assistant-suggestion:hover,
+  .assistant-suggestion:focus-visible { transform: none; }
 }
 
 @media (max-width: 860px) {

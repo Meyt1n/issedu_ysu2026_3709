@@ -128,6 +128,14 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 15_000
 export const DEMO_SEED_TIMEOUT_MS = 30_000
 
 /**
+ * 人脸注册/登录（multipart 三帧）的专用超时：本地 YuNet+SFace 推理通常只要
+ * 1~3 秒，但首次使用时服务端可能要从 OpenCV Zoo 下载约 37MB 的 SFace 权重，
+ * 慢网络下远超默认 15 秒——之前直接被中止并误报「本地 API 不可用」（HCT-424）。
+ * 只放宽人脸这几条调用，不放宽全局默认值；仍然有界，挂死请求可恢复。
+ */
+export const FACE_REQUEST_TIMEOUT_MS = 120_000
+
+/**
  * 识别「网关层不可用」：请求根本没有到达本地 API，而是被中间代理挡回。
  * - Vite dev 代理在 API 未启动（ECONNREFUSED）时返回 500 且响应体为空；
  * - Compose 的 Nginx 在 api 容器不可达时返回 502/504（HTML 错误页）。
@@ -185,15 +193,18 @@ export class ApiClient {
       })
     } catch (cause) {
       if (options.signal?.aborted) throw cause
-      throw new ApiClientError(
-        timeoutSignal.aborted
-          ? `API request timed out after ${timeoutMs}ms`
-          : 'API service is unavailable',
-        {
+      // 超时和「连不上」必须区分：超时说明服务端可能仍在处理（例如人脸
+      // 首次推理），不能对用户宣称「API 不可用/没有改变任何数据」（HCT-424）。
+      if (timeoutSignal.aborted) {
+        throw new ApiClientError(`API request timed out after ${timeoutMs}ms`, {
           status: 0,
-          code: 'DEPENDENCY_UNAVAILABLE',
-        },
-      )
+          code: 'REQUEST_TIMEOUT',
+        })
+      }
+      throw new ApiClientError('API service is unavailable', {
+        status: 0,
+        code: 'DEPENDENCY_UNAVAILABLE',
+      })
     }
     const requestId = response.headers.get('x-request-id')
     const text = await response.text()
@@ -267,7 +278,11 @@ export class ApiClient {
     body.append('actor_id', actorId)
     body.append('challenge_id', challengeId)
     for (const frame of frames) body.append('frames', frame, frame.name)
-    return this.request('/api/v1/auth/face-login', { method: 'POST', body })
+    return this.request(
+      '/api/v1/auth/face-login',
+      { method: 'POST', body },
+      { timeoutMs: FACE_REQUEST_TIMEOUT_MS },
+    )
   }
 
   loginWithFamilyFace(
@@ -279,7 +294,11 @@ export class ApiClient {
     body.append('household_id', householdId)
     body.append('challenge_id', challengeId)
     for (const frame of frames) body.append('frames', frame, frame.name)
-    return this.request('/api/v1/auth/family-face-login', { method: 'POST', body })
+    return this.request(
+      '/api/v1/auth/family-face-login',
+      { method: 'POST', body },
+      { timeoutMs: FACE_REQUEST_TIMEOUT_MS },
+    )
   }
 
   setPin(householdId: string, pin: string, options?: RequestOptions): Promise<{ status: string; household_id: string }> {
@@ -435,7 +454,7 @@ export class ApiClient {
     return this.request(
       `/api/v1/households/${encodeURIComponent(householdId)}/face-credentials`,
       { method: 'POST', body },
-      options,
+      { ...options, timeoutMs: options?.timeoutMs ?? FACE_REQUEST_TIMEOUT_MS },
     )
   }
 
