@@ -48,6 +48,7 @@ LLM 只接收已授权的 OCR token、条码解析结果、包装候选和本地
 - 文档解析后保留页码/章节/表格标签；切片与 Embedding 版本化。
 - 先按用户、家庭、成员和文档权限过滤，再检索/重排；禁止检索后再遮挡越权结果。
 - 文档内提示词视为数据，不得覆盖系统与安全规则。
+- **受控爬虫持续刷新：** 仅允许 `docs/knowledge/crawl/allowlist.json` 中的 HTTPS/夹具来源；结果写入 `docs/knowledge/staging/`，经人工批准晋升到 `approved/incoming/` 后再独立 `--index-version` 入库。禁止未审核网页与 `auto_ingest` 直写正式索引；详见 [知识爬虫 README](../knowledge/crawl/README.md)。
 
 ## 5. LLM 微调
 

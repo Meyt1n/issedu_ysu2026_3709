@@ -53,6 +53,7 @@ const VIEW_LOADERS = {
   knowledge: () => import('./views/KnowledgeView.vue'),
   modellab: () => import('./views/ModelLabView.vue'),
   'face-credentials': () => import('./views/FaceCredentialView.vue'),
+  'demo-lab': () => import('./views/DemoLabView.vue'),
 } satisfies Record<ViewName, () => Promise<{ default: Component }>>
 
 const OverviewView = lazyView(VIEW_LOADERS.overview)
@@ -68,6 +69,7 @@ const AuthView = lazyView(VIEW_LOADERS.authorizations)
 const KnowledgeView = lazyView(VIEW_LOADERS.knowledge)
 const ModelLabView = lazyView(VIEW_LOADERS.modellab)
 const FaceCredentialView = lazyView(VIEW_LOADERS['face-credentials'])
+const DemoLabView = lazyView(VIEW_LOADERS['demo-lab'])
 const MemberHomeView = lazyView(VIEW_LOADERS['member-home'])
 const MemberCaptureView = lazyView(VIEW_LOADERS['member-capture'])
 const MemberPlansView = lazyView(VIEW_LOADERS['member-plans'])
@@ -95,6 +97,7 @@ const NAV_ITEMS: Array<{ view: ViewName; label: string; icon: string; group: str
   { view: 'bigscreen', label: '家庭大屏', icon: 'sun', group: '家庭与研发' },
   { view: 'knowledge', label: '知识文档', icon: 'leaf', group: '家庭与研发' },
   { view: 'modellab', label: '模型实验室', icon: 'sparkle', group: '家庭与研发' },
+  { view: 'demo-lab', label: '演示造数', icon: 'sparkle', group: '家庭与研发' },
 ]
 
 const VIEW_COMPONENTS: Record<ViewName, unknown> = {
@@ -116,6 +119,7 @@ const VIEW_COMPONENTS: Record<ViewName, unknown> = {
   knowledge: KnowledgeView,
   modellab: ModelLabView,
   'face-credentials': FaceCredentialView,
+  'demo-lab': DemoLabView,
 }
 
 const visibleNavItems = computed(() => {

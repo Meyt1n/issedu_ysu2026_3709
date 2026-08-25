@@ -754,9 +754,13 @@ export interface KnowledgeRetrieveResult {
   chunk_id?: string
   document_id?: string
   document_title?: string
+  title?: string
   text?: string
   score?: number
   locator?: string | null
+  match_reason?: string
+  matched_terms?: string[]
+  matched_synonyms?: string[]
   [key: string]: unknown
 }
 

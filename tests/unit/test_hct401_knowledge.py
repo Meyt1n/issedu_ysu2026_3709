@@ -249,6 +249,70 @@ class TestRetrieval:
         assert all(r["score"] > 0 for r in results)
         assert "阿莫西林" in results[0]["text"]
 
+    def test_common_term_across_all_chunks_is_still_retrievable(self, db_session):
+        """Regression: a query term present in every chunk must stay findable.
+
+        The previous scoring mixed document-level N with chunk-level document
+        frequency, so a term appearing in more chunks than there are documents
+        received a negative IDF and matching chunks were silently dropped as
+        NO_RELEVANT_RESULTS.
+        """
+        section = (
+            "家庭用药安全提醒：请核对药品名称、规格和有效期，"
+            "妥善存放并在需要时联系药师复核。" * 8
+        )
+        content = "\n\n".join(section for _ in range(5))
+        _make_doc(db_session, title="用药安全长文", content=content)
+        db_session.commit()
+
+        chunk_count = db_session.query(KnowledgeChunk).count()
+        assert chunk_count >= 3, "fixture must span multiple chunks"
+
+        results = retrieve(db_session, query="用药安全", actor_id="test-actor")
+        assert results
+        assert all(item["score"] > 0 for item in results)
+
+    def test_chunk_matching_more_query_terms_ranks_first(self, db_session):
+        """A chunk covering all query terms must outrank keyword stuffing."""
+        _make_doc(
+            db_session,
+            title="覆盖全部术语",
+            content="药品过期后的处理方式：先核对有效期，再按处置提示分类。",
+        )
+        _make_doc(
+            db_session,
+            title="重复单一术语",
+            content="药品 药品 药品 药品 药品 药品 药品 药品 药品 药品",
+        )
+        db_session.commit()
+
+        results = retrieve(db_session, query="过期 药品 处理", actor_id="test-actor", top_k=5)
+        assert results[0]["title"] == "覆盖全部术语"
+
+    def test_markdown_sections_become_chunks_with_section_locators(self, db_session):
+        content = (
+            "# 演示知识卡\n\n开头说明，仅用于测试。\n\n"
+            "## 药品存放\n\n药品应存放在儿童接触不到的地方，避免高温和潮湿。\n\n"
+            "## 过期处置\n\n定期检查有效期，过期药品需要妥善处置并记录。\n"
+        )
+        doc = _make_doc(db_session, title="章节演示", content=content)
+        db_session.commit()
+
+        chunks = (
+            db_session.query(KnowledgeChunk)
+            .filter(KnowledgeChunk.document_id == doc.id)
+            .order_by(KnowledgeChunk.chunk_index)
+            .all()
+        )
+        assert len(chunks) >= 3
+        locators = [chunk.locator for chunk in chunks]
+        assert any("药品存放" in locator for locator in locators)
+        assert any("过期处置" in locator for locator in locators)
+
+        results = retrieve(db_session, query="过期处置", actor_id="test-actor")
+        assert "过期处置" in results[0]["locator"]
+        assert "过期" in results[0]["text"]
+
 # ── Index snapshot ─────────────────────────────────────────────────────
 class TestIndexSnapshot:
     def test_create_snapshot(self, db_session):

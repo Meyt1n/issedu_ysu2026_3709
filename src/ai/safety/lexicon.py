@@ -94,6 +94,10 @@ MEDICATION_SAFETY_ROUTE_TERMS: tuple[str, ...] = (
     "可以停药",
     "改吃什么",
     "换成别的药",
+    "开个处方",
+    "开处方",
+    "帮我开药",
+    "调整一下剂量",
 )
 
 # Follow-up prompts must not invite dosage / stop / switch decisions.

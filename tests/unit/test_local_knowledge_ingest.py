@@ -107,6 +107,62 @@ def test_ingest_rejects_content_hash_mismatch(db_session, tmp_path: Path) -> Non
     assert db_session.query(KnowledgeDocument).count() == 0
 
 
+def test_repo_demo_manifest_ingests_and_topics_are_retrievable(db_session) -> None:
+    """The committed teaching manifest must ingest cleanly and stay findable.
+
+    This pins manifest paths, hashes and permission scopes to the files in
+    docs/demo, and verifies that each teaching topic is actually retrievable
+    with a natural query, so knowledge-base growth cannot silently break RAG.
+    """
+    from app.knowledge import retrieve
+
+    repo_root = Path(__file__).resolve().parents[2]
+    manifest_path = repo_root / "docs" / "demo" / "本地RAG知识清单.json"
+
+    result = ingest_manifest(
+        db_session,
+        manifest_path=manifest_path,
+        source_root=manifest_path.parent,
+        actor_id="demo-admin",
+        index_version="demo-cn-en-v4",
+    )
+
+    assert result["index"]["document_count"] == 22
+    assert len(result["created"]) == 22
+
+    topic_queries = {
+        "药品身份核对": "家庭用药安全演示知识卡",
+        "过期药品怎么处置": "家庭药品存放与过期处置教学卡",
+        "过敏信息记录和分享注意什么": "过敏信息记录与授权分享教学卡",
+        "血压血糖记录观察": "血压血糖居家记录观察教学卡",
+        "什么时候需要联系急救": "居家照护沟通与紧急联络教学卡",
+        "药盒包装识别人工复核": "药品包装识别与人工复核教学卡",
+        "提醒确认和未确认升级": "提醒确认与未确认升级教学卡",
+        "字段级授权最小必要披露": "家庭成员角色与字段授权教学卡",
+        "健康事件追加不可覆盖": "健康事件追加与不可覆盖教学卡",
+        "规则命中证据分区展示": "规则命中解释与证据分区教学卡",
+        "健康数据默认不出网": "本地优先与隐私不出网教学卡",
+        "助手拒答紧急升级": "助手拒答与紧急升级教学卡",
+        "服药时间窗提醒预算": "服药时间窗与提醒预算教学卡",
+        "居家跌倒风险环境观察": "居家环境跌倒风险观察教学卡",
+        "外出旅行备药清单": "外出备药与旅行清单教学卡",
+        "医嘱变更必须人工确认": "医嘱变更人工确认教学卡",
+        "撤权后检索不可见": "删除撤权与知识传播教学卡",
+        "天气行动卡低风险提示": "天气行动卡低风险提示教学卡",
+        "家庭药箱分类盘点": "家庭药箱分类盘点教学卡",
+        "语音只是交互不是证据": "语音交互与证据边界教学卡",
+        "指标趋势观察异常沟通": "指标趋势观察与异常沟通教学卡",
+        "多证据视觉质量门控": "多证据视觉质量门控教学卡",
+    }
+    for query, expected_title_part in topic_queries.items():
+        results = retrieve(db_session, query=query, actor_id="demo-admin", top_k=3)
+        assert results, f"query {query!r} returned no results"
+        assert expected_title_part in results[0]["title"], (
+            f"query {query!r} hit {results[0]['title']!r} instead of "
+            f"{expected_title_part!r}"
+        )
+
+
 def test_index_checksum_ignores_generated_chunk_uuid(db_session) -> None:
     from app.knowledge import add_document
 
