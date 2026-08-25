@@ -180,6 +180,44 @@ test('绑定成员账号进入成员前台；已确认事件只出现在成员�
   await expect(page.getByText('这里只展示家庭管理员确认过的内容')).toBeVisible()
 })
 
+test('管理员确认过敏与药品后，成员前台显示需要留意的情况', async ({ page, request }) => {
+  const id = runId()
+  const scope = await bootstrapPortalHousehold(request, id)
+
+  const allergy = await request.post(`${API_BASE}/api/v1/households/${scope.householdId}/events`, {
+    headers: { 'X-Actor-Id': scope.ownerId },
+    data: {
+      member_id: scope.memberId,
+      event_type: 'allergy_added',
+      source: 'MANUAL',
+      confirmation_status: 'CONFIRMED',
+      payload: { allergy: 'aspirin' },
+      idempotency_key: `e2e-allergy-${id}`,
+    },
+  })
+  expect(allergy.status()).toBe(201)
+
+  const drug = await request.post(`${API_BASE}/api/v1/households/${scope.householdId}/events`, {
+    headers: { 'X-Actor-Id': scope.ownerId },
+    data: {
+      member_id: scope.memberId,
+      event_type: 'medication_added',
+      source: 'MANUAL',
+      confirmation_status: 'CONFIRMED',
+      payload: { drug: 'aspirin' },
+      idempotency_key: `e2e-drug-${id}`,
+    },
+  })
+  expect(drug.status()).toBe(201)
+
+  await enterDevIdentity(page, scope.memberActorId)
+  await expect(page.getByRole('heading', { name: '需要留意的情况' })).toBeVisible()
+  await expect(page.getByText(/aspirin/i)).toBeVisible()
+  await expect(page.getByText('请先问家人或医生')).toBeVisible()
+  await expect(page.getByText('allergy_conflict')).toHaveCount(0)
+  await expect(page.getByText('SEVERE')).toHaveCount(0)
+})
+
 test('未知身份看不到家庭与健康摘要', async ({ page }) => {
   await enterDevIdentity(page, `e2e-stranger-${runId()}`)
   await expect(page.getByText(/还没有可见的家庭/)).toBeVisible()

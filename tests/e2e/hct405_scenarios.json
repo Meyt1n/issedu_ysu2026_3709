@@ -250,6 +250,40 @@
         "acceptance_gate 仍缺部署演练、批准模型固定集和跨组 R3。"
       ],
       "acceptance_gate_scenario_id": "vision_scan_to_manual_confirm"
+    },
+    {
+      "id": "HCT405-14",
+      "title": "已确认事实触发规则后，成员前台可见风险提醒",
+      "status": "automated",
+      "preconditions": ["合成家庭", "绑定成员账号", "过敏与药品已确认事件"],
+      "roles": ["owner", "member"],
+      "steps": [
+        "管理员确认过敏事实",
+        "管理员确认冲突药品",
+        "成员读取本人 risks",
+        "成员不能读取他人 risks",
+        "成员不能 ACK_RISK",
+        "未确认药品不进入规则投影"
+      ],
+      "expected_states": [
+        "allergy_conflict 与 duplicate_ingredient 对成员可见",
+        "成员前台文案不暴露 rule_id/SEVERE",
+        "他人范围隐藏式 404"
+      ],
+      "permission_boundary": "风险读取走 has_member_read_access；ACK 仍需 ACK_RISK 授权。",
+      "audit_evidence": [
+        "tests/e2e/test_hct405_member_risk_loop.py",
+        "src/web/src/ui/memberRisk.ts",
+        "tests/browser/hct439-member-portal.spec.ts"
+      ],
+      "cleanup": "pytest fixture 删除临时家庭。",
+      "coverage_tags": ["rules", "member-portal", "confirmed-event", "risk-alert"],
+      "automated_tests": [
+        "tests/e2e/test_hct405_member_risk_loop.py::test_confirmed_allergy_and_drug_surface_member_risk",
+        "tests/e2e/test_hct405_member_risk_loop.py::test_member_cannot_acknowledge_risk_without_grant"
+      ],
+      "limitations": ["合成规则事实不代表正式药品固定集或已发布模型。"],
+      "acceptance_gate_scenario_id": "confirmed_event_to_rule_alert"
     }
   ]
 }

@@ -1,25 +1,40 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import { apiClient } from '../api/client'
 import type { HealthEvent, PlanWorkbenchResponse, RiskListResponse } from '../api/types'
 import AppIcon from '../components/AppIcon.vue'
-import { formatError, requestOptions, selectedMember, session, setView } from '../store'
+import {
+  formatError,
+  onHealthDataRefresh,
+  requestOptions,
+  selectedMember,
+  session,
+  setView,
+} from '../store'
 import { eventTypeLabel, formatDateTime, summarizeEventPayload } from '../ui/labels'
-import { riskLevelLabel } from '../risk/riskView'
+import { memberRiskLevelLabel, memberRiskMessage } from '../ui/memberRisk'
 
 const plans = ref<PlanWorkbenchResponse | null>(null)
 const events = ref<HealthEvent[]>([])
 const risks = ref<RiskListResponse | null>(null)
 const loading = ref(false)
 const loadError = ref('')
+let removeHealthRefreshListener: (() => void) | null = null
 
 const memberName = computed(() => selectedMember.value?.display_name ?? '家人')
 const nextPlans = computed(() => (plans.value?.plans ?? []).slice(0, 3))
 const recentEvents = computed(() =>
   events.value.filter(event => event.confirmation_status === 'CONFIRMED').slice(-3).reverse(),
 )
-const visibleRisks = computed(() => (risks.value?.alerts ?? []).slice(0, 4))
+const visibleRisks = computed(() =>
+  (risks.value?.alerts ?? []).slice(0, 4).map(alert => ({
+    key: alert.risk_fingerprint || `${alert.rule_id}:${alert.message}`,
+    level: alert.level,
+    levelLabel: memberRiskLevelLabel(alert.level),
+    message: memberRiskMessage(alert),
+  })),
+)
 
 async function loadHome(): Promise<void> {
   const householdId = session.selectedHouseholdId
@@ -46,7 +61,11 @@ async function loadHome(): Promise<void> {
 }
 
 watch(() => [session.selectedHouseholdId, session.selectedMemberId], () => void loadHome())
-onMounted(() => void loadHome())
+onMounted(() => {
+  void loadHome()
+  removeHealthRefreshListener = onHealthDataRefresh(() => void loadHome())
+})
+onBeforeUnmount(() => removeHealthRefreshListener?.())
 </script>
 
 <template>
@@ -113,8 +132,8 @@ onMounted(() => void loadHome())
     </div>
     <p class="member-risk-intro">这些提醒来自家庭管理员确认过的记录。如果不确定怎么处理，请先问家人或医生。</p>
     <ul class="list-plain member-risk-list">
-      <li v-for="alert in visibleRisks" :key="alert.risk_fingerprint" class="member-risk-row" :class="alert.level">
-        <span class="member-risk-level">{{ riskLevelLabel(alert.level) }}</span>
+      <li v-for="alert in visibleRisks" :key="alert.key" class="member-risk-row" :class="alert.level">
+        <span class="member-risk-level">{{ alert.levelLabel }}</span>
         <span>{{ alert.message }}</span>
       </li>
     </ul>
