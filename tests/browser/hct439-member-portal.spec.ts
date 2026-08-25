@@ -145,6 +145,7 @@ test('家庭成员进入前台，只看到自己的照护入口和已确认记�
   await expect(page.locator('aside.sidebar').getByRole('button', { name: '我的家庭' })).toBeVisible()
   await expect(page.locator('aside.sidebar').getByRole('button', { name: '拍照录药' })).toBeVisible()
   await expect(page.locator('aside.sidebar').getByRole('button', { name: '我的记录' })).toBeVisible()
+  await expect(page.locator('aside.sidebar').getByRole('button', { name: '使用帮助' })).toBeVisible()
   await expect(page.locator('aside.sidebar').getByRole('button', { name: '授权管理' })).toHaveCount(0)
   await expect(page.locator('aside.sidebar').getByRole('button', { name: '人工复核' })).toHaveCount(0)
   await expect(page.getByText('教学演示系统')).toHaveCount(0)

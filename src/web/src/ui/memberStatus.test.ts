@@ -35,7 +35,15 @@ describe('成员前台状态文案映射（HCT-439 阶段二）', () => {
 
   it('识别完成后提示等待家人确认，而不是暴露 succeeded', () => {
     expect(memberVisionStatusLabel('succeeded')).toBe('已提交，等待家人确认')
+    expect(memberVisionStatusLabel('REVIEW_REQUIRED')).toBe('已提交，等待家人确认')
     expect(memberVisionStatusHint('succeeded')).toContain('我的记录')
+  })
+
+  it('冲突与未知状态映射为生活化提示', () => {
+    expect(memberVisionStatusLabel('CONFLICT')).toBe('信息不一致，等待管理员核对')
+    expect(memberVisionStatusLabel('UNKNOWN')).toBe('暂时没有找到可靠药品信息')
+    expect(memberVisionStatusHint('CONFLICT')).toContain('核对')
+    expect(memberVisionStatusHint('UNKNOWN')).toContain('重新拍摄')
   })
 
   it('管理员确认后的照片显示“已确认”，覆盖任务自身状态', () => {
@@ -53,12 +61,8 @@ describe('成员前台状态文案映射（HCT-439 阶段二）', () => {
   it('未知/内部状态一律回落到兜底文案，绝不透出内部代码', () => {
     for (const code of [
       'MATCHED',
-      'CONFLICT',
-      'UNKNOWN',
-      'REVIEW',
       'LOW_QUALITY',
       'READY_FOR_FUSION',
-      'PENDING_REVIEW',
       'SOMETHING_ELSE',
       '',
       null,

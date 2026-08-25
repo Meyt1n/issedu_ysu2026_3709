@@ -16,6 +16,7 @@ export type ViewName =
   | 'member-capture'
   | 'member-plans'
   | 'member-records'
+  | 'member-help'
   | 'overview'
   | 'members'
   | 'scan'
@@ -37,6 +38,7 @@ export const MEMBER_VIEWS: readonly ViewName[] = [
   'member-capture',
   'member-plans',
   'member-records',
+  'member-help',
 ]
 
 export type SessionStatus = 'signed-out' | 'loading' | 'ready' | 'empty' | 'error'
@@ -72,6 +74,7 @@ interface SessionState {
   isOwnerView: boolean
   capabilities: CapabilityResponse | null
   loadingScope: boolean
+  pendingReviewCount: number
   toasts: Toast[]
 }
 
@@ -92,6 +95,7 @@ const state = reactive<SessionState>({
   isOwnerView: false,
   capabilities: null,
   loadingScope: false,
+  pendingReviewCount: 0,
   toasts: [],
 })
 
@@ -241,6 +245,7 @@ function clearSessionContext(): void {
   state.members = []
   state.selectedMemberId = ''
   state.isOwnerView = false
+  state.pendingReviewCount = 0
   state.capabilities = null
 }
 
@@ -584,6 +589,12 @@ export async function loadHouseholdScope(): Promise<void> {
     } catch {
       state.capabilities = null
     }
+
+    if (state.portal === 'admin') {
+      await refreshPendingReviewCount()
+    } else {
+      state.pendingReviewCount = 0
+    }
   } catch (cause) {
     state.members = []
     if (!sessionIsSignedOut()) state.error = formatError(cause)
@@ -599,6 +610,24 @@ export async function refreshMembers(): Promise<void> {
   if (!state.members.some(member => member.id === state.selectedMemberId)) {
     state.selectedMemberId = state.members[0]?.id ?? ''
   }
+  if (state.portal === 'admin') await refreshPendingReviewCount()
+}
+
+export async function refreshPendingReviewCount(): Promise<void> {
+  const householdId = state.selectedHouseholdId
+  if (!householdId || state.portal !== 'admin' || state.members.length === 0) {
+    state.pendingReviewCount = 0
+    return
+  }
+  const results = await Promise.allSettled(
+    state.members.map(member =>
+      apiClient.listReviewTasks(householdId, member.id, requestOptions.value),
+    ),
+  )
+  state.pendingReviewCount = results.reduce((total, result) => {
+    if (result.status !== 'fulfilled') return total
+    return total + result.value.filter(task => task.status === 'PENDING_REVIEW').length
+  }, 0)
 }
 
 const VISION_TASK_STORAGE = 'hct-vision-tasks'

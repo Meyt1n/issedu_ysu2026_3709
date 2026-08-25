@@ -13,8 +13,18 @@ export function memberVisionStatusLabel(
 ): string {
   if (confirmed) return '已确认'
   if (status === 'queued' || status === 'running') return '正在识别'
-  if (status === 'succeeded') return '已提交，等待家人确认'
+  if (
+    status === 'succeeded'
+    || status === 'REVIEW_REQUIRED'
+    || status === 'PENDING_REVIEW'
+    || status === 'REVIEW'
+  ) {
+    return '已提交，等待家人确认'
+  }
+  if (status === 'CONFLICT') return '信息不一致，等待管理员核对'
+  if (status === 'UNKNOWN') return '暂时没有找到可靠药品信息'
   if (status === 'cancelled') return '已取消'
+  if (status === 'failed' || status === 'timeout') return '识别失败，请重新拍照'
   return '识别失败，请重新拍照'
 }
 
@@ -24,8 +34,18 @@ export function memberVisionStatusHint(
 ): string {
   if (confirmed) return '家庭管理员已确认，药品信息已进入家庭记录。'
   if (status === 'queued' || status === 'running') return '照片正在本机处理中，请稍等。'
-  if (status === 'succeeded') return '管理员确认后，你就能在“我的记录”里看到它。'
+  if (
+    status === 'succeeded'
+    || status === 'REVIEW_REQUIRED'
+    || status === 'PENDING_REVIEW'
+    || status === 'REVIEW'
+  ) {
+    return '管理员确认后，你就能在“我的记录”里看到它。'
+  }
+  if (status === 'CONFLICT') return '家庭管理员会核对药盒信息，请耐心等待。'
+  if (status === 'UNKNOWN') return '管理员可能会请你重新拍摄或手动填写。'
   if (status === 'cancelled') return '这张照片没有进入家庭记录，可以重新拍摄。'
+  if (status === 'failed' || status === 'timeout') return '请换一个光线好、文字清楚的角度再拍一次。'
   return '请换一个光线好、文字清楚的角度再拍一次。'
 }
 

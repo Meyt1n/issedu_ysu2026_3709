@@ -8,6 +8,8 @@ import SkeletonList from './components/SkeletonList.vue'
 import {
   dismissToast,
   MEMBER_VIEWS,
+  onHealthDataRefresh,
+  refreshPendingReviewCount,
   selectHousehold,
   selectedMember,
   session,
@@ -38,6 +40,7 @@ const VIEW_LOADERS = {
   'member-capture': () => import('./views/MemberCaptureView.vue'),
   'member-plans': () => import('./views/MemberPlansView.vue'),
   'member-records': () => import('./views/MemberRecordsView.vue'),
+  'member-help': () => import('./views/MemberHelpView.vue'),
   members: () => import('./views/MembersView.vue'),
   plans: () => import('./views/PlansView.vue'),
   scan: () => import('./views/ScanView.vue'),
@@ -69,6 +72,7 @@ const MemberHomeView = lazyView(VIEW_LOADERS['member-home'])
 const MemberCaptureView = lazyView(VIEW_LOADERS['member-capture'])
 const MemberPlansView = lazyView(VIEW_LOADERS['member-plans'])
 const MemberRecordsView = lazyView(VIEW_LOADERS['member-records'])
+const MemberHelpView = lazyView(VIEW_LOADERS['member-help'])
 
 // 管理员后台固定五组导航（HCT-439 阶段三）：
 // 日常照护 / 证据录入 / 安全与洞察 / 权限与凭证 / 家庭与研发。
@@ -77,6 +81,7 @@ const NAV_ITEMS: Array<{ view: ViewName; label: string; icon: string; group: str
   { view: 'member-capture', label: '拍照录药', icon: 'scan', group: '我的照护' },
   { view: 'member-plans', label: '服药提醒', icon: 'plan', group: '我的照护' },
   { view: 'member-records', label: '我的记录', icon: 'compass', group: '我的照护' },
+  { view: 'member-help', label: '使用帮助', icon: 'info', group: '我的照护' },
   { view: 'overview', label: '家庭总览', icon: 'home', group: '日常照护' },
   { view: 'members', label: '成员档案', icon: 'members', group: '日常照护' },
   { view: 'plans', label: '健康计划', icon: 'plan', group: '日常照护' },
@@ -97,6 +102,7 @@ const VIEW_COMPONENTS: Record<ViewName, unknown> = {
   'member-capture': MemberCaptureView,
   'member-plans': MemberPlansView,
   'member-records': MemberRecordsView,
+  'member-help': MemberHelpView,
   overview: OverviewView,
   members: MembersView,
   plans: PlansView,
@@ -229,9 +235,13 @@ async function onHouseholdChange(event: Event): Promise<void> {
 const glowEl = ref<HTMLElement | null>(null)
 let glowFrame = 0
 let glowHandler: ((event: PointerEvent) => void) | null = null
+let removeHealthRefreshListener: (() => void) | null = null
 
 onMounted(() => {
   installRipple()
+  removeHealthRefreshListener = onHealthDataRefresh(() => {
+    if (session.portal === 'admin') void refreshPendingReviewCount()
+  })
 
   const motionOk =
     globalThis.matchMedia?.('(hover: hover)').matches &&
@@ -251,6 +261,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  removeHealthRefreshListener?.()
   if (glowHandler) window.removeEventListener('pointermove', glowHandler)
   cancelAnimationFrame(glowFrame)
 })
@@ -290,6 +301,13 @@ onBeforeUnmount(() => {
             >
               <AppIcon :name="item.icon" :size="19" />
               <span class="nav-label">{{ item.label }}</span>
+              <span
+                v-if="item.view === 'review' && session.pendingReviewCount > 0"
+                class="nav-badge"
+                :title="`${session.pendingReviewCount} 条待复核`"
+              >
+                {{ session.pendingReviewCount > 9 ? '9+' : session.pendingReviewCount }}
+              </span>
             </button>
           </li>
         </ul>

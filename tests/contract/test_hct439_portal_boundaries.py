@@ -134,3 +134,60 @@ def test_member_cannot_read_other_member_scope(client: TestClient) -> None:
         headers=MEMBER_HEADERS,
     )
     assert state.status_code == 404
+
+
+def test_member_can_read_own_risks_and_vision_tasks(client: TestClient) -> None:
+    """成员可以读取自己的风险摘要和视觉任务进度，但不能读取他人范围。"""
+    household_id, member = _household_with_bound_member(client)
+    other = client.post(
+        f"/api/v1/households/{household_id}/members",
+        headers=OWNER_HEADERS,
+        json={"display_name": "爷爷", "role": "DEPENDENT", "actor_id": "grandpa"},
+    ).json()
+
+    own_risks = client.get(
+        f"/api/v1/households/{household_id}/members/{member['id']}/risks",
+        headers=MEMBER_HEADERS,
+    )
+    assert own_risks.status_code == 200, own_risks.text
+    assert own_risks.json()["member_id"] == member["id"]
+
+    other_risks = client.get(
+        f"/api/v1/households/{household_id}/members/{other['id']}/risks",
+        headers=MEMBER_HEADERS,
+    )
+    assert other_risks.status_code == 404
+
+    own_tasks = client.get(
+        f"/api/v1/households/{household_id}/vision-tasks",
+        params={"member_id": member["id"]},
+        headers=MEMBER_HEADERS,
+    )
+    assert own_tasks.status_code == 200
+    assert isinstance(own_tasks.json(), list)
+
+    other_tasks = client.get(
+        f"/api/v1/households/{household_id}/vision-tasks",
+        params={"member_id": other["id"]},
+        headers=MEMBER_HEADERS,
+    )
+    assert other_tasks.status_code == 404
+
+
+def test_member_cannot_post_confirmed_events(client: TestClient) -> None:
+    """成员不能直接写入已确认健康事件，必须走管理员复核链路。"""
+    household_id, member = _household_with_bound_member(client)
+
+    denied = client.post(
+        f"/api/v1/households/{household_id}/events",
+        headers=MEMBER_HEADERS,
+        json={
+            "member_id": member["id"],
+            "event_type": "medication_added",
+            "source": "MANUAL",
+            "confirmation_status": "CONFIRMED",
+            "payload": {"drug": "布洛芬"},
+            "evidence": {},
+        },
+    )
+    assert denied.status_code == 404

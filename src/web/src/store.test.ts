@@ -2,10 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { apiClient } from './api/client'
 import {
+  connect,
   connectWithFamilyFace,
   connectWithPassword,
   selectedMember,
   session,
+  setView,
   signOut,
 } from './store'
 
@@ -111,5 +113,77 @@ describe('family face entry context', () => {
     expect(selectedMember.value?.display_name).toBe('奶奶')
     expect(session.portal).toBe('member')
     expect(session.currentView).toBe('member-home')
+  })
+})
+
+describe('portal view guards (HCT-439)', () => {
+  afterEach(() => {
+    signOut()
+    vi.restoreAllMocks()
+  })
+
+  it('keeps member accounts inside member-only views', async () => {
+    vi.spyOn(apiClient, 'listHouseholds').mockResolvedValue([
+      {
+        id: 'household-member',
+        name: '爷爷奶奶家',
+        created_by: 'parent-admin',
+        created_at: '2026-08-24T00:00:00Z',
+      },
+    ])
+    vi.spyOn(apiClient, 'listMembers').mockResolvedValue([
+      {
+        id: 'member-grandma',
+        household_id: 'household-member',
+        display_name: '奶奶',
+        role: 'DEPENDENT',
+        actor_id: 'grandma-account',
+        created_at: '2026-08-24T00:00:00Z',
+      },
+    ])
+    vi.spyOn(apiClient, 'getCapabilities').mockResolvedValue({
+      phase: 'local',
+      available: ['api'],
+      unavailable: [],
+    })
+
+    await connect('grandma-account', 'family-care')
+    expect(session.portal).toBe('member')
+    setView('review')
+    expect(session.currentView).toBe('member-home')
+    setView('member-help')
+    expect(session.currentView).toBe('member-help')
+  })
+
+  it('keeps admin accounts out of member-only views', async () => {
+    vi.spyOn(apiClient, 'listHouseholds').mockResolvedValue([
+      {
+        id: 'household-admin',
+        name: '管理家庭',
+        created_by: 'parent-admin',
+        created_at: '2026-08-24T00:00:00Z',
+      },
+    ])
+    vi.spyOn(apiClient, 'listMembers').mockResolvedValue([
+      {
+        id: 'member-grandma',
+        household_id: 'household-admin',
+        display_name: '奶奶',
+        role: 'DEPENDENT',
+        actor_id: 'grandma-account',
+        created_at: '2026-08-24T00:00:00Z',
+      },
+    ])
+    vi.spyOn(apiClient, 'listReviewTasks').mockResolvedValue([])
+    vi.spyOn(apiClient, 'getCapabilities').mockResolvedValue({
+      phase: 'local',
+      available: ['api'],
+      unavailable: [],
+    })
+
+    await connect('parent-admin', 'family-care')
+    expect(session.portal).toBe('admin')
+    setView('member-capture')
+    expect(session.currentView).toBe('overview')
   })
 })
