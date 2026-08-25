@@ -11,7 +11,7 @@ from app.config import get_settings
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PREVIOUS_REVISION = "0010_hct405_review_wiring"
-CURRENT_REVISION = "0021_hct425_face_credential_mysql_index"
+CURRENT_REVISION = "0022_hct442_knowledge_query_privacy"
 
 
 def _config(database_url: str) -> Config:
