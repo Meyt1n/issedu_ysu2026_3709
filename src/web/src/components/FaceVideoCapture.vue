@@ -68,23 +68,32 @@ async function capture(): Promise<void> {
     const context = canvas.getContext('2d')
     if (!context) throw new Error('CAMERA_UNAVAILABLE')
 
+    // 活体校验要求相邻帧有可测量的姿态变化，因此逐帧引导用户轻微转头，
+    // 而不是提示“保持不动”。
+    const framePrompts = [
+      '请正对镜头，让整张脸位于画面中央',
+      '很好，请将头部轻轻向左转一点',
+      '最后一帧，请将头部轻轻转回或向右一点',
+    ]
     const frames: File[] = []
     for (let index = 0; index < 3; index += 1) {
-      progress.value = `请保持一张脸在画面中央（正在采集 ${index + 1}/3）`
+      progress.value = `${framePrompts[index]}（正在采集 ${index + 1}/3）`
       context.drawImage(video.value, 0, 0, width, height)
       const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.9))
       if (!blob) throw new Error('CAMERA_UNAVAILABLE')
       frames.push(new File([blob], `face-${props.mode}-${index + 1}.jpg`, { type: 'image/jpeg' }))
-      if (index < 2) await wait(500)
+      if (index < 2) await wait(650)
     }
     progress.value = '采集完成，正在提交本地安全校验…'
     emit('captured', frames)
   } catch (cause) {
     error.value = cause instanceof DOMException && cause.name === 'NotAllowedError'
-      ? '摄像头权限被拒绝，请改用 PIN 登录。'
-      : props.mode === 'registration'
-        ? '摄像头不可用，请检查权限后重新采集。'
-        : '摄像头不可用或画面质量不足，请改用 PIN 登录。'
+      ? '摄像头权限被拒绝，请在浏览器地址栏允许摄像头后重试，或改用 PIN/密码登录。'
+      : cause instanceof DOMException && cause.name === 'NotFoundError'
+        ? '没有检测到可用的摄像头设备，请改用 PIN/密码登录。'
+        : props.mode === 'registration'
+          ? '摄像头不可用，请检查权限后重新采集。'
+          : '摄像头不可用或画面质量不足，请改用 PIN 登录。'
     if (props.showFallback) emit('fallback')
   } finally {
     stopCamera()
@@ -101,8 +110,8 @@ onBeforeUnmount(stopCamera)
     <video ref="video" class="face-preview" muted playsinline aria-label="摄像头预览" />
     <p class="form-sub">
       {{ mode === 'registration'
-        ? '请让本人看向镜头并缓慢转动头部，系统会采集三帧动态视频画面。视频只在本地内存中处理。'
-        : '请保持正面并缓慢转动视线，系统会采集短暂的多帧活体序列。' }}
+        ? '请在光线均匀的环境下，让本人距离摄像头约半米、看向镜头并按提示缓慢转动头部；系统会采集三帧动态画面，视频只在本地内存中处理。'
+        : '请保持光线均匀、距离摄像头约半米，按提示缓慢转动头部；画面保持完全不动会被活体校验拒绝。' }}
     </p>
     <p v-if="progress" class="notice" role="status" aria-live="polite">{{ progress }}</p>
     <p v-if="error" class="notice error" role="alert">{{ error }}</p>
