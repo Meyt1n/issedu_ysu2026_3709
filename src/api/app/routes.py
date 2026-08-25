@@ -1223,6 +1223,26 @@ def list_health_events(
         HealthEvent.household_id == household.id,
         HealthEvent.member_id.in_(allowed_member_ids),
     )
+    # A member account may have a broad event-page query without explicitly
+    # naming itself.  Keep the same confirmed-only boundary as the member
+    # timeline endpoint; owners and authorized caregivers retain their
+    # existing scoped visibility.
+    if household.created_by != actor_id:
+        self_member_ids = {
+            member.id
+            for member in session.scalars(
+                select(Member).where(
+                    Member.household_id == household.id,
+                    Member.actor_id == actor_id,
+                    Member.deleted_at.is_(None),
+                )
+            ).all()
+        }
+        if self_member_ids:
+            query = query.where(
+                (HealthEvent.member_id.not_in(self_member_ids))
+                | (HealthEvent.confirmation_status == "CONFIRMED")
+            )
     if member_id is not None:
         query = query.where(HealthEvent.member_id == member_id)
     if member_id is not None and is_self_member(session, household, member_id, actor_id):
@@ -1337,6 +1357,22 @@ def page_health_events(
         HealthEvent.household_id == household.id,
         HealthEvent.member_id.in_(allowed_member_ids),
     )
+    if household.created_by != actor_id:
+        self_member_ids = {
+            member.id
+            for member in session.scalars(
+                select(Member).where(
+                    Member.household_id == household.id,
+                    Member.actor_id == actor_id,
+                    Member.deleted_at.is_(None),
+                )
+            ).all()
+        }
+        if self_member_ids:
+            query = query.where(
+                (HealthEvent.member_id.not_in(self_member_ids))
+                | (HealthEvent.confirmation_status == "CONFIRMED")
+            )
     if member_id is not None:
         query = query.where(HealthEvent.member_id == member_id)
     if event_type is not None:
@@ -2559,11 +2595,17 @@ def run_rules_endpoint(
     household_id: str,
     member_id: str,
     actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
     session: Session = Depends(get_session),
 ) -> list[dict]:
     household = session.get(Household, household_id)
     member = session.get(Member, member_id)
-    if _is_erased(household, member):
+    if (
+        _is_erased(household, member)
+        or not has_member_read_access(
+            session, household, member_id, actor_id, access_purpose
+        )
+    ):
         _raise_resource_not_found()
     from app.projection import build_relationship_graph, get_timeline
     from app.rules import run_rules
@@ -4335,13 +4377,11 @@ def list_risks(
     member = session.get(Member, member_id)
     if _is_erased(household, member):
         _raise_resource_not_found()
-    if not has_authorized_action(
+    if not has_member_read_access(
         session,
         household,
         member_id,
         actor_id,
-        "READ_EVENTS",
-        "health_events",
         access_purpose,
     ):
         _raise_resource_not_found()
@@ -4391,13 +4431,11 @@ def get_risk_detail(
     member = session.get(Member, member_id)
     if _is_erased(household, member):
         _raise_resource_not_found()
-    if not has_authorized_action(
+    if not has_member_read_access(
         session,
         household,
         member_id,
         actor_id,
-        "READ_EVENTS",
-        "health_events",
         access_purpose,
     ):
         _raise_resource_not_found()

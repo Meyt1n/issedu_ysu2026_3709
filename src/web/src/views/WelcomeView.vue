@@ -43,7 +43,8 @@ const householdId = ref(initialBoundFaceHouseholdId)
 const boundFaceHouseholdName = ref(getBoundFaceHouseholdName())
 const pin = ref('')
 const faceFrames = ref<File[]>([])
-const authMode = ref<'development' | 'session'>(session.authMode)
+const showDevelopmentEntry = import.meta.env.DEV
+const authMode = ref<'development' | 'session'>(showDevelopmentEntry ? session.authMode : 'session')
 const credentialMode = ref<'password' | 'pin' | 'face'>(
   initialBoundFaceHouseholdId ? 'face' : 'password',
 )
@@ -255,7 +256,7 @@ async function submitCreate(): Promise<void> {
         </p>
         <div class="welcome-art" :style="{ '--par-rx': artRx, '--par-ry': artRy }">
           <img :src="welcomeHero" alt="温馨的家庭照护插画：家人围坐在洒满阳光的窗边" />
-          <span class="art-caption">AI 生成教学插画 · 本地资源</span>
+          <span class="art-caption">本地家庭插画 · 不上传原图</span>
           <span class="art-float f1"><AppIcon name="lock" :size="13" />数据不出网</span>
           <span class="art-float f2"><AppIcon name="heart" :size="13" />事实可追溯</span>
         </div>
@@ -269,7 +270,7 @@ async function submitCreate(): Promise<void> {
       <section v-if="!showCreateForm" class="welcome-form-card">
         <h2>进入家庭空间</h2>
         <div class="segmented-control" role="group" aria-label="选择登录方式">
-          <button type="button" :class="{ active: authMode === 'development' }" @click="authMode = 'development'">开发演示</button>
+          <button v-if="showDevelopmentEntry" type="button" :class="{ active: authMode === 'development' }" @click="authMode = 'development'">开发演示</button>
           <button type="button" :class="{ active: authMode === 'session' }" @click="authMode = 'session'">正式账号登录</button>
         </div>
         <p v-if="authMode === 'development'" class="form-sub">仅用于非生产本地演示，使用开发身份标识；不会建立正式会话。</p>
@@ -279,7 +280,7 @@ async function submitCreate(): Promise<void> {
             开发身份标识
             <input v-model="actorId" autocomplete="off" placeholder="例如 parent-1" required />
           </label>
-          <label class="field">
+          <label v-if="authMode === 'development'" class="field">
             访问用途代码
             <input
               v-model="accessPurpose"
@@ -355,7 +356,7 @@ async function submitCreate(): Promise<void> {
             @captured="onFaceCaptured"
             @fallback="usePinFallback"
           />
-          <label class="field">
+          <label v-if="authMode === 'development'" class="field">
             访问用途代码
             <input
               v-model="accessPurpose"
@@ -380,7 +381,7 @@ async function submitCreate(): Promise<void> {
           </button>
         </form>
         <p class="welcome-disclaimer">
-          教学演示系统，不提供诊断、处方或用药决策；不提供购药、问诊或广告导流。
+          家庭健康记录仅供日常参考，不提供诊断、处方或用药决策；紧急情况请联系医生或当地急救服务。
         </p>
       </section>
 

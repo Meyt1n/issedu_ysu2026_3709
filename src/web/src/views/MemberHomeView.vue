@@ -2,13 +2,15 @@
 import { computed, onMounted, ref, watch } from 'vue'
 
 import { apiClient } from '../api/client'
-import type { HealthEvent, PlanWorkbenchResponse } from '../api/types'
+import type { HealthEvent, PlanWorkbenchResponse, RiskListResponse } from '../api/types'
 import AppIcon from '../components/AppIcon.vue'
 import { formatError, requestOptions, selectedMember, session, setView } from '../store'
 import { eventTypeLabel, formatDateTime, summarizeEventPayload } from '../ui/labels'
+import { riskLevelLabel } from '../risk/riskView'
 
 const plans = ref<PlanWorkbenchResponse | null>(null)
 const events = ref<HealthEvent[]>([])
+const risks = ref<RiskListResponse | null>(null)
 const loading = ref(false)
 const loadError = ref('')
 
@@ -17,6 +19,7 @@ const nextPlans = computed(() => (plans.value?.plans ?? []).slice(0, 3))
 const recentEvents = computed(() =>
   events.value.filter(event => event.confirmation_status === 'CONFIRMED').slice(-3).reverse(),
 )
+const visibleRisks = computed(() => (risks.value?.alerts ?? []).slice(0, 4))
 
 async function loadHome(): Promise<void> {
   const householdId = session.selectedHouseholdId
@@ -24,13 +27,19 @@ async function loadHome(): Promise<void> {
   if (!householdId || !memberId) return
   loading.value = true
   loadError.value = ''
-  const [planResult, eventResult] = await Promise.allSettled([
+  const [planResult, eventResult, riskResult] = await Promise.allSettled([
     apiClient.getPlanWorkbench(householdId, memberId, requestOptions.value),
     apiClient.listMemberTimeline(householdId, memberId, requestOptions.value),
+    apiClient.listMemberRisks(householdId, memberId, requestOptions.value),
   ])
   plans.value = planResult.status === 'fulfilled' ? planResult.value : null
   events.value = eventResult.status === 'fulfilled' ? eventResult.value : []
-  if (planResult.status === 'rejected' && eventResult.status === 'rejected') {
+  risks.value = riskResult.status === 'fulfilled' ? riskResult.value : null
+  if (
+    planResult.status === 'rejected' &&
+    eventResult.status === 'rejected' &&
+    riskResult.status === 'rejected'
+  ) {
     loadError.value = formatError(planResult.reason)
   }
   loading.value = false
@@ -92,5 +101,22 @@ onMounted(() => void loadHome())
         </li>
       </ul>
     </article>
+  </section>
+
+  <section v-if="visibleRisks.length" class="card member-risk-card" aria-label="需要留意的情况">
+    <div class="card-heading">
+      <div>
+        <p class="eyebrow">管理员已确认</p>
+        <h3 class="card-title">需要留意的情况</h3>
+      </div>
+      <span class="member-risk-count">{{ risks?.total }} 条</span>
+    </div>
+    <p class="member-risk-intro">这些提醒来自家庭管理员确认过的记录。如果不确定怎么处理，请先问家人或医生。</p>
+    <ul class="list-plain member-risk-list">
+      <li v-for="alert in visibleRisks" :key="alert.risk_fingerprint" class="member-risk-row" :class="alert.level">
+        <span class="member-risk-level">{{ riskLevelLabel(alert.level) }}</span>
+        <span>{{ alert.message }}</span>
+      </li>
+    </ul>
   </section>
 </template>

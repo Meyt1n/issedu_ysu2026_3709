@@ -225,6 +225,66 @@ def test_bound_member_can_see_only_self_scope_but_cannot_write_health_event(
     assert event.status_code == 404
 
 
+def test_bound_member_event_page_hides_pending_events_and_rules_are_scoped(
+    client: TestClient,
+) -> None:
+    """成员的宽事件查询和规则入口也必须保持自己的已确认范围。"""
+    household_id = _create_household(client, "成员范围家庭")['id']
+    member = client.post(
+        f"/api/v1/households/{household_id}/members",
+        headers={"X-Actor-Id": "owner"},
+        json={"display_name": "爷爷", "role": "DEPENDENT", "actor_id": "grandpa"},
+    ).json()
+    for status in ("CONFIRMED", "UNCONFIRMED"):
+        response = client.post(
+            f"/api/v1/households/{household_id}/events",
+            headers={"X-Actor-Id": "owner"},
+            json={
+                "member_id": member["id"],
+                "event_type": "MEDICATION",
+                "confirmation_status": status,
+                "payload": {"status": status},
+            },
+        )
+        assert response.status_code == 201, response.text
+
+    member_headers = {"X-Actor-Id": "grandpa", "X-Access-Purpose": "family-care"}
+    page = client.get(
+        f"/api/v1/households/{household_id}/events/page",
+        headers=member_headers,
+        params={"member_id": member["id"]},
+    )
+    assert page.status_code == 200, page.text
+    assert [item["confirmation_status"] for item in page.json()["items"]] == ["CONFIRMED"]
+
+    rules = client.post(
+        f"/api/v1/households/{household_id}/rules/run",
+        headers=member_headers,
+        params={"member_id": member["id"]},
+    )
+    assert rules.status_code == 200, rules.text
+
+    risks = client.get(
+        f"/api/v1/households/{household_id}/members/{member['id']}/risks",
+        headers=member_headers,
+    )
+    assert risks.status_code == 200, risks.text
+    assert risks.json()["member_id"] == member["id"]
+
+    stranger = client.post(
+        f"/api/v1/households/{household_id}/rules/run",
+        headers={"X-Actor-Id": "stranger", "X-Access-Purpose": "family-care"},
+        params={"member_id": member["id"]},
+    )
+    assert stranger.status_code == 404
+
+    stranger_risks = client.get(
+        f"/api/v1/households/{household_id}/members/{member['id']}/risks",
+        headers={"X-Actor-Id": "stranger", "X-Access-Purpose": "family-care"},
+    )
+    assert stranger_risks.status_code == 404
+
+
 def test_list_members_unauthorized_returns_404_no_leak(client: TestClient) -> None:
     """GET /members 未授权者返回隐藏式 404，且响应不含成员数据。"""
     household_id = _create_household(client)["id"]

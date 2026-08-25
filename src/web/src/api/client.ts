@@ -728,6 +728,18 @@ export class ApiClient {
     )
   }
 
+  listMemberVisionTasks(
+    householdId: string,
+    memberId: string,
+    options?: RequestOptions,
+  ): Promise<VisionTask[]> {
+    return this.request(
+      `/api/v1/households/${encodeURIComponent(householdId)}/vision-tasks?member_id=${encodeURIComponent(memberId)}`,
+      undefined,
+      options,
+    )
+  }
+
   /** 携带开发身份头下载文件字节（<img> 无法带请求头，需转 blob URL）。 */
   async fetchFileBlob(storageKey: string, options: RequestOptions = {}): Promise<Blob> {
     const headers = new Headers()
