@@ -32,10 +32,10 @@ describe('随身版语音输入', () => {
     const result = {
       isFinal: true,
       length: 2,
-      0: { transcript: 'xiaoyan dakai', confidence: 0.2 },
-      1: { transcript: '小燕打开', confidence: 0.9 },
+      0: { transcript: 'xiaoyan xiaoyan', confidence: 0.2 },
+      1: { transcript: '小燕小燕', confidence: 0.9 },
     } as unknown as SpeechRecognitionResultLike
-    expect(pickBestAlternative(result)).toBe('小燕打开')
+    expect(pickBestAlternative(result)).toBe('小燕小燕')
   })
 
   it('用最新 interim 探测唤醒，并容忍同音误识', () => {
@@ -43,13 +43,14 @@ describe('随身版语音输入', () => {
       resultIndex: 1,
       results: [
         { isFinal: true, length: 1, 0: { transcript: '背景噪音' } },
-        { isFinal: false, length: 1, 0: { transcript: '小燕打开' } },
+        { isFinal: false, length: 1, 0: { transcript: '小燕小燕' } },
       ],
     } as unknown as SpeechRecognitionEventLike
-    expect(latestTranscriptFromEvent(event)).toBe('小燕打开')
-    expect(normalizeVoiceText('晓燕，打开一下')).toBe('小燕打开')
-    expect(containsWakePhrase('小严打开')).toBe(true)
-    expect(transcriptAfterWakePhrase('小燕，打开，查询最近的用药提醒')).toBe('查询最近的用药提醒')
+    expect(latestTranscriptFromEvent(event)).toBe('小燕小燕')
+    expect(normalizeVoiceText('晓燕，晓燕')).toBe('小燕小燕')
+    expect(containsWakePhrase('小严小严')).toBe(true)
+    expect(containsWakePhrase('小燕啊小燕')).toBe(true)
+    expect(transcriptAfterWakePhrase('小燕小燕，查询最近的用药提醒')).toBe('查询最近的用药提醒')
   })
 
   it('默认启用 continuous / interim / 多候选', () => {

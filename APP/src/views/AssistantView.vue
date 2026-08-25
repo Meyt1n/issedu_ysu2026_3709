@@ -54,7 +54,7 @@ const serverLabel = computed(() => session.serverBaseUrl.trim() || '（未填写
 const assistantReady = computed(() => liveMode.value && Boolean(session.serverBaseUrl.trim()))
 
 const voiceStatusLabel = computed(() => {
-  if (voiceMode.value === 'wake') return '等待唤醒：请说「小燕打开」'
+  if (voiceMode.value === 'wake') return '等待唤醒：请说「小燕小燕」'
   if (voiceMode.value === 'active') return '已唤醒，正在听写到输入框'
   return ''
 })
@@ -444,7 +444,7 @@ onBeforeUnmount(() => {
           :disabled="sending || !speechInputSupported"
           :aria-pressed="listening"
           :aria-label="listening ? '停止语音唤醒' : '开启语音唤醒'"
-          :title="speechInputSupported ? '先点击开启，再说小燕打开' : '当前不支持语音输入'"
+          :title="speechInputSupported ? '先点击开启，再说小燕小燕' : '当前不支持语音输入'"
           @click="toggleVoiceInput"
         >
           <AppIcon name="mic" :size="22" />

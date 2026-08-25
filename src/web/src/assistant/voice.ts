@@ -139,7 +139,7 @@ export function transcriptFromEvent(event: SpeechRecognitionEventLike): string {
 
 /**
  * 只取 resultIndex 起的最新片段：唤醒判定优先看最近 interim，
- * 避免整段历史缓冲拖慢“小燕打开”切换。
+ * 避免整段历史缓冲拖慢“小燕小燕”切换。
  */
 export function latestTranscriptFromEvent(event: SpeechRecognitionEventLike): string {
   const parts: string[] = []
@@ -151,10 +151,13 @@ export function latestTranscriptFromEvent(event: SpeechRecognitionEventLike): st
   return joinTranscriptParts(parts) || transcriptFromEvent(event)
 }
 
+/** 默认唤醒词：连呼两声名字即可，不必再说「打开」。 */
+export const DEFAULT_WAKE_PHRASE = '小燕小燕'
+
 /** ASR 常见同音/近音纠偏，仅用于唤醒匹配，不改写入草稿的原文。 */
 const WAKE_ASR_CORRECTIONS: ReadonlyArray<readonly [RegExp, string]> = [
   [/晓燕|小严|小研|小嫣|小延|小言|小烟/g, '小燕'],
-  [/打开开|打开下|打开一下|打开助手|打开家健镜/g, '打开'],
+  [/小燕啊小燕|小燕呀小燕|小燕呢小燕|嘿小燕小燕|喂小燕小燕/g, '小燕小燕'],
 ]
 
 /** Normalize only for wake-phrase matching; the original transcript stays untouched. */
@@ -175,17 +178,17 @@ function wakePhrasePattern(phrase: string): RegExp | null {
   return new RegExp(chars, 'iu')
 }
 
-/** Match "小燕打开" while tolerating punctuation and common ASR near-homophones. */
-export function containsWakePhrase(text: string, phrase = '小燕打开'): boolean {
+/** Match "小燕小燕" while tolerating punctuation and common ASR near-homophones. */
+export function containsWakePhrase(text: string, phrase = DEFAULT_WAKE_PHRASE): boolean {
   const pattern = wakePhrasePattern(phrase)
   if (!pattern) return false
   if (pattern.test(text)) return true
-  // 归一化后再匹配一次，覆盖“小严打开 / 晓燕，打开助手”等误识。
+  // 归一化后再匹配一次，覆盖“小严小严 / 晓燕，晓燕”等误识。
   return pattern.test(normalizeVoiceText(text))
 }
 
 /** Remove the wake phrase and return the spoken content that follows it. */
-export function transcriptAfterWakePhrase(text: string, phrase = '小燕打开'): string {
+export function transcriptAfterWakePhrase(text: string, phrase = DEFAULT_WAKE_PHRASE): string {
   const pattern = wakePhrasePattern(phrase)
   if (!pattern) return text.trim()
   const direct = pattern.exec(text)
