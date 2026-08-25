@@ -122,24 +122,45 @@ def _content_hash(text: str) -> str:
 
 # ── Permission check ───────────────────────────────────────────────────
 
+def normalize_permission_scope(
+    permission_scope: dict | None,
+    *,
+    created_by: str,
+) -> dict:
+    """Stamp creator identity so empty scopes never become world-readable."""
+    scope = dict(permission_scope or {})
+    scope.setdefault("created_by", created_by)
+    return scope
+
+
 def _check_permission(
     doc_scope: dict,
     actor_id: str,
     household_id: str | None = None,
     member_id: str | None = None,
+    *,
+    doc_created_by: str | None = None,
+    knowledge_admin_ids: set[str] | frozenset[str] | None = None,
 ) -> bool:
-    if not doc_scope:
+    """Authorize knowledge access. Empty scope is creator-only (default deny).
+
+    ``internal: true`` is a staff/knowledge-admin gate, not a public flag.
+    """
+    scope = doc_scope or {}
+    creator = scope.get("created_by") or doc_created_by
+    if creator and creator == actor_id:
         return True
-    if doc_scope.get("created_by") == actor_id:
-        return True
-    hh_ids = doc_scope.get("household_ids", [])
+    if not scope:
+        return False
+    hh_ids = scope.get("household_ids", [])
     if hh_ids and household_id and household_id in hh_ids:
         return True
-    m_ids = doc_scope.get("member_ids", [])
+    m_ids = scope.get("member_ids", [])
     if m_ids and member_id and member_id in m_ids:
         return True
-    if doc_scope.get("internal", False):
-        return True
+    if scope.get("internal", False):
+        admins = knowledge_admin_ids or set()
+        return actor_id in admins
     return False
 
 
@@ -167,7 +188,9 @@ def add_document(
         content_hash=content_hash,
         full_text=content,
         created_by=created_by,
-        permission_scope=permission_scope or {},
+        permission_scope=normalize_permission_scope(
+            permission_scope, created_by=created_by
+        ),
         effective_from=effective_from,
         effective_until=effective_until,
     )
@@ -253,8 +276,18 @@ def retrieve(
 
     accessible_ids: set = set()
     doc_meta: dict = {}
+    from app.config import get_settings
+
+    knowledge_admins = get_settings().knowledge_admin_actor_set
     for doc in all_docs:
-        if _check_permission(doc.permission_scope, actor_id, household_id, member_id):
+        if _check_permission(
+            doc.permission_scope or {},
+            actor_id,
+            household_id,
+            member_id,
+            doc_created_by=doc.created_by,
+            knowledge_admin_ids=knowledge_admins,
+        ):
             accessible_ids.add(doc.id)
             doc_meta[doc.id] = {
                 "title": doc.title,

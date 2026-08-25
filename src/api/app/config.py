@@ -101,6 +101,12 @@ class Settings(BaseSettings):
     log_mask_enabled: bool = True
     upload_allowed_extensions: str = ".jpg,.jpeg,.png,.pdf,.mp4,.mov"
     upload_max_size_bytes: int = 10 * 1024 * 1024
+    # Comma-separated actor ids allowed to read ``internal`` knowledge docs.
+    # Empty means internal docs are creator-only (plus household/member scopes).
+    knowledge_admin_actors: str = ""
+    # Comma-separated actor ids allowed to activate/rollback model releases.
+    # Empty means only the binding creator may govern that release.
+    model_release_admin_actors: str = ""
 
     @field_validator("default_household_time_zone")
     @classmethod
@@ -172,6 +178,20 @@ class Settings(BaseSettings):
         return {
             item.strip().lower()
             for item in self.agent_web_search_allowed_domains.split(",")
+            if item.strip()
+        }
+
+    @property
+    def knowledge_admin_actor_set(self) -> set[str]:
+        return {
+            item.strip() for item in self.knowledge_admin_actors.split(",") if item.strip()
+        }
+
+    @property
+    def model_release_admin_actor_set(self) -> set[str]:
+        return {
+            item.strip()
+            for item in self.model_release_admin_actors.split(",")
             if item.strip()
         }
 

@@ -87,8 +87,14 @@ class TestDocumentCRUD:
         assert doc.content_hash == _content_hash("青霉素 过敏 慎用")
 # ── Permission filtering ───────────────────────────────────────────────
 class TestPermissionFiltering:
-    def test_empty_scope_is_public(self, db_session):
-        assert _check_permission({}, "any-actor") is True
+    def test_empty_scope_is_creator_only(self, db_session):
+        assert (
+            _check_permission({}, "creator", doc_created_by="creator") is True
+        )
+        assert (
+            _check_permission({}, "any-actor", doc_created_by="creator") is False
+        )
+        assert _check_permission({}, "any-actor") is False
 
     def test_owner_can_read(self, db_session):
         scope = {"created_by": "alice"}
@@ -108,9 +114,20 @@ class TestPermissionFiltering:
         assert _check_permission(scope, "any", member_id="m-1") is True
         assert _check_permission(scope, "any", member_id="m-2") is False
 
-    def test_internal_flag_allows(self, db_session):
+    def test_internal_flag_requires_knowledge_admin(self, db_session):
         scope = {"internal": True}
-        assert _check_permission(scope, "any") is True
+        assert _check_permission(scope, "any") is False
+        assert (
+            _check_permission(
+                scope, "staff", knowledge_admin_ids={"staff"}
+            )
+            is True
+        )
+
+    def test_add_document_stamps_creator_on_empty_scope(self, db_session):
+        doc = _make_doc(db_session, permission_scope={})
+        db_session.commit()
+        assert doc.permission_scope["created_by"] == "test-actor"
 # ── TF-IDF Retrieval ───────────────────────────────────────────────────
 class TestRetrieval:
     def test_basic_retrieval(self, db_session):
@@ -120,7 +137,7 @@ class TestRetrieval:
         )
         db_session.commit()
 
-        results = retrieve(db_session, query="阿莫西林 用法", actor_id="user-1")
+        results = retrieve(db_session, query="阿莫西林 用法", actor_id="test-actor")
         assert len(results) > 0
         assert results[0]["score"] > 0
         assert "阿莫西林" in results[0]["text"]
@@ -171,14 +188,14 @@ class TestRetrieval:
         )
         db_session.commit()
 
-        results = retrieve(db_session, query="药品说明", actor_id="u1")
+        results = retrieve(db_session, query="药品说明", actor_id="test-actor")
         assert all("过期" not in r["title"] for r in results)
 
     def test_results_include_source_metadata(self, db_session):
         _make_doc(db_session, content="知识库测试 内容", kw_source="auth_package_insert")
         db_session.commit()
 
-        results = retrieve(db_session, query="知识库测试", actor_id="u1")
+        results = retrieve(db_session, query="知识库测试", actor_id="test-actor")
         assert results[0]["source"] == "auth_package_insert"
         assert results[0]["document_id"] is not None
         assert results[0]["chunk_id"] is not None
@@ -189,7 +206,7 @@ class TestRetrieval:
         _make_doc(db_session, content="阿莫西林 服用方法 口服 0.5g")
         db_session.commit()
 
-        results = retrieve(db_session, query="口服 服用方法", actor_id="u1", top_k=10)
+        results = retrieve(db_session, query="口服 服用方法", actor_id="test-actor", top_k=10)
         scores = [r["score"] for r in results]
         assert scores == sorted(scores, reverse=True)
 
@@ -200,7 +217,7 @@ class TestRetrieval:
         )
         db_session.commit()
 
-        results = retrieve(db_session, query="合成照护证据", actor_id="u1")
+        results = retrieve(db_session, query="合成照护证据", actor_id="test-actor")
 
         assert len(results) == 1
         assert results[0]["score"] > 0
@@ -210,7 +227,7 @@ class TestRetrieval:
         db_session.commit()
 
         with pytest.raises(ValueError, match="NO_RELEVANT_RESULTS"):
-            retrieve(db_session, query="天气温度", actor_id="u1")
+            retrieve(db_session, query="天气温度", actor_id="test-actor")
 
     def test_common_term_across_many_chunks_still_retrieved(self, db_session):
         """Regression: chunk-level df must not turn IDF negative.
@@ -227,7 +244,7 @@ class TestRetrieval:
         chunk_count = db_session.query(KnowledgeChunk).count()
         assert chunk_count >= 3  # the term must appear in more chunks than docs
 
-        results = retrieve(db_session, query="阿莫西林", actor_id="u1", top_k=5)
+        results = retrieve(db_session, query="阿莫西林", actor_id="test-actor", top_k=5)
         assert len(results) > 0
         assert all(r["score"] > 0 for r in results)
         assert "阿莫西林" in results[0]["text"]
