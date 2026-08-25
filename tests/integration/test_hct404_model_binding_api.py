@@ -32,8 +32,8 @@ class TestActivateBindingAPI:
 
         resp2 = client.post(
             f"/api/v1/model-version-bindings/{binding_id}/activate",
-            json={"approved_by": "alice"},
-            headers={"X-Actor-Id": "alice"},
+            json={"approved_by": "bob"},
+            headers={"X-Actor-Id": "bob"},
         )
         assert resp2.status_code == 200
         assert resp2.json()["release_status"] == "active"
@@ -48,8 +48,8 @@ class TestActivateBindingAPI:
 
         resp2 = client.post(
             f"/api/v1/model-version-bindings/{binding_id}/activate",
-            json={"approved_by": "alice"},
-            headers={"X-Actor-Id": "alice"},
+            json={"approved_by": "bob"},
+            headers={"X-Actor-Id": "bob"},
         )
         assert resp2.status_code == 422
 
@@ -67,8 +67,8 @@ class TestActivateBindingAPI:
         binding_id = resp.json()["id"]
         resp2 = client.post(
             f"/api/v1/model-version-bindings/{binding_id}/activate",
-            json={"approved_by": "alice"},
-            headers={"X-Actor-Id": "alice"},
+            json={"approved_by": "bob"},
+            headers={"X-Actor-Id": "bob"},
         )
         assert resp2.status_code == 422
         assert resp2.json()["detail"] == "HCT404_FORMAL_RELEASE_REQUIRED"
@@ -83,7 +83,7 @@ class TestActivateBindingAPI:
         }, headers={"X-Actor-Id": "alice"})
         b1_id = r1.json()["id"]
         client.post(f"/api/v1/model-version-bindings/{b1_id}/activate",
-                    json={"approved_by": "alice"}, headers={"X-Actor-Id": "alice"})
+                    json={"approved_by": "bob"}, headers={"X-Actor-Id": "bob"})
 
         # Second binding
         r2 = client.post("/api/v1/model-version-bindings", json={
@@ -94,7 +94,7 @@ class TestActivateBindingAPI:
         }, headers={"X-Actor-Id": "alice"})
         b2_id = r2.json()["id"]
         client.post(f"/api/v1/model-version-bindings/{b2_id}/activate",
-                    json={"approved_by": "alice"}, headers={"X-Actor-Id": "alice"})
+                    json={"approved_by": "bob"}, headers={"X-Actor-Id": "bob"})
 
         # b1 should now be inactive
         r3 = client.get(f"/api/v1/model-version-bindings/{b1_id}", headers={"X-Actor-Id": "alice"})
@@ -115,7 +115,7 @@ class TestRollbackBindingAPI:
         }, headers={"X-Actor-Id": "alice"})
         b_id = r1.json()["id"]
         client.post(f"/api/v1/model-version-bindings/{b_id}/activate",
-                    json={"approved_by": "alice"}, headers={"X-Actor-Id": "alice"})
+                    json={"approved_by": "bob"}, headers={"X-Actor-Id": "bob"})
 
         r2 = client.post(f"/api/v1/model-version-bindings/{b_id}/rollback",
                          json={"reason": "bug"}, headers={"X-Actor-Id": "alice"})
@@ -162,8 +162,8 @@ class TestRollbackBindingAPI:
         binding_id = response.json()["id"]
         client.post(
             f"/api/v1/model-version-bindings/{binding_id}/activate",
-            json={"approved_by": "alice"},
-            headers={"X-Actor-Id": "alice"},
+            json={"approved_by": "bob"},
+            headers={"X-Actor-Id": "bob"},
         )
         missing = client.post(
             f"/api/v1/model-version-bindings/{binding_id}/rollback",
@@ -190,7 +190,7 @@ class TestRollbackBindingAPI:
         }, headers={"X-Actor-Id": "alice"})
         b1_id = r1.json()["id"]
         client.post(f"/api/v1/model-version-bindings/{b1_id}/activate",
-                    json={"approved_by": "alice"}, headers={"X-Actor-Id": "alice"})
+                    json={"approved_by": "bob"}, headers={"X-Actor-Id": "bob"})
 
         # Second binding → activate (deactivates b1)
         r2 = client.post("/api/v1/model-version-bindings", json={
@@ -201,7 +201,7 @@ class TestRollbackBindingAPI:
         }, headers={"X-Actor-Id": "alice"})
         b2_id = r2.json()["id"]
         client.post(f"/api/v1/model-version-bindings/{b2_id}/activate",
-                    json={"approved_by": "alice"}, headers={"X-Actor-Id": "alice"})
+                    json={"approved_by": "bob"}, headers={"X-Actor-Id": "bob"})
 
         # Rollback b2
         client.post(f"/api/v1/model-version-bindings/{b2_id}/rollback",
