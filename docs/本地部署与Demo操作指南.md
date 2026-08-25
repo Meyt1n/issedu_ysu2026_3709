@@ -10,7 +10,7 @@
 
 ### 1.1 干净环境标准复现路径
 
-以下路径是 HCT-101 的基础档复现入口（工程骨架）。要复刻视觉识别与本地助手闭环，请改用功能分支 `feature/hct-local-model-adapter`，并阅读根目录 README 的「复刻本机视觉与助手闭环」。
+以下路径是 HCT-101 的基础档复现入口（工程骨架）。视觉识别与本地助手闭环已合入 `master`，无需切换功能分支；按功能开启的总入口见根目录 README 的[「功能与 API 启动指南（按功能开启）」](../README.md#功能与-api-启动指南按功能开启)与「复刻本机视觉与助手闭环」。
 
 `up` 默认使用 Compose profile `basic`，构建 API/Web/outbox worker/care-plan worker，等待 MySQL、API、两个 worker 和 Web 的健康检查，并在 API 容器启动时执行 Alembic 迁移；`down` 默认不删除 `mysql_data` 卷。所有业务服务都声明了 profile，**不指定 `basic`/`enhanced`/`dev` 时 Compose 不会启动任何容器**；启动脚本已默认补上 `--profile basic`。
 
