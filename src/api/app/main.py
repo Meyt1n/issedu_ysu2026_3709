@@ -1,4 +1,6 @@
+import asyncio
 import re
+from contextlib import asynccontextmanager
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
@@ -7,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 from app import __version__
 from app.config import get_settings
+from app.face_credentials import run_face_pipeline, warm_face_models_if_present
 from app.log_mask import install_log_mask
 from app.request_context import reset_request_id, set_request_id
 from app.routes import router
@@ -16,10 +19,25 @@ settings = get_settings()
 if settings.log_mask_enabled:
     install_log_mask()
 
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    # HCT-424/HCT-425: warm already-downloaded YuNet/SFace weights on the face
+    # worker in the background so the first registration/login skips the ONNX
+    # load + first-inference cost.  Never downloads and never blocks startup.
+    warm_task = asyncio.create_task(run_face_pipeline(warm_face_models_if_present))
+    try:
+        yield
+    finally:
+        warm_task.cancel()
+        await asyncio.gather(warm_task, return_exceptions=True)
+
+
 app = FastAPI(
     title=settings.app_name,
     version=__version__,
     description="一期本地优先家庭健康事件与授权骨架。视觉、规则和 LLM 适配器暂不可用。",
+    lifespan=_lifespan,
 )
 app.add_middleware(
     CORSMiddleware,

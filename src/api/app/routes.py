@@ -103,6 +103,7 @@ from app.face_credentials import (
     normalize_face_failure_reason,
     pack_face_templates,
     ranking_margin,
+    run_face_pipeline,
     score_probe_against_gallery,
     unpack_face_templates,
 )
@@ -290,6 +291,19 @@ def _face_extractor_for_algorithm(algorithm_version: str):
     if algorithm_version == V2_FACE_ALGORITHM_VERSION:
         return extract_v2_face_template
     return extract_face_template
+
+
+class _FaceAuthRejected(Exception):
+    """Carries a desensitized failure reason out of the offloaded face pipeline.
+
+    The pipeline closures run in the face worker thread and must not touch the
+    request's database session, so they raise this instead of calling the
+    audit-writing ``failed()`` helpers directly.
+    """
+
+    def __init__(self, reason: str = "FACE_AUTH_FAILED") -> None:
+        super().__init__(reason)
+        self.reason = reason
 
 
 def _raise_resource_not_found() -> NoReturn:
@@ -2000,8 +2014,55 @@ async def auth_face_login(
         failed("CREDENTIAL_UNAVAILABLE")
 
     frame_bytes: list[bytes] = []
-    templates: list[bytes] = []
-    yaws: list[float] = []
+
+    def _match_frames_against_credential() -> float:
+        """Gate/extract/liveness/match pipeline; runs off the event loop.
+
+        Raises ``_FaceAuthRejected`` with the desensitized reason bucket,
+        ``HTTPException`` when the stored template cannot be decrypted, or
+        ``RuntimeError`` when the local face service is unavailable.
+        """
+        templates: list[bytes] = []
+        yaws: list[float] = []
+        try:
+            for data in frame_bytes:
+                # Face-specific frame gate; the medicine-carton OCR gate falsely
+                # rejected valid guided webcam captures (HCT-424/HCT-425 fix).
+                try:
+                    ensure_face_frame_quality(data)
+                except ValueError as exc:
+                    raise _FaceAuthRejected("FRAME_QUALITY_INVALID") from exc
+                extractor = _face_extractor_for_algorithm(credential.algorithm_version)
+                if credential.algorithm_version.startswith("opencv-yunet-sface"):
+                    template, frame_meta = extractor(data)
+                    yaws.append(float(frame_meta.get("yaw", 0.0)))
+                else:
+                    template, _ = extractor(data)
+                templates.append(template)
+            try:
+                pose_yaws = yaws if settings.face_require_pose_liveness and yaws else None
+                check_face_liveness(templates, pose_yaws)
+            except ValueError as exc:
+                if str(exc) == "FACE_LIVENESS_FAILED":
+                    raise _FaceAuthRejected("LIVENESS_FAILED") from exc
+                raise _FaceAuthRejected("FACE_MATCH_FAILED") from exc
+            try:
+                stored_template = decrypt_template(credential.encrypted_template)
+                gallery = unpack_face_templates(stored_template)
+            except ValueError as exc:
+                raise _FaceAuthRejected("FACE_MATCH_FAILED") from exc
+            # Every frame must match the enrolled gallery (best angle per frame),
+            # then take the minimum across frames so one stolen photo cannot pass.
+            return aggregate_match_scores(
+                [score_probe_against_gallery(template, gallery) for template in templates]
+            )
+        except (_FaceAuthRejected, HTTPException, RuntimeError):
+            raise
+        except ValueError as exc:
+            raise _FaceAuthRejected("FACE_MATCH_FAILED") from exc
+        finally:
+            templates.clear()
+
     try:
         if len(frames) < 2 or len(frames) > 3:
             failed("FRAME_COUNT_INVALID")
@@ -2016,30 +2077,14 @@ async def auth_face_login(
             if upload.content_type == "image/png" and not data.startswith(b"\x89PNG\r\n\x1a\n"):
                 failed("FRAME_MAGIC_INVALID")
             frame_bytes.append(data)
-            # Face-specific frame gate; the medicine-carton OCR gate falsely
-            # rejected valid guided webcam captures (HCT-424/HCT-425 fix).
-            try:
-                ensure_face_frame_quality(data)
-            except ValueError:
-                failed("FRAME_QUALITY_INVALID")
-            extractor = _face_extractor_for_algorithm(credential.algorithm_version)
-            if credential.algorithm_version.startswith("opencv-yunet-sface"):
-                template, frame_meta = extractor(data)
-                yaws.append(float(frame_meta.get("yaw", 0.0)))
-            else:
-                template, _ = extractor(data)
-            templates.append(template)
+        # Run the heavy OpenCV/ONNX matching on the dedicated face worker so the
+        # event loop (health checks, other logins) never hangs behind it.
         try:
-            pose_yaws = yaws if settings.face_require_pose_liveness and yaws else None
-            check_face_liveness(templates, pose_yaws)
-        except ValueError as exc:
-            if str(exc) == "FACE_LIVENESS_FAILED":
-                failed("LIVENESS_FAILED")
-            failed("FACE_MATCH_FAILED")
-        try:
-            stored_template = decrypt_template(credential.encrypted_template)
-            gallery = unpack_face_templates(stored_template)
-        except HTTPException as exc:
+            match_score = await run_face_pipeline(_match_frames_against_credential)
+        except _FaceAuthRejected as exc:
+            failed(exc.reason)
+        except (HTTPException, RuntimeError) as exc:
+            # Template decrypt failure or local face service unavailable.
             _record_authentication_audit(
                 session,
                 household_id=household_id,
@@ -2052,36 +2097,11 @@ async def auth_face_login(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="FACE_AUTH_UNAVAILABLE",
             ) from exc
-        except ValueError:
-            failed("FACE_MATCH_FAILED")
-        # Every frame must match the enrolled gallery (best angle per frame),
-        # then take the minimum across frames so one stolen photo cannot pass.
-        match_score = aggregate_match_scores(
-            [score_probe_against_gallery(template, gallery) for template in templates]
-        )
         if match_score < match_threshold_for(credential.algorithm_version):
             failed()
-    except HTTPException:
-        raise
-    except ValueError:
-        failed("FACE_MATCH_FAILED")
-    except RuntimeError as exc:
-        _record_authentication_audit(
-            session,
-            household_id=household_id,
-            actor_id=actor_id,
-            method="FACE",
-            outcome="FAILED",
-            reason="FACE_SERVICE_UNAVAILABLE",
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="FACE_AUTH_UNAVAILABLE",
-        ) from exc
     finally:
         for index in range(len(frame_bytes)):
             frame_bytes[index] = b""
-        templates.clear()
 
     clear_face_failures(rate_key, session)
     _record_authentication_audit(
@@ -2156,8 +2176,99 @@ async def auth_family_face_login(
         failed("CREDENTIAL_UNAVAILABLE")
 
     frame_bytes: list[bytes] = []
-    templates_by_algorithm: dict[str, list[bytes]] = {}
-    yaws_by_algorithm: dict[str, list[float]] = {}
+
+    def _identify_household_member() -> str:
+        """Gate/extract/liveness/1:N match pipeline; runs off the event loop.
+
+        Returns the uniquely matched ``actor_id``.  Raises ``_FaceAuthRejected``
+        with the desensitized reason bucket or ``RuntimeError`` when every
+        stored credential is unreadable / the face service is unavailable.
+        """
+        templates_by_algorithm: dict[str, list[bytes]] = {}
+        try:
+            for data in frame_bytes:
+                # Face-specific frame gate; the medicine-carton OCR gate falsely
+                # rejected valid guided webcam captures (HCT-424/HCT-425 fix).
+                try:
+                    ensure_face_frame_quality(data)
+                except ValueError as exc:
+                    raise _FaceAuthRejected("FRAME_QUALITY_INVALID") from exc
+
+            # A household may contain legacy v1/v2 and current v3 credentials
+            # during migration, so derive each feature representation only once
+            # per algorithm version and keep all raw frames in memory only.
+            for algorithm_version in {
+                credential.algorithm_version for credential in credentials
+            }:
+                extractor = _face_extractor_for_algorithm(algorithm_version)
+                extracted: list[bytes] = []
+                yaws: list[float] = []
+                for data in frame_bytes:
+                    template, frame_meta = extractor(data)
+                    extracted.append(template)
+                    if algorithm_version.startswith("opencv-yunet-sface"):
+                        yaws.append(float(frame_meta.get("yaw", 0.0)))
+                try:
+                    pose_yaws = yaws if settings.face_require_pose_liveness and yaws else None
+                    check_face_liveness(extracted, pose_yaws)
+                except ValueError as exc:
+                    if str(exc) == "FACE_LIVENESS_FAILED":
+                        raise _FaceAuthRejected("LIVENESS_FAILED") from exc
+                    raise _FaceAuthRejected("FACE_MATCH_FAILED") from exc
+                templates_by_algorithm[algorithm_version] = extracted
+
+            candidates: list[tuple[float, float, str, str]] = []
+            decrypt_failures = 0
+            for credential in credentials:
+                try:
+                    stored_template = decrypt_template(credential.encrypted_template)
+                    gallery = unpack_face_templates(stored_template)
+                    templates = templates_by_algorithm[credential.algorithm_version]
+                    # Same rule as 1:1 login: all frames must match one member gallery.
+                    score = aggregate_match_scores(
+                        [
+                            score_probe_against_gallery(template, gallery)
+                            for template in templates
+                        ]
+                    )
+                except (HTTPException, ValueError, KeyError):
+                    decrypt_failures += 1
+                    continue
+                candidates.append(
+                    (
+                        ranking_margin(score, credential.algorithm_version),
+                        score,
+                        credential.actor_id,
+                        credential.algorithm_version,
+                    )
+                )
+            if not candidates:
+                if decrypt_failures:
+                    raise RuntimeError("FACE_CREDENTIALS_UNAVAILABLE")
+                raise _FaceAuthRejected("CREDENTIAL_UNAVAILABLE")
+
+            candidates.sort(key=lambda item: item[0], reverse=True)
+            best_margin, best_score, best_actor_id, best_algorithm = candidates[0]
+            second_margin = candidates[1][0] if len(candidates) > 1 else None
+            if best_margin < 0 or best_score < match_threshold_for(best_algorithm):
+                raise _FaceAuthRejected("NO_MATCH")
+            if (
+                second_margin is not None
+                and best_margin - second_margin < family_match_margin_for(best_algorithm)
+            ):
+                # A close race between two family members is not safe to resolve
+                # automatically; the UI falls back to PIN/explicit account login.
+                raise _FaceAuthRejected("AMBIGUOUS_MATCH")
+            return best_actor_id
+        except (_FaceAuthRejected, RuntimeError):
+            raise
+        except ValueError as exc:
+            raise _FaceAuthRejected("FACE_MATCH_FAILED") from exc
+        finally:
+            for templates in templates_by_algorithm.values():
+                templates.clear()
+            templates_by_algorithm.clear()
+
     try:
         if len(frames) < 2 or len(frames) > 3:
             failed("FRAME_COUNT_INVALID")
@@ -2172,97 +2283,28 @@ async def auth_family_face_login(
             if upload.content_type == "image/png" and not data.startswith(b"\x89PNG\r\n\x1a\n"):
                 failed("FRAME_MAGIC_INVALID")
             frame_bytes.append(data)
-            # Face-specific frame gate; the medicine-carton OCR gate falsely
-            # rejected valid guided webcam captures (HCT-424/HCT-425 fix).
-            try:
-                ensure_face_frame_quality(data)
-            except ValueError:
-                failed("FRAME_QUALITY_INVALID")
-
-        # A household may contain legacy v1/v2 and current v3 credentials during
-        # migration, so derive each feature representation only once per
-        # algorithm version and keep all raw frames in memory only.
-        for algorithm_version in {credential.algorithm_version for credential in credentials}:
-            extractor = _face_extractor_for_algorithm(algorithm_version)
-            extracted: list[bytes] = []
-            yaws: list[float] = []
-            for data in frame_bytes:
-                template, frame_meta = extractor(data)
-                extracted.append(template)
-                if algorithm_version.startswith("opencv-yunet-sface"):
-                    yaws.append(float(frame_meta.get("yaw", 0.0)))
-            try:
-                pose_yaws = yaws if settings.face_require_pose_liveness and yaws else None
-                check_face_liveness(extracted, pose_yaws)
-            except ValueError as exc:
-                if str(exc) == "FACE_LIVENESS_FAILED":
-                    failed("LIVENESS_FAILED")
-                failed("FACE_MATCH_FAILED")
-            templates_by_algorithm[algorithm_version] = extracted
-            yaws_by_algorithm[algorithm_version] = yaws
-
-        candidates: list[tuple[float, float, str, str]] = []
-        decrypt_failures = 0
-        for credential in credentials:
-            try:
-                stored_template = decrypt_template(credential.encrypted_template)
-                gallery = unpack_face_templates(stored_template)
-                templates = templates_by_algorithm[credential.algorithm_version]
-                # Same rule as 1:1 login: all frames must match one member gallery.
-                score = aggregate_match_scores(
-                    [score_probe_against_gallery(template, gallery) for template in templates]
-                )
-            except (HTTPException, ValueError, KeyError):
-                decrypt_failures += 1
-                continue
-            candidates.append(
-                (
-                    ranking_margin(score, credential.algorithm_version),
-                    score,
-                    credential.actor_id,
-                    credential.algorithm_version,
-                )
+        # Run the heavy OpenCV/ONNX 1:N matching on the dedicated face worker so
+        # the event loop (health checks, other logins) never hangs behind it.
+        try:
+            best_actor_id = await run_face_pipeline(_identify_household_member)
+        except _FaceAuthRejected as exc:
+            failed(exc.reason)
+        except RuntimeError as exc:
+            _record_authentication_audit(
+                session,
+                household_id=household_id,
+                actor_id=rate_actor,
+                method="FACE",
+                outcome="FAILED",
+                reason="FACE_SERVICE_UNAVAILABLE",
             )
-        if not candidates:
-            if decrypt_failures:
-                raise RuntimeError("FACE_CREDENTIALS_UNAVAILABLE")
-            failed("CREDENTIAL_UNAVAILABLE")
-
-        candidates.sort(key=lambda item: item[0], reverse=True)
-        best_margin, best_score, best_actor_id, best_algorithm = candidates[0]
-        second_margin = candidates[1][0] if len(candidates) > 1 else None
-        if best_margin < 0 or best_score < match_threshold_for(best_algorithm):
-            failed("NO_MATCH")
-        if (
-            second_margin is not None
-            and best_margin - second_margin < family_match_margin_for(best_algorithm)
-        ):
-            # A close race between two family members is not safe to resolve
-            # automatically; the UI falls back to PIN/explicit account login.
-            failed("AMBIGUOUS_MATCH")
-    except HTTPException:
-        raise
-    except ValueError:
-        failed("FACE_MATCH_FAILED")
-    except RuntimeError as exc:
-        _record_authentication_audit(
-            session,
-            household_id=household_id,
-            actor_id=rate_actor,
-            method="FACE",
-            outcome="FAILED",
-            reason="FACE_SERVICE_UNAVAILABLE",
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="FACE_AUTH_UNAVAILABLE",
-        ) from exc
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="FACE_AUTH_UNAVAILABLE",
+            ) from exc
     finally:
         for index in range(len(frame_bytes)):
             frame_bytes[index] = b""
-        for templates in templates_by_algorithm.values():
-            templates.clear()
-        templates_by_algorithm.clear()
 
     clear_face_failures(rate_key, session)
     _record_authentication_audit(
@@ -2542,10 +2584,45 @@ async def register_face_credential(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="FACE_LIVENESS_FAILED",
         )
-    templates: list[bytes] = []
-    yaws: list[float] = []
+    image_frames: list[bytes] = []
     metadata: dict[str, Any] | None = None
     packed_template = b""
+
+    def _process_registration_frames() -> tuple[bytes, dict[str, Any] | None]:
+        """CPU-heavy gate/detect/embed/liveness pipeline; runs off the event loop."""
+        templates: list[bytes] = []
+        yaws: list[float] = []
+        frame_metadata: dict[str, Any] | None = None
+        try:
+            for image_bytes in image_frames:
+                # Face-specific frame gate (raises FACE_FRAME_LOW_QUALITY).  The
+                # medicine-carton OCR gate must not run here: it falsely rejected
+                # valid guided webcam captures (HCT-424 root-cause fix).
+                ensure_face_frame_quality(image_bytes)
+                # Geometry gates (face size/pose/blur) run inside extract_face_template.
+                template, frame_meta = extract_face_template(image_bytes, enforce_geometry=True)
+                templates.append(template)
+                yaws.append(float(frame_meta.get("yaw", 0.0)))
+                frame_metadata = frame_meta
+            try:
+                pose_yaws = yaws if settings.face_require_pose_liveness else None
+                check_face_liveness(templates, pose_yaws)
+            except ValueError as exc:
+                raise ValueError("FACE_LIVENESS_FAILED") from exc
+            # Keep every angle in an encrypted multi-template gallery so login can
+            # tolerate mild head turns without lowering the match threshold.
+            packed = pack_face_templates(templates)
+            if frame_metadata is not None and len(templates) > 1:
+                frame_metadata = {
+                    **frame_metadata,
+                    "feature_version": FACE_FEATURE_VERSION_MULTI,
+                    "template_count": len(templates),
+                }
+            return packed, frame_metadata
+        finally:
+            templates.clear()
+            yaws.clear()
+
     try:
         for upload in uploads:
             filename = validate_filename(upload.filename or "unknown")
@@ -2560,30 +2637,12 @@ async def register_face_credential(
             image_bytes = await upload.read(2 * 1024 * 1024 + 1)
             if not image_bytes or len(image_bytes) > 2 * 1024 * 1024:
                 raise ValueError("FACE_FRAME_SIZE_INVALID")
-            # Face-specific frame gate (raises FACE_FRAME_LOW_QUALITY).  The
-            # medicine-carton OCR gate must not run here: it falsely rejected
-            # valid guided webcam captures (HCT-424 root-cause fix).
-            ensure_face_frame_quality(image_bytes)
-            # Geometry gates (face size/pose/blur) run inside extract_face_template.
-            template, frame_metadata = extract_face_template(image_bytes, enforce_geometry=True)
-            templates.append(template)
-            yaws.append(float(frame_metadata.get("yaw", 0.0)))
-            metadata = frame_metadata
-            image_bytes = b""
-        try:
-            pose_yaws = yaws if settings.face_require_pose_liveness else None
-            check_face_liveness(templates, pose_yaws)
-        except ValueError as exc:
-            raise ValueError("FACE_LIVENESS_FAILED") from exc
-        # Keep every angle in an encrypted multi-template gallery so login can
-        # tolerate mild head turns without lowering the match threshold.
-        packed_template = pack_face_templates(templates)
-        if metadata is not None and len(templates) > 1:
-            metadata = {
-                **metadata,
-                "feature_version": FACE_FEATURE_VERSION_MULTI,
-                "template_count": len(templates),
-            }
+            image_frames.append(image_bytes)
+        # Frame decode, YuNet/SFace inference and (first-use) model download are
+        # synchronous heavy work: run them on the dedicated face worker so
+        # /health and every other request stay responsive while the user waits
+        # on 「正在保存…」 (HCT-424 root-cause fix for false 「本地 API 不可用」).
+        packed_template, metadata = await run_face_pipeline(_process_registration_frames)
     except RuntimeError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2595,9 +2654,8 @@ async def register_face_credential(
             detail=str(exc),
         ) from exc
     finally:
-        # Drop all decoded registration frames before touching the database.
-        templates.clear()
-        yaws.clear()
+        # Drop all raw registration frames before touching the database.
+        image_frames.clear()
 
     if metadata is None or not packed_template:
         raise HTTPException(
