@@ -196,4 +196,21 @@ export interface AssistantResponse {
   route?: string | null
   query_type?: string | null
   risk_notice?: string | null
+  agent_trace?: AssistantAgentTrace[]
+  external_sources?: AssistantExternalSource[]
+  network_query?: string | null
+}
+
+/** 流式助手事件中的最小 trace 结构。 */
+export interface AssistantAgentTrace {
+  agent_id: string
+  status?: string
+  summary?: string | null
+  detail?: string | null
+}
+
+export interface AssistantExternalSource {
+  title: string
+  url?: string | null
+  snippet?: string | null
 }
