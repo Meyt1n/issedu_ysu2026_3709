@@ -49,7 +49,8 @@ Android 静态网络配置无法表达“任意 RFC1918/ULA 地址可明文、�
 - 清除应用数据后首次启动出现系统通知授权对话框，选择拒绝后 `POST_NOTIFICATIONS` 为 `granted=false`，应用仍回到 `MainActivity` 正常运行；
 - 将同一权限置为系统 `USER_FIXED` 永久拒绝后强制停止并重启应用，仍直接进入 `MainActivity`，未再次弹出授权对话框；
 - 创建临时次用户 `10`，为该用户安装同一 APK 并启动应用：应用运行在 `u10`，数据目录为 `/data/user/10/com.homecaretwin.companion`，机主仍使用独立的 `/data/user/0/com.homecaretwin.companion`；验证后停止并删除临时用户，模拟器恢复为仅机主用户；
-- 该模拟器证据补齐通知拒绝/永久拒绝和多用户启动隔离；真实设备迁移还原仍因没有可控 D2D/云备份恢复源无法完成，受控 HTTPS 证书联调仍需专用证书环境。
+- 切换模拟器到 `com.android.localtransport/.LocalTransport` 后执行 `bmgr backupnow com.homecaretwin.companion`，仍返回 `Backup is not allowed`，`bmgr list sets` 未出现该应用可恢复的备份集；测试结束已切回原云备份 transport，并重新安装确认最终包不含 `ALLOW_BACKUP`；
+- 该模拟器证据补齐通知拒绝/永久拒绝、多用户启动隔离和本地备份 transport 拒绝；真实设备迁移还原仍因没有可控 D2D/云备份恢复源无法完成，受控 HTTPS 证书联调仍需专用证书环境。
 
 ### 2026-08-24 最新 `master` 复核
 
