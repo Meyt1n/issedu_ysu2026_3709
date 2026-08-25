@@ -295,7 +295,7 @@ test('可见界面始终保持本地优先与无导流安全边界', async ({ pa
   await page.goto('/')
 
   await expect(page.getByText('健康数据默认保存在本地家庭可信域')).toBeVisible()
-  await expect(page.getByText('不提供诊断、处方或用药决策；不提供购药、问诊或广告导流。')).toBeVisible()
+  await expect(page.getByText('家庭健康记录仅供日常参考，不提供诊断、处方或用药决策；紧急情况请联系医生或当地急救服务。')).toBeVisible()
   await expect(page.locator('body')).not.toContainText(
     /购药入口|立即购买|去问诊|在线咨询|广告推荐|buy medicine|purchase|online consultation|advertisement|commission/i,
   )

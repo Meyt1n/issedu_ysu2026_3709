@@ -62,6 +62,70 @@ async function installMemberApi(page: Page): Promise<void> {
         }],
       })
     }
+    if (request.method() === 'GET' && path.endsWith('/risks')) {
+      return respond({
+        member_id: member.id,
+        alerts: [{
+          rule_id: 'allergy_conflict',
+          level: 'WARNING',
+          message: '请和家庭管理员一起核对这条记录。',
+          source_event_ids: ['event-confirmed-1'],
+          created_at: '2026-08-24T08:00:00Z',
+          rule_version: 'demo-rules-v1',
+          risk_fingerprint: 'risk-fingerprint-1',
+          acknowledgement: null,
+        }],
+        total: 1,
+        severe_count: 0,
+        warning_count: 1,
+      })
+    }
+    if (request.method() === 'GET' && path.endsWith('/vision-tasks')) {
+      return respond([{
+        id: 'member-task-1',
+        household_id: household.id,
+        member_id: member.id,
+        file_id: 'member-photo-1.jpg',
+        task_type: 'medicine',
+        status: 'running',
+        error_code: null,
+        error_message: null,
+        error_detail: null,
+        result: null,
+        model_version: null,
+        model_threshold: null,
+        schema_version: null,
+        code_version: null,
+        data_version: null,
+        preprocess_version: null,
+        input_digest: null,
+        created_by: member.actor_id,
+        created_at: '2026-08-24T08:00:00Z',
+      }])
+    }
+    if (request.method() === 'GET' && path === '/api/v1/vision-tasks/member-task-1') {
+      return respond({
+        id: 'member-task-1',
+        household_id: household.id,
+        member_id: member.id,
+        file_id: 'member-photo-1.jpg',
+        task_type: 'medicine',
+        status: 'running',
+        error_code: null,
+        error_message: null,
+        error_detail: null,
+        result: null,
+        model_version: null,
+        model_threshold: null,
+        schema_version: null,
+        code_version: null,
+        data_version: null,
+        preprocess_version: null,
+        input_digest: null,
+        created_by: member.actor_id,
+        created_at: '2026-08-24T08:00:00Z',
+      })
+    }
     if (request.method() === 'GET' && path === '/api/v1/meta/capabilities') {
       return respond({ phase: 'local', available: ['api'], unavailable: ['ollama'] })
     }
@@ -77,12 +141,23 @@ test('家庭成员进入前台，只看到自己的照护入口和已确认记�
 
   await expect(page.locator('.app-frame')).toBeVisible()
   await expect(page.getByText('家庭成员前台', { exact: true })).toBeVisible()
+  await expect(page.locator('.identity-chip')).not.toContainText('grandma-account')
   await expect(page.locator('aside.sidebar').getByRole('button', { name: '我的家庭' })).toBeVisible()
   await expect(page.locator('aside.sidebar').getByRole('button', { name: '拍照录药' })).toBeVisible()
   await expect(page.locator('aside.sidebar').getByRole('button', { name: '我的记录' })).toBeVisible()
   await expect(page.locator('aside.sidebar').getByRole('button', { name: '授权管理' })).toHaveCount(0)
   await expect(page.locator('aside.sidebar').getByRole('button', { name: '人工复核' })).toHaveCount(0)
   await expect(page.getByText('教学演示系统')).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: '需要留意的情况' })).toBeVisible()
+  await expect(page.getByText('请和家庭管理员一起核对这条记录。')).toBeVisible()
+  await expect(page.getByText('allergy_conflict')).toHaveCount(0)
+
+  await page.evaluate(() => {
+    localStorage.setItem('hct-vision-tasks:grandma-account', JSON.stringify(['member-task-1']))
+  })
+  await page.locator('aside.sidebar').getByRole('button', { name: '拍照录药', exact: true }).click()
+  await expect(page.getByRole('heading', { name: '把药盒拍清楚就可以了' })).toBeVisible()
+  await expect(page.getByText('正在识别', { exact: true })).toBeVisible()
 
   await page.locator('aside.sidebar').getByRole('button', { name: '我的记录', exact: true }).click()
   await expect(page.getByRole('heading', { name: '奶奶的健康记录' })).toBeVisible()

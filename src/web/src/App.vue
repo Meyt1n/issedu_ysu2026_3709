@@ -376,11 +376,14 @@ onBeforeUnmount(() => {
               </button>
             </div>
           </div>
-          <span class="identity-chip" :title="`${currentHouseholdLabel} · 登录账号 ${session.actorId}`">
+          <span
+            class="identity-chip"
+            :title="session.portal === 'admin' ? `${currentHouseholdLabel} · 登录账号 ${session.actorId}` : `${currentHouseholdLabel} · 当前成员`"
+          >
             <AppIcon name="members" :size="16" />
             <span class="identity-person">
               <strong>{{ currentMemberLabel }}</strong>
-              <small>{{ session.actorId }}</small>
+              <small>{{ session.portal === 'admin' ? session.actorId : '当前家庭成员' }}</small>
             </span>
             <span class="role-tag" :class="{ caregiver: !session.isOwnerView }">
               {{ session.isOwnerView ? '家庭管理员后台' : '家庭成员前台' }}

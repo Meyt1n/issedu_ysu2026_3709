@@ -1,17 +1,100 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
-import type { VisionTask } from '../api/types'
+import { apiClient } from '../api/client'
+import type { HealthEvent, VisionTask } from '../api/types'
 import AppIcon from '../components/AppIcon.vue'
+import {
+  pushToast,
+  rememberVisionTask,
+  rememberedVisionTasks,
+  requestOptions,
+  session,
+} from '../store'
 import VisionQualityPanel from '../vision/VisionQualityPanel.vue'
-import { pushToast, session } from '../store'
 
 const submittedTask = ref<VisionTask | null>(null)
+const trackedTasks = ref<VisionTask[]>([])
+const confirmedTaskIds = ref<Set<string>>(new Set())
+let pollTimer: ReturnType<typeof setInterval> | null = null
+
+const hasActiveTasks = computed(() => trackedTasks.value.some(task => (
+  task.status === 'queued' || task.status === 'running'
+)))
+
+function taskStatusLabel(task: VisionTask): string {
+  if (confirmedTaskIds.value.has(task.id)) return '已确认'
+  if (task.status === 'queued' || task.status === 'running') return '正在识别'
+  if (task.status === 'succeeded') return '已提交，等待家人确认'
+  if (task.status === 'cancelled') return '已取消'
+  return '识别失败，请重新拍照'
+}
+
+function taskStatusHint(task: VisionTask): string {
+  if (confirmedTaskIds.value.has(task.id)) return '家庭管理员已确认，药品信息已进入家庭记录。'
+  if (task.status === 'queued' || task.status === 'running') return '照片正在本机处理中，请稍等。'
+  if (task.status === 'succeeded') return '管理员确认后，你就能在“我的记录”里看到它。'
+  if (task.status === 'cancelled') return '这张照片没有进入家庭记录，可以重新拍摄。'
+  return '请换一个光线好、文字清楚的角度再拍一次。'
+}
+
+function visionTaskIdFromEvent(event: HealthEvent): string | null {
+  const value = event.evidence?.vision_task_id
+  return typeof value === 'string' ? value : null
+}
+
+async function refreshTracking(): Promise<void> {
+  const serverTasks = session.selectedHouseholdId && session.selectedMemberId
+    ? await apiClient.listMemberVisionTasks(
+        session.selectedHouseholdId,
+        session.selectedMemberId,
+        requestOptions.value,
+      ).catch(() => [] as VisionTask[])
+    : []
+  const ids = [...new Set([
+    ...serverTasks.map(task => task.id),
+    ...rememberedVisionTasks(),
+  ])].slice(0, 5)
+  if (!ids.length) {
+    trackedTasks.value = []
+    confirmedTaskIds.value = new Set()
+    return
+  }
+  const taskResults = await Promise.allSettled(
+    ids.map(id => apiClient.getVisionTask(id, requestOptions.value)),
+  )
+  trackedTasks.value = taskResults
+    .filter((result): result is PromiseFulfilledResult<VisionTask> => result.status === 'fulfilled')
+    .map(result => result.value)
+
+  if (!session.selectedHouseholdId || !session.selectedMemberId) return
+  const timeline = await apiClient.listMemberTimeline(
+    session.selectedHouseholdId,
+    session.selectedMemberId,
+    requestOptions.value,
+  ).catch(() => [] as HealthEvent[])
+  confirmedTaskIds.value = new Set(
+    timeline.map(visionTaskIdFromEvent).filter((id): id is string => Boolean(id)),
+  )
+}
 
 function onTaskCreated(task: VisionTask): void {
+  rememberVisionTask(task.id)
   submittedTask.value = task
+  void refreshTracking()
   pushToast('success', '照片已提交，等家庭管理员确认后才会记入家庭记录。')
 }
+
+onMounted(() => {
+  void refreshTracking()
+  pollTimer = setInterval(() => {
+    if (hasActiveTasks.value) void refreshTracking()
+  }, 5000)
+})
+
+onBeforeUnmount(() => {
+  if (pollTimer) clearInterval(pollTimer)
+})
 </script>
 
 <template>
@@ -37,5 +120,20 @@ function onTaskCreated(task: VisionTask): void {
   <section v-if="submittedTask" class="card member-next-step">
     <AppIcon name="check" :size="22" />
     <div><strong>接下来由家庭管理员确认</strong><p>确认后，你可以在“我的记录”里看到结果。</p></div>
+  </section>
+
+  <section v-if="trackedTasks.length" class="card member-capture-status">
+    <div class="card-heading">
+      <div><p class="eyebrow">照片进度</p><h3 class="card-title">最近提交</h3></div>
+      <span v-if="hasActiveTasks" class="pill gold">处理中</span>
+    </div>
+    <ul class="list-plain member-status-list">
+      <li v-for="task in trackedTasks" :key="task.id" class="member-status-row">
+        <span class="member-status-icon" :class="confirmedTaskIds.has(task.id) ? 'confirmed' : task.status === 'failed' || task.status === 'timeout' ? 'failed' : 'pending'">
+          <AppIcon :name="confirmedTaskIds.has(task.id) ? 'check' : task.status === 'failed' || task.status === 'timeout' ? 'alert' : 'scan'" :size="17" />
+        </span>
+        <span><strong>{{ taskStatusLabel(task) }}</strong><small>{{ taskStatusHint(task) }}</small></span>
+      </li>
+    </ul>
   </section>
 </template>

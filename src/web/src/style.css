@@ -4491,6 +4491,22 @@ button:focus-visible, a:focus-visible {
 .member-summary-grid { align-items: start; }
 .member-empty { padding: 28px 18px; }
 .member-empty > .app-icon { color: var(--pine); margin-bottom: 8px; }
+.member-risk-card { border-left: 4px solid var(--gold); margin-top: 18px; }
+.member-risk-count { color: var(--rose); font-size: 13px; font-weight: 700; }
+.member-risk-intro { color: var(--ink-soft); font-size: 13px; line-height: 1.6; margin: -4px 0 12px; }
+.member-risk-list { display: grid; gap: 8px; }
+.member-risk-row {
+  align-items: flex-start;
+  background: color-mix(in srgb, var(--gold) 9%, transparent);
+  border-radius: 10px;
+  display: flex;
+  gap: 10px;
+  line-height: 1.55;
+  padding: 10px 12px;
+}
+.member-risk-row.SEVERE { background: color-mix(in srgb, var(--rose) 10%, transparent); }
+.member-risk-level { color: var(--gold-deep); flex: 0 0 36px; font-size: 12px; font-weight: 700; }
+.member-risk-row.SEVERE .member-risk-level { color: var(--rose); }
 .member-list { gap: 9px; }
 .member-list .row-card { display: grid; gap: 4px; }
 .member-list .row-card strong { align-items: center; display: flex; gap: 7px; }
@@ -4498,6 +4514,31 @@ button:focus-visible, a:focus-visible {
 .member-confirmation-note { margin-bottom: 18px; }
 .member-next-step { align-items: flex-start; color: var(--pine); display: flex; gap: 12px; margin-top: 18px; }
 .member-next-step p { color: var(--ink-soft); margin: 5px 0 0; }
+.member-capture-status { margin-top: 18px; }
+.member-status-list { display: grid; gap: 10px; }
+.member-status-row {
+  align-items: center;
+  background: var(--card-soft);
+  border: 1px solid var(--glass-border);
+  border-radius: 14px;
+  display: flex;
+  gap: 12px;
+  padding: 12px 14px;
+}
+.member-status-row > span:last-child { display: grid; gap: 3px; }
+.member-status-row small { color: var(--ink-soft); }
+.member-status-icon {
+  align-items: center;
+  border-radius: 50%;
+  display: grid;
+  flex: 0 0 32px;
+  height: 32px;
+  justify-items: center;
+  width: 32px;
+}
+.member-status-icon.pending { background: color-mix(in srgb, var(--gold) 20%, transparent); color: var(--clay); }
+.member-status-icon.confirmed { background: color-mix(in srgb, var(--pine) 16%, transparent); color: var(--pine); }
+.member-status-icon.failed { background: color-mix(in srgb, var(--rose) 20%, transparent); color: var(--clay); }
 .member-plan-list,
 .member-record-list { display: grid; gap: 10px; }
 .member-plan-row,

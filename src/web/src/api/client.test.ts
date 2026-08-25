@@ -201,6 +201,23 @@ describe('ApiClient authorization contract', () => {
     ])
   })
 
+  it('loads persistent member vision task status within the household scope', async () => {
+    const requests: string[] = []
+    const client = new ApiClient({
+      baseUrl: 'http://local.test',
+      fetcher: async input => {
+        requests.push(String(input))
+        return new Response('[]', { status: 200 })
+      },
+    })
+
+    await client.listMemberVisionTasks('household/1', 'member 1')
+
+    expect(requests).toEqual([
+      'http://local.test/api/v1/households/household%2F1/vision-tasks?member_id=member%201',
+    ])
+  })
+
   it('writes a risk acknowledgement with the idempotency header', async () => {
     const requests: Array<{ url: string; init: RequestInit }> = []
     const client = new ApiClient({
