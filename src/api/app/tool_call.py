@@ -484,24 +484,32 @@ class OllamaClient:
         if tools:
             payload["tools"] = tools
 
-        with httpx.Client(timeout=timeout or REQUEST_TIMEOUT, trust_env=False) as client:
-            with client.stream("POST", f"{self.base_url}/api/chat", json=payload) as resp:
-                resp.raise_for_status()
-                if cancel_check is not None and cancel_check():
-                    resp.close()
-                    raise RuntimeError("OLLAMA_CANCELLED")
-                for line in resp.iter_lines():
+        try:
+            with httpx.Client(timeout=timeout or REQUEST_TIMEOUT, trust_env=False) as client:
+                with client.stream("POST", f"{self.base_url}/api/chat", json=payload) as resp:
+                    resp.raise_for_status()
                     if cancel_check is not None and cancel_check():
                         resp.close()
                         raise RuntimeError("OLLAMA_CANCELLED")
-                    if not line:
-                        continue
-                    data = json.loads(line)
-                    content = (data.get("message") or {}).get("content") or ""
-                    if content:
-                        yield content
-                    if data.get("done"):
-                        break
+                    for line in resp.iter_lines():
+                        if cancel_check is not None and cancel_check():
+                            resp.close()
+                            raise RuntimeError("OLLAMA_CANCELLED")
+                        if not line:
+                            continue
+                        data = json.loads(line)
+                        content = (data.get("message") or {}).get("content") or ""
+                        if content:
+                            yield content
+                        if data.get("done"):
+                            break
+        except httpx.HTTPError as exc:
+            # Parity with ``chat``: a down or refusing Ollama must surface as
+            # the structured MODEL_UNAVAILABLE degrade in the orchestrator,
+            # never as an unhandled 500 that hides successful local/search
+            # steps from the user.
+            logger.warning("Ollama stream unavailable: %s", str(exc)[:160])
+            raise RuntimeError(f"OLLAMA_UNAVAILABLE: {str(exc)[:120]}") from exc
         self._available = True
 
 

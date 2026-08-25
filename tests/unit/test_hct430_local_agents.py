@@ -253,6 +253,35 @@ def test_agent_catalog_explains_unavailable_reason_and_enable_hint() -> None:
     assert "教学夹具" in fixture["web_search_enable_hint"]
 
 
+def test_chat_stream_wraps_connection_errors_for_structured_degrade(monkeypatch) -> None:
+    """An unreachable Ollama must degrade, not crash the whole chat request."""
+    import httpx
+    import pytest as _pytest
+
+    from app.tool_call import OllamaClient
+
+    class _RefusingClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def stream(self, *_args, **_kwargs):
+            raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr("app.tool_call.httpx.Client", _RefusingClient)
+    stream = OllamaClient().chat_stream(
+        model="local-model",
+        messages=[{"role": "user", "content": "测试"}],
+    )
+    with _pytest.raises(RuntimeError, match="OLLAMA_UNAVAILABLE"):
+        list(stream)
+
+
 def test_web_search_agent_with_fixture_provider_stays_offline(monkeypatch) -> None:
     """Dual opt-in with the fixture provider works without any egress."""
 
