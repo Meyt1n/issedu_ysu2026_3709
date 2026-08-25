@@ -7,6 +7,7 @@ import {
   connectWithPassword,
   connectWithPin,
   portalWelcomeMessage,
+  refreshCapabilities,
   selectedMember,
   session,
   setView,
@@ -155,6 +156,40 @@ describe('family face entry context', () => {
     expect(session.currentView).toBe('member-home')
     expect(selectedMember.value?.display_name).toBe('奶奶')
     expect(portalWelcomeMessage()).toBe('你好，奶奶。欢迎回家。')
+  })
+})
+
+describe('pre-login capability probe (HCT-425)', () => {
+  afterEach(() => {
+    signOut()
+    vi.restoreAllMocks()
+  })
+
+  it('loads capabilities anonymously so the welcome face tab can detect readiness', async () => {
+    const spy = vi.spyOn(apiClient, 'getCapabilities').mockResolvedValue({
+      phase: 'local',
+      available: ['api', 'face-recognition-local'],
+      unavailable: [],
+    })
+
+    await refreshCapabilities()
+
+    expect(spy).toHaveBeenCalledWith()
+    expect(session.capabilities?.available).toContain('face-recognition-local')
+  })
+
+  it('keeps the previous capabilities when the probe fails', async () => {
+    vi.spyOn(apiClient, 'getCapabilities').mockResolvedValueOnce({
+      phase: 'local',
+      available: ['face-recognition-local'],
+      unavailable: [],
+    })
+    await refreshCapabilities()
+
+    vi.spyOn(apiClient, 'getCapabilities').mockRejectedValueOnce(new Error('offline'))
+    await refreshCapabilities()
+
+    expect(session.capabilities?.available).toContain('face-recognition-local')
   })
 })
 

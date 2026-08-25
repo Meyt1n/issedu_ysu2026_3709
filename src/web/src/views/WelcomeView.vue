@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 
 import welcomeHero from '../assets/welcome-hero.jpg'
 import { apiClient } from '../api/client'
@@ -17,6 +17,7 @@ import {
   getBoundFaceHouseholdName,
   portalWelcomeMessage,
   pushToast,
+  refreshCapabilities,
   session,
 } from '../store'
 import { SHOW_DEV_LOGIN } from '../ui/featureFlags'
@@ -169,6 +170,11 @@ watch(
     })
   },
 )
+
+onMounted(() => {
+  // 人脸 tab 依赖 /meta/capabilities 判断模型是否就绪；登录前也需要预取。
+  if (!session.capabilities) void refreshCapabilities()
+})
 
 onBeforeUnmount(() => {
   householdsRequest?.abort()

@@ -381,6 +381,20 @@ export function clearBoundFaceHousehold(): void {
   }
 }
 
+/**
+ * 登录前预取本地能力声明（`/meta/capabilities` 是公开元数据接口，不需要
+ * 鉴权）。欢迎页据此判断人脸识别模型是否就绪；此前该状态只在登录后的
+ * `loadHouseholdScope` 里加载，冷加载的欢迎页会把已绑定设备误判为
+ * “人脸登录暂时不可用”。失败时保留已有值，由页面引导改用 PIN/密码。
+ */
+export async function refreshCapabilities(): Promise<void> {
+  try {
+    state.capabilities = await apiClient.getCapabilities()
+  } catch {
+    // 探测失败不清空已有能力声明，也不阻塞欢迎页；人脸不可用时页面自带回退。
+  }
+}
+
 async function enterAuthenticatedSession(
   sessionResult: AuthSession,
   preferredHouseholdId = '',
