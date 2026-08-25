@@ -134,15 +134,17 @@ export function createIdempotencyKey(): string {
 
 export function formatError(cause: unknown): string {
   if (cause instanceof ApiClientError) {
+    // 超时 ≠ 服务不可用：服务端（例如人脸注册的本地推理）可能仍在处理并随后
+    // 完成保存，不能宣称「没有改变任何数据」（HCT-424 误报根因之一）。
+    if (cause.code === 'REQUEST_TIMEOUT') {
+      return '本地服务响应超时：请求可能仍在后台处理。请稍候点“刷新”确认结果，再决定是否重试。'
+    }
     if (cause.code === 'DEPENDENCY_UNAVAILABLE') {
       return (
-        '无法连接本地 API，本次没有改变任何数据。请确认 API 已启动'
+        '本地 API 服务不可用：无法连接本地 API，本次没有改变任何数据。请确认 API 已启动'
         + '（scripts/start.ps1 api 或 Compose 的 api 服务）、端口配置正确，'
         + '并用 /health 验证后重试。'
       )
-    }
-    if (cause.code === 'REQUEST_TIMEOUT') {
-      return '本地 API 响应超时，本次结果未确认。API 可能正在启动或负载较高，请稍后重试。'
     }
     if (cause.message === 'KNOWLEDGE_STEWARD_REQUIRED') {
       return (

@@ -330,3 +330,27 @@ describe('formatError 区分真实失败原因（HCT-401 爬虫面板）', () =>
     expect(message).toContain('SOMETHING_BROKE')
   })
 })
+
+describe('formatError timeout vs unavailability (HCT-424)', () => {
+  it('explains a timeout as possibly still processing, never as API down', () => {
+    // 人脸注册首次推理/模型下载超过超时上限时，服务端可能仍在保存；
+    // 不能显示「本地 API 不可用/没有改变任何数据」。
+    const message = formatError(new ApiClientError('API request timed out after 120000ms', {
+      status: 0,
+      code: 'REQUEST_TIMEOUT',
+    }))
+
+    expect(message).toContain('超时')
+    expect(message).not.toContain('不可用')
+    expect(message).not.toContain('没有改变任何数据')
+  })
+
+  it('keeps the unavailable copy for real connection failures', () => {
+    const message = formatError(new ApiClientError('API service is unavailable', {
+      status: 0,
+      code: 'DEPENDENCY_UNAVAILABLE',
+    }))
+
+    expect(message).toContain('本地 API 服务不可用')
+  })
+})

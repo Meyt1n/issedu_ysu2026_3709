@@ -137,10 +137,15 @@ function selectFile(event: Event): void {
 
 function explainError(cause: unknown): string {
   if (cause instanceof ApiClientError) {
-    if (cause.code === 'DEPENDENCY_UNAVAILABLE' || cause.code === 'REQUEST_TIMEOUT') {
+    if (cause.code === 'REQUEST_TIMEOUT') {
+      return isMemberView.value
+        ? '这张照片检查得有点慢，请稍等一下再试一次。'
+        : '本地服务响应超时，可能仍在处理；请稍候重试。'
+    }
+    if (cause.code === 'DEPENDENCY_UNAVAILABLE') {
       return isMemberView.value
         ? '家里的服务暂时连不上，请让家人帮忙看一下。'
-        : '本地服务连不上或响应超时，请确认 API 已启动后重试。'
+        : '本地服务连不上，请确认 API 已启动后重试。'
     }
     if (cause.status === 413) {
       return isMemberView.value ? '照片太大了，请换一张小一点的再试。' : '图片过大，请缩小图片后重试。'

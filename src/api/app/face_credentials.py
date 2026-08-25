@@ -14,6 +14,7 @@ may be downloaded once when explicitly allowed.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import os
@@ -21,9 +22,10 @@ import tempfile
 import urllib.error
 import urllib.request
 from collections.abc import Callable
-from functools import lru_cache
+from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache, partial
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import cv2
 import numpy as np
@@ -121,6 +123,42 @@ _MODEL_URLS = {
         "face_recognition_sface/face_recognition_sface_2021dec.onnx"
     ),
 }
+
+_T = TypeVar("_T")
+
+# HCT-424/HCT-425 根因修复：人脸帧解码、YuNet/SFace 推理和一次性的模型下载
+# 都是同步重活，绝不能直接在 asyncio 事件循环上执行——那会让 /health 和所有
+# 并发请求一起挂起，前端在默认 15 秒超时中止后把一个仍在处理的请求误报成
+# 「本地 API 不可用」。单 worker 线程既让事件循环保持响应，又把对 lru_cache
+# 共享的 SFace 模型实例的访问串行化（OpenCV 模型对象不保证线程安全）。
+FACE_PIPELINE_THREAD_PREFIX = "face-pipeline"
+_FACE_PIPELINE_EXECUTOR = ThreadPoolExecutor(
+    max_workers=1,
+    thread_name_prefix=FACE_PIPELINE_THREAD_PREFIX,
+)
+
+
+async def run_face_pipeline(func: Callable[..., _T], *args: Any, **kwargs: Any) -> _T:
+    """Run one synchronous face-processing step off the event loop."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_FACE_PIPELINE_EXECUTOR, partial(func, *args, **kwargs))
+
+
+def warm_face_models_if_present() -> bool:
+    """Load already-downloaded YuNet/SFace weights into the process cache.
+
+    Called in the pipeline worker during app startup so the first real
+    registration/login does not pay ONNX load + first-inference cost.  It
+    never downloads: when weights are missing the download (if allowed)
+    happens inside the first face request, also off the event loop.
+    """
+    if not face_models_ready():
+        return False
+    try:
+        _sface_recognizer()
+    except (RuntimeError, cv2.error):
+        return False
+    return True
 
 
 def _cipher() -> Fernet:
