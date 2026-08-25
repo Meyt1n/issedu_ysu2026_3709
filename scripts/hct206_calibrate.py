@@ -18,6 +18,9 @@ ROOT = Path(__file__).resolve().parents[1]
 # ``sys.path[0]``; add the source root explicitly for the documented command.
 sys.path.insert(0, str(ROOT / "src"))
 DEFAULT_FIXTURE = ROOT / "tests" / "fixtures" / "hct206" / "calibration_fixture.json"
+DEFAULT_REGISTRY = (
+    ROOT / "docs" / "model-registry" / "HCT-206-fusion-thresholds-calibrated-v1.json"
+)
 FIXTURE_SCHEMA_VERSION = "hct206-calibration-fixture-v1"
 
 
@@ -66,16 +69,66 @@ def run_calibration(path: Path = DEFAULT_FIXTURE) -> dict[str, Any]:
     }
 
 
+def build_registry_entry(result: dict[str, Any]) -> dict[str, Any]:
+    """Materialise a model-registry row from a calibration run (not production)."""
+    report = result["report"]
+    return {
+        "schema_version": "hct-model-registry/v1",
+        "model_id": "hct-fusion-thresholds-calibrated-v1",
+        "story": "HCT-206",
+        "task": "candidate_fusion_thresholds",
+        "release_status": "TECHNICAL_CALIBRATED_UNRELEASED",
+        "production_eligible": False,
+        "config_version": report["thresholds"]["config_version"],
+        "thresholds": report["thresholds"],
+        "calibration": {
+            "fixture_id": result["fixture_id"],
+            "fixture_schema_version": result["fixture_schema_version"],
+            "sample_sha256": report["sample_sha256"],
+            "report_schema_version": report["schema_version"],
+            "validation": report["validation"],
+            "independent_test": report["independent_test"],
+            "approval": result["approval"],
+            "human_review": result["human_review"],
+        },
+        "artifacts": {
+            "fixture_path": "tests/fixtures/hct206/calibration_fixture.json",
+            "calibration_script": "scripts/hct206_calibrate.py",
+            "stored_outside_git": False,
+        },
+        "limitations": list(result["limitations"]) + list(report.get("limitations") or []),
+        "supersedes": ["fusion-thresholds-demo-v1"],
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fixture", type=Path, default=DEFAULT_FIXTURE)
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--register",
+        type=Path,
+        nargs="?",
+        const=DEFAULT_REGISTRY,
+        help=(
+            "Write the technical registry entry (default: "
+            f"{DEFAULT_REGISTRY.relative_to(ROOT)}). Never marks production_eligible."
+        ),
+    )
     args = parser.parse_args()
     result = run_calibration(args.fixture)
     rendered = json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     if args.output:
         args.output.write_text(rendered, encoding="utf-8")
     print(rendered, end="")
+    if args.register is not None:
+        entry = build_registry_entry(result)
+        args.register.parent.mkdir(parents=True, exist_ok=True)
+        args.register.write_text(
+            json.dumps(entry, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        print(f"registered technical thresholds -> {args.register}", file=sys.stderr)
     return 0
 
 

@@ -714,6 +714,9 @@ def test_question_classifier_marks_medication_safety() -> None:
         "我今天漏服了一次降压药，需要补服吗？",
         "老人误服了两粒药怎么办？",
         "吃过量了会怎么样？",
+        "好像吃错药了怎么办？",
+        "药吃多了需要催吐吗？",
+        "可以停用这个药吗？",
     ],
 )
 def test_question_classifier_marks_bare_dosage_terms_as_medication_safety(query) -> None:
@@ -725,6 +728,22 @@ def test_question_classifier_marks_bare_dosage_terms_as_medication_safety(query)
     """
     assert classify_question(query) == "MEDICATION_SAFETY"
 
+
+def test_medical_boundary_blocks_stop_medication_synonyms() -> None:
+    from app.tool_call import _check_medical_boundary
+
+    assert _check_medical_boundary("建议你别再吃这个药")
+    assert _check_medical_boundary("可以停用阿莫西林")
+
+
+def test_health_assistant_output_rejects_placeholder_answer() -> None:
+    with pytest.raises(ValidationError):
+        HealthAssistantOutput(answer="unknown", sources=[], confidence="low", escalate=False)
+
+
+def test_health_assistant_output_rejects_non_enum_confidence() -> None:
+    with pytest.raises(ValidationError):
+        HealthAssistantOutput(answer="本地记录显示已确认用药。", sources=[], confidence="sure")
 
 def test_medication_safety_requires_reviewed_knowledge_and_exposes_risk_notice(
     db_session: Session,

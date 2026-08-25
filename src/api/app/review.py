@@ -22,12 +22,14 @@ from enum import StrEnum
 from typing import Any
 
 from fastapi import HTTPException, status
+from pydantic import ValidationError
 from sqlalchemy import JSON, Column, DateTime, Index, Integer, String, func, select, update
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import Base
+from app.schemas import MedicationReviewPayload
 
 logger = logging.getLogger(__name__)
 
@@ -452,6 +454,78 @@ def _claim_transition(
     return updated, True
 
 
+def normalize_medication_review_payload(
+    raw: dict[str, Any] | MedicationReviewPayload | None,
+    *,
+    strict: bool = False,
+) -> dict[str, Any]:
+    """Validate and strip a confirm/correct payload to the HCT-207 whitelist.
+
+    When ``strict`` is false (confirm path), unknown keys inherited from stored
+    fusion candidates are dropped so they never enter the health event.  When
+    ``strict`` is true (correct path), unknown keys are rejected so callers
+    cannot smuggle arbitrary fields through a manual correction.
+    """
+    if isinstance(raw, MedicationReviewPayload):
+        return raw.model_dump(exclude_unset=True)
+    if not isinstance(raw, dict) or not raw:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="REVIEW_CANDIDATE_REQUIRED",
+        )
+    allowed = set(MedicationReviewPayload.model_fields)
+    unknown = set(raw) - allowed
+    if strict and unknown:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="REVIEW_PAYLOAD_INVALID",
+        )
+    filtered = {key: value for key, value in raw.items() if key in allowed}
+    try:
+        return MedicationReviewPayload.model_validate(filtered).model_dump(exclude_unset=True)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="REVIEW_PAYLOAD_INVALID",
+        ) from exc
+
+
+def _candidate_identity(payload: dict[str, Any]) -> tuple[str, str | None]:
+    name = str(payload.get("drug_name") or payload.get("drug") or "").casefold().strip()
+    candidate_id = payload.get("candidate_id")
+    if isinstance(candidate_id, str) and candidate_id.strip():
+        return name, candidate_id.strip()
+    return name, None
+
+
+def assert_candidate_in_task(
+    task: ReviewTask,
+    selected_candidate: dict[str, Any],
+) -> None:
+    """Require confirm selections to resolve to a stored review candidate."""
+    candidates = list(task.candidates or [])
+    if not candidates:
+        return
+    selected_id = _candidate_identity(selected_candidate)
+    if not selected_id[0]:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="REVIEW_CANDIDATE_REQUIRED",
+        )
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        stored_id = _candidate_identity(candidate)
+        if stored_id[0] != selected_id[0]:
+            continue
+        if selected_id[1] is None or stored_id[1] is None or selected_id[1] == stored_id[1]:
+            return
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail="REVIEW_CANDIDATE_NOT_IN_TASK",
+    )
+
+
 def confirm_review(
     session: Session,
     task: ReviewTask,
@@ -478,6 +552,8 @@ def confirm_review(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="REVIEW_CANDIDATE_REQUIRED",
         )
+    selected_candidate = normalize_medication_review_payload(selected_candidate)
+    assert_candidate_in_task(task, selected_candidate)
     updated, _ = _claim_transition(
         session,
         task,
@@ -514,7 +590,7 @@ def correct_review(
     task: ReviewTask,
     *,
     actor_id: str,
-    manual_payload: dict[str, Any],
+    manual_payload: dict[str, Any] | MedicationReviewPayload,
     correction_note: str | None = None,
     idempotency_key: str | None = None,
     expected_version: int | None = None,
@@ -523,6 +599,7 @@ def correct_review(
 
     Returns (updated_task, health_event_dict).
     """
+    manual_payload = normalize_medication_review_payload(manual_payload, strict=True)
     original_candidates = task.candidates
     updated, _ = _claim_transition(
         session,

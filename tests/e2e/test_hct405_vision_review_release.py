@@ -534,7 +534,7 @@ def test_manual_review_correction_creates_one_confirmed_event(
     assert event["confirmation_status"] == "CONFIRMED"
     assert event["payload"]["drug_name"] == "Corrected synthetic medication"
     assert event["evidence"]["review_task_id"] == fusion["review_task_id"]
-    assert event["evidence"]["fusion_context"]["thresholds"]["matched_score"] == 0.8
+    assert event["evidence"]["fusion_context"]["thresholds"]["matched_score"] == 0.5
 
     repeated_fusion = client.post(
         f"/api/v1/vision-tasks/{vision_task_id}/fusion",

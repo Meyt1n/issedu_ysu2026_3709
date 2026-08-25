@@ -260,3 +260,19 @@ class TestTokenizer:
 
     def test_empty_tokenize(self):
         assert _tokenize("") == []
+
+    def test_query_alias_expands_short_drug_name(self, db_session):
+        from app.knowledge import _expand_query_aliases, _query_tokens
+
+        _make_doc(
+            db_session,
+            content="阿莫西林胶囊 用法用量 口服 注意事项",
+            title="amox-alias",
+        )
+        assert "阿莫西林" in _expand_query_aliases("阿莫 怎么服用")
+        results = retrieve(db_session, query="阿莫 用法", actor_id="u1")
+        assert results
+        assert "阿莫西林" in results[0]["text"]
+        tokens = _query_tokens("阿莫西林")
+        assert "阿莫西林" in tokens
+        assert any(len(token) == 3 for token in tokens)
