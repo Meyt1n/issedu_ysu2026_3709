@@ -158,16 +158,20 @@ export function formatError(cause: unknown): string {
       if (cause.message === 'FACE_FRAME_LOW_QUALITY') {
         return '人脸图片质量不足：请使用至少 640×480 的清晰正面照片，保证光线均匀、仅有一张人脸且不要裁切脸部。'
       }
+      if (cause.message === 'FACE_TOO_SMALL') return '人脸在画面中太小，请靠近摄像头，让整张脸约占画面六分之一以上。'
+      if (cause.message === 'FACE_TOO_LARGE') return '人脸在画面中过大或贴边，请稍退后，保证整张脸完整入画。'
+      if (cause.message === 'FACE_POSE_EXTREME') return '头部偏转过大，请不要侧脸到接近侧面，按提示轻微转头即可。'
+      if (cause.message === 'FACE_BLURRY') return '人脸区域不够清晰，请稳住手机/摄像头并改善光线后重试。'
       if (cause.message === 'FACE_NOT_FOUND') return '图片中没有检测到清晰人脸，请重新拍摄正面照片。'
       if (cause.message === 'FACE_MULTIPLE_SUBJECTS') return '图片中检测到多张人脸，请只保留要绑定的一个人。'
-      if (cause.message === 'FACE_LIVENESS_FAILED') return '动态采集没有形成有效变化，请看向镜头后缓慢转动头部，再重新采集。'
+      if (cause.message === 'FACE_LIVENESS_FAILED') return '动态采集没有形成有效转头变化，请正对镜头后按提示缓慢左右转动头部，再重新采集。'
       return `请求内容未通过校验：${cause.message}`
     }
     if (cause.status === 503 && cause.message === 'FACE_DETECTOR_UNAVAILABLE') {
-      return '本地人脸检测器暂不可用，请重启 API 服务后重试。'
+      return '本地人脸模型尚未就绪。请管理员运行 uv run python scripts/ensure_face_models.py 后重启 API，或先改用 PIN/密码登录。'
     }
     if (cause.status === 503 && cause.message === 'FACE_AUTH_UNAVAILABLE') {
-      return '人脸识别服务暂时不可用，本次未创建会话；请改用 PIN 或账号密码登录。'
+      return '人脸识别服务暂时不可用（模型未就绪或解密失败），本次未创建会话；请改用 PIN 或账号密码登录。'
     }
     if (cause.status === 429) {
       const lockMatch = /^LOCKED:(\d+)$/.exec(cause.message)

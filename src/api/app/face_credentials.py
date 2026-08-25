@@ -41,32 +41,57 @@ V2_FACE_FEATURE_VERSION = "face-template-v2"
 LEGACY_FACE_ALGORITHM_VERSION = "opencv-haar-grayscale-v1"
 LEGACY_FACE_FEATURE_VERSION = "face-template-v1"
 FACE_CONSENT_VERSION = "face-registration-consent-v1"
-FACE_LIVENESS_VERSION = "motion-sequence-v2"
+FACE_LIVENESS_VERSION = "motion-sequence-v3"
+FACE_FEATURE_VERSION_MULTI = "face-embedding-sface-v3-multi"
 
 _FEATURE_SIZE = 64
 _LEGACY_FEATURE_SIZE = 32
 _SFACE_EMBEDDING_SIZE = 128
 _SFACE_INPUT_SIZE = 112
+_BUNDLE_MAGIC = b"HCTFB01\0"
 
 # Grayscale crop cosine threshold (legacy v1/v2).
 FACE_MATCH_THRESHOLD_GRAYSCALE = 0.82
 FAMILY_FACE_MATCH_MARGIN_GRAYSCALE = 0.06
-# SFace cosine threshold (OpenCV zoo default is 0.363).  A slightly higher
-# gate reduces false accepts between household members in 1:N matching.
+# SFace defaults (override via FACE_MATCH_THRESHOLD_SFACE settings). OpenCV zoo
+# cosine default is 0.363; 0.40 is a safer household false-accept gate until
+# scripts/calibrate_face_thresholds.py is run on local camera captures.
 FACE_MATCH_THRESHOLD_SFACE = 0.40
 FAMILY_FACE_MATCH_MARGIN_SFACE = 0.05
 # Back-compat exports used by older imports/tests; prefer match_threshold_for().
 FACE_MATCH_THRESHOLD = FACE_MATCH_THRESHOLD_SFACE
 FAMILY_FACE_MATCH_MARGIN = FAMILY_FACE_MATCH_MARGIN_SFACE
 
-# motion-sequence-v2: a consecutive pair at or above this similarity is an
-# identical (replayed) frame; every pair of a live capture must show change.
+# motion-sequence-v3: every consecutive pair must change, stay the same subject,
+# and the yaw span across the sequence must show a deliberate head turn.
 FACE_LIVENESS_MAX_PAIR_SIMILARITY = 0.9995
-# Frames captured within one short live sequence must stay recognisably the
-# same subject.  Grayscale crops need a higher floor; SFace embeddings of the
-# same person under mild motion commonly sit around 0.5–0.9.
 FACE_SEQUENCE_CONSISTENCY_FLOOR_GRAYSCALE = 0.55
 FACE_SEQUENCE_CONSISTENCY_FLOOR_SFACE = 0.30
+FACE_YAW_SPAN_MIN = 0.12
+FACE_YAW_ABS_MAX = 0.62
+FACE_AREA_RATIO_MIN = 0.06
+FACE_AREA_RATIO_MAX = 0.55
+FACE_CROP_BLUR_MIN = 35.0
+
+# Desensitized auth failure buckets for audit aggregation (no scores/templates).
+FACE_FAILURE_REASON_BUCKETS = frozenset(
+    {
+        "FRAME_QUALITY_INVALID",
+        "LIVENESS_FAILED",
+        "NO_MATCH",
+        "AMBIGUOUS_MATCH",
+        "FACE_SERVICE_UNAVAILABLE",
+        "RATE_LIMITED",
+        "CREDENTIAL_UNAVAILABLE",
+        "CHALLENGE_INVALID",
+        "FRAME_COUNT_INVALID",
+        "FRAME_TYPE_INVALID",
+        "FRAME_SIZE_INVALID",
+        "FRAME_MAGIC_INVALID",
+        "FACE_MATCH_FAILED",
+        "FACE_AUTH_FAILED",
+    }
+)
 
 _FACE_CASCADE_FILENAME = "haarcascade_frontalface_default.xml"
 _YUNET_FILENAME = "face_detection_yunet_2023mar.onnx"
@@ -110,19 +135,109 @@ def decrypt_template(ciphertext: bytes) -> bytes:
 
 def match_threshold_for(algorithm_version: str) -> float:
     if algorithm_version in {FACE_ALGORITHM_VERSION}:
-        return FACE_MATCH_THRESHOLD_SFACE
+        return float(get_settings().face_match_threshold_sface)
     return FACE_MATCH_THRESHOLD_GRAYSCALE
 
 
 def family_match_margin_for(algorithm_version: str) -> float:
     if algorithm_version in {FACE_ALGORITHM_VERSION}:
-        return FAMILY_FACE_MATCH_MARGIN_SFACE
+        return float(get_settings().face_match_margin_sface)
     return FAMILY_FACE_MATCH_MARGIN_GRAYSCALE
 
 
 def ranking_margin(score: float, algorithm_version: str) -> float:
     """Comparable 1:N rank key across mixed template versions."""
     return float(score) - match_threshold_for(algorithm_version)
+
+
+def face_models_ready() -> bool:
+    """True when YuNet + SFace ONNX files are present locally (no download)."""
+    model_dir = _face_model_dir()
+    return (model_dir / _YUNET_FILENAME).is_file() and (model_dir / _SFACE_FILENAME).is_file()
+
+
+def is_legacy_face_algorithm(algorithm_version: str) -> bool:
+    return algorithm_version in {
+        LEGACY_FACE_ALGORITHM_VERSION,
+        V2_FACE_ALGORITHM_VERSION,
+    }
+
+
+def normalize_face_failure_reason(reason: str) -> str:
+    """Map raw failure codes onto a fixed desensitized bucket set."""
+    token = (reason or "FACE_AUTH_FAILED").split(":", 1)[0].strip().upper()
+    if token in FACE_FAILURE_REASON_BUCKETS:
+        return token
+    if token.startswith("FACE_") and "QUALITY" in token:
+        return "FRAME_QUALITY_INVALID"
+    quality_tokens = {
+        "FACE_NOT_FOUND",
+        "FACE_MULTIPLE_SUBJECTS",
+        "FACE_POSE_EXTREME",
+        "FACE_TOO_SMALL",
+        "FACE_TOO_LARGE",
+        "FACE_BLURRY",
+        "FACE_FRAME_LOW_QUALITY",
+    }
+    if token in quality_tokens:
+        return "FRAME_QUALITY_INVALID"
+    if token == "FACE_LIVENESS_FAILED":
+        return "LIVENESS_FAILED"
+    service_tokens = {
+        "FACE_DETECTOR_UNAVAILABLE",
+        "FACE_CREDENTIAL_UNAVAILABLE",
+        "FACE_CREDENTIALS_UNAVAILABLE",
+    }
+    if token in service_tokens:
+        return "FACE_SERVICE_UNAVAILABLE"
+    return "FACE_AUTH_FAILED"
+
+
+def pack_face_templates(templates: list[bytes]) -> bytes:
+    """Pack 1–3 embeddings into one ciphertext payload (multi-angle gallery)."""
+    if not templates or len(templates) > 3:
+        raise ValueError("FACE_TEMPLATE_INVALID")
+    if len(templates) == 1:
+        return templates[0]
+    parts = [bytearray(_BUNDLE_MAGIC), bytes([len(templates)])]
+    payload = bytearray()
+    for template in templates:
+        if len(template) != _SFACE_EMBEDDING_SIZE * 4:
+            raise ValueError("FACE_TEMPLATE_INVALID")
+        payload.extend(len(template).to_bytes(2, "big"))
+        payload.extend(template)
+    parts.append(payload)
+    return b"".join(parts)
+
+
+def unpack_face_templates(blob: bytes) -> list[bytes]:
+    """Unpack a gallery blob; legacy single templates remain a one-item list."""
+    if not blob:
+        raise ValueError("FACE_TEMPLATE_INVALID")
+    if not blob.startswith(_BUNDLE_MAGIC):
+        return [blob]
+    count = blob[len(_BUNDLE_MAGIC)]
+    offset = len(_BUNDLE_MAGIC) + 1
+    templates: list[bytes] = []
+    for _ in range(count):
+        if offset + 2 > len(blob):
+            raise ValueError("FACE_TEMPLATE_INVALID")
+        size = int.from_bytes(blob[offset : offset + 2], "big")
+        offset += 2
+        if size <= 0 or offset + size > len(blob):
+            raise ValueError("FACE_TEMPLATE_INVALID")
+        templates.append(blob[offset : offset + size])
+        offset += size
+    if not templates:
+        raise ValueError("FACE_TEMPLATE_INVALID")
+    return templates
+
+
+def score_probe_against_gallery(probe: bytes, gallery: list[bytes]) -> float:
+    """Best cosine against any enrolled angle; used before per-frame min aggregate."""
+    if not gallery:
+        raise ValueError("FACE_TEMPLATE_INVALID")
+    return max(face_template_similarity(probe, item) for item in gallery)
 
 
 def face_extractor_for(algorithm_version: str) -> Callable[[bytes], tuple[bytes, dict[str, Any]]]:
@@ -265,6 +380,57 @@ def _detect_single_face_yunet(image: np.ndarray) -> np.ndarray:
     return faces[0][:-1]
 
 
+def _estimate_yaw_from_yunet(face: np.ndarray) -> float:
+    """Rough yaw in [-1, 1] from nose offset inside the YuNet box (mirrored-safe)."""
+    x, _y, width, _height = float(face[0]), float(face[1]), float(face[2]), float(face[3])
+    if width <= 1:
+        return 0.0
+    nose_x = float(face[8])
+    center_x = x + width / 2.0
+    return float(np.clip((nose_x - center_x) / (width / 2.0), -1.0, 1.0))
+
+
+def _face_area_ratio(face: np.ndarray, image: np.ndarray) -> float:
+    height, width = image.shape[:2]
+    area = max(1.0, float(width) * float(height))
+    return float(face[2]) * float(face[3]) / area
+
+
+def _face_crop_blur_variance(image: np.ndarray, face: np.ndarray) -> float:
+    x, y, width, height = (int(face[0]), int(face[1]), int(face[2]), int(face[3]))
+    x2 = min(image.shape[1], x + width)
+    y2 = min(image.shape[0], y + height)
+    x = max(0, x)
+    y = max(0, y)
+    crop = image[y:y2, x:x2]
+    if crop.size == 0:
+        return 0.0
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+    return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+
+def assess_face_frame_geometry(
+    image: np.ndarray,
+    face: np.ndarray,
+    *,
+    enforce: bool = True,
+) -> dict[str, float]:
+    """Reject frames that are unlikely to yield a stable identity embedding."""
+    yaw = _estimate_yaw_from_yunet(face)
+    area_ratio = _face_area_ratio(face, image)
+    blur = _face_crop_blur_variance(image, face)
+    if enforce:
+        if area_ratio < FACE_AREA_RATIO_MIN:
+            raise ValueError("FACE_TOO_SMALL")
+        if area_ratio > FACE_AREA_RATIO_MAX:
+            raise ValueError("FACE_TOO_LARGE")
+        if abs(yaw) > FACE_YAW_ABS_MAX:
+            raise ValueError("FACE_POSE_EXTREME")
+        if blur < FACE_CROP_BLUR_MIN:
+            raise ValueError("FACE_BLURRY")
+    return {"yaw": yaw, "face_area_ratio": area_ratio, "face_blur_variance": blur}
+
+
 def _normalize_crop(crop: np.ndarray, feature_size: int, *, robust: bool) -> bytes:
     if crop.size == 0:
         raise ValueError("FACE_CROP_INVALID")
@@ -284,12 +450,18 @@ def _normalize_crop(crop: np.ndarray, feature_size: int, *, robust: bool) -> byt
     return normalized.astype("<f4").tobytes()
 
 
-def extract_face_template(image_bytes: bytes) -> tuple[bytes, dict[str, Any]]:
+def extract_face_template(
+    image_bytes: bytes,
+    *,
+    enforce_geometry: bool = True,
+) -> tuple[bytes, dict[str, Any]]:
     """Detect one face and derive a local SFace embedding (v3)."""
     image = _decode_face_image(image_bytes)
     recognizer = _sface_recognizer()
+    geometry: dict[str, float] = {"yaw": 0.0, "face_area_ratio": 0.0, "face_blur_variance": 0.0}
     try:
         face = _detect_single_face_yunet(image)
+        geometry = assess_face_frame_geometry(image, face, enforce=enforce_geometry)
         aligned = recognizer.alignCrop(image, face)
     except ValueError as exc:
         if str(exc) != "FACE_NOT_FOUND":
@@ -305,8 +477,27 @@ def extract_face_template(image_bytes: bytes) -> tuple[bytes, dict[str, Any]]:
         top = max(0, y - pad_top)
         right = min(image.shape[1], x + width + pad_x)
         bottom = min(image.shape[0], y + height + pad_bottom)
+        crop = image[top:bottom, left:right]
+        if enforce_geometry:
+            area_ratio = float(crop.shape[0] * crop.shape[1]) / float(
+                image.shape[0] * image.shape[1]
+            )
+            if area_ratio < FACE_AREA_RATIO_MIN:
+                raise ValueError("FACE_TOO_SMALL") from None
+            if area_ratio > FACE_AREA_RATIO_MAX:
+                raise ValueError("FACE_TOO_LARGE") from None
+            blur = float(
+                cv2.Laplacian(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var()
+            )
+            if blur < FACE_CROP_BLUR_MIN:
+                raise ValueError("FACE_BLURRY") from None
+            geometry = {
+                "yaw": 0.0,
+                "face_area_ratio": area_ratio,
+                "face_blur_variance": blur,
+            }
         aligned = cv2.resize(
-            image[top:bottom, left:right],
+            crop,
             (_SFACE_INPUT_SIZE, _SFACE_INPUT_SIZE),
             interpolation=cv2.INTER_AREA,
         )
@@ -319,6 +510,9 @@ def extract_face_template(image_bytes: bytes) -> tuple[bytes, dict[str, Any]]:
         "feature_dimensions": [_SFACE_EMBEDDING_SIZE],
         "algorithm_version": FACE_ALGORITHM_VERSION,
         "feature_version": FACE_FEATURE_VERSION,
+        "yaw": geometry["yaw"],
+        "face_area_ratio": geometry["face_area_ratio"],
+        "face_blur_variance": geometry["face_blur_variance"],
     }
 
 
@@ -386,16 +580,13 @@ def _consistency_floor_for_templates(templates: list[bytes]) -> float:
     return FACE_SEQUENCE_CONSISTENCY_FLOOR_GRAYSCALE
 
 
-def check_face_liveness(templates: list[bytes]) -> None:
-    """Require a short one-subject motion sequence (motion-sequence-v2).
+def check_face_liveness(
+    templates: list[bytes],
+    yaws: list[float] | None = None,
+) -> None:
+    """Require a short one-subject motion + head-turn sequence (motion-sequence-v3).
 
-    v1 only rejected a sequence in which *no* pair of consecutive frames
-    changed, so ``[still, still, other]`` passed.  v2 requires every
-    consecutive pair to show measurable change (no replayed frame anywhere in
-    the sequence) and to stay recognisably the same subject, which rejects
-    sequences spliced together from different sources.  This remains a
-    deterministic, versioned local OpenCV heuristic, not production-grade
-    anti-spoofing.
+    Still a deterministic local OpenCV heuristic, not production-grade anti-spoofing.
     """
     if len(templates) < 2 or len(templates) > 3:
         raise ValueError("FACE_LIVENESS_FAILED")
@@ -411,6 +602,11 @@ def check_face_liveness(templates: list[bytes]) -> None:
         if similarity >= FACE_LIVENESS_MAX_PAIR_SIMILARITY:
             raise ValueError("FACE_LIVENESS_FAILED")
         if similarity < consistency_floor:
+            raise ValueError("FACE_LIVENESS_FAILED")
+    if yaws is not None:
+        if len(yaws) != len(templates):
+            raise ValueError("FACE_LIVENESS_FAILED")
+        if max(yaws) - min(yaws) < FACE_YAW_SPAN_MIN:
             raise ValueError("FACE_LIVENESS_FAILED")
 
 

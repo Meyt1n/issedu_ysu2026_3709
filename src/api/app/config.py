@@ -66,6 +66,10 @@ class Settings(BaseSettings):
     # stay outside git; first use may download from OpenCV Zoo when enabled.
     face_model_dir: str = "./models/face"
     face_model_auto_download: bool = True
+    # Calibrate with scripts/calibrate_face_thresholds.py on local camera sets.
+    face_match_threshold_sface: float = Field(default=0.40, ge=0.20, le=0.95)
+    face_match_margin_sface: float = Field(default=0.05, ge=0.01, le=0.30)
+    face_require_pose_liveness: bool = True
     ruleset_version: str = "rules-v0"
     knowledge_version: str = "knowledge-v0"
     embedding_version: str = "unavailable"

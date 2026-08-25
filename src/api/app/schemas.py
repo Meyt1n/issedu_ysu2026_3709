@@ -75,6 +75,16 @@ class FaceCredentialRead(BaseModel):
     consented_at: datetime
     revoked_at: datetime | None
     created_at: datetime
+    upgrade_recommended: bool = False
+    template_count: int = 1
+
+
+class FaceAuthFailureSummaryRead(BaseModel):
+    """Desensitized FACE auth failure buckets; never includes scores or templates."""
+
+    days: int
+    totals: dict[str, int]
+    by_day: dict[str, dict[str, int]]
 
 
 # ── HCT-427: step-up confirmation and session revalidation ─────────

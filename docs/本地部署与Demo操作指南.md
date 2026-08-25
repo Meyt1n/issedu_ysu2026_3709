@@ -45,6 +45,24 @@ chmod +x scripts/start.sh
 
 增强档（额外启动 Ollama 容器）在启动前设置 `$env:COMPOSE_PROFILE='enhanced'`（Bash：`export COMPOSE_PROFILE=enhanced`）。容器内仍需自行拉取或创建模型；未配置 `OLLAMA_MODEL` 时助手保持结构化降级。
 
+### 1.3 人脸识别本地模型（HCT-424/425）
+
+人脸登录使用本地 OpenCV YuNet + SFace ONNX，**权重不进 Git**。首次部署请先准备模型：
+
+```bash
+uv run python scripts/ensure_face_models.py
+# 可选：用本机摄像头采样目录校准阈值（不上传、不落库原图）
+# uv run python scripts/calibrate_face_thresholds.py ./face-samples
+```
+
+然后在 `.env` 中确认：
+
+- `FACE_MODEL_DIR=./models/face`
+- `FACE_MODEL_AUTO_DOWNLOAD=true`（或改为 false 并手工拷贝 ONNX）
+- `FACE_MATCH_THRESHOLD_SFACE` / `FACE_MATCH_MARGIN_SFACE`（校准脚本输出）
+
+`/api/v1/meta/capabilities` 在模型就绪时会包含 `face-recognition-local`；未就绪时欢迎页会提示改用 PIN/密码。旧灰度 v1/v2 凭证仍可登录，管理员页会提示重新绑定升级。
+
 ### 1.2 本地进程开发路径
 
 需要调试 Vue/FastAPI 时可以不启动 Compose 的 API/Web，但仍必须先安装依赖并执行迁移。若 `.env` 里的 `DATABASE_URL` 指向 MySQL 而本机没有库，请改成 SQLite，例如 `$env:DATABASE_URL='sqlite+pysqlite:///./homecare-dev.sqlite3'`。
