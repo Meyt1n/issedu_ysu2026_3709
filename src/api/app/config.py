@@ -56,6 +56,10 @@ class Settings(BaseSettings):
     vision_quality_min_subject_area_ratio: float = 0.08
     vision_quality_max_border_touch_ratio: float = 0.50
     biometric_encryption_key: str = "dev-only-biometric-key-change-me"
+    # Local YuNet + SFace ONNX cache for HCT-425 v3 face embeddings.  Weights
+    # stay outside git; first use may download from OpenCV Zoo when enabled.
+    face_model_dir: str = "./models/face"
+    face_model_auto_download: bool = True
     ruleset_version: str = "rules-v0"
     knowledge_version: str = "knowledge-v0"
     embedding_version: str = "unavailable"

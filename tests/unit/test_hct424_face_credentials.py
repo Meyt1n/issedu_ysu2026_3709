@@ -84,6 +84,68 @@ def test_aggregate_match_scores_requires_every_frame_to_match() -> None:
         aggregate_match_scores([])
 
 
+def test_match_threshold_for_uses_sface_gate_on_v3() -> None:
+    from app.face_credentials import (
+        FACE_ALGORITHM_VERSION,
+        FACE_MATCH_THRESHOLD_SFACE,
+        V2_FACE_ALGORITHM_VERSION,
+        match_threshold_for,
+    )
+
+    assert match_threshold_for(FACE_ALGORITHM_VERSION) == FACE_MATCH_THRESHOLD_SFACE
+    assert match_threshold_for(V2_FACE_ALGORITHM_VERSION) == pytest.approx(0.82)
+
+
+def test_sface_embeddings_separate_different_people(tmp_path, monkeypatch) -> None:
+    """v3 must accept same-person pairs and reject a different person."""
+    import shutil
+    from pathlib import Path
+
+    from app.face_credentials import (
+        FACE_MATCH_THRESHOLD_SFACE,
+        _sface_recognizer,
+        ensure_face_models,
+        extract_face_template,
+        face_template_similarity,
+    )
+
+    sample_dir = Path("/tmp/face-samples")
+    obama = sample_dir / "obama.jpg"
+    obama2 = sample_dir / "obama2.jpg"
+    biden = sample_dir / "biden.jpg"
+    if not (obama.is_file() and obama2.is_file() and biden.is_file()):
+        pytest.skip("sample face images unavailable")
+
+    model_dir = tmp_path / "face-models"
+    model_dir.mkdir()
+    source = Path("models/face")
+    if not (source / "face_recognition_sface_2021dec.onnx").is_file():
+        pytest.skip("local SFace models unavailable")
+    for name in (
+        "face_detection_yunet_2023mar.onnx",
+        "face_recognition_sface_2021dec.onnx",
+    ):
+        shutil.copy(source / name, model_dir / name)
+
+    monkeypatch.setenv("FACE_MODEL_DIR", str(model_dir))
+    monkeypatch.setenv("FACE_MODEL_AUTO_DOWNLOAD", "false")
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    _sface_recognizer.cache_clear()
+    ensure_face_models()
+
+    left = extract_face_template(obama.read_bytes())[0]
+    same = extract_face_template(obama2.read_bytes())[0]
+    other = extract_face_template(biden.read_bytes())[0]
+
+    assert len(left) == 128 * 4
+    assert face_template_similarity(left, same) >= FACE_MATCH_THRESHOLD_SFACE
+    assert face_template_similarity(left, other) < FACE_MATCH_THRESHOLD_SFACE
+    get_settings.cache_clear()
+    _sface_recognizer.cache_clear()
+
+
 def test_face_template_similarity_is_bounded_for_valid_templates() -> None:
     first = (b"\x00\x00\x80\x3f" * (32 * 32))
     second = (b"\x00\x00\x80\x3f" * (32 * 32))

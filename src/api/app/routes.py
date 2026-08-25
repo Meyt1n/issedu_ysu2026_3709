@@ -80,16 +80,19 @@ from app.event_service import (
 )
 from app.face_credentials import (
     FACE_CONSENT_VERSION,
-    FACE_MATCH_THRESHOLD,
-    FAMILY_FACE_MATCH_MARGIN,
     LEGACY_FACE_ALGORITHM_VERSION,
+    V2_FACE_ALGORITHM_VERSION,
     aggregate_match_scores,
     check_face_liveness,
     decrypt_template,
     encrypt_template,
     extract_face_template,
     extract_legacy_face_template,
+    extract_v2_face_template,
     face_template_similarity,
+    family_match_margin_for,
+    match_threshold_for,
+    ranking_margin,
 )
 from app.file_upload import (
     compute_hash,
@@ -249,6 +252,15 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1")
 settings = get_settings()
+
+
+def _face_extractor_for_algorithm(algorithm_version: str):
+    """Resolve extractors via this module so contract tests can monkeypatch them."""
+    if algorithm_version == LEGACY_FACE_ALGORITHM_VERSION:
+        return extract_legacy_face_template
+    if algorithm_version == V2_FACE_ALGORITHM_VERSION:
+        return extract_v2_face_template
+    return extract_face_template
 
 
 def _raise_resource_not_found() -> NoReturn:
@@ -1779,11 +1791,7 @@ async def auth_face_login(
             )
             if not quality["allow_downstream"]:
                 failed("FRAME_QUALITY_INVALID")
-            extractor = (
-                extract_legacy_face_template
-                if credential.algorithm_version == LEGACY_FACE_ALGORITHM_VERSION
-                else extract_face_template
-            )
+            extractor = _face_extractor_for_algorithm(credential.algorithm_version)
             template, _ = extractor(data)
             templates.append(template)
         try:
@@ -1813,7 +1821,7 @@ async def auth_face_login(
         match_score = aggregate_match_scores(
             [face_template_similarity(template, stored_template) for template in templates]
         )
-        if match_score < FACE_MATCH_THRESHOLD:
+        if match_score < match_threshold_for(credential.algorithm_version):
             failed()
     except HTTPException:
         raise
@@ -1935,15 +1943,11 @@ async def auth_family_face_login(
             if not quality["allow_downstream"]:
                 failed("FRAME_QUALITY_INVALID")
 
-        # A household may contain legacy v1 and current v2 credentials during
+        # A household may contain legacy v1/v2 and current v3 credentials during
         # migration, so derive each feature representation only once per
         # algorithm version and keep all raw frames in memory only.
         for algorithm_version in {credential.algorithm_version for credential in credentials}:
-            extractor = (
-                extract_legacy_face_template
-                if algorithm_version == LEGACY_FACE_ALGORITHM_VERSION
-                else extract_face_template
-            )
+            extractor = _face_extractor_for_algorithm(algorithm_version)
             extracted = [extractor(data)[0] for data in frame_bytes]
             try:
                 check_face_liveness(extracted)
@@ -1953,7 +1957,7 @@ async def auth_family_face_login(
                 failed("FACE_MATCH_FAILED")
             templates_by_algorithm[algorithm_version] = extracted
 
-        candidates: list[tuple[float, str]] = []
+        candidates: list[tuple[float, float, str, str]] = []
         decrypt_failures = 0
         for credential in credentials:
             try:
@@ -1969,18 +1973,28 @@ async def auth_family_face_login(
             except (HTTPException, ValueError, KeyError):
                 decrypt_failures += 1
                 continue
-            candidates.append((score, credential.actor_id))
+            candidates.append(
+                (
+                    ranking_margin(score, credential.algorithm_version),
+                    score,
+                    credential.actor_id,
+                    credential.algorithm_version,
+                )
+            )
         if not candidates:
             if decrypt_failures:
                 raise RuntimeError("FACE_CREDENTIALS_UNAVAILABLE")
             failed("CREDENTIAL_UNAVAILABLE")
 
         candidates.sort(key=lambda item: item[0], reverse=True)
-        best_score, best_actor_id = candidates[0]
-        second_score = candidates[1][0] if len(candidates) > 1 else None
-        if best_score < FACE_MATCH_THRESHOLD:
+        best_margin, best_score, best_actor_id, best_algorithm = candidates[0]
+        second_margin = candidates[1][0] if len(candidates) > 1 else None
+        if best_margin < 0 or best_score < match_threshold_for(best_algorithm):
             failed("NO_MATCH")
-        if second_score is not None and best_score - second_score < FAMILY_FACE_MATCH_MARGIN:
+        if (
+            second_margin is not None
+            and best_margin - second_margin < family_match_margin_for(best_algorithm)
+        ):
             # A close race between two family members is not safe to resolve
             # automatically; the UI falls back to PIN/explicit account login.
             failed("AMBIGUOUS_MATCH")

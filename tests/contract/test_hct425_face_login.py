@@ -115,7 +115,7 @@ def test_dynamic_face_registration_can_be_used_for_local_login(
         json={"display_name": "奶奶", "actor_id": "grandma-dynamic"},
     ).json()
 
-    template = b"\x00\x00\x80\x3f" * (64 * 64)
+    template = b"\x00\x00\x80\x3f" * 128
     monkeypatch.setattr(quality_gate, "decode_image", lambda _data: object())
     monkeypatch.setattr(
         quality_gate,
@@ -128,8 +128,8 @@ def test_dynamic_face_registration_can_be_used_for_local_login(
         lambda _data: (
             template,
             {
-                "algorithm_version": "opencv-haar-grayscale-v2",
-                "feature_version": "face-template-v2",
+                "algorithm_version": "opencv-yunet-sface-v3",
+                "feature_version": "face-embedding-sface-v3",
             },
         ),
     )
@@ -151,7 +151,7 @@ def test_dynamic_face_registration_can_be_used_for_local_login(
         files=files,
     )
     assert registered.status_code == 201, registered.text
-    assert registered.json()["algorithm_version"] == "opencv-haar-grayscale-v2"
+    assert registered.json()["algorithm_version"] == "opencv-yunet-sface-v3"
 
     challenge = client.post(
         "/api/v1/auth/face-challenge",
@@ -194,8 +194,8 @@ def test_family_face_login_identifies_the_best_member_inside_bound_household(
         json={"display_name": "奶奶", "actor_id": "hct425-grandma"},
     ).json()
 
-    negative_template = b"\x00\x00\x80\xbf" * (64 * 64)
-    positive_template = b"\x00\x00\x80\x3f" * (64 * 64)
+    negative_template = b"\x00\x00\x80\xbf" * 128
+    positive_template = b"\x00\x00\x80\x3f" * 128
     now = datetime.now(UTC)
     db_session.add_all(
         [
@@ -203,8 +203,8 @@ def test_family_face_login_identifies_the_best_member_inside_bound_household(
                 household_id=household,
                 actor_id=grandpa["actor_id"],
                 encrypted_template=encrypt_template(negative_template),
-                algorithm_version="opencv-haar-grayscale-v2",
-                feature_version="face-template-v2",
+                algorithm_version="opencv-yunet-sface-v3",
+                feature_version="face-embedding-sface-v3",
                 credential_version=1,
                 consent_version="face-registration-consent-v1",
                 status="ACTIVE",
@@ -215,8 +215,8 @@ def test_family_face_login_identifies_the_best_member_inside_bound_household(
                 household_id=household,
                 actor_id=grandma["actor_id"],
                 encrypted_template=encrypt_template(positive_template),
-                algorithm_version="opencv-haar-grayscale-v2",
-                feature_version="face-template-v2",
+                algorithm_version="opencv-yunet-sface-v3",
+                feature_version="face-embedding-sface-v3",
                 credential_version=1,
                 consent_version="face-registration-consent-v1",
                 status="ACTIVE",
@@ -277,15 +277,15 @@ def test_face_login_rejects_a_single_injected_matching_frame(
         json={"display_name": "爷爷", "actor_id": "hct425-inject-grandpa"},
     ).json()
 
-    victim_template = b"\x00\x00\x80\x3f" * (64 * 64)
-    attacker_template = b"\x00\x00\x80\xbf" * (64 * 64)
+    victim_template = b"\x00\x00\x80\x3f" * 128
+    attacker_template = b"\x00\x00\x80\xbf" * 128
     db_session.add(
         FaceCredential(
             household_id=household,
             actor_id=member["actor_id"],
             encrypted_template=encrypt_template(victim_template),
-            algorithm_version="opencv-haar-grayscale-v2",
-            feature_version="face-template-v2",
+            algorithm_version="opencv-yunet-sface-v3",
+            feature_version="face-embedding-sface-v3",
             credential_version=1,
             consent_version="face-registration-consent-v1",
             status="ACTIVE",
@@ -351,7 +351,7 @@ def test_deleting_a_face_credential_revokes_household_sessions(
         json={"display_name": "奶奶", "actor_id": "hct425-revoke-grandma"},
     ).json()
 
-    template = b"\x00\x00\x80\x3f" * (64 * 64)
+    template = b"\x00\x00\x80\x3f" * 128
     monkeypatch.setattr(quality_gate, "decode_image", lambda _data: object())
     monkeypatch.setattr(
         quality_gate,
@@ -364,8 +364,8 @@ def test_deleting_a_face_credential_revokes_household_sessions(
         lambda _data: (
             template,
             {
-                "algorithm_version": "opencv-haar-grayscale-v2",
-                "feature_version": "face-template-v2",
+                "algorithm_version": "opencv-yunet-sface-v3",
+                "feature_version": "face-embedding-sface-v3",
             },
         ),
     )
@@ -488,7 +488,7 @@ def test_family_face_login_rejects_an_ambiguous_member_match(
         )
     ]
 
-    template = b"\x00\x00\x80\x3f" * (64 * 64)
+    template = b"\x00\x00\x80\x3f" * 128
     now = datetime.now(UTC)
     db_session.add_all(
         [
@@ -496,8 +496,8 @@ def test_family_face_login_rejects_an_ambiguous_member_match(
                 household_id=household,
                 actor_id=member["actor_id"],
                 encrypted_template=encrypt_template(template),
-                algorithm_version="opencv-haar-grayscale-v2",
-                feature_version="face-template-v2",
+                algorithm_version="opencv-yunet-sface-v3",
+                feature_version="face-embedding-sface-v3",
                 credential_version=1,
                 consent_version="face-registration-consent-v1",
                 status="ACTIVE",
