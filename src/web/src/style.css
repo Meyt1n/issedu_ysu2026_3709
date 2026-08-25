@@ -1137,6 +1137,13 @@ button:focus-visible, a:focus-visible {
   display: grid;
   gap: 10px;
 }
+.welcome-face-unavailable .row-actions,
+.row-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
 .welcome-face-unavailable .btn {
   justify-self: start;
 }
