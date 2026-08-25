@@ -366,15 +366,24 @@ def _knowledge_agent(
         access_purpose=access_purpose,
     )
     result_count = len(result.get("results") or [])
-    if result.get("error"):
+    error = str(result.get("error") or "")
+    # NO_RELEVANT_RESULTS means the search ran and simply found nothing; only
+    # authorisation/index/scope failures are a blocked pipeline step.
+    if error == "NO_RELEVANT_RESULTS":
+        status = "completed"
+        summary = "本地资料库暂无与问题直接相关的内容"
+    elif error:
+        status = "blocked"
         summary = "本地资料检索未完成"
     elif result_count:
+        status = "completed"
         summary = "已找到相关的本地审核资料"
     else:
+        status = "completed"
         summary = "本地资料库暂无直接相关的内容"
     return result, _trace(
         "knowledge", _AGENT_ROLES["knowledge"],
-        "blocked" if result.get("error") else "completed",
+        status,
         started,
         summary,
         source_count=result_count,

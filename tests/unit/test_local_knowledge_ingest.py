@@ -107,6 +107,46 @@ def test_ingest_rejects_content_hash_mismatch(db_session, tmp_path: Path) -> Non
     assert db_session.query(KnowledgeDocument).count() == 0
 
 
+def test_repo_demo_manifest_ingests_and_topics_are_retrievable(db_session) -> None:
+    """The committed teaching manifest must ingest cleanly and stay findable.
+
+    This pins manifest paths, hashes and permission scopes to the files in
+    docs/demo, and verifies that each teaching topic is actually retrievable
+    with a natural query, so knowledge-base growth cannot silently break RAG.
+    """
+    from app.knowledge import retrieve
+
+    repo_root = Path(__file__).resolve().parents[2]
+    manifest_path = repo_root / "docs" / "demo" / "本地RAG知识清单.json"
+
+    result = ingest_manifest(
+        db_session,
+        manifest_path=manifest_path,
+        source_root=manifest_path.parent,
+        actor_id="demo-admin",
+        index_version="demo-cn-en-v2",
+    )
+
+    assert result["index"]["document_count"] == 6
+    assert len(result["created"]) == 6
+
+    topic_queries = {
+        "药品身份核对": "家庭用药安全演示知识卡",
+        "过期药品怎么处置": "家庭药品存放与过期处置教学卡",
+        "过敏信息记录和分享注意什么": "过敏信息记录与授权分享教学卡",
+        "血压血糖记录观察": "血压血糖居家记录观察教学卡",
+        "什么时候需要联系急救": "居家照护沟通与紧急联络教学卡",
+        "药盒包装识别人工复核": "药品包装识别与人工复核教学卡",
+    }
+    for query, expected_title_part in topic_queries.items():
+        results = retrieve(db_session, query=query, actor_id="demo-admin", top_k=3)
+        assert results, f"query {query!r} returned no results"
+        assert expected_title_part in results[0]["title"], (
+            f"query {query!r} hit {results[0]['title']!r} instead of "
+            f"{expected_title_part!r}"
+        )
+
+
 def test_index_checksum_ignores_generated_chunk_uuid(db_session) -> None:
     from app.knowledge import add_document
 

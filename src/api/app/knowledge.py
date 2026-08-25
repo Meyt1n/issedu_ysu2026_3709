@@ -179,34 +179,61 @@ def add_document(
     return doc
 
 
+_HEADING_PATTERN = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
+_CHUNK_SIZE = 500
+_CHUNK_OVERLAP = 80
+_LOCATOR_TITLE_MAX = 80
+
+
+def _iter_sections(text: str) -> list[tuple[str, int, int]]:
+    """Split text into (section_title, start, end) spans covering all of it.
+
+    Markdown headings are the section boundaries so teaching cards retrieve
+    per topic and citations can point at a named section (the AI/RAG spec
+    requires keeping section labels through parsing).  Plain text without
+    headings stays a single untitled section.
+    """
+    matches = list(_HEADING_PATTERN.finditer(text))
+    if not matches:
+        return [("", 0, len(text))]
+    sections: list[tuple[str, int, int]] = []
+    if matches[0].start() > 0:
+        sections.append(("", 0, matches[0].start()))
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        sections.append((match.group(2).strip(), match.start(), end))
+    return sections
+
+
 def _chunk_document(session: Session, doc: KnowledgeDocument) -> None:
     text = doc.full_text
-    chunk_size = 500
-    overlap = 80
-    start = 0
     idx = 0
-    while start < len(text):
-        end = min(start + chunk_size, len(text))
-        chunk_text = text[start:end]
-        if end < len(text):
-            last_full_stop = max(chunk_text.rfind("。"), chunk_text.rfind("."))
-            if last_full_stop > chunk_size // 2:
-                end = start + last_full_stop + 1
-                chunk_text = text[start:end]
-        term_vec = _tf(chunk_text)
-        locator = f"chars:{start}-{end}"
-        chunk = KnowledgeChunk(
-            document_id=doc.id,
-            chunk_index=idx,
-            text=chunk_text,
-            locator=locator,
-            term_vector=term_vec,
-        )
-        session.add(chunk)
-        idx += 1
-        if end >= len(text):
-            break
-        start = end - overlap
+    for section_title, section_start, section_end in _iter_sections(text):
+        start = section_start
+        while start < section_end:
+            end = min(start + _CHUNK_SIZE, section_end)
+            chunk_text = text[start:end]
+            if end < section_end:
+                last_full_stop = max(chunk_text.rfind("。"), chunk_text.rfind("."))
+                if last_full_stop > _CHUNK_SIZE // 2:
+                    end = start + last_full_stop + 1
+                    chunk_text = text[start:end]
+            if chunk_text.strip():
+                locator = f"chars:{start}-{end}"
+                if section_title:
+                    locator = f"section:{section_title[:_LOCATOR_TITLE_MAX]}|{locator}"
+                chunk = KnowledgeChunk(
+                    document_id=doc.id,
+                    chunk_index=idx,
+                    text=chunk_text,
+                    locator=locator,
+                    term_vector=_tf(chunk_text),
+                )
+                session.add(chunk)
+                idx += 1
+            if end >= section_end:
+                break
+            start = end - _CHUNK_OVERLAP
 
 
 def delete_document(session: Session, doc_id: str, *, deleted_by: str) -> bool:
@@ -233,8 +260,13 @@ def retrieve(
     member_id: str | None = None,
     top_k: int = 5,
 ) -> list[dict]:
-    q_tokens = _tokenize(query)
+    normalized_query = re.sub(r"\s+", " ", str(query or "")).strip()
+    if not normalized_query:
+        raise ValueError("EMPTY_QUERY")
+    q_tokens = _tokenize(normalized_query)
     if not q_tokens:
+        # Stopword-only or single-character noise degrades exactly like an
+        # empty query instead of scanning the index for nothing.
         raise ValueError("EMPTY_QUERY")
 
     # 1. Permission pre-filter: load active docs, check scope
@@ -273,22 +305,34 @@ def retrieve(
     if not chunks:
         raise ValueError("EMPTY_INDEX")
 
-    # 3. TF-IDF scoring
-    n_docs = len(accessible_ids)
+    # 3. Scoring: smoothed chunk-level TF-IDF with query-coverage weighting.
+    #    * IDF is computed against the chunk collection (df counts chunks), so
+    #      a term present in every chunk keeps a small positive weight instead
+    #      of turning negative and hiding matching chunks.
+    #    * TF is sublinear (1 + ln tf) so a chunk repeating one keyword cannot
+    #      drown out a chunk that actually covers the question.
+    #    * Coverage weighting prefers chunks matching more distinct query
+    #      terms, which keeps multi-document teaching content well ranked.
+    n_chunks = len(chunks)
     df: Counter = Counter()
     for ch in chunks:
         df.update(ch.term_vector.keys())
 
+    unique_q_tokens = set(q_tokens)
     scored = []
     for ch in chunks:
         score = 0.0
-        for tok in q_tokens:
+        matched_tokens = 0
+        for tok in unique_q_tokens:
             tf = ch.term_vector.get(tok, 0)
             if tf == 0:
                 continue
-            idf = math.log(n_docs / df.get(tok, 1)) + 1.0
-            score += tf * idf
-        if score > 0:
+            matched_tokens += 1
+            idf = math.log((1 + n_chunks) / (1 + df[tok])) + 1.0
+            score += (1.0 + math.log(tf)) * idf
+        if matched_tokens:
+            coverage = matched_tokens / len(unique_q_tokens)
+            score *= 0.5 + 0.5 * coverage
             meta = doc_meta.get(ch.document_id, {})
             scored.append({
                 "chunk_id": ch.id,

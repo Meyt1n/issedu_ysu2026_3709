@@ -1,7 +1,7 @@
 {
-  "manifest_version": "1",
+  "manifest_version": "2",
   "status": "approved",
-  "approval_note": "仅用于 HomeCare Twin 本地教学演示；不含真实家庭健康数据。",
+  "approval_note": "仅用于 HomeCare Twin 本地教学演示；全部为自写合成教学知识卡，不含真实家庭健康数据，不构成诊断、处方或用药建议。",
   "documents": [
     {
       "path": "家庭用药安全演示知识.md",
@@ -11,6 +11,51 @@
       "version": "demo-cn-en-v1",
       "permission_scope": {},
       "content_sha256": "6e695840a617c188273d137985eee203e086da3c111f8fdb90ccd44ee77d60a3"
+    },
+    {
+      "path": "家庭药品存放与过期处置教学卡.md",
+      "title": "HomeCare Twin 家庭药品存放与过期处置教学卡",
+      "source": "homecare-demo-kb",
+      "license": "internal-demo",
+      "version": "demo-cn-en-v2",
+      "permission_scope": {},
+      "content_sha256": "047a4526e2968af0576ce3de268f3d2d839485027e06ee15e9eea467a791dc56"
+    },
+    {
+      "path": "过敏信息记录与授权分享教学卡.md",
+      "title": "HomeCare Twin 过敏信息记录与授权分享教学卡",
+      "source": "homecare-demo-kb",
+      "license": "internal-demo",
+      "version": "demo-cn-en-v2",
+      "permission_scope": {},
+      "content_sha256": "ec8e76bf099adff2662b53a0a0ecee5c95c8782c9890cbfb10457b940f386d59"
+    },
+    {
+      "path": "血压血糖居家记录观察教学卡.md",
+      "title": "HomeCare Twin 血压血糖居家记录观察教学卡",
+      "source": "homecare-demo-kb",
+      "license": "internal-demo",
+      "version": "demo-cn-en-v2",
+      "permission_scope": {},
+      "content_sha256": "e0b6d91465c93e6bfabf8a878a526d83539c49bd62483d8fa673880f4acbfca3"
+    },
+    {
+      "path": "居家照护沟通与紧急联络教学卡.md",
+      "title": "HomeCare Twin 居家照护沟通与紧急联络教学卡",
+      "source": "homecare-demo-kb",
+      "license": "internal-demo",
+      "version": "demo-cn-en-v2",
+      "permission_scope": {},
+      "content_sha256": "55bb151794ee70dc4bbb05f4197dbc134b6ced71ae6cc493e14d6242ad0e86ef"
+    },
+    {
+      "path": "药品包装识别与人工复核教学卡.md",
+      "title": "HomeCare Twin 药品包装识别与人工复核教学卡",
+      "source": "homecare-demo-kb",
+      "license": "internal-demo",
+      "version": "demo-cn-en-v2",
+      "permission_scope": {},
+      "content_sha256": "6e8f68fb6bc06afe54dc92a52e56a8930b25bbdce54f6b2ab2754b4c2e97ddde"
     }
   ]
 }
