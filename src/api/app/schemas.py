@@ -620,6 +620,27 @@ class VisionTaskRead(BaseModel):
         return self
 
 
+class VisionTaskCleanupRequest(BaseModel):
+    """Owner-controlled cleanup pass; preview is the safe default."""
+
+    dry_run: bool = True
+    limit: int = Field(default=100, ge=1, le=1_000)
+
+
+class VisionTaskCleanupRead(BaseModel):
+    cutoff_at: datetime
+    retention_seconds: int
+    dry_run: bool
+    scanned: int
+    eligible: int
+    skipped_recent: int
+    skipped_pending_review: int
+    skipped_shared_file: int
+    deleted_artifacts: int
+    missing_files: int
+    failed_files: int
+
+
 class VisionFusionRead(CandidateFusionResult):
     review_task_id: str
     review_task_version: int = Field(ge=1)

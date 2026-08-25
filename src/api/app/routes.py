@@ -212,6 +212,8 @@ from app.schemas import (
     TrainingConsentRevoke,
     VisionFusionRead,
     VisionQualityRead,
+    VisionTaskCleanupRead,
+    VisionTaskCleanupRequest,
     VisionTaskCreate,
     VisionTaskRead,
 )
@@ -233,6 +235,7 @@ from app.vision_tasks import (
     VISION_MEDIA_TYPES,
     VisionTaskStatus,
     _file_digest,
+    cleanup_expired_video_files,
     create_vision_task,
     get_vision_task,
     list_vision_tasks,
@@ -3943,6 +3946,46 @@ def list_vision_tasks_endpoint(
         member_id=member_id,
         status=task_status,
     )
+
+
+@router.post(
+    "/households/{household_id}/vision-tasks/retention-cleanup",
+    response_model=VisionTaskCleanupRead,
+)
+def cleanup_vision_task_files_endpoint(
+    household_id: str,
+    payload: VisionTaskCleanupRequest,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> VisionTaskCleanupRead:
+    """Preview or remove expired video files while retaining task metadata.
+
+    This is an owner-only control-plane operation.  The default dry-run and
+    server-side batch cap make it safe to wire to a periodic operator job.
+    """
+    require_household_owner(session, household_id, actor_id)
+    report = cleanup_expired_video_files(
+        session,
+        household_id,
+        retention_seconds=settings.vision_video_retention_seconds,
+        limit=min(payload.limit, settings.vision_video_cleanup_batch_size),
+        dry_run=payload.dry_run,
+    )
+    session.add(
+        AccessAudit(
+            household_id=household_id,
+            actor_id=actor_id,
+            operation="READ" if payload.dry_run else "DELETE",
+            action="VISION_RETENTION_PREVIEW" if payload.dry_run else "VISION_RETENTION_CLEANUP",
+            data_field="vision_task.video_files",
+            purpose="retention",
+            outcome="ALLOWED",
+            reason="DRY_RUN" if payload.dry_run else "RETENTION_POLICY",
+            request_id=current_request_id(),
+        )
+    )
+    session.commit()
+    return VisionTaskCleanupRead(**report.__dict__)
 
 
 @router.post("/vision-tasks/{task_id}/cancel", response_model=VisionTaskRead)
