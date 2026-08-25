@@ -1,6 +1,6 @@
 import { ApiClient, ApiClientError } from '@/api/client'
 import { CAPABILITY_IDS, hasCapability } from '@/stores/capabilities'
-import type { AuthorizationRead, HealthEvent, Member, RequestOptions, UploadedFile, VisionTask } from '@/api/types'
+import type { AuthorizationRead, HealthEvent, Member, RequestOptions, RiskAlert, RiskListResponse, UploadedFile, VisionTask } from '@/api/types'
 import type {
   CareTask,
   CaregiverEscalation,
@@ -14,6 +14,9 @@ import type {
   QualityCheckResult,
   RecognitionCandidate,
   RiskCard,
+  RiskAuditMetadata,
+  RiskAcknowledgementView,
+  RiskSummary,
   ReminderPolicy,
   RiskLevel,
   TaskAction,
@@ -407,6 +410,100 @@ function parseHistoryTime(value: string): number {
   return Number.isFinite(time) ? time : Number.POSITIVE_INFINITY
 }
 
+function optionalText(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function optionalInteger(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null
+}
+
+function riskAuditMetadata(alert: RiskAlert): RiskAuditMetadata {
+  const metadata: RiskAuditMetadata = {
+    deduplicationKey: optionalText(alert.deduplication_key),
+    mergedCount: optionalInteger(alert.merged_count),
+    budgetStatus: optionalText(alert.budget_status),
+    budgetReason: optionalText(alert.budget_reason),
+    nextVisibleAt: optionalText(alert.next_visible_at),
+    validUntil: optionalText(alert.valid_until),
+    evidenceSummary: optionalText(alert.evidence_summary),
+    complete: false,
+  }
+  metadata.complete = Object.entries(metadata)
+    .filter(([key]) => key !== 'complete')
+    .every(([, value]) => value !== null)
+  return metadata
+}
+
+function riskSummary(response: RiskListResponse): RiskSummary {
+  const summary = {
+    rulesetVersion: optionalText(response.ruleset_version),
+    nonSevereBudget: optionalInteger(response.non_severe_budget),
+    suppressedCount: optionalInteger(response.suppressed_count),
+    total: optionalInteger(response.total),
+    severeCount: optionalInteger(response.severe_count),
+    warningCount: optionalInteger(response.warning_count),
+  }
+  return { ...summary, complete: summary.rulesetVersion !== null && summary.nonSevereBudget !== null && summary.suppressedCount !== null }
+}
+
+function mergeRiskSummaries(summaries: RiskSummary[]): RiskSummary {
+  const unique = <T>(values: Array<T | null>): T | null => {
+    const present = values.filter((value): value is T => value !== null)
+    return present.length === values.length && new Set(present).size === 1 ? present[0]! : null
+  }
+  const sum = (values: Array<number | null>): number | null => values.every(value => value !== null)
+    ? values.reduce((total, value) => total + (value ?? 0), 0)
+    : null
+  const merged = {
+    rulesetVersion: unique(summaries.map(item => item.rulesetVersion)),
+    nonSevereBudget: unique(summaries.map(item => item.nonSevereBudget)),
+    suppressedCount: sum(summaries.map(item => item.suppressedCount)),
+    total: sum(summaries.map(item => item.total)),
+    severeCount: sum(summaries.map(item => item.severeCount)),
+    warningCount: sum(summaries.map(item => item.warningCount)),
+  }
+  return { ...merged, complete: summaries.length > 0 && summaries.every(item => item.complete) && merged.rulesetVersion !== null }
+}
+
+function riskAcknowledgement(alert: RiskAlert): RiskAcknowledgementView | null {
+  const acknowledgement = alert.acknowledgement
+  if (!acknowledgement) return null
+  return {
+    actorId: acknowledgement.actor_id,
+    acknowledgedAt: acknowledgement.acknowledged_at,
+    replayed: acknowledgement.replayed,
+  }
+}
+
+function toRiskCard(
+  alert: RiskAlert,
+  memberId: string,
+  memberName: string,
+  sourceEvents: RiskCard['sourceEvents'] = [],
+  explanation = '由家庭服务器确定性规则计算得出；移动端只展示服务端返回的脱敏审计信息。',
+): RiskCard {
+  const ruleVersion = optionalText(alert.rule_version)
+  const acknowledgement = riskAcknowledgement(alert)
+  return {
+    ruleId: alert.rule_id,
+    ruleVersion,
+    level: alert.level as RiskLevel,
+    message: alert.message,
+    memberId,
+    memberName,
+    createdAt: alert.created_at,
+    sourceCount: Array.isArray(alert.source_event_ids) ? alert.source_event_ids.length : 0,
+    riskFingerprint: optionalText(alert.risk_fingerprint),
+    acknowledgement,
+    audit: riskAuditMetadata(alert),
+    explanation,
+    suggestion: '请查看依据后在授权范围内处理；如有医疗疑问请联系医生或药师。',
+    acknowledged: Boolean(acknowledgement),
+    sourceEvents,
+  }
+}
+
 function stablePlanId(event: HealthEvent): string | null {
   const payload = event.payload ?? {}
   const linked = textOf(payload['plan_event_id']) || textOf(payload['plan_id'])
@@ -504,6 +601,7 @@ export class HttpDataProvider implements DataProvider {
   private householdTimeZone: string | null = null
   private memberCache = new Map<string, Member>()
   private taskCache = new Map<string, CareTask>()
+  private cachedRiskSummary: RiskSummary | null = null
   /** 同一 File 的上传请求在当前运行时共享，避免重试或重复点击产生多个文件。 */
   private fileUploads = new WeakMap<File, Promise<UploadedFile>>()
   /** 视觉任务按 File + 成员保存幂等键；创建失败后重试仍复用同一上传和任务键。 */
@@ -752,55 +850,56 @@ export class HttpDataProvider implements DataProvider {
         })
       }
       this.memberCache = new Map(members.map(m => [m.id, m]))
-      const all = await Promise.all(members.map(m => this.listRisks(m.id).catch(() => [] as RiskCard[])))
+      const responses = await Promise.all(members.map(async member => {
+        try {
+          const response = await this.client.listMemberRisks(householdId, member.id, this.options())
+          return { member, response }
+        } catch {
+          return null
+        }
+      }))
+      const successful = responses.filter((item): item is { member: Member; response: RiskListResponse } => item !== null)
+      this.cachedRiskSummary = mergeRiskSummaries(successful.map(item => riskSummary(item.response)))
+      const all = successful.map(({ member, response }) => response.alerts.map(alert => (
+        toRiskCard(alert, member.id, member.display_name)
+      )))
       return all
         .flat()
         .sort((a, b) => (RISK_ORDER[a.level] ?? 9) - (RISK_ORDER[b.level] ?? 9))
     }
     const memberName = await this.memberName(memberId)
     const response = await this.client.listMemberRisks(householdId, memberId, this.options())
+    this.cachedRiskSummary = riskSummary(response)
     return response.alerts
-      .map(alert => ({
-        ruleId: alert.rule_id,
-        ruleVersion: '服务端 rules-v0',
-        level: alert.level as RiskLevel,
-        message: alert.message,
-        memberId,
-        memberName,
-        createdAt: alert.created_at,
-        sourceCount: alert.source_event_ids.length,
-        explanation:
-          '由家庭服务器确定性规则（过期/库存/重复成分/过敏/相互作用）基于已确认事件计算得出，不是模型推断。',
-        suggestion: '请查看依据后在授权范围内处理；如有医疗疑问请联系医生或药师。',
-        acknowledged: false,
-        sourceEvents: [],
-      }))
+      .map(alert => toRiskCard(alert, memberId, memberName))
       .sort((a, b) => (RISK_ORDER[a.level] ?? 9) - (RISK_ORDER[b.level] ?? 9))
+  }
+
+  async getRiskSummary(): Promise<RiskSummary> {
+    if (this.cachedRiskSummary) return { ...this.cachedRiskSummary }
+    await this.listRisks()
+    if (this.cachedRiskSummary) return this.cachedRiskSummary
+    return {
+      rulesetVersion: null,
+      nonSevereBudget: null,
+      suppressedCount: null,
+      total: null,
+      severeCount: null,
+      warningCount: null,
+      complete: false,
+    }
   }
 
   async getRiskDetail(memberId: string, ruleId: string): Promise<RiskCard> {
     const householdId = await this.resolveHouseholdId()
     const memberName = await this.memberName(memberId)
     const detail = await this.client.getRiskDetail(householdId, memberId, ruleId, this.options())
-    return {
-      ruleId: detail.alert.rule_id,
-      ruleVersion: '服务端 rules-v0',
-      level: detail.alert.level as RiskLevel,
-      message: detail.alert.message,
-      memberId,
-      memberName,
-      createdAt: detail.alert.created_at,
-      sourceCount: detail.source_events.length,
-      explanation: '由家庭服务器确定性规则计算得出；以下为脱敏的证据事件摘要。',
-      suggestion: '请查看依据后在授权范围内处理；如有医疗疑问请联系医生或药师。',
-      acknowledged: false,
-      sourceEvents: detail.source_events.map(e => ({
+    return toRiskCard(detail.alert, memberId, memberName, detail.source_events.map(e => ({
         id: e.id,
         eventType: e.event_type,
         confirmationStatus: e.confirmation_status,
         createdAt: e.created_at,
-      })),
-    }
+      })), '由家庭服务器确定性规则计算得出；以下为服务端返回的脱敏证据事件摘要。')
   }
 
   async acknowledgeRisk(memberId: string, ruleId: string): Promise<RiskCard> {

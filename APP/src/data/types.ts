@@ -129,19 +129,52 @@ export interface RiskSourceEvent {
 
 export interface RiskCard {
   ruleId: string
-  ruleVersion: string
+  ruleVersion: string | null
   level: RiskLevel
   message: string
   memberId: string
   memberName: string
   createdAt: string | null
   sourceCount: number
+  riskFingerprint: string | null
+  acknowledgement: RiskAcknowledgementView | null
+  /** 服务端返回的去重、预算和证据元数据；不在客户端推导。 */
+  audit: RiskAuditMetadata
   /** 为什么出现这条提醒：来自确定性规则的解释，不是模型生成的医疗判断 */
   explanation: string
   /** 非医疗处置建议：只指向确认、补录、联系家人/专业人员 */
   suggestion: string
   acknowledged: boolean
   sourceEvents: RiskSourceEvent[]
+}
+
+export interface RiskAcknowledgementView {
+  actorId: string
+  acknowledgedAt: string
+  replayed: boolean
+}
+
+export interface RiskAuditMetadata {
+  deduplicationKey: string | null
+  mergedCount: number | null
+  budgetStatus: string | null
+  budgetReason: string | null
+  nextVisibleAt: string | null
+  validUntil: string | null
+  evidenceSummary: string | null
+  /** 所有可选审计字段均由服务端返回时才为 true。 */
+  complete: boolean
+}
+
+export interface RiskSummary {
+  rulesetVersion: string | null
+  nonSevereBudget: number | null
+  suppressedCount: number | null
+  total: number | null
+  severeCount: number | null
+  warningCount: number | null
+  /** 预算摘要字段完整时才允许展示确定性解释。 */
+  complete: boolean
 }
 
 export interface QualityMetricView {
@@ -305,6 +338,7 @@ export interface DataProvider {
   getMemberDetail(memberId: string): Promise<MemberDetail>
   getTodaySnapshot(memberId: string): Promise<TodaySnapshot>
   listRisks(memberId?: string): Promise<RiskCard[]>
+  getRiskSummary(): Promise<RiskSummary>
   getRiskDetail(memberId: string, ruleId: string): Promise<RiskCard>
   acknowledgeRisk(memberId: string, ruleId: string): Promise<RiskCard>
   submitTaskAction(taskId: string, action: TaskAction, payload?: TaskActionPayload): Promise<CareTask>

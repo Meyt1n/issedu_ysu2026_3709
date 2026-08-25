@@ -104,8 +104,29 @@ async function acknowledge(): Promise<void> {
           {{ risk.memberName }}
           <template v-if="risk.createdAt"> · {{ formatDateTime(risk.createdAt) }}</template>
         </p>
-        <p class="meta-line">规则 {{ risk.ruleId }} · 版本 {{ risk.ruleVersion }}</p>
+        <p class="meta-line">规则 {{ risk.ruleId }} · 版本 {{ risk.ruleVersion ?? '服务端未返回完整审计信息' }}</p>
       </header>
+
+      <section class="card" aria-labelledby="audit-title">
+        <div class="card-title-row">
+          <h2 id="audit-title">服务端审计信息</h2>
+          <span class="tag" :data-tone="risk.audit.complete ? 'calm' : 'warn'">
+            {{ risk.audit.complete ? '字段完整' : '信息不完整' }}
+          </span>
+        </div>
+        <dl class="audit-grid">
+          <div><dt>风险指纹</dt><dd>{{ risk.riskFingerprint ? '已由服务端返回' : '服务端未返回完整审计信息' }}</dd></div>
+          <div><dt>去重/合并</dt><dd>{{ risk.audit.mergedCount ?? '服务端未返回完整审计信息' }}</dd></div>
+          <div><dt>预算结论</dt><dd>{{ risk.audit.budgetStatus ?? '服务端未返回完整审计信息' }}</dd></div>
+          <div><dt>下次可见</dt><dd>{{ risk.audit.nextVisibleAt ? formatDateTime(risk.audit.nextVisibleAt) : '服务端未返回完整审计信息' }}</dd></div>
+          <div><dt>有效期</dt><dd>{{ risk.audit.validUntil ? formatDateTime(risk.audit.validUntil) : '服务端未返回完整审计信息' }}</dd></div>
+          <div><dt>证据摘要</dt><dd>{{ risk.audit.evidenceSummary ?? '服务端未返回完整审计信息' }}</dd></div>
+        </dl>
+        <p v-if="!risk.audit.complete" class="meta-line">
+          服务端未返回完整审计信息；移动端不会根据本地规则推断合并、预算、有效期或医疗结论。
+        </p>
+        <p v-else-if="risk.audit.budgetReason" class="meta-line">{{ risk.audit.budgetReason }}</p>
+      </section>
 
       <section class="card" aria-labelledby="why-title">
         <h2 id="why-title">为什么出现这条提醒</h2>
@@ -165,4 +186,8 @@ async function acknowledge(): Promise<void> {
 <style scoped>
 .back-btn { justify-self: start; }
 .risk-title { font-size: 1.25rem; }
+.audit-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; margin: 0; }
+.audit-grid div { display: grid; gap: 3px; }
+.audit-grid dt { color: var(--c-ink-muted); font-size: .78rem; }
+.audit-grid dd { margin: 0; font-weight: 800; overflow-wrap: anywhere; }
 </style>

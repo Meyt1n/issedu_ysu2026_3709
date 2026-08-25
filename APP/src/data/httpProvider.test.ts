@@ -576,6 +576,114 @@ describe('多家庭选择与隔离（MOB-158）', () => {
   })
 })
 
+describe('服务端风险审计元数据（MOB-156）', () => {
+  const member = {
+    id: 'm-1',
+    household_id: 'hh-1',
+    display_name: '合成成员',
+    role: 'SELF',
+    actor_id: 'actor-1',
+    created_at: '2026-08-20T00:00:00Z',
+  }
+
+  function providerForRisk(alertPatch: Record<string, unknown> = {}, listPatch: Record<string, unknown> = {}) {
+    const listMemberRisks = vi.fn().mockResolvedValue({
+      member_id: member.id,
+      alerts: [{
+        rule_id: 'risk-1',
+        level: 'SEVERE',
+        message: '合成严重风险',
+        source_event_ids: ['event-1', 'event-2'],
+        created_at: '2026-08-20T02:00:00Z',
+        rule_version: 'rules-v7',
+        risk_fingerprint: 'f'.repeat(64),
+        acknowledgement: null,
+        deduplication_key: 'dedup-1',
+        merged_count: 2,
+        budget_status: 'VISIBLE',
+        budget_reason: '严重信号不受普通预算压制',
+        next_visible_at: '2026-08-21T02:00:00Z',
+        valid_until: '2026-08-21T02:00:00Z',
+        evidence_summary: '2 条脱敏来源事件',
+        ...alertPatch,
+      }],
+      total: 1,
+      severe_count: 1,
+      warning_count: 0,
+      ruleset_version: 'rules-v7',
+      non_severe_budget: 10,
+      suppressed_count: 3,
+      ...listPatch,
+    })
+    const client = {
+      listHouseholds: vi.fn().mockResolvedValue([{ id: 'hh-1', name: '合成家庭' }]),
+      listMembers: vi.fn().mockResolvedValue([member]),
+      listMemberRisks,
+    } as unknown as ApiClient
+    const provider = new HttpDataProvider(client, () => ({
+      actorId: 'actor-1',
+      accessPurpose: 'family-care',
+      householdId: 'hh-1',
+    }))
+    return { provider, listMemberRisks }
+  }
+
+  it('只映射服务端规则版本、预算、指纹和完整审计字段', async () => {
+    const { provider } = providerForRisk()
+
+    const risks = await provider.listRisks()
+    const summary = await provider.getRiskSummary()
+
+    expect(risks[0]).toMatchObject({
+      ruleVersion: 'rules-v7',
+      riskFingerprint: 'f'.repeat(64),
+      acknowledged: false,
+      audit: {
+        deduplicationKey: 'dedup-1',
+        mergedCount: 2,
+        budgetStatus: 'VISIBLE',
+        validUntil: '2026-08-21T02:00:00Z',
+        complete: true,
+      },
+    })
+    expect(summary).toEqual({
+      rulesetVersion: 'rules-v7',
+      nonSevereBudget: 10,
+      suppressedCount: 3,
+      total: 1,
+      severeCount: 1,
+      warningCount: 0,
+      complete: true,
+    })
+  })
+
+  it('缺少服务端审计字段时不回退 rules-v0、预算默认值或本地推断', async () => {
+    const { provider } = providerForRisk(
+      {
+        rule_version: null,
+        risk_fingerprint: null,
+        deduplication_key: null,
+        merged_count: null,
+        budget_status: null,
+        budget_reason: null,
+        next_visible_at: null,
+        valid_until: null,
+        evidence_summary: null,
+      },
+      { ruleset_version: null, non_severe_budget: null, suppressed_count: null },
+    )
+
+    const risks = await provider.listRisks()
+    const summary = await provider.getRiskSummary()
+
+    expect(risks[0]?.ruleVersion).toBeNull()
+    expect(risks[0]?.audit.complete).toBe(false)
+    expect(risks[0]?.audit.mergedCount).toBeNull()
+    expect(summary.complete).toBe(false)
+    expect(summary.nonSevereBudget).toBeNull()
+  })
+})
+
 describe('环境行动卡的受控降级（MOB-157）', () => {
   it('服务端未声明能力时不把旧环境数据或本地推断显示为行动卡', () => {
     clearCapabilities()
