@@ -42,6 +42,9 @@ export const MEMBER_VIEWS: readonly ViewName[] = [
   'member-help',
 ]
 
+/** Views reachable from both member and admin portals. */
+export const SHARED_VIEWS: readonly ViewName[] = ['assistant']
+
 export type SessionStatus = 'signed-out' | 'loading' | 'ready' | 'empty' | 'error'
 
 export const HEALTH_DATA_REFRESH_EVENT = 'hct:health-data-refresh'
@@ -77,6 +80,7 @@ interface SessionState {
   loadingScope: boolean
   pendingReviewCount: number
   toasts: Toast[]
+  assistantSeedPrompt: string
 }
 
 const state = reactive<SessionState>({
@@ -98,6 +102,7 @@ const state = reactive<SessionState>({
   loadingScope: false,
   pendingReviewCount: 0,
   toasts: [],
+  assistantSeedPrompt: '',
 })
 
 let toastSeq = 0
@@ -201,7 +206,11 @@ export function dismissToast(id: number): void {
 }
 
 export function setView(view: ViewName): void {
-  if (state.portal === 'member' && !MEMBER_VIEWS.includes(view)) {
+  if (
+    state.portal === 'member' &&
+    !MEMBER_VIEWS.includes(view) &&
+    !SHARED_VIEWS.includes(view)
+  ) {
     state.currentView = 'member-home'
     return
   }
@@ -215,6 +224,17 @@ export function setView(view: ViewName): void {
     return
   }
   state.currentView = view
+}
+
+export function openAssistantWithPrompt(prompt: string): void {
+  state.assistantSeedPrompt = prompt.trim()
+  setView('assistant')
+}
+
+export function consumeAssistantSeedPrompt(): string {
+  const prompt = state.assistantSeedPrompt
+  state.assistantSeedPrompt = ''
+  return prompt
 }
 
 function sessionIsSignedOut(): boolean {

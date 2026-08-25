@@ -106,6 +106,22 @@ class Settings(BaseSettings):
     weather_ruleset_version: str = "weather-actions-v1"
     egress_default_deny: bool = True
     egress_weather_whitelist: str = ""
+    # HCT-445: home-screen health news.  Default local = seasonal calendar only.
+    # Set HEALTH_NEWS_ADAPTER=enabled and populate HEALTH_NEWS_ALLOWED_DOMAINS
+    # before any outbound fetch (WHO / NHC / China CDC, etc.).
+    health_news_adapter: str = "local"
+    health_news_allowed_domains: str = ""
+    # Optional subset of built-in source ids (who_news_en,nhc_xwzx,chinacdc_zxxx).
+    health_news_source_ids: str = ""
+    # Extra sources: id|name|https_url|rss_or_html_list|optional_path_hint ; separated
+    health_news_extra_sources: str = ""
+    health_news_timeout_seconds: float = Field(default=8.0, gt=0, le=20)
+    health_news_cache_ttl_seconds: float = Field(default=1800.0, ge=0, le=86400)
+    health_news_stale_ttl_seconds: float = Field(default=86400.0, ge=0, le=604800)
+    health_news_min_request_interval_seconds: float = Field(default=2.0, ge=0, le=60)
+    health_news_retry_attempts: int = Field(default=2, ge=1, le=3)
+    health_news_retry_backoff_seconds: float = Field(default=0.15, ge=0, le=2)
+    health_news_max_items: int = Field(default=6, ge=1, le=12)
     log_mask_enabled: bool = True
     upload_allowed_extensions: str = ".jpg,.jpeg,.png,.pdf,.mp4,.mov"
     upload_max_size_bytes: int = 10 * 1024 * 1024
@@ -166,6 +182,13 @@ class Settings(BaseSettings):
                 "set ALLOW_PROCESS_LOCAL_FACE_CHALLENGES_IN_PRODUCTION=true only for "
                 "single-node drills, or wait for durable challenge storage"
             )
+        if (
+            self.health_news_adapter.strip().casefold() == "enabled"
+            and not self.health_news_allowed_domain_set
+        ):
+            problems.append(
+                "HEALTH_NEWS_ALLOWED_DOMAINS is required when HEALTH_NEWS_ADAPTER=enabled"
+            )
         if problems:
             raise ValueError("PRODUCTION_CONFIGURATION_BLOCKED: " + "; ".join(problems))
         return self
@@ -203,6 +226,30 @@ class Settings(BaseSettings):
             for item in self.agent_web_search_allowed_domains.split(",")
             if item.strip()
         }
+
+    @property
+    def health_news_allowed_domain_set(self) -> set[str]:
+        return {
+            item.strip().lower().removeprefix("https://").removeprefix("http://").split("/")[0]
+            for item in self.health_news_allowed_domains.split(",")
+            if item.strip()
+        }
+
+    @property
+    def health_news_source_id_set(self) -> set[str]:
+        return {
+            item.strip()
+            for item in self.health_news_source_ids.split(",")
+            if item.strip()
+        }
+
+    @property
+    def health_news_extra_sources_list(self) -> list[str]:
+        return [
+            item.strip()
+            for item in self.health_news_extra_sources.split(";")
+            if item.strip()
+        ]
 
     @property
     def knowledge_admin_actor_set(self) -> set[str]:

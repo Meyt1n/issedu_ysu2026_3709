@@ -3646,6 +3646,22 @@ def list_assistant_agents(
     return get_agent_catalog(settings)
 
 
+@router.get("/health-news")
+async def list_health_news(
+    actor_id: str = Depends(get_actor_id),
+) -> dict:
+    """Return home-screen health news (whitelist remote + seasonal fallback).
+
+    Default adapter mode is local/seasonal only.  When enabled with an
+    allowlist, public titles are fetched over HTTPS without any household
+    fields.  Failures degrade to seasonal cards instead of inventing news.
+    """
+    del actor_id
+    from app.health_news_adapter import fetch_health_news
+
+    return await fetch_health_news()
+
+
 def _summarize_event_payload(payload: dict | None) -> str:
     if not payload:
         return ""

@@ -134,6 +134,47 @@ def is_web_search_egress_allowed(url: str, settings=None) -> bool:
     return allowed
 
 
+def is_health_news_egress_allowed(url: str, settings=None) -> bool:
+    """Allow HTTPS hosts listed in HEALTH_NEWS_ALLOWED_DOMAINS (HCT-445).
+
+    Separate from weather and agent web-search allowlists.  Health-news
+    fetches are read-only GETs with no request body and must never carry
+    household or health fields.
+    """
+    settings = settings or get_settings()
+    mode = (settings.health_news_adapter or "local").strip().casefold()
+    if mode != "enabled":
+        logger.warning("EGRESS_BLOCKED: health news adapter is not enabled")
+        return False
+    parsed = urlparse(url)
+    if parsed.scheme.lower() != "https":
+        logger.warning("EGRESS_BLOCKED: health news egress requires HTTPS")
+        return False
+    target = _normalize_host(url)
+    if not target:
+        logger.warning("EGRESS_BLOCKED: health news URL has no host")
+        return False
+    allowed_hosts = settings.health_news_allowed_domain_set
+    if not allowed_hosts:
+        logger.warning("EGRESS_BLOCKED: health news allowlist is empty")
+        return False
+    host = (parsed.hostname or "").lower()
+    bare = host.removeprefix("www.")
+    allowed = (
+        target in allowed_hosts
+        or host in allowed_hosts
+        or bare in allowed_hosts
+        or f"www.{bare}" in allowed_hosts
+    )
+    if not allowed:
+        logger.warning(
+            "EGRESS_BLOCKED: health news host=%s not in allowlist size=%d",
+            target,
+            len(allowed_hosts),
+        )
+    return allowed
+
+
 def validate_egress_payload(body: dict[str, Any] | None) -> tuple[bool, str | None]:
     """Reject outbound payloads that contain forbidden health fields.
 

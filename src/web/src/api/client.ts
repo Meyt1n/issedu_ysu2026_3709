@@ -25,6 +25,7 @@ import type {
   CreateModelVersionBindingInput,
   HardSample,
   HealthEvent,
+  HealthNewsResponse,
   HealthResponse,
   CapabilityResponse,
   DashboardSummary,
@@ -850,6 +851,10 @@ export class ApiClient {
       undefined,
       options,
     )
+  }
+
+  getHealthNews(options?: RequestOptions): Promise<HealthNewsResponse> {
+    return this.request('/api/v1/health-news', undefined, options)
   }
 
   assistantChat(
