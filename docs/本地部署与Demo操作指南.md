@@ -41,7 +41,7 @@ chmod +x scripts/start.sh
 ./scripts/start.sh down
 ```
 
-`health` 会同时检查 Compose 中 API、outbox worker、care-plan worker、Web、MySQL 的容器健康状态，并访问 API 与 Web 的 `/health`。默认浏览器入口为 `http://localhost:8080`，API 健康检查为 `http://localhost:8000/health`，OpenAPI 为 `http://localhost:8000/docs`。端口被占用时，在 `.env` 中修改 `API_PORT`、`WEB_PORT` 或 `MYSQL_PORT`，再重新执行 `up`。
+`health` 会同时检查 Compose 中 API、outbox worker、care-plan worker、Web、MySQL 的容器健康状态，并访问 API 与 Web 的 `/health`。默认浏览器入口为成员前台 `http://localhost:8080` 与管理后台 `http://localhost:8081`（HCT-453，见 §1.4），API 健康检查为 `http://localhost:8000/health`，OpenAPI 为 `http://localhost:8000/docs`。端口被占用时，在 `.env` 中修改 `API_PORT`、`WEB_PORT`、`ADMIN_WEB_PORT` 或 `MYSQL_PORT`，再重新执行 `up`。
 
 增强档（额外启动 Ollama 容器）在启动前设置 `$env:COMPOSE_PROFILE='enhanced'`（Bash：`export COMPOSE_PROFILE=enhanced`）。容器内仍需自行拉取或创建模型；未配置 `OLLAMA_MODEL` 时助手保持结构化降级。
 
@@ -100,9 +100,23 @@ scripts/start.ps1 migrate
 scripts/start.ps1 api
 ```
 
-另开终端执行 `scripts/start.ps1 web`。Linux/macOS 将脚本名替换为 `scripts/start.sh`。本地进程路径不会自动启动 outbox worker；该路径的 `/api/v1/health/db` 使用本地 `DATABASE_URL` 检查数据库，不能代替 Compose 服务级 `health`。
+另开终端执行 `scripts/start.ps1 web-member`（成员前台 5173）；需要管理后台时再开一个终端执行 `scripts/start.ps1 web-admin`（5174）。调试也可用原 `scripts/start.ps1 web`（单入口，按账号角色进门户）。Linux/macOS 将脚本名替换为 `scripts/start.sh`。本地进程路径不会自动启动 outbox worker；该路径的 `/api/v1/health/db` 使用本地 `DATABASE_URL` 检查数据库，不能代替 Compose 服务级 `health`。
 
 带卷删除数据库前必须先完成备份演练；标准 `down` 不会删除卷。确需清空教学数据库时，必须由负责人单独执行 `docker compose down --volumes` 并记录影响。
+
+### 1.4 前台 / 后台双入口怎么进（HCT-453）
+
+一个家庭只有一个本地 API 和一套账号；前台和后台是**两个端口的登录入口**，共用同一份网页构建产物：
+
+| 我是谁 | 应该打开 | 本地进程（路径 1.2） | Compose（路径 1.1） | 登录方式 |
+|---|---|---|---|---|
+| 家庭成员（长辈/家人） | 成员前台 | `http://127.0.0.1:5173`（`scripts/start web-member`） | `http://localhost:8080` | 人脸 / 家庭 PIN（也可账号密码） |
+| 家庭管理员（owner） | 管理后台 | `http://127.0.0.1:5174`（`scripts/start web-admin`） | `http://localhost:8081` | 账号密码（PIN/人脸主要供家人使用） |
+
+- 走错入口不会泄露或损坏任何数据：登录成功后系统发现账号与入口不匹配，会立刻退出本次登录，并在页面上给出「去管理后台登录 / 回成员前台登录」按钮。
+- 入口只是界面锁；谁能看什么、谁能改什么仍完全由服务端授权（HCT-439/HCT-102）决定。
+- 端口自定义：本地进程 `HCT_WEB_PORT`（前台）/ `HCT_ADMIN_WEB_PORT`（后台）；Compose `.env` 的 `WEB_PORT` / `ADMIN_WEB_PORT`。非默认端口部署可在构建时设置 `VITE_MEMBER_PORTAL_URL` / `VITE_ADMIN_PORTAL_URL` 让跨端按钮指向正确公开地址。
+- 调试用单入口 `scripts/start web`（5173，不设入口模式）保持旧行为：登录后按账号角色自动进前台或后台。
 
 ## 2. 三档运行目标
 
