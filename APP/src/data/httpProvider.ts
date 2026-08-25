@@ -3,6 +3,7 @@ import { CAPABILITY_IDS, hasCapability } from '@/stores/capabilities'
 import type { AuthorizationRead, HealthEvent, Member, RequestOptions, UploadedFile, VisionTask } from '@/api/types'
 import type {
   CareTask,
+  CaregiverEscalation,
   DataProvider,
   EnvironmentActionState,
   HouseholdOption,
@@ -55,6 +56,8 @@ function createIdempotencyKey(): string {
 
 const PLAN_FACT_TYPES = new Set(['plan_created', 'plan_updated'])
 const PLAN_ACTION_TYPES = new Set(['plan_confirmed', 'plan_deferred', 'plan_skipped'])
+const PLAN_ESCALATION_TYPES = new Set(['care_escalated', 'care_level_escalated'])
+const CAREGIVER_NOTIFICATION_TYPE = 'caregiver_notified'
 const TASK_LEVELS: TaskLevel[] = ['INFO', 'GENERAL', 'HIGH', 'URGENT']
 const RISK_ORDER: Record<string, number> = { SEVERE: 0, WARNING: 1, INFO: 2, TIP: 3 }
 
@@ -112,6 +115,87 @@ function planLevel(event: HealthEvent): TaskLevel {
 
 function recordOf(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null
+}
+
+function serverEventOrder(event: HealthEvent, fallback: number): number {
+  const sequence = Number(event.sequence_no)
+  return Number.isFinite(sequence) ? sequence : fallback
+}
+
+function escalationStatus(value: unknown): CaregiverEscalation['status'] {
+  switch (textOf(value).toUpperCase()) {
+    case 'QUEUED':
+    case 'SENT':
+    case 'DELIVERED': return 'QUEUED'
+    case 'VIEWED': return 'VIEWED'
+    case 'PROCESSED': return 'PROCESSED'
+    case 'FAILED': return 'FAILED'
+    default: return 'UNKNOWN'
+  }
+}
+
+function escalationReason(value: unknown): string {
+  switch (textOf(value).toUpperCase()) {
+    case 'MISSED_DOSE_ESCALATION': return '服务端记录了连续未确认任务，需要授权照护者关注。'
+    case 'OVERDUE_AFTER_GRACE_PERIOD': return '服务端记录了超过安全时间窗仍未确认的任务。'
+    default: return '服务端记录了未确认任务，需要关注。'
+  }
+}
+
+const SAFE_ESCALATION_NEXT_STEP = '查看授权照护者的脱敏任务摘要；如情况严重，请联系家人或拨打 120。'
+
+/**
+ * 只解析时间线中由服务端产生的升级/通知事件。
+ * 没有 care_escalated 事件时返回 undefined，绝不根据本地时间或任务状态猜测升级。
+ */
+function escalationForPlan(
+  events: HealthEvent[],
+  planEventId: string,
+  latestAction: HealthEvent | null,
+): CaregiverEscalation | undefined {
+  const indexed = events.map((event, index) => ({ event, index }))
+  const actionOrder = latestAction ? serverEventOrder(latestAction, events.indexOf(latestAction)) : Number.NEGATIVE_INFINITY
+  const escalation = indexed
+    .filter(({ event }) => PLAN_ESCALATION_TYPES.has(event.event_type))
+    .filter(({ event }) => textOf((event.payload ?? {})['plan_event_id']) === planEventId)
+    .filter(({ event, index }) => serverEventOrder(event, index) >= actionOrder)
+    .sort((a, b) => serverEventOrder(a.event, a.index) - serverEventOrder(b.event, b.index))
+    .at(-1)?.event
+  if (!escalation) return undefined
+
+  const payload = escalation.payload ?? {}
+  const automationKey = textOf(payload['automation_key'])
+  const notification = indexed
+    .filter(({ event }) => event.event_type === CAREGIVER_NOTIFICATION_TYPE)
+    .filter(({ event }) => textOf((event.payload ?? {})['plan_event_id']) === planEventId)
+    .filter(({ event }) => !automationKey || textOf((event.payload ?? {})['escalation_automation_key']) === automationKey)
+    .sort((a, b) => serverEventOrder(a.event, a.index) - serverEventOrder(b.event, b.index))
+    .at(-1)?.event
+  const notificationPayload = notification?.payload ?? {}
+  const notifyCaregivers = payload['notify_caregivers'] === true
+  // 计划载荷中的通知意图不是当前授权证明；只有通知事件回执存在时才展示授权照护者目标。
+  const target = notification ? 'AUTHORIZED_CAREGIVER' : 'NONE'
+  const status = notification
+    ? escalationStatus(notificationPayload['delivery_status'])
+    : notifyCaregivers ? 'CREATED' : 'UNAVAILABLE'
+  const nextStep = textOf(notificationPayload['next_step']) || textOf(payload['next_step']) || (
+    notification
+      ? SAFE_ESCALATION_NEXT_STEP
+      : notifyCaregivers
+        ? '等待服务端通知回执；当前不显示照护者身份，也不尝试本地通知。'
+        : '服务端未返回有效照护授权，未发送升级通知；请联系家人或拨打 120。'
+  )
+
+  return {
+    status,
+    target,
+    reason: escalationReason(payload['reason']),
+    occurredAt: escalation.occurred_at ?? escalation.created_at,
+    dueAt: textOf(payload['due_at']) || null,
+    nextStep,
+    auditEventId: escalation.id,
+    notificationEventId: notification?.id,
+  }
 }
 
 /** Only a server-provided, member-authorized reminder contract may enter local scheduling. */
@@ -173,6 +257,11 @@ export function deriveTasksFromEvents(
         }
       }
     }
+    const escalation = escalationForPlan(events, plan.id, latest)
+    if (escalation) {
+      task.escalation = escalation
+      task.status = 'ESCALATED'
+    }
     return task
   })
 }
@@ -217,6 +306,12 @@ const PLAN_ACTION_LABELS: Record<string, { action: TaskAction; label: string; fi
   plan_confirmed: { action: 'confirm', label: '确认', finalStatus: 'CONFIRMED' },
   plan_deferred: { action: 'defer', label: '延期', finalStatus: 'DEFERRED' },
   plan_skipped: { action: 'skip', label: '跳过', finalStatus: 'SKIPPED' },
+}
+
+const ESCALATION_HISTORY_LABELS: Record<string, { action: 'escalate' | 'caregiver_notify'; label: string; note: string }> = {
+  care_escalated: { action: 'escalate', label: '升级照护者', note: '服务端升级审计事件' },
+  care_level_escalated: { action: 'escalate', label: '升级照护者', note: '服务端升级审计事件' },
+  caregiver_notified: { action: 'caregiver_notify', label: '通知授权照护者', note: '服务端通知回执事件' },
 }
 
 /**
@@ -268,6 +363,25 @@ export function deriveTaskActionHistory(
         receipt: isLatest ? 'RECEIPTED' : 'SUPERSEDED',
         note: isLatest ? undefined : '该计划的后续操作已覆盖此动作（服务端幂等保留历史）',
       })
+    })
+  }
+
+  for (const event of events) {
+    const mapping = ESCALATION_HISTORY_LABELS[event.event_type]
+    if (!mapping) continue
+    const planEventId = textOf((event.payload ?? {})['plan_event_id'])
+    if (!planEventId) continue
+    entries.push({
+      eventId: event.id,
+      action: mapping.action,
+      actionLabel: mapping.label,
+      taskTitle: planTitles.get(planEventId) ?? '计划任务（标题未知）',
+      memberName,
+      memberId,
+      serverTime: event.occurred_at ?? event.created_at,
+      finalStatus: 'ESCALATED',
+      receipt: 'RECEIPTED',
+      note: mapping.note,
     })
   }
 

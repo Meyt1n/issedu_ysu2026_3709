@@ -179,8 +179,11 @@ const memberSelection = computed<string>({
 const pendingTasks = computed(
   () => snapshot.value?.tasks.filter(t => t.status === 'PENDING' || t.status === 'DEFERRED') ?? [],
 )
+const escalatedTasks = computed(
+  () => snapshot.value?.tasks.filter(t => t.status === 'ESCALATED') ?? [],
+)
 const doneTasks = computed(
-  () => snapshot.value?.tasks.filter(t => t.status !== 'PENDING' && t.status !== 'DEFERRED') ?? [],
+  () => snapshot.value?.tasks.filter(t => t.status !== 'PENDING' && t.status !== 'DEFERRED' && t.status !== 'ESCALATED') ?? [],
 )
 const topRisks = computed(() => (snapshot.value?.risks ?? []).slice(0, 3))
 
@@ -449,17 +452,20 @@ onMounted(reload)
       <section aria-labelledby="tasks-title">
         <div class="section-heading">
           <h2 id="tasks-title"><span class="heading-dot" aria-hidden="true"></span>今日照护任务</h2>
-          <span class="meta-line">{{ pendingTasks.length }} 项待处理</span>
+          <span class="meta-line">
+            {{ pendingTasks.length }} 项待处理
+            <template v-if="escalatedTasks.length > 0"> · {{ escalatedTasks.length }} 项需关注</template>
+          </span>
         </div>
         <div class="plain-list" style="margin-top: 10px">
           <EmptyState
-            v-if="pendingTasks.length === 0"
+            v-if="pendingTasks.length === 0 && escalatedTasks.length === 0"
             icon="check"
             title="今日任务都处理完了"
             hint="新的提醒会按等级出现在这里"
           />
           <TaskCard
-            v-for="task in pendingTasks"
+            v-for="task in [...pendingTasks, ...escalatedTasks]"
             :key="task.id"
             :task="task"
             :busy="Boolean(busyTaskId)"
