@@ -724,6 +724,11 @@ export interface AssistantAgentCatalogItem {
   network: boolean
 }
 
+export type WebSearchUnavailableReason =
+  | 'DEPLOYMENT_DISABLED'
+  | 'EGRESS_BLOCKED'
+  | 'OPT_IN_REQUIRED'
+
 export interface AssistantAgentCatalog {
   mode: 'multi_agent'
   all_agents_local: boolean
@@ -732,6 +737,12 @@ export interface AssistantAgentCatalog {
   /** True only when the deployment switch is on and the endpoint passes the allowlist. */
   web_search_ready?: boolean
   web_search_provider?: string
+  /** True when the provider serves offline teaching fixtures (no egress). */
+  web_search_offline_fixture?: boolean
+  /** Why search cannot run right now; OPT_IN_REQUIRED means ready but per-request. */
+  web_search_unavailable_reason?: WebSearchUnavailableReason
+  /** Operator-facing hint on how to enable or use web search. */
+  web_search_enable_hint?: string
   web_search_requires_request_opt_in: boolean
   agents: AssistantAgentCatalogItem[]
 }

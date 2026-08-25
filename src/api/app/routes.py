@@ -3345,10 +3345,16 @@ def list_classroom_scenarios(
 
 
 def _require_knowledge_steward(actor_id: str) -> None:
+    """Gate crawl operations to demo stewards and configured knowledge admins.
+
+    Non-stewards receive an explicit ``KNOWLEDGE_STEWARD_REQUIRED`` error so the
+    UI can explain how to obtain access instead of showing an empty panel.
+    """
     if not (
         actor_id.startswith("demo-")
         or actor_id.startswith("test-")
         or actor_id in {"knowledge-steward", "demo-parent"}
+        or actor_id in get_settings().knowledge_admin_actor_set
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

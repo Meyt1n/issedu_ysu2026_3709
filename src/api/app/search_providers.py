@@ -21,6 +21,14 @@ from app.config import Settings
 
 logger = logging.getLogger(__name__)
 
+FIXTURE_PROVIDER = "fixture"
+
+
+def is_fixture_search_provider(settings: Settings) -> bool:
+    """True when the deployment uses the offline teaching-fixture provider."""
+    return (settings.agent_web_search_provider or "").strip().casefold() == FIXTURE_PROVIDER
+
+
 _MEDICAL_DOMAIN_HINTS = (
     "nih.gov",
     "who.int",
@@ -171,7 +179,7 @@ def _normalize_results(items: list[dict[str, str]], max_results: int) -> list[di
             "url": url,
             "snippet": (item.get("snippet") or "").strip()[:500],
             "domain": urlparse(url).hostname or "",
-            "source": "external_web_search",
+            "source": item.get("source") or "external_web_search",
         })
         if len(parsed) >= max_results:
             break
@@ -355,8 +363,81 @@ class SearXNGProvider:
         return _normalize_results(items, settings.agent_web_search_max_results * 2)
 
 
+# Synthetic offline references for classroom demos.  ``fixture.invalid`` is an
+# RFC 2606 reserved domain that can never resolve, so nothing here can be
+# mistaken for a real page and no request ever leaves the process.  The copy
+# stays on generic care-operations topics and never states medical facts.
+_FIXTURE_SNIPPET_SUFFIX = "（教学夹具，非真实网页；外部参考不属于本地审核证据，不构成医疗建议。）"
+_FIXTURE_RESULTS: tuple[dict[str, str], ...] = (
+    {
+        "title": "教学夹具：家庭药箱存放与过期检查提示",
+        "url": "https://fixture.invalid/med-storage",
+        "snippet": "演示如何展示药箱存放、避光避潮与定期检查有效期的公开科普入口。"
+        + _FIXTURE_SNIPPET_SUFFIX,
+        "keywords": "药箱 存放 过期 有效期 保存 储存 medication storage expiry",
+        "source": "teaching_fixture",
+    },
+    {
+        "title": "教学夹具：过敏信息分享边界科普导航",
+        "url": "https://fixture.invalid/allergy-share",
+        "snippet": "演示过敏史沟通与授权边界类公开资料在搜索结果中的展示样式。"
+        + _FIXTURE_SNIPPET_SUFFIX,
+        "keywords": "过敏 授权 分享 allergy",
+        "source": "teaching_fixture",
+    },
+    {
+        "title": "教学夹具：用药提醒与照护升级公开指引入口",
+        "url": "https://fixture.invalid/reminder-escalation",
+        "snippet": "演示提醒确认、延期与照护者升级流程类公开指引的检索展示。"
+        + _FIXTURE_SNIPPET_SUFFIX,
+        "keywords": "提醒 升级 确认 延期 漏服 reminder escalation",
+        "source": "teaching_fixture",
+    },
+    {
+        "title": "教学夹具：药品包装复核与条码核对科普入口",
+        "url": "https://fixture.invalid/packaging-check",
+        "snippet": "演示包装信息、条码冲突与人工复核类公开科普的检索展示。"
+        + _FIXTURE_SNIPPET_SUFFIX,
+        "keywords": "包装 条码 复核 核对 说明书 barcode packaging",
+        "source": "teaching_fixture",
+    },
+    {
+        "title": "教学夹具：家庭照护公开科普检索导航",
+        "url": "https://fixture.invalid/care-navigation",
+        "snippet": "通用教学占位结果：演示受控联网参考的展示位置与「非本地审核证据」标注。"
+        + _FIXTURE_SNIPPET_SUFFIX,
+        "keywords": "照护 科普 家庭 健康",
+        "source": "teaching_fixture",
+    },
+)
+
+
+class FixtureSearchProvider:
+    """Serve offline teaching fixtures; performs no network egress at all."""
+
+    def search(self, query: str, *, settings: Settings) -> list[dict[str, str]]:
+        tokens = _query_tokens(query)
+        scored: list[tuple[int, dict[str, str]]] = []
+        for item in _FIXTURE_RESULTS:
+            haystack = (
+                f"{item['title']} {item['snippet']} {item.get('keywords', '')}".casefold()
+            )
+            score = sum(1 for token in tokens if token in haystack)
+            scored.append((score, item))
+        scored.sort(key=lambda pair: -pair[0])
+        matched = [item for score, item in scored if score > 0]
+        # A demo query should always show the reference layout, so fall back to
+        # the generic fixtures when nothing overlaps the redacted query.
+        chosen = matched or [item for _, item in scored]
+        return _normalize_results(
+            [dict(item) for item in chosen], settings.agent_web_search_max_results
+        )
+
+
 def get_search_provider(settings: Settings) -> SearchProvider:
     provider = (settings.agent_web_search_provider or "duckduckgo_html").strip().casefold()
+    if provider == FIXTURE_PROVIDER:
+        return FixtureSearchProvider()
     if provider == "searxng":
         return SearXNGProvider()
     return DuckDuckGoHtmlProvider()
@@ -371,7 +452,10 @@ def execute_web_search(query: str, *, settings: Settings) -> list[dict[str, str]
             query, cached, max_results=settings.agent_web_search_max_results
         )
 
-    _enforce_min_interval(settings)
+    # The rate limiter protects external endpoints; fixtures never leave the
+    # process, so classroom demos are not throttled.
+    if not is_fixture_search_provider(settings):
+        _enforce_min_interval(settings)
     with _CACHE_LOCK:
         _METRICS["searches"] += 1
     raw = get_search_provider(settings).search(query, settings=settings)

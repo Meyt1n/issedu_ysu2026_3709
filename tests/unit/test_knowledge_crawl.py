@@ -112,6 +112,9 @@ def test_knowledge_crawl_api_steward_only(client: TestClient) -> None:
         headers={"X-Actor-Id": "stranger"},
     )
     assert denied.status_code == 403
+    # The reason code is a UI contract: the web panel keys the "需要知识管理员"
+    # guidance on this detail instead of showing a silent empty list.
+    assert denied.json()["detail"] == "KNOWLEDGE_STEWARD_REQUIRED"
 
     status = client.get(
         "/api/v1/knowledge/crawl/status",
@@ -136,3 +139,27 @@ def test_knowledge_crawl_api_steward_only(client: TestClient) -> None:
     )
     assert rejected.status_code == 200
     assert rejected.json()["status"] == "rejected"
+
+
+def test_knowledge_crawl_api_allows_configured_admin(client: TestClient) -> None:
+    """Actors in KNOWLEDGE_ADMIN_ACTORS are stewards without a demo prefix."""
+    from app.config import get_settings
+
+    settings = get_settings()
+    previous = settings.knowledge_admin_actors
+    settings.knowledge_admin_actors = "ops-knowledge-admin"
+    try:
+        denied = client.get(
+            "/api/v1/knowledge/crawl/status",
+            headers={"X-Actor-Id": "someone-else"},
+        )
+        allowed = client.get(
+            "/api/v1/knowledge/crawl/status",
+            headers={"X-Actor-Id": "ops-knowledge-admin"},
+        )
+    finally:
+        settings.knowledge_admin_actors = previous
+
+    assert denied.status_code == 403
+    assert allowed.status_code == 200
+    assert allowed.json()["auto_ingest"] is False

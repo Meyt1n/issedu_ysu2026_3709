@@ -42,7 +42,11 @@ from app.retrieval_cache import (
     make_entry_key,
     make_session_key,
 )
-from app.search_providers import SearchRateLimited, execute_web_search
+from app.search_providers import (
+    SearchRateLimited,
+    execute_web_search,
+    is_fixture_search_provider,
+)
 from app.tool_call import (
     ASSISTANT_SYSTEM_PROMPT,
     OllamaClient,
@@ -244,6 +248,29 @@ def get_agent_catalog(settings: Settings | None = None) -> dict[str, Any]:
         web_search_ready = is_web_search_egress_allowed(
             settings.agent_web_search_url.strip(), settings
         )
+    fixture_provider = is_fixture_search_provider(settings)
+    # A machine-readable reason plus an operator hint let the UI say exactly
+    # why search is not running and how to turn it on, instead of a silent
+    # disabled checkbox.
+    if not settings.agent_web_search_enabled:
+        unavailable_reason = "DEPLOYMENT_DISABLED"
+        enable_hint = (
+            "在 .env 设置 AGENT_WEB_SEARCH_ENABLED=true 并重启 API；"
+            "离线课堂演示可同时设置 AGENT_WEB_SEARCH_PROVIDER=fixture（不出网）。"
+        )
+    elif not web_search_ready:
+        unavailable_reason = "EGRESS_BLOCKED"
+        enable_hint = (
+            "AGENT_WEB_SEARCH_URL 必须是 HTTPS，且其域名需列入 "
+            "AGENT_WEB_SEARCH_ALLOWED_DOMAINS（如 html.duckduckgo.com），修改后重启 API。"
+        )
+    else:
+        unavailable_reason = "OPT_IN_REQUIRED"
+        enable_hint = (
+            "教学夹具搜索已就绪（不出网）；在助手页勾选「补充联网参考」即可演示外部参考。"
+            if fixture_provider
+            else "部署已就绪；在助手页勾选「补充联网参考」后，本次请求才会发送脱敏查询。"
+        )
     return {
         "mode": "multi_agent",
         "all_agents_local": True,
@@ -254,6 +281,9 @@ def get_agent_catalog(settings: Settings | None = None) -> dict[str, Any]:
         # an accurate availability state without probing the network.
         "web_search_ready": web_search_ready,
         "web_search_provider": settings.agent_web_search_provider,
+        "web_search_offline_fixture": fixture_provider,
+        "web_search_unavailable_reason": unavailable_reason,
+        "web_search_enable_hint": enable_hint,
         "web_search_requires_request_opt_in": True,
         "agents": [
             {
@@ -650,14 +680,29 @@ def _web_search_agent(
             "搜索地址未通过安全校验",
         ), safe_query
 
+    fixture = is_fixture_search_provider(settings)
     try:
         results = execute_web_search(safe_query, settings=settings)
+        if fixture:
+            summary = (
+                f"已获取 {len(results)} 条教学夹具参考（未出网）"
+                if results
+                else "教学夹具搜索完成，未找到合适的参考"
+            )
+        else:
+            summary = (
+                f"已获取 {len(results)} 条外部参考"
+                if results
+                else "搜索完成，未找到合适的外部参考"
+            )
         # An empty result set is a completed search, not a failure: the trace
-        # must make clear that the network call succeeded but found nothing.
+        # must make clear that the call succeeded but found nothing.  The
+        # fixture provider never leaves the process, so it must not claim
+        # network usage.
         return results, _trace(
             "web_search", _AGENT_ROLES["web_search"], "completed", started,
-            f"已获取 {len(results)} 条外部参考" if results else "搜索完成，未找到合适的外部参考",
-            network_used=True,
+            summary,
+            network_used=not fixture,
             source_count=len(results),
         ), safe_query
     except SearchRateLimited:
@@ -671,7 +716,7 @@ def _web_search_agent(
         return [], _trace(
             "web_search", _AGENT_ROLES["web_search"], "degraded", started,
             "外部搜索暂时不可用，本地分析不受影响",
-            network_used=True,
+            network_used=not fixture,
         ), safe_query
 
 
