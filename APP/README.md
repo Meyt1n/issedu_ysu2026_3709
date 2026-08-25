@@ -124,7 +124,7 @@ uv run uvicorn app.main:app --app-dir src/api --host 0.0.0.0 --port 18800
 
 # 2. 在本仓库写入虚构联调数据（幂等，可重复执行）
 npm run seed:live -- --base http://127.0.0.1:18800
-
+#    加 --multi-household 会额外建第二个同 owner 的家庭，用于验证多家庭显式选择与切换隔离
 # 3. 启动移动端（dev 代理默认指向 18800；连其它实例用 HOMECARE_API 覆盖）
 npm run dev
 ```

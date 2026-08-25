@@ -4,7 +4,12 @@ import { createAuthTestStub } from '@/api/auth'
 import { registerSessionCleanup, requireReauth, resetAuthState, signIn } from '@/stores/auth'
 import { resetSession, sessionContextKey, updateSession, useSession } from '@/stores/session'
 
-import { activeProvider, canSubmitWrites, clearHouseholdSelection, selectHousehold } from './index'
+import {
+  activeProvider,
+  canSubmitWrites,
+  clearHouseholdSelection,
+  selectHousehold,
+} from './index'
 
 const CREDENTIALS = { account: 'demo-account', password: 'demo-password' }
 

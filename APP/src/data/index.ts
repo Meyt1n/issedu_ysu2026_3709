@@ -79,10 +79,11 @@ function guardAuthorization(provider: DataProvider): DataProvider {
       return (...args: unknown[]) => Promise.resolve(value.apply(target, args)).catch((cause: unknown) => {
         // 401/会话过期/撤权先收敛到正式会话生命周期，再落到授权边界。
         if (handleAuthFailure(cause)) throw cause
-        // 已选家庭失效只需回到安全选择态；不必把整个授权边界判为需重新验证。
+        // 已选家庭失效：丢弃缓存让后续请求继续 fail-closed，但**保留**这个失效的
+        // 选择，好让设置页读到它并明确告诉用户"之前选的家庭已不可用"。若在这里就
+        // 清空，用户之后只会看到泛泛的"请选择家庭"，无从知道原因（NFR-07）。
         if (cause instanceof ApiClientError && cause.code === 'HOUSEHOLD_UNAVAILABLE') {
           dropLiveProvider()
-          clearHouseholdSelection()
           throw cause
         }
         if (isAuthorizationRejection(cause)) {
