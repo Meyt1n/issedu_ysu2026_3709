@@ -706,7 +706,7 @@ function degradeReasonLabel(reason?: string | null): string {
     REQUEST_FAILED: '本地 API 请求失败',
     MODEL_UNAVAILABLE: '本地模型不可用',
     OLLAMA_UNAVAILABLE: '本地模型服务不可用',
-    KNOWLEDGE_UNAVAILABLE: '本地知识库不可用',
+    KNOWLEDGE_UNAVAILABLE: '本机暂无已审核的相关知识卡',
     NO_AUTHORISED_DOCUMENTS: '当前范围没有可用知识文档',
     EVIDENCE_REQUIRED: '没有足够的本地证据',
     CITATION_NOT_FOUND: '引用未通过服务端校验',
@@ -717,6 +717,12 @@ function degradeReasonLabel(reason?: string | null): string {
     MEDICAL_BOUNDARY_VIOLATION: '回答触及医疗边界，已被安全拦截',
   }
   return labels[reason ?? ''] ?? reason ?? '受控降级'
+}
+
+// Knowledge-gap degrades are a friendly teaching fallback, not a safety
+// interception; they get a soft note instead of the warning banner.
+function isKnowledgeGapDegrade(entry: ChatEntry): boolean {
+  return entry.degraded === true && entry.degradeReason === 'KNOWLEDGE_UNAVAILABLE'
 }
 
 function evidenceSummary(entry: ChatEntry): string {
@@ -1237,7 +1243,11 @@ onBeforeUnmount(() => {
               <AppIcon name="timeline" :size="12" style="vertical-align: -1px" />
               分流说明：{{ entry.routeExplanation }}
             </span>
-            <span v-if="entry.degraded" style="color: var(--gold)">
+            <span v-if="isKnowledgeGapDegrade(entry)" class="chat-evidence-summary">
+              <AppIcon name="compass" :size="12" style="vertical-align: -1px" />
+              本机暂无已审核的相关知识卡，以上是一般照护提示；具体用药请咨询医生或药师。
+            </span>
+            <span v-else-if="entry.degraded" style="color: var(--gold)">
               ⚠ {{ degradeReasonLabel(entry.degradeReason) }}，以上为受控回复，不含模型生成的医疗判断。
             </span>
             <span v-if="entry.escalate" style="color: var(--rose)">
