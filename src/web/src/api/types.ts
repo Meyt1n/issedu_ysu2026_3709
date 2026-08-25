@@ -706,6 +706,8 @@ export interface AssistantAgentTrace {
   summary?: string
   source_count?: number
   classifier?: Record<string, unknown>
+  /** Machine-readable cause for skipped/blocked/degraded steps (e.g. NOT_OPTED_IN). */
+  reason_code?: string
 }
 
 export interface AssistantExternalSource {
