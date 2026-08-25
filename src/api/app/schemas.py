@@ -799,6 +799,12 @@ class KnowledgeQueryAuditRead(BaseModel):
     created_at: datetime
 
 
+class KnowledgeQueryAuditPageRead(BaseModel):
+    items: list[KnowledgeQueryAuditRead]
+    next_cursor: str | None = None
+    has_more: bool
+
+
 # ── HCT-403: Ollama tool calling schemas ────────────────────────────
 
 
