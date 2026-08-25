@@ -15,9 +15,14 @@ from datetime import UTC, datetime
 from sqlalchemy import JSON, Column, DateTime, Integer, String, Text, func, select
 from sqlalchemy.orm import Session
 
+from app.knowledge_synonyms import expand_query_tokens, matched_synonym_labels
 from app.models import Base, new_id
 
 logger = logging.getLogger(__name__)
+
+# Blend classic TF-IDF with a lightweight local cosine over bag-of-terms
+# vectors.  No external embedding model is required; both signals stay on-box.
+_VECTOR_SCORE_WEIGHT = 0.35
 
 
 # ── ORM models (use shared Base) ─────────────────────────────────────
@@ -253,34 +258,61 @@ def add_document(
     return doc
 
 
+_HEADING_PATTERN = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
+_CHUNK_SIZE = 500
+_CHUNK_OVERLAP = 80
+_LOCATOR_TITLE_MAX = 80
+
+
+def _iter_sections(text: str) -> list[tuple[str, int, int]]:
+    """Split text into (section_title, start, end) spans covering all of it.
+
+    Markdown headings are the section boundaries so teaching cards retrieve
+    per topic and citations can point at a named section (the AI/RAG spec
+    requires keeping section labels through parsing).  Plain text without
+    headings stays a single untitled section.
+    """
+    matches = list(_HEADING_PATTERN.finditer(text))
+    if not matches:
+        return [("", 0, len(text))]
+    sections: list[tuple[str, int, int]] = []
+    if matches[0].start() > 0:
+        sections.append(("", 0, matches[0].start()))
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        sections.append((match.group(2).strip(), match.start(), end))
+    return sections
+
+
 def _chunk_document(session: Session, doc: KnowledgeDocument) -> None:
     text = doc.full_text
-    chunk_size = 500
-    overlap = 80
-    start = 0
     idx = 0
-    while start < len(text):
-        end = min(start + chunk_size, len(text))
-        chunk_text = text[start:end]
-        if end < len(text):
-            last_full_stop = max(chunk_text.rfind("。"), chunk_text.rfind("."))
-            if last_full_stop > chunk_size // 2:
-                end = start + last_full_stop + 1
-                chunk_text = text[start:end]
-        term_vec = _tf(chunk_text)
-        locator = f"chars:{start}-{end}"
-        chunk = KnowledgeChunk(
-            document_id=doc.id,
-            chunk_index=idx,
-            text=chunk_text,
-            locator=locator,
-            term_vector=term_vec,
-        )
-        session.add(chunk)
-        idx += 1
-        if end >= len(text):
-            break
-        start = end - overlap
+    for section_title, section_start, section_end in _iter_sections(text):
+        start = section_start
+        while start < section_end:
+            end = min(start + _CHUNK_SIZE, section_end)
+            chunk_text = text[start:end]
+            if end < section_end:
+                last_full_stop = max(chunk_text.rfind("。"), chunk_text.rfind("."))
+                if last_full_stop > _CHUNK_SIZE // 2:
+                    end = start + last_full_stop + 1
+                    chunk_text = text[start:end]
+            if chunk_text.strip():
+                locator = f"chars:{start}-{end}"
+                if section_title:
+                    locator = f"section:{section_title[:_LOCATOR_TITLE_MAX]}|{locator}"
+                chunk = KnowledgeChunk(
+                    document_id=doc.id,
+                    chunk_index=idx,
+                    text=chunk_text,
+                    locator=locator,
+                    term_vector=_tf(chunk_text),
+                )
+                session.add(chunk)
+                idx += 1
+            if end >= section_end:
+                break
+            start = end - _CHUNK_OVERLAP
 
 
 def delete_document(session: Session, doc_id: str, *, deleted_by: str) -> bool:
@@ -309,7 +341,14 @@ def retrieve(
 ) -> list[dict]:
     q_tokens = _query_tokens(query)
     if not q_tokens:
+        # Stopword-only or single-character noise degrades exactly like an
+        # empty query instead of scanning the index for nothing.
         raise ValueError("EMPTY_QUERY")
+    original_q_tokens = list(dict.fromkeys(q_tokens))
+    # Colloquial aliases ("expiry" / "回收") expand before scoring so teaching
+    # cards remain findable without cloud embeddings.  Coverage is still
+    # measured on the original query terms so expansions cannot dilute rank.
+    q_tokens = expand_query_tokens(q_tokens)
 
     # 1. Permission pre-filter: load active docs, check scope
     now = datetime.now(UTC)
@@ -357,28 +396,54 @@ def retrieve(
     if not chunks:
         raise ValueError("EMPTY_INDEX")
 
-    # 3. TF-IDF scoring.  ``df`` counts chunks, so the IDF denominator must
-    # be the chunk count as well.  The previous ``log(n_docs / df)`` mixed
-    # document and chunk units: any term present in more chunks than there
-    # are accessible documents scored negative, so a chunk containing the
-    # query term could fall below the ``score > 0`` filter and retrieval
-    # degraded to NO_RELEVANT_RESULTS although the term exists.  The
-    # smoothed chunk-level form below is always >= 1 for a matching term.
+    # 3. Scoring: smoothed chunk-level TF-IDF + lightweight local cosine.
+    #    * IDF uses the chunk collection (df counts chunks) so common terms keep
+    #      a small positive weight instead of going negative (master IDF fix).
+    #    * TF is sublinear (1 + ln tf); coverage + bag-of-terms cosine blend
+    #      keep multi-topic teaching cards ranked without cloud embeddings.
     n_chunks = len(chunks)
     df: Counter = Counter()
     for ch in chunks:
         df.update(ch.term_vector.keys())
 
+    unique_q_tokens = set(q_tokens)
+    original_unique = set(original_q_tokens)
+    q_tf = Counter(q_tokens)
     scored = []
     for ch in chunks:
         score = 0.0
-        for tok in q_tokens:
+        matched_tokens = 0
+        matched_original = 0
+        for tok in unique_q_tokens:
             tf = ch.term_vector.get(tok, 0)
             if tf == 0:
                 continue
+            matched_tokens += 1
+            if tok in original_unique:
+                matched_original += 1
             idf = math.log((1 + n_chunks) / (1 + df.get(tok, 0))) + 1.0
-            score += tf * idf
-        if score > 0:
+            score += (1.0 + math.log(tf)) * idf
+        if matched_tokens:
+            coverage = matched_original / len(original_unique)
+            score *= 0.5 + 0.5 * coverage
+            cosine = _cosine_bag_of_terms(q_tf, ch.term_vector or {})
+            score = (1.0 - _VECTOR_SCORE_WEIGHT) * score + _VECTOR_SCORE_WEIGHT * (
+                score * (0.5 + 0.5 * cosine)
+            )
+            doc_terms = set((ch.term_vector or {}).keys())
+            direct_hits = sorted(
+                token for token in original_unique if token in doc_terms
+            )[:8]
+            synonym_hits = matched_synonym_labels(original_q_tokens, doc_terms)[:6]
+            reason_parts = []
+            if direct_hits:
+                reason_parts.append("关键词:" + ",".join(direct_hits))
+            if synonym_hits:
+                reason_parts.append("同义词:" + ";".join(synonym_hits))
+            if coverage:
+                reason_parts.append(f"覆盖度:{coverage:.2f}")
+            if cosine:
+                reason_parts.append(f"向量相似:{cosine:.2f}")
             meta = doc_meta.get(ch.document_id, {})
             scored.append({
                 "chunk_id": ch.id,
@@ -389,12 +454,33 @@ def retrieve(
                 "text": ch.text,
                 "locator": ch.locator,
                 "score": round(score, 4),
+                "match_reason": " | ".join(reason_parts) or "term-overlap",
+                "matched_terms": direct_hits,
+                "matched_synonyms": synonym_hits,
             })
 
     scored.sort(key=lambda r: r["score"], reverse=True)
     if not scored:
         raise ValueError("NO_RELEVANT_RESULTS")
     return scored[:top_k]
+
+
+def _cosine_bag_of_terms(query_tf: Counter, doc_tf: dict) -> float:
+    """Cosine similarity between two bag-of-terms maps (local light vector)."""
+    if not query_tf or not doc_tf:
+        return 0.0
+    dot = 0.0
+    for term, q_weight in query_tf.items():
+        d_weight = doc_tf.get(term)
+        if d_weight:
+            dot += float(q_weight) * float(d_weight)
+    if dot <= 0.0:
+        return 0.0
+    q_norm = math.sqrt(sum(weight * weight for weight in query_tf.values()))
+    d_norm = math.sqrt(sum(float(weight) * float(weight) for weight in doc_tf.values()))
+    if q_norm <= 0.0 or d_norm <= 0.0:
+        return 0.0
+    return dot / (q_norm * d_norm)
 
 
 # ── Audit logging ─────────────────────────────────────────────────────

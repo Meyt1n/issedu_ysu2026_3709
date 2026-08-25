@@ -14,13 +14,19 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-from ai.safety.lexicon import MEDICATION_SAFETY_ROUTE_TERMS, URGENT_ROUTE_TERMS
+from ai.safety.lexicon import (
+    MEDICATION_SAFETY_ROUTE_TERMS,
+    SYMPTOM_CONTEXT_TERMS,
+    SYMPTOM_MEDICATION_INTENT_TERMS,
+    URGENT_ROUTE_TERMS,
+)
 
 logger = logging.getLogger(__name__)
 
 QUERY_TYPES: tuple[str, ...] = (
     "URGENT",
     "MEDICATION_SAFETY",
+    "SYMPTOM_MEDICATION",
     "MEDICATION_RECORD",
     "FAMILY_RECORD",
     "RULE_EVIDENCE",
@@ -31,6 +37,7 @@ QUERY_TYPES: tuple[str, ...] = (
 _QUERY_TYPE_SEVERITY: dict[str, int] = {
     "URGENT": 100,
     "MEDICATION_SAFETY": 90,
+    "SYMPTOM_MEDICATION": 80,
     "MEDICATION_RECORD": 50,
     "FAMILY_RECORD": 40,
     "RULE_EVIDENCE": 30,
@@ -40,10 +47,11 @@ _QUERY_TYPE_SEVERITY: dict[str, int] = {
 _CLASSIFIER_SYSTEM = (
     "你是本地居家照护助手的问题路由分类器，不是医生。"
     "只输出一个 JSON 对象：{\"query_type\":\"<TYPE>\"}。"
-    "允许的 TYPE：URGENT、MEDICATION_SAFETY、MEDICATION_RECORD、"
+    "允许的 TYPE：URGENT、MEDICATION_SAFETY、SYMPTOM_MEDICATION、MEDICATION_RECORD、"
     "FAMILY_RECORD、RULE_EVIDENCE、GENERAL。"
     "规则：危及生命的紧急描述→URGENT；剂量/停药/换药/误服/过量/同服/"
-    "吃错药或近义口语→MEDICATION_SAFETY；查用药清单→MEDICATION_RECORD；"
+    "吃错药或近义口语→MEDICATION_SAFETY；症状问“吃什么药”类资料解释→SYMPTOM_MEDICATION；"
+    "查用药清单→MEDICATION_RECORD；"
     "查家庭健康档案→FAMILY_RECORD；查规则/证据依据→RULE_EVIDENCE；其余→GENERAL。"
     "不要诊断，不要解释，不要输出其它字段。"
 )
@@ -60,10 +68,15 @@ def classify_question_lexicon(query: str) -> str:
         return "MEDICATION_SAFETY"
     if any(term in normalized for term in MEDICATION_SAFETY_ROUTE_TERMS):
         return "MEDICATION_SAFETY"
+    medicine_intent = any(term in normalized for term in SYMPTOM_MEDICATION_INTENT_TERMS)
+    symptom_context = any(term in normalized for term in SYMPTOM_CONTEXT_TERMS)
+    if medicine_intent or (
+        symptom_context and any(term in normalized for term in ("药", "用药", "吃药"))
+    ):
+        return "SYMPTOM_MEDICATION"
     if any(
         term in normalized
         for term in (
-            "吃什么药",
             "正在用药",
             "在用药",
             "用药记录",

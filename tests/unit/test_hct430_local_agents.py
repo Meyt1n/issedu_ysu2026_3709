@@ -8,6 +8,7 @@ from app.config import Settings
 from app.egress_guard import is_web_search_egress_allowed
 from app.local_agents import (
     _database_agent,
+    _knowledge_agent,
     _web_search_agent,
     get_agent_catalog,
     plan_agent_execution,
@@ -15,6 +16,59 @@ from app.local_agents import (
     run_local_multi_agent,
 )
 from app.search_providers import parse_search_results
+
+
+def test_knowledge_agent_reports_no_hit_as_completed(db_session) -> None:
+    """A no-hit retrieval is a normal outcome, not a blocked pipeline step."""
+    from app.knowledge import add_document
+
+    add_document(
+        db_session,
+        title="演示知识",
+        content="阿莫西林 说明书 用法用量",
+        source="synthetic-local",
+        created_by="u1",
+    )
+    db_session.commit()
+
+    result, trace = _knowledge_agent(
+        db_session,
+        query="天气温度",
+        actor_id="u1",
+        household_id=None,
+        member_id=None,
+        access_purpose=None,
+    )
+
+    assert result.get("error") == "NO_RELEVANT_RESULTS"
+    assert trace["status"] == "completed"
+    assert "暂无" in trace["summary"]
+
+
+def test_knowledge_agent_reports_permission_denial_as_blocked(db_session) -> None:
+    from app.knowledge import add_document
+
+    add_document(
+        db_session,
+        title="他人私有知识",
+        content="阿莫西林 说明书 用法用量",
+        source="synthetic-local",
+        created_by="someone-else",
+        permission_scope={"created_by": "someone-else"},
+    )
+    db_session.commit()
+
+    result, trace = _knowledge_agent(
+        db_session,
+        query="阿莫西林 用法",
+        actor_id="u1",
+        household_id=None,
+        member_id=None,
+        access_purpose=None,
+    )
+
+    assert result.get("error") == "NO_AUTHORISED_DOCUMENTS"
+    assert trace["status"] == "blocked"
 
 
 def test_web_query_redacts_identity_values_and_ids() -> None:

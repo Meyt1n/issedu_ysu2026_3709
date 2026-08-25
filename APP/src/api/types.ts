@@ -188,20 +188,22 @@ export interface AssistantCitation {
 
 export interface AssistantAgentTrace {
   agent_id: string
-  role: string
-  status: string
-  local: boolean
-  network_used: boolean
+  role?: string
+  status?: string
+  local?: boolean
+  network_used?: boolean
   duration_ms?: number
-  summary?: string
+  summary?: string | null
+  /** 流式事件中的补充说明（与主仓库 SSE trace 对齐）。 */
+  detail?: string | null
   source_count?: number
   classifier?: Record<string, unknown>
 }
 
 export interface AssistantExternalSource {
   title: string
-  url: string
-  snippet?: string
+  url?: string | null
+  snippet?: string | null
   domain?: string
   source?: string
 }

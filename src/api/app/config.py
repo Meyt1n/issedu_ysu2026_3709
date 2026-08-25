@@ -111,6 +111,22 @@ class Settings(BaseSettings):
     weather_ruleset_version: str = "weather-actions-v1"
     egress_default_deny: bool = True
     egress_weather_whitelist: str = ""
+    # HCT-445: home-screen health news.  Default local = seasonal calendar only.
+    # Set HEALTH_NEWS_ADAPTER=enabled and populate HEALTH_NEWS_ALLOWED_DOMAINS
+    # before any outbound fetch (WHO / NHC / China CDC, etc.).
+    health_news_adapter: str = "local"
+    health_news_allowed_domains: str = ""
+    # Optional subset of built-in source ids (who_news_en,nhc_xwzx,chinacdc_zxxx).
+    health_news_source_ids: str = ""
+    # Extra sources: id|name|https_url|rss_or_html_list|optional_path_hint ; separated
+    health_news_extra_sources: str = ""
+    health_news_timeout_seconds: float = Field(default=8.0, gt=0, le=20)
+    health_news_cache_ttl_seconds: float = Field(default=1800.0, ge=0, le=86400)
+    health_news_stale_ttl_seconds: float = Field(default=86400.0, ge=0, le=604800)
+    health_news_min_request_interval_seconds: float = Field(default=2.0, ge=0, le=60)
+    health_news_retry_attempts: int = Field(default=2, ge=1, le=3)
+    health_news_retry_backoff_seconds: float = Field(default=0.15, ge=0, le=2)
+    health_news_max_items: int = Field(default=6, ge=1, le=12)
     log_mask_enabled: bool = True
     upload_allowed_extensions: str = ".jpg,.jpeg,.png,.pdf,.mp4,.mov"
     upload_max_size_bytes: int = 10 * 1024 * 1024
@@ -118,8 +134,18 @@ class Settings(BaseSettings):
     # Empty means internal docs are creator-only (plus household/member scopes).
     knowledge_admin_actors: str = ""
     # Comma-separated actor ids allowed to activate/rollback model releases.
-    # Empty means only the binding creator may govern that release.
+    # Empty means only the binding creator may govern that release (when dual
+    # control is off). With dual control on, empty means any non-creator may
+    # activate; set an allowlist for shared demos.
     model_release_admin_actors: str = ""
+    # Require activator != binding.created_by for HCT-404 dual-control drills.
+    model_release_dual_control: bool = True
+    # When true, household owners must supply X-Access-Purpose for field-level
+    # health reads (step toward post-P0 owner ABAC). Default off for P0 demos.
+    owner_requires_access_purpose: bool = False
+    # Process-local face challenges remain a production gap until a durable
+    # challenge store ships; keep the gate explicit.
+    allow_process_local_face_challenges_in_production: bool = False
 
     @field_validator("default_household_time_zone")
     @classmethod
@@ -131,19 +157,18 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def reject_unsafe_production_configuration(self) -> "Settings":
-        """Prevent the local demo auth stores from being deployed as production.
+        """Fail closed for production until remaining demo gaps are closed.
 
-        Password/PIN/face challenges and bearer sessions are intentionally
-        process-local in this phase.  Starting with ``APP_ENV=production``
-        would otherwise make a restart silently log everyone out and would
-        retain development trust shortcuts.  Fail closed until the database
-        session store, rotation and CSRF deployment work is delivered.
+        Bearer sessions and password/PIN rate limits are database-backed
+        (HCT-428). Remaining production blockers are development trust
+        shortcuts, weak signing keys, egress posture, and process-local face
+        challenges.
         """
 
         if self.app_env.strip().casefold() not in {"prod", "production"}:
             return self
 
-        problems: list[str] = ["database-backed session persistence is not implemented"]
+        problems: list[str] = []
         if self.allow_dev_actor_header:
             problems.append("ALLOW_DEV_ACTOR_HEADER must be false")
         if self.cursor_signing_key in {"", "dev-only-change-me"}:
@@ -156,6 +181,19 @@ class Settings(BaseSettings):
             problems.append("EGRESS_DEFAULT_DENY must remain true")
         if self.agent_web_search_enabled and not self.agent_web_search_allowed_domain_set:
             problems.append("AGENT_WEB_SEARCH_ALLOWED_DOMAINS is required when search is enabled")
+        if not self.allow_process_local_face_challenges_in_production:
+            problems.append(
+                "face login challenges are process-local; "
+                "set ALLOW_PROCESS_LOCAL_FACE_CHALLENGES_IN_PRODUCTION=true only for "
+                "single-node drills, or wait for durable challenge storage"
+            )
+        if (
+            self.health_news_adapter.strip().casefold() == "enabled"
+            and not self.health_news_allowed_domain_set
+        ):
+            problems.append(
+                "HEALTH_NEWS_ALLOWED_DOMAINS is required when HEALTH_NEWS_ADAPTER=enabled"
+            )
         if problems:
             raise ValueError("PRODUCTION_CONFIGURATION_BLOCKED: " + "; ".join(problems))
         return self
@@ -193,6 +231,30 @@ class Settings(BaseSettings):
             for item in self.agent_web_search_allowed_domains.split(",")
             if item.strip()
         }
+
+    @property
+    def health_news_allowed_domain_set(self) -> set[str]:
+        return {
+            item.strip().lower().removeprefix("https://").removeprefix("http://").split("/")[0]
+            for item in self.health_news_allowed_domains.split(",")
+            if item.strip()
+        }
+
+    @property
+    def health_news_source_id_set(self) -> set[str]:
+        return {
+            item.strip()
+            for item in self.health_news_source_ids.split(",")
+            if item.strip()
+        }
+
+    @property
+    def health_news_extra_sources_list(self) -> list[str]:
+        return [
+            item.strip()
+            for item in self.health_news_extra_sources.split(";")
+            if item.strip()
+        ]
 
     @property
     def knowledge_admin_actor_set(self) -> set[str]:

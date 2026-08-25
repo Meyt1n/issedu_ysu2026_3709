@@ -19,20 +19,35 @@ import {
 } from '../assistant/chatSession'
 import { normalizeSuggestedQuestions } from '../assistant/followUp'
 import {
-  containsWakePhrase,
-  createSpeechRecognition,
+  AUTO_SEND_PRESETS,
+  createAutoSendScheduler,
+  createDictationController,
+  getSpeakingIndex,
+  getSpeakingSegments,
+  inspectChineseVoicePacks,
   isSpeechInputSupported,
   isSpeechOutputSupported,
-  latestTranscriptFromEvent,
+  jumpSpeakingSegment,
+  loadVoicePreferences,
+  memberNameHotwordPairs,
+  runVoicePreflight,
+  saveVoicePreferences,
+  SILENCE_PRESETS,
+  skipSpeakingSegment,
   speakText,
   stopSpeaking,
-  transcriptAfterWakePhrase,
-  transcriptFromEvent,
-  VOICE_RESTART_DELAY_MS,
-  type SpeechRecognitionLike,
+  validateWakePhrase,
+  WAKE_PHRASE_PRESETS,
+  type DictationController,
+  type DictationMode,
+  type VoiceCommandId,
+  type VoicePackReport,
+  type VoicePreflightReport,
+  type VoicePreferences,
 } from '../assistant/voice'
 import AppIcon from '../components/AppIcon.vue'
 import {
+  consumeAssistantSeedPrompt,
   formatError,
   requestOptions,
   selectMember,
@@ -97,17 +112,209 @@ const workflowRouteExplanation = ref<string | null>(null)
 const liveEvidencePreview = ref<EvidencePreview | null>(null)
 const stopStatus = ref('')
 const assistantSessionId = ref('')
-type VoiceMode = 'off' | 'wake' | 'active'
+type VoiceMode = DictationMode
 
 const voiceMode = ref<VoiceMode>('off')
-const listening = computed(() => voiceMode.value !== 'off')
+const listening = computed(() =>
+  voiceMode.value === 'wake' || voiceMode.value === 'active' || voiceMode.value === 'command',
+)
 const voicePreview = ref('')
 const speakingIndex = ref<number | null>(null)
+const speakingProgress = ref('')
+const needMicGesture = ref(false)
 const chatWindow = ref<HTMLElement | null>(null)
 const draftInput = ref<HTMLTextAreaElement | null>(null)
+const sendButton = ref<HTMLButtonElement | null>(null)
+const voicePrefs = ref<VoicePreferences>(loadVoicePreferences())
+const wakePhraseDraft = ref(voicePrefs.value.wakePhrase)
+const voiceSendHint = ref('')
+const voicePackReport = ref<VoicePackReport | null>(null)
+const voicePackChecking = ref(false)
+const preflightReport = ref<VoicePreflightReport | null>(null)
+const preflightRunning = ref(false)
+const speakingSegmentIndex = ref(0)
 // The generic label is replaced by the model name the API reports with each
 // reply, so the UI never hardcodes a runtime model.
 const modelLabel = ref('本地模型')
+
+const wakePhrase = computed(() => voicePrefs.value.wakePhrase)
+
+const memberHotwordExtras = computed(() =>
+  memberNameHotwordPairs(session.members.map(member => member.display_name)),
+)
+
+const activeSpeakingSegments = computed(() =>
+  speakingIndex.value !== null ? [...getSpeakingSegments()] : [],
+)
+
+const silencePresetId = computed(() => {
+  const match = SILENCE_PRESETS.find(
+    preset => preset.silenceMs === voicePrefs.value.silenceMs
+      && preset.continuationSilenceMs === voicePrefs.value.continuationSilenceMs,
+  )
+  return match?.id ?? 'custom'
+})
+
+const sendConfirmGate = createAutoSendScheduler({
+  onArmed: (delayMs) => {
+    const sec = Math.round(delayMs / 1000)
+    voiceSendHint.value = `无新输入，约 ${sec} 秒后自动发送；可说「取消」或「继续说」`
+    if (loadVoicePreferences().confirmSound) speakText(`${sec} 秒后发送，可说取消`)
+  },
+  onTick: (remainMs) => {
+    if (remainMs <= 0) return
+    const sec = Math.max(1, Math.ceil(remainMs / 1000))
+    voiceSendHint.value = `无新输入，${sec} 秒后自动发送；可说「取消」「继续说」，或说「发送吧」立即发送`
+  },
+  onAutoSend: (content) => {
+    voiceSendHint.value = ''
+    if (content.trim() && !sending.value) void send(content)
+  },
+  onCancelled: () => {
+    voiceSendHint.value = '已取消自动发送'
+  },
+})
+
+function applySilencePreset(presetId: string): void {
+  const preset = SILENCE_PRESETS.find(item => item.id === presetId)
+  if (!preset) return
+  voicePrefs.value = saveVoicePreferences({
+    silenceMs: preset.silenceMs,
+    continuationSilenceMs: preset.continuationSilenceMs,
+  })
+}
+
+function applyAutoSendPreset(presetId: string): void {
+  const preset = AUTO_SEND_PRESETS.find(item => item.id === presetId)
+  if (!preset) return
+  voicePrefs.value = saveVoicePreferences({ autoSendDelayMs: preset.delayMs })
+  sendConfirmGate.reset()
+  voiceSendHint.value = ''
+}
+
+function toggleVoicePref<K extends keyof VoicePreferences>(key: K, value: VoicePreferences[K]): void {
+  voicePrefs.value = saveVoicePreferences({ [key]: value })
+}
+
+function applyWakePreset(phrase: string): void {
+  wakePhraseDraft.value = phrase
+  saveWakePhrase()
+}
+
+function saveWakePhrase(): void {
+  const checked = validateWakePhrase(wakePhraseDraft.value)
+  if (!checked.ok) {
+    voiceError.value = checked.message
+    wakePhraseDraft.value = voicePrefs.value.wakePhrase
+    return
+  }
+  voiceError.value = ''
+  voicePrefs.value = saveVoicePreferences({ wakePhrase: checked.phrase })
+  wakePhraseDraft.value = checked.phrase
+  // 更换唤醒词后重新进入唤醒聆听，避免旧词残留提示。
+  if (listening.value || voiceMode.value === 'command' || voiceMode.value === 'ready') {
+    void beginWakeListening()
+  }
+}
+
+function repeatLastAnswer(): void {
+  const last = [...history.value].reverse().find(entry => entry.role === 'assistant' && entry.content.trim())
+  if (!last) {
+    voiceError.value = '还没有可朗读的回答。'
+    return
+  }
+  const index = history.value.lastIndexOf(last)
+  toggleSpeech(index, last.content)
+}
+
+function armAutoSend(draftText?: string): void {
+  const delay = loadVoicePreferences().autoSendDelayMs
+  if (!delay || delay <= 0) {
+    voiceSendHint.value = '已听完，请确认后点发送；也可说「发送吧」立即发送'
+    return
+  }
+  sendConfirmGate.start(draftText ?? draft.value, delay)
+}
+
+function handleVoiceCommand(command: VoiceCommandId): void {
+  if (command === 'confirm_send') {
+    if (!draft.value.trim() || sending.value) {
+      voiceError.value = '没有可发送的草稿。'
+      return
+    }
+    sendConfirmGate.reset()
+    voiceSendHint.value = ''
+    void send()
+    return
+  }
+  if (command === 'cancel_send') {
+    sendConfirmGate.cancel()
+    return
+  }
+  if (command === 'repeat_answer') {
+    sendConfirmGate.cancel()
+    repeatLastAnswer()
+    return
+  }
+  if (command === 'stop_speaking') {
+    stopSpeaking()
+    speakingIndex.value = null
+    speakingProgress.value = ''
+    return
+  }
+  if (command === 'redo_dictation') {
+    sendConfirmGate.reset()
+    ensureDictation().redoDictation()
+    return
+  }
+  if (command === 'resume_dictation') {
+    sendConfirmGate.cancel()
+    ensureDictation().resumeDictation()
+  }
+}
+
+async function checkVoicePacks(): Promise<void> {
+  voicePackChecking.value = true
+  try {
+    voicePackReport.value = await inspectChineseVoicePacks()
+  } finally {
+    voicePackChecking.value = false
+  }
+}
+
+async function runPreflight(): Promise<void> {
+  preflightRunning.value = true
+  try {
+    preflightReport.value = await runVoicePreflight()
+  } finally {
+    preflightRunning.value = false
+  }
+}
+
+function onDraftFocus(): void {
+  if (voiceMode.value === 'active' || voiceMode.value === 'wake') {
+    ensureDictation().pause()
+  }
+  // 手动改字时取消自动发送，避免改到一半被发出。
+  sendConfirmGate.cancel()
+}
+
+function editDraftLine(): void {
+  sendConfirmGate.cancel()
+  ensureDictation().pause()
+  void nextTick(() => draftInput.value?.focus())
+}
+
+function redoVoiceDraft(): void {
+  sendConfirmGate.reset()
+  ensureDictation().redoDictation()
+}
+
+function jumpSpeechSegment(index: number): void {
+  if (jumpSpeakingSegment(index)) {
+    speakingSegmentIndex.value = getSpeakingIndex()
+  }
+}
 
 function formatModelLabel(model?: string | null): string {
   if (!model || model === 'unavailable') return '本地模型未配置'
@@ -116,12 +323,7 @@ function formatModelLabel(model?: string | null): string {
 
 let streamTimer: ReturnType<typeof setInterval> | null = null
 let stopStatusTimer: ReturnType<typeof setTimeout> | null = null
-let voiceRestartTimer: ReturnType<typeof setTimeout> | null = null
-let recognition: SpeechRecognitionLike | null = null
-let voiceDraftPrefix = ''
-let voiceSessionId = 0
-let voiceStopRequested = false
-let voiceFatalError = false
+let dictation: DictationController | null = null
 
 const speechInputSupported = isSpeechInputSupported()
 const speechOutputSupported = isSpeechOutputSupported()
@@ -166,28 +368,88 @@ function showStoppedStatus(): void {
   }, 2400)
 }
 
-async function loadAgentCatalog(): Promise<void> {
-  try {
-    const catalog = await apiClient.listAssistantAgents(requestOptions.value)
-    // web_search_ready also verifies the endpoint allowlist; fall back to
-    // the enable switch for older API versions.
-    webSearchAvailable.value = catalog.web_search_ready ?? catalog.web_search_enabled
-  } catch {
-    // Keep the control usable if an older API does not expose HCT-430 yet.
-    webSearchAvailable.value = null
+function ensureDictation(): DictationController {
+  if (dictation) return dictation
+  dictation = createDictationController({
+    onModeChange: (mode) => {
+      voiceMode.value = mode
+    },
+    onPreview: (text) => {
+      voicePreview.value = text
+    },
+    onDraft: (text) => {
+      draft.value = text
+    },
+    onError: (message) => {
+      voiceError.value = message
+    },
+    onNeedGesture: () => {
+      needMicGesture.value = true
+    },
+    onUtteranceComplete: (utteranceDraft) => {
+      needMicGesture.value = false
+      void nextTick(() => {
+        sendButton.value?.focus()
+      })
+      armAutoSend(utteranceDraft || draft.value)
+    },
+    onCommand: (command) => {
+      handleVoiceCommand(command)
+    },
+  }, {
+    getHotwordExtras: () => memberHotwordExtras.value,
+    getPreferences: () => loadVoicePreferences(),
+  })
+  return dictation
+}
+
+function stopVoiceInput(): void {
+  dictation?.stop()
+  voicePreview.value = ''
+  needMicGesture.value = false
+  sendConfirmGate.reset()
+  voiceSendHint.value = ''
+}
+
+async function beginWakeListening(): Promise<void> {
+  if (!speechInputSupported) {
+    voiceError.value = '当前浏览器不支持语音输入，请改用文字输入。'
+    return
   }
+  if (speakingIndex.value !== null) {
+    stopSpeaking()
+    speakingIndex.value = null
+    speakingProgress.value = ''
+  }
+  needMicGesture.value = false
+  voiceError.value = ''
+  ensureDictation().startWake(draft.value)
+}
+
+async function bootstrapVoice(): Promise<void> {
+  if (!speechInputSupported) return
+  await ensureDictation().tryAutoStart()
 }
 
 const voiceStatusText = computed(() => {
-  if (voiceMode.value === 'wake') return '正在聆听唤醒词：“小燕小燕”'
+  if (voiceMode.value === 'wake') return `正在聆听唤醒词：“${wakePhrase.value}”`
   if (voiceMode.value === 'active') return '已唤醒，识别中的文字会实时填入草稿'
-  return ''
+  if (voiceMode.value === 'ready' || voiceMode.value === 'command') {
+    return voiceSendHint.value || '说完后会倒计时自动发送；可说取消、继续说，或发送吧立即发送'
+  }
+  return needMicGesture.value ? '点按下方按钮一次以开启麦克风聆听' : ''
+})
+
+const autoSendPresetId = computed(() => {
+  const match = AUTO_SEND_PRESETS.find(preset => preset.delayMs === voicePrefs.value.autoSendDelayMs)
+  return match?.id ?? 'custom'
 })
 
 const voiceButtonLabel = computed(() => {
   if (voiceMode.value === 'wake') return '等待唤醒'
   if (voiceMode.value === 'active') return '停止语音'
-  return '开启唤醒'
+  if (voiceMode.value === 'ready' || voiceMode.value === 'command') return '重新聆听'
+  return needMicGesture.value ? '允许麦克风并聆听' : '开启唤醒'
 })
 
 const canSend = computed(() => draft.value.trim().length > 0 && !sending.value)
@@ -501,175 +763,71 @@ watch(
   { immediate: true },
 )
 
+async function loadAgentCatalog(): Promise<void> {
+  try {
+    const catalog = await apiClient.listAssistantAgents(requestOptions.value)
+    webSearchAvailable.value = catalog.web_search_ready ?? catalog.web_search_enabled
+  } catch {
+    webSearchAvailable.value = null
+  }
+}
+
+function onVisibilityChange(): void {
+  if (document.visibilityState === 'hidden') stopVoiceInput()
+}
+
 onMounted(() => {
   void loadAgentCatalog()
+  void bootstrapVoice()
+  document.addEventListener('visibilitychange', onVisibilityChange)
+  const seeded = consumeAssistantSeedPrompt()
+  if (seeded) {
+    draft.value = seeded
+    void send(seeded)
+  }
 })
 
-function stopVoiceInput(): void {
-  voiceStopRequested = true
-  voiceFatalError = false
-  voiceSessionId += 1
-  voiceMode.value = 'off'
-  voicePreview.value = ''
-  if (voiceRestartTimer) {
-    clearTimeout(voiceRestartTimer)
-    voiceRestartTimer = null
-  }
-  const currentRecognition = recognition
-  recognition = null
-  currentRecognition?.abort()
-}
-
-function scheduleVoiceRecognition(sessionId: number): void {
-  if (voiceRestartTimer) clearTimeout(voiceRestartTimer)
-  voiceRestartTimer = setTimeout(() => {
-    voiceRestartTimer = null
-    if (sessionId !== voiceSessionId || voiceStopRequested || voiceFatalError || !listening.value) return
-    startVoiceRecognition(sessionId)
-  }, VOICE_RESTART_DELAY_MS)
-}
-
-function startVoiceRecognition(sessionId: number): void {
-  const nextRecognition = createSpeechRecognition('zh-CN', {
-    continuous: true,
-    interimResults: true,
-    maxAlternatives: 3,
-  })
-  if (!nextRecognition) {
-    voiceFatalError = true
-    voiceMode.value = 'off'
-    voiceError.value = '当前浏览器不支持连续语音输入，请改用文字输入。'
-    return
-  }
-
-  nextRecognition.onstart = () => {
-    if (sessionId !== voiceSessionId) return
-    voiceError.value = ''
-  }
-  nextRecognition.onresult = event => {
-    if (sessionId !== voiceSessionId) return
-    // 唤醒看最新 interim 片段，降低“说完一整句才切 active”的延迟。
-    const latest = latestTranscriptFromEvent(event)
-    const transcript = transcriptFromEvent(event)
-    if (!latest && !transcript) return
-
-    if (voiceMode.value === 'wake') {
-      const wakeProbe = latest || transcript
-      if (!containsWakePhrase(wakeProbe) && !containsWakePhrase(transcript)) {
-        voicePreview.value = `正在聆听：${wakeProbe || transcript}`
-        return
-      }
-      voiceMode.value = 'active'
-      // 唤醒瞬间清空预览前缀噪声，后续只保留提问内容。
-      voiceDraftPrefix = draft.value.trim() ? `${draft.value.trim()} ` : ''
-    }
-
-    const spokenSource = containsWakePhrase(transcript)
-      ? transcript
-      : containsWakePhrase(latest)
-        ? latest
-        : transcript
-    const spoken = containsWakePhrase(spokenSource)
-      ? transcriptAfterWakePhrase(spokenSource)
-      : spokenSource.trim()
-    if (spoken) {
-      // interimResults=true means this is intentionally updated before the
-      // browser marks the utterance final; it never submits the message.
-      draft.value = `${voiceDraftPrefix}${spoken}`.trimStart()
-      voicePreview.value = `正在输入：${spoken}`
-    } else {
-      voicePreview.value = '已唤醒，请说出问题'
-    }
-  }
-  nextRecognition.onerror = event => {
-    if (sessionId !== voiceSessionId) return
-    const error = event.error ?? ''
-    if (error === 'no-speech' || error === 'aborted') return
-
-    if (error === 'not-allowed' || error === 'service-not-allowed') {
-      voiceFatalError = true
-      voiceStopRequested = true
-      voiceMode.value = 'off'
-      voiceError.value = '麦克风权限未开启，请允许浏览器使用麦克风，或改用文字输入。'
-      return
-    }
-    if (error === 'audio-capture') {
-      voiceFatalError = true
-      voiceStopRequested = true
-      voiceMode.value = 'off'
-      voiceError.value = '没有检测到可用麦克风，请检查系统设备或改用文字输入。'
-      return
-    }
-    voiceError.value = '语音识别服务暂时中断，正在快速重试；也可以改用文字输入。'
-  }
-  nextRecognition.onend = () => {
-    if (sessionId !== voiceSessionId) return
-    if (recognition === nextRecognition) recognition = null
-    if (!voiceStopRequested && !voiceFatalError && listening.value) {
-      // 浏览器识别会话结束后其结果列表会清空；把已写入的草稿折叠进前缀，
-      // 重启聆听时继续追加，而不是覆盖之前说过的内容。
-      if (voiceMode.value === 'active') {
-        voiceDraftPrefix = draft.value.trim() ? `${draft.value.trim()} ` : ''
-      }
-      scheduleVoiceRecognition(sessionId)
-    }
-  }
-
-  recognition = nextRecognition
-  try {
-    nextRecognition.start()
-  } catch {
-    if (sessionId !== voiceSessionId) return
-    voiceFatalError = true
-    voiceStopRequested = true
-    voiceMode.value = 'off'
-    recognition = null
-    voiceError.value = '语音输入未能启动，请稍后重试或改用文字输入。'
-  }
-}
-
 function toggleVoiceInput(): void {
-  if (listening.value) {
+  if (voiceMode.value === 'wake' || voiceMode.value === 'active') {
     stopVoiceInput()
     return
   }
-  voiceError.value = ''
-  if (!speechInputSupported) {
-    voiceError.value = '当前浏览器不支持语音输入，请改用文字输入。'
-    return
-  }
-
-  // 听说互斥：开始聆听前停止朗读，避免麦克风把合成语音写进草稿。
-  if (speakingIndex.value !== null) {
-    stopSpeaking()
-    speakingIndex.value = null
-  }
-  voiceDraftPrefix = draft.value.trim() ? `${draft.value.trim()} ` : ''
-  voicePreview.value = ''
-  voiceStopRequested = false
-  voiceFatalError = false
-  const sessionId = ++voiceSessionId
-  voiceMode.value = 'wake'
-  startVoiceRecognition(sessionId)
+  void beginWakeListening()
 }
 
 function toggleSpeech(index: number, content: string): void {
   if (speakingIndex.value === index) {
     stopSpeaking()
     speakingIndex.value = null
+    speakingProgress.value = ''
     return
   }
   voiceError.value = ''
-  // 听说互斥：朗读回答前先停止语音输入，识别不会把播报内容当作提问。
   if (listening.value) stopVoiceInput()
-  const started = speakText(content, () => {
-    if (speakingIndex.value === index) speakingIndex.value = null
+  speakingProgress.value = ''
+  speakingSegmentIndex.value = 0
+  const started = speakText(content, {
+    onFinished: () => {
+      if (speakingIndex.value === index) {
+        speakingIndex.value = null
+        speakingProgress.value = ''
+        speakingSegmentIndex.value = 0
+      }
+    },
+    onProgress: (progress) => {
+      speakingSegmentIndex.value = progress.index
+      speakingProgress.value = `正在朗读 ${progress.index + 1}/${progress.total}`
+    },
   })
   if (!started) {
     voiceError.value = '当前浏览器不支持语音回复，请阅读文字回答。'
     return
   }
   speakingIndex.value = index
+}
+
+function skipCurrentSpeechSegment(): void {
+  skipSpeakingSegment()
 }
 
 /** 打字机式逐字呈现：对已完整返回的回答做流式展示。 */
@@ -845,6 +1003,7 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
     orchestrationPhase.value = null
     liveEvidencePreview.value = null
     sending.value = false
+    if (!needMicGesture.value) void beginWakeListening()
   }
 }
 
@@ -857,7 +1016,9 @@ onBeforeUnmount(() => {
   cancelActiveSend()
   if (streamTimer) clearInterval(streamTimer)
   if (stopStatusTimer) clearTimeout(stopStatusTimer)
-  stopVoiceInput()
+  document.removeEventListener('visibilitychange', onVisibilityChange)
+  dictation?.dispose()
+  dictation = null
   stopSpeaking()
 })
 </script>
@@ -1152,6 +1313,31 @@ onBeforeUnmount(() => {
               <AppIcon :name="speakingIndex === index ? 'close' : 'volume'" :size="14" />
               {{ speakingIndex === index ? '停止朗读' : '朗读回答' }}
             </button>
+            <button
+              v-if="speakingIndex === index && speakingProgress"
+              type="button"
+              class="btn btn-ghost btn-small"
+              @click="skipCurrentSpeechSegment"
+            >
+              {{ speakingProgress }} · 跳过本句
+            </button>
+            <div
+              v-if="speakingIndex === index && activeSpeakingSegments.length > 1"
+              class="speech-segment-chips"
+              aria-label="朗读分段跳转"
+            >
+              <button
+                v-for="(segment, segmentIndex) in activeSpeakingSegments"
+                :key="`${segmentIndex}-${segment.slice(0, 12)}`"
+                type="button"
+                class="btn btn-ghost btn-small"
+                :class="{ active: speakingSegmentIndex === segmentIndex }"
+                :aria-current="speakingSegmentIndex === segmentIndex ? 'true' : undefined"
+                @click="jumpSpeechSegment(segmentIndex)"
+              >
+                第 {{ segmentIndex + 1 }} 句
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -1212,17 +1398,33 @@ onBeforeUnmount(() => {
         v-model="draft"
         rows="2"
         placeholder="例如：最近的用药提醒是依据什么？（回答仅供参考，不构成医疗建议）"
+        @focus="onDraftFocus"
         @keydown.enter.exact.prevent="send()"
       />
-      <div class="chat-compose-actions">
+      <div v-if="voiceMode === 'ready' || voiceMode === 'command'" class="voice-ready-actions" role="group" aria-label="口述确认">
+        <button ref="sendButton" type="submit" class="btn btn-primary btn-large" :disabled="!canSend">
+          发送
+        </button>
+        <button type="button" class="btn btn-ghost" @click="editDraftLine">
+          改一句
+        </button>
+        <button type="button" class="btn btn-ghost" @click="redoVoiceDraft">
+          重说
+        </button>
+        <button type="button" class="btn btn-ghost btn-small" @click="toggleVoiceInput">
+          {{ voiceButtonLabel }}
+        </button>
+      </div>
+      <p v-if="voiceSendHint" class="text-faint" style="font-size: 13px; margin: 6px 0 0" role="status">{{ voiceSendHint }}</p>
+      <div v-if="voiceMode !== 'ready' && voiceMode !== 'command'" class="chat-compose-actions">
         <button
           type="button"
           class="btn btn-ghost btn-small voice-input-button"
-          :class="{ listening, active: voiceMode === 'active' }"
+          :class="{ listening, active: voiceMode === 'active', ready: voiceMode === 'ready', need: needMicGesture }"
           :disabled="sending || !speechInputSupported"
-          :aria-label="listening ? '停止语音唤醒' : '开启语音唤醒'"
+          :aria-label="listening ? '停止语音唤醒' : voiceButtonLabel"
           :aria-pressed="listening"
-          :title="speechInputSupported ? '先点击开启，再说“小燕小燕”；识别文字只会实时填入草稿' : '当前浏览器不支持语音输入'"
+          :title="speechInputSupported ? `进入助手页后会自动尝试聆听；首次需点按允许麦克风，再说「${wakePhrase}」` : '当前浏览器不支持语音输入'"
           @click="toggleVoiceInput"
         >
           <AppIcon name="microphone" :size="15" />
@@ -1237,7 +1439,7 @@ onBeforeUnmount(() => {
         >
           停止
         </button>
-        <button type="submit" class="btn btn-primary" :disabled="!canSend">
+        <button ref="sendButton" type="submit" class="btn btn-primary" :disabled="!canSend">
           {{ sending ? '发送中' : '发送' }}
         </button>
       </div>
@@ -1251,7 +1453,21 @@ onBeforeUnmount(() => {
       </span>
     </label>
     <div
-      v-if="listening"
+      v-if="needMicGesture && !listening"
+      class="voice-session-panel wake"
+      role="status"
+      aria-live="polite"
+    >
+      <span class="voice-session-visual" aria-hidden="true">
+        <AppIcon name="microphone" :size="17" />
+      </span>
+      <span class="voice-session-copy">
+        <strong>需要一次点按开启麦克风</strong>
+        <span>浏览器要求用户手势后才能开麦；点按后会自动等待「{{ wakePhrase }}」。</span>
+      </span>
+    </div>
+    <div
+      v-if="listening || voiceMode === 'ready'"
       class="voice-session-panel"
       :class="voiceMode"
       role="status"
@@ -1263,7 +1479,17 @@ onBeforeUnmount(() => {
         <AppIcon name="microphone" :size="17" />
       </span>
       <span class="voice-session-copy">
-        <strong>{{ voiceMode === 'wake' ? '等待唤醒' : '已唤醒，正在实时输入' }}</strong>
+        <strong>
+          {{
+            voiceMode === 'wake'
+              ? '等待唤醒'
+              : voiceMode === 'ready'
+                ? '已听完'
+                : voiceMode === 'command'
+                  ? '指令聆听'
+                  : '已唤醒，正在实时输入'
+          }}
+        </strong>
         <span>{{ voiceStatusText }}</span>
         <span v-if="voicePreview" class="voice-live-transcript">{{ voicePreview }}</span>
       </span>
@@ -1273,8 +1499,134 @@ onBeforeUnmount(() => {
       {{ voiceError }}
     </p>
     <p class="text-faint" style="font-size: 12px; line-height: 1.6; margin: 10px 0 0">
-      先点击“开启唤醒”，再说“小燕小燕”开始实时填入草稿；发送前可修改。语音回复由浏览器本地朗读，原始音频不会上传到本地助手 API。
+      先点击开启唤醒，再说「{{ wakePhrase }}」开始实时填入草稿。
+      说完并静音后会倒计时自动发送（可在下方偏好改时长或关闭）；等待时可说「取消」「继续说」，或说「发送吧」立即发送。
+      语音回复由浏览器本地朗读，原始音频不会上传到本地助手 API。
     </p>
+
+    <section class="voice-prefs-panel card-sub" aria-label="语音偏好与自检">
+      <strong class="voice-prefs-title">语音偏好</strong>
+      <label class="voice-pref-row">
+        <span>唤醒词</span>
+        <input
+          v-model="wakePhraseDraft"
+          type="text"
+          maxlength="8"
+          aria-label="自定义唤醒词"
+          @change="saveWakePhrase"
+        />
+      </label>
+      <div class="row-actions" style="margin: 0 0 8px">
+        <button
+          v-for="preset in WAKE_PHRASE_PRESETS"
+          :key="preset.id"
+          type="button"
+          class="btn btn-ghost btn-small"
+          @click="applyWakePreset(preset.phrase)"
+        >
+          {{ preset.label }}
+        </button>
+      </div>
+      <label class="voice-pref-row">
+        <span>静音结束</span>
+        <select :value="silencePresetId" @change="applySilencePreset(($event.target as HTMLSelectElement).value)">
+          <option v-for="preset in SILENCE_PRESETS" :key="preset.id" :value="preset.id">
+            {{ preset.label }}
+          </option>
+        </select>
+      </label>
+      <label class="voice-pref-row">
+        <span>说完后自动发送</span>
+        <select :value="autoSendPresetId" @change="applyAutoSendPreset(($event.target as HTMLSelectElement).value)">
+          <option v-for="preset in AUTO_SEND_PRESETS" :key="preset.id" :value="preset.id">
+            {{ preset.label }}
+          </option>
+        </select>
+      </label>
+      <label class="voice-pref-row">
+        <input
+          type="checkbox"
+          :checked="voicePrefs.confirmSound"
+          @change="toggleVoicePref('confirmSound', ($event.target as HTMLInputElement).checked)"
+        />
+        <span>听写结束后轻量提示音</span>
+      </label>
+      <label class="voice-pref-row">
+        <input
+          type="checkbox"
+          :checked="voicePrefs.doubleWake"
+          @change="toggleVoicePref('doubleWake', ($event.target as HTMLInputElement).checked)"
+        />
+        <span>双次唤醒确认（降低误唤醒）</span>
+      </label>
+      <label class="voice-pref-row">
+        <input
+          type="checkbox"
+          :checked="voicePrefs.voiceCommands"
+          @change="toggleVoicePref('voiceCommands', ($event.target as HTMLInputElement).checked)"
+        />
+        <span>听写后聆听白名单语音指令</span>
+      </label>
+      <div class="row-actions" style="margin-top: 8px">
+        <button type="button" class="btn btn-ghost btn-small" :disabled="voicePackChecking" @click="checkVoicePacks">
+          {{ voicePackChecking ? '检测中…' : '检查中文语音包' }}
+        </button>
+        <button type="button" class="btn btn-ghost btn-small" :disabled="preflightRunning" @click="runPreflight">
+          {{ preflightRunning ? '自检中…' : '运行语音预检' }}
+        </button>
+      </div>
+      <p v-if="voicePackReport" class="text-faint" style="font-size: 12px; margin: 8px 0 0">
+        {{ voicePackReport.guidance }}
+      </p>
+      <ul v-if="preflightReport" class="voice-preflight-list">
+        <li v-for="(line, idx) in preflightReport.guidance" :key="idx">{{ line }}</li>
+      </ul>
+    </section>
   </section>
 </template>
 
+<style scoped>
+.voice-ready-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+}
+.voice-ready-actions .btn-large {
+  flex: 1 1 140px;
+  min-height: 48px;
+  font-size: 16px;
+}
+.speech-segment-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.speech-segment-chips .btn.active {
+  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.voice-prefs-panel {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--ink) 8%, transparent);
+}
+.voice-prefs-title {
+  display: block;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+.voice-pref-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  margin: 6px 0;
+}
+.voice-preflight-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+</style>

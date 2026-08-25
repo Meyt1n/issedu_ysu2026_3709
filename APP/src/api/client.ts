@@ -345,8 +345,8 @@ export class ApiClient {
   }
 
   /**
-   * 多智能体流式聊天：逐步接收 trace / status / token / done。
-   * 仅推送校验后的最终回答文本；失败时可回退到 assistantChat。
+   * 多智能体流式聊天：与网页端同源 SSE，逐步接收 trace / status / token / done。
+   * 仍不上传音频；仅推送校验后的最终回答文本。若流式不可用，调用方可回退到 assistantChat。
    */
   async assistantChatStream(
     input: AssistantChatInput,
@@ -372,7 +372,14 @@ export class ApiClient {
     const hasPerRequestAuth = Object.prototype.hasOwnProperty.call(options, 'authSession')
     const authSession = hasPerRequestAuth ? options.authSession : this.authSessionProvider?.()
     if (authSession) {
-      if (authSession.transport === 'bearer' && authSession.accessToken) {
+      const expiresAt = Date.parse(authSession.expiresAt)
+      if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+        throw new ApiClientError('登录会话已过期', { status: 401, code: 'SESSION_EXPIRED' })
+      }
+      if (authSession.transport === 'bearer') {
+        if (!authSession.accessToken) {
+          throw new ApiClientError('登录会话已过期', { status: 401, code: 'SESSION_EXPIRED' })
+        }
         headers.set('Authorization', `Bearer ${authSession.accessToken}`)
       } else if (authSession.transport !== 'cookie') {
         headers.set('X-Actor-Id', authSession.actorId)
@@ -381,25 +388,41 @@ export class ApiClient {
     } else if (!hasAuthProvider) {
       if (options.actorId) headers.set('X-Actor-Id', options.actorId)
       if (options.accessPurpose) headers.set('X-Access-Purpose', options.accessPurpose)
+    } else if (options.accessPurpose) {
+      headers.set('X-Access-Purpose', options.accessPurpose)
     }
 
     const timeoutMs = options.timeoutMs ?? 240_000
-    const timeoutController = typeof AbortController !== 'undefined' ? new AbortController() : null
-    const timeoutTimer = timeoutController ? setTimeout(() => timeoutController.abort(), timeoutMs) : null
+    const timeoutController = typeof AbortController !== 'undefined' && timeoutMs > 0
+      ? new AbortController()
+      : null
+    const timeoutTimer = timeoutController
+      ? setTimeout(() => timeoutController.abort(), timeoutMs)
+      : null
     const onExternalAbort = () => timeoutController?.abort()
     options.signal?.addEventListener('abort', onExternalAbort)
 
     try {
-      const response = await this.fetcher(
-        `${this.baseUrl}/api/v1/assistant/chat/stream${query ? `?${query}` : ''}`,
-        {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(input),
-          signal: options.signal ?? timeoutController?.signal,
-          credentials: authSession?.transport === 'cookie' ? 'include' : undefined,
-        },
-      )
+      let response: Response
+      try {
+        response = await this.fetcher(
+          `${this.baseUrl}/api/v1/assistant/chat/stream${query ? `?${query}` : ''}`,
+          {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(input),
+            signal: options.signal ?? timeoutController?.signal,
+            credentials: authSession?.transport === 'cookie' ? 'include' : undefined,
+          },
+        )
+      } catch {
+        const aborted = timeoutController?.signal.aborted === true
+        if (aborted) {
+          throw new ApiClientError('请求超时，服务器没有在限定时间内响应', { status: 0, code: 'REQUEST_TIMEOUT' })
+        }
+        throw new ApiClientError('家庭服务器暂时无法访问', { status: 0, code: 'DEPENDENCY_UNAVAILABLE' })
+      }
+
       if (!response.ok) {
         const text = await response.text()
         let body: unknown = null

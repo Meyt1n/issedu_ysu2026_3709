@@ -16,7 +16,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +43,7 @@ def run_offline_checks() -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     try:
         from ai.safety.classifier import classify_question_lexicon, merge_query_types
+
         from app.local_agents import plan_agent_execution
         from app.tool_call import classify_question, is_loopback_ollama_url
 
@@ -55,7 +56,9 @@ def run_offline_checks() -> list[dict[str, Any]]:
         plan = plan_agent_execution("GENERAL", household_id=None, member_id=None)
         assert plan["database"].run is False
         assert plan["knowledge"].run is False
-        results.append(_ok("offline.classifier_and_plan", "greeting/GENERAL/MEDICATION_SAFETY/URGENT + plan"))
+        results.append(
+            _ok("offline.classifier_and_plan", "greeting/GENERAL/MEDICATION_SAFETY/URGENT + plan")
+        )
     except Exception as exc:  # noqa: BLE001
         results.append(_fail("offline.classifier_and_plan", str(exc)[:240]))
     return results
@@ -80,7 +83,8 @@ def run_http_checks(base_url: str) -> list[dict[str, Any]]:
     try:
         status, payload = get("/health")
         if status == 200:
-            results.append(_ok("http.health", f"status={payload.get('status') if isinstance(payload, dict) else status}"))
+            health_status = payload.get("status") if isinstance(payload, dict) else status
+            results.append(_ok("http.health", f"status={health_status}"))
         else:
             results.append(_fail("http.health", f"HTTP {status}"))
     except Exception as exc:  # noqa: BLE001
@@ -93,12 +97,17 @@ def run_http_checks(base_url: str) -> list[dict[str, Any]]:
             results.append(_fail("http.agents_catalog", f"HTTP {status}"))
         else:
             agents = payload.get("agents") or payload.get("items") or []
-            local_flags = [bool(item.get("local", True)) for item in agents] if isinstance(agents, list) else []
+            local_flags = (
+                [bool(item.get("local", True)) for item in agents]
+                if isinstance(agents, list)
+                else []
+            )
             all_local = all(local_flags) if local_flags else payload.get("all_agents_local", True)
+            agent_count = len(agents) if isinstance(agents, list) else "n/a"
             results.append(
                 _ok(
                     "http.agents_catalog",
-                    f"agents={len(agents) if isinstance(agents, list) else 'n/a'} all_local={all_local} "
+                    f"agents={agent_count} all_local={all_local} "
                     f"web_search_ready={payload.get('web_search_ready')}",
                 )
             )
@@ -140,9 +149,13 @@ def run_http_checks(base_url: str) -> list[dict[str, Any]]:
                 )
             )
         else:
-            results.append(_fail("http.greeting_multi_agent", f"unexpected payload keys={list(payload)[:12]}"))
+            results.append(
+                _fail("http.greeting_multi_agent", f"unexpected payload keys={list(payload)[:12]}")
+            )
     except Exception as exc:  # noqa: BLE001
-        results.append(_skip("http.greeting_multi_agent", f"auth or API unavailable: {str(exc)[:180]}"))
+        results.append(
+            _skip("http.greeting_multi_agent", f"auth or API unavailable: {str(exc)[:180]}")
+        )
 
     return results
 
@@ -158,9 +171,13 @@ def run_ollama_checks(base_url: str, model: str) -> list[dict[str, Any]]:
         with urllib.request.urlopen(req, timeout=5) as resp:  # noqa: S310
             payload = json.loads(resp.read().decode("utf-8"))
         names = [item.get("name") for item in payload.get("models", []) if isinstance(item, dict)]
-        results.append(_ok("ollama.tags", f"models={len(names)} has_configured={model in names or model == 'unavailable'}"))
-        if model and model != "unavailable" and model not in names and not any(model in (n or "") for n in names):
-            results.append(_skip("ollama.model", f"configured model {model!r} not listed; chat probe skipped"))
+        has_configured = model in names or model == "unavailable"
+        results.append(_ok("ollama.tags", f"models={len(names)} has_configured={has_configured}"))
+        listed = model in names or any(model in (n or "") for n in names)
+        if model and model != "unavailable" and not listed:
+            results.append(
+                _skip("ollama.model", f"configured model {model!r} not listed; chat probe skipped")
+            )
             return results
         if model == "unavailable":
             results.append(_skip("ollama.chat", "OLLAMA_MODEL=unavailable"))
@@ -195,7 +212,7 @@ def run_ollama_checks(base_url: str, model: str) -> list[dict[str, Any]]:
 
 
 def render_report(results: list[dict[str, Any]], *, out_path: Path) -> None:
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%SZ")
     passed = sum(1 for item in results if item["status"] == "pass")
     failed = sum(1 for item in results if item["status"] == "fail")
     skipped = sum(1 for item in results if item["status"] == "skip")
@@ -203,12 +220,13 @@ def render_report(results: list[dict[str, Any]], *, out_path: Path) -> None:
         "# HCT-430 助手演示冒烟记录",
         "",
         f"- 生成时间（UTC）：{now}",
-        f"- 脚本：`scripts/hct430_assistant_demo_smoke.py`",
+        "- 脚本：`scripts/hct430_assistant_demo_smoke.py`",
         f"- 汇总：pass={passed} fail={failed} skip={skipped}",
         "",
         "## 结论边界",
         "",
-        "- 本记录只证明本机可自动完成的冒烟项；**不**替代维护者 R3、真实浏览器端到端、MySQL 全家演示或回滚演练签署。",
+        "- 本记录只证明本机可自动完成的冒烟项；"
+        "**不**替代维护者 R3、真实浏览器端到端、MySQL 全家演示或回滚演练签署。",
         "- 未写入真实健康数据、密钥或完整模型输出正文。",
         "",
         "## 检查项",

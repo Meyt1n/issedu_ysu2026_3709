@@ -169,7 +169,7 @@ onBeforeUnmount(() => {
       <div>
         <h2 class="hero-greeting">视觉扫描中心</h2>
         <p class="hero-sub">
-          拍摄药盒或报告，先通过本地质量门控，再进入 OCR 识别队列；冲突或未知结果一律进入人工复核。
+          拍摄药盒或报告，经本地质量门控后进入识别队列；冲突结果进入人工复核。
         </p>
       </div>
       <label class="context-select">
@@ -247,7 +247,7 @@ onBeforeUnmount(() => {
           归属成员：{{ task.member_id ? memberNameById.get(task.member_id) ?? task.member_id : '未指定' }} ·
           创建于 {{ formatDateTime(task.created_at) }} · 文件 {{ task.file_id }}
         </p>
-        <p class="row-meta" style="margin: 0; font-family: ui-monospace, monospace; font-size: 12px">
+        <p class="row-meta mono-wrap" style="margin: 0; font-family: ui-monospace, monospace; font-size: 12px">
           任务编号 {{ task.id }} · 提交者 {{ task.created_by }} · 用途 {{ session.accessPurpose || '未填' }}
         </p>
         <p v-if="task.status === 'queued'" class="row-meta" style="margin: 0">

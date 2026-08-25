@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import pytest
-
 from ai.safety.classifier import (
     classify_question_dual,
     classify_question_lexicon,
     merge_query_types,
     parse_model_query_type,
 )
+
 from app.tool_call import classify_question
 
 

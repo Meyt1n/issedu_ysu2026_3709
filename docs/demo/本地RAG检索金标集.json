@@ -1,0 +1,152 @@
+{
+  "gold_version": "1",
+  "index_version": "demo-cn-en-v4",
+  "description": "固定问句→应命中教学文档；用于防止知识库扩充后主题串题。全部为合成教学查询，不含真实健康数据。",
+  "cases": [
+    {
+      "id": "kb-gold-001",
+      "query": "过期药品怎么处置",
+      "expect_title_contains": "家庭药品存放与过期处置教学卡",
+      "must_not_title_contains": ["天气行动卡", "语音交互"]
+    },
+    {
+      "id": "kb-gold-002",
+      "query": "药品身份核对要看哪些信息",
+      "expect_title_contains": "家庭用药安全演示知识卡",
+      "must_not_title_contains": ["跌倒风险", "天气行动卡"]
+    },
+    {
+      "id": "kb-gold-003",
+      "query": "过敏信息记录和分享注意什么",
+      "expect_title_contains": "过敏信息记录与授权分享教学卡",
+      "must_not_title_contains": ["外出备药", "天气行动卡"]
+    },
+    {
+      "id": "kb-gold-004",
+      "query": "血压血糖记录观察怎么做",
+      "expect_title_contains": "血压血糖居家记录观察教学卡",
+      "must_not_title_contains": ["药箱分类盘点", "语音交互"]
+    },
+    {
+      "id": "kb-gold-005",
+      "query": "什么时候需要联系急救",
+      "expect_title_contains": "居家照护沟通与紧急联络教学卡",
+      "must_not_title_contains": ["天气行动卡低风险"]
+    },
+    {
+      "id": "kb-gold-006",
+      "query": "药盒包装识别人工复核",
+      "expect_title_contains": "药品包装识别与人工复核教学卡",
+      "must_not_title_contains": ["删除撤权", "天气行动卡"]
+    },
+    {
+      "id": "kb-gold-007",
+      "query": "点了已确认是不是等于吃过药",
+      "expect_title_contains": "提醒确认与未确认升级教学卡",
+      "must_not_title_contains": ["医嘱变更人工确认"]
+    },
+    {
+      "id": "kb-gold-008",
+      "query": "字段级授权最小必要披露",
+      "expect_title_contains": "家庭成员角色与字段授权教学卡",
+      "must_not_title_contains": ["过期处置"]
+    },
+    {
+      "id": "kb-gold-009",
+      "query": "健康事件为什么要追加不能覆盖",
+      "expect_title_contains": "健康事件追加与不可覆盖教学卡",
+      "must_not_title_contains": ["天气行动卡"]
+    },
+    {
+      "id": "kb-gold-010",
+      "query": "规则命中后证据怎么分区展示",
+      "expect_title_contains": "规则命中解释与证据分区教学卡",
+      "must_not_title_contains": ["语音交互"]
+    },
+    {
+      "id": "kb-gold-011",
+      "query": "健康数据默认不出网吗",
+      "expect_title_contains": "本地优先与隐私不出网教学卡",
+      "must_not_title_contains": ["外出备药"]
+    },
+    {
+      "id": "kb-gold-012",
+      "query": "助手为什么要拒答开处方和买药导流",
+      "expect_title_contains": "助手拒答与紧急升级教学卡",
+      "must_not_title_contains": ["家庭药箱分类盘点", "过期处置"]
+    },
+    {
+      "id": "kb-gold-013",
+      "query": "服药时间窗和提醒预算是什么",
+      "expect_title_contains": "服药时间窗与提醒预算教学卡",
+      "must_not_title_contains": ["跌倒风险"]
+    },
+    {
+      "id": "kb-gold-014",
+      "query": "家里防滑和跌倒风险怎么观察",
+      "expect_title_contains": "居家环境跌倒风险观察教学卡",
+      "must_not_title_contains": ["过敏信息记录"]
+    },
+    {
+      "id": "kb-gold-015",
+      "query": "出门旅行备药清单核对什么",
+      "expect_title_contains": "外出备药与旅行清单教学卡",
+      "must_not_title_contains": ["语音交互与证据边界"]
+    },
+    {
+      "id": "kb-gold-016",
+      "query": "医嘱变更必须人工确认吗",
+      "expect_title_contains": "医嘱变更人工确认教学卡",
+      "must_not_title_contains": ["天气行动卡"]
+    },
+    {
+      "id": "kb-gold-017",
+      "query": "撤权以后还能检索到吗",
+      "expect_title_contains": "删除撤权与知识传播教学卡",
+      "must_not_title_contains": ["药品包装识别"]
+    },
+    {
+      "id": "kb-gold-018",
+      "query": "天热能不能建议减药",
+      "expect_title_contains": "天气行动卡低风险提示教学卡",
+      "must_not_title_contains": ["服药时间窗与提醒预算"]
+    },
+    {
+      "id": "kb-gold-019",
+      "query": "家庭药箱怎么分类盘点",
+      "expect_title_contains": "家庭药箱分类盘点教学卡",
+      "must_not_title_contains": ["助手拒答"]
+    },
+    {
+      "id": "kb-gold-020",
+      "query": "语音是不是健康证据",
+      "expect_title_contains": "语音交互与证据边界教学卡",
+      "must_not_title_contains": ["多证据视觉质量门控"]
+    },
+    {
+      "id": "kb-gold-021",
+      "query": "指标趋势观察异常怎么沟通",
+      "expect_title_contains": "指标趋势观察与异常沟通教学卡",
+      "must_not_title_contains": ["天气行动卡"]
+    },
+    {
+      "id": "kb-gold-022",
+      "query": "多证据视觉质量门控是什么",
+      "expect_title_contains": "多证据视觉质量门控教学卡",
+      "must_not_title_contains": ["本地优先与隐私"]
+    },
+    {
+      "id": "kb-gold-023",
+      "query": "过期药 expiry 怎么回收处置",
+      "expect_title_contains": "家庭药品存放与过期处置教学卡",
+      "must_not_title_contains": ["天气行动卡"],
+      "notes": "同义词/别名扩展：expiry、回收"
+    },
+    {
+      "id": "kb-gold-024",
+      "query": "child 儿童误服药品怎么办",
+      "expect_title_contains": "家庭药品存放与过期处置教学卡",
+      "must_not_title_contains": ["指标趋势"]
+    }
+  ]
+}

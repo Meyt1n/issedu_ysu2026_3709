@@ -61,14 +61,14 @@ const stepStates = computed(() => {
     return [
       { label: '选照片', state: hasFile ? 'done' : 'current' },
       {
-        label: '看看清不清楚',
+        label: '看清不清楚',
         state: passed ? 'done' : flow === 'checking' ? 'current' : hasFile ? 'current' : 'idle',
       },
       {
         label: '交给家人',
         state: flow === 'queued' ? 'done' : passed ? 'current' : 'idle',
       },
-      { label: '等家人确认', state: 'idle' },
+      { label: '等确认', state: 'idle' },
     ]
   }
   return [
@@ -78,10 +78,10 @@ const stepStates = computed(() => {
       state: passed ? 'done' : flow === 'checking' ? 'current' : hasFile ? 'current' : 'idle',
     },
     {
-      label: '创建识别任务',
+      label: '创建任务',
       state: flow === 'queued' ? 'done' : passed ? 'current' : 'idle',
     },
-    { label: '人工复核后入档', state: 'idle' },
+    { label: '复核入档', state: 'idle' },
   ]
 })
 
@@ -242,7 +242,7 @@ watch(() => [props.actorId, props.memberId, props.accessPurpose], () => {
       <div>
         <p class="eyebrow">{{ isMemberView ? '拍照录药' : '本地药盒采集' }}</p>
         <h3 id="vision-quality-title" class="card-title">
-          {{ isMemberView ? '拍一张清楚的药盒照片' : '先检查图片质量，再进入识别' }}
+          {{ isMemberView ? '选择药盒照片' : '先检查图片质量，再进入识别' }}
         </h3>
       </div>
       <span
@@ -254,7 +254,7 @@ watch(() => [props.actorId, props.memberId, props.accessPurpose], () => {
             ? (
               state === 'idle' ? '还没选照片'
               : state === 'ready' ? '还没检查'
-              : state === 'checking' ? '正在看清不清楚'
+              : state === 'checking' ? '正在检查'
               : state === 'retake' ? '请重新拍'
               : state === 'passed' ? '照片可以了'
               : state === 'queueing' ? '正在提交'
@@ -287,9 +287,9 @@ watch(() => [props.actorId, props.memberId, props.accessPurpose], () => {
       </span>
     </div>
 
-    <p class="card-note" style="margin: 0 0 14px">
+    <p class="card-note" style="margin: 0 0 12px">
       {{ isMemberView
-        ? '照片只留在家里。交给家人核对之前，不会写进家庭本子。'
+        ? '照片只留在家里，家人确认后才会记入本子。'
         : '图片只发送到本机 API。质量通过不代表识别成功；识别结果仅为候选，人工确认后才进入健康记录。' }}
     </p>
 
@@ -298,11 +298,10 @@ watch(() => [props.actorId, props.memberId, props.accessPurpose], () => {
         <img v-if="previewUrl" :src="previewUrl" alt="当前待检查药盒图片的本地预览" />
         <template v-else>
           <div class="capture-empty">
-            <span class="capture-empty-icon"><AppIcon name="scan" :size="30" /></span>
-            <strong>点击选择药盒照片</strong>
-            <span>{{ isMemberView ? '可以拍照或从相册选图 · 只在家里看' : '支持 JPEG / PNG · 仅在本机预览' }}</span>
+            <span class="capture-empty-icon"><AppIcon name="scan" :size="26" /></span>
+            <strong>{{ isMemberView ? '点击选照片' : '点击选择药盒照片' }}</strong>
+            <span>{{ isMemberView ? '拍照或从相册选图' : '支持 JPEG / PNG · 仅在本机预览' }}</span>
           </div>
-          <span class="capture-hint">点击此处拍照，或从设备选择图片</span>
         </template>
         <input
           type="file"

@@ -12,6 +12,7 @@
     "test": "vitest run",
     "android:sync": "npm run build && cap sync android",
     "verify:android-a11y-evidence": "node scripts/verify-android-a11y-evidence.mjs",
+    "verify:android-voice-evidence": "node scripts/verify-android-voice-evidence.mjs",
     "android:sync:debug": "vite build --mode android-debug && cap sync android",
     "audit:android-security": "node scripts/audit-android-security.mjs",
     "seed:live": "node scripts/seed-live-demo.mjs",

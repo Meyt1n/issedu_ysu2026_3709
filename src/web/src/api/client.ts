@@ -25,6 +25,7 @@ import type {
   CreateModelVersionBindingInput,
   HardSample,
   HealthEvent,
+  HealthNewsResponse,
   HealthResponse,
   CapabilityResponse,
   DashboardSummary,
@@ -854,6 +855,10 @@ export class ApiClient {
     )
   }
 
+  getHealthNews(options?: RequestOptions): Promise<HealthNewsResponse> {
+    return this.request('/api/v1/health-news', undefined, options)
+  }
+
   assistantChat(
     input: AssistantChatInput,
     householdId?: string,
@@ -1219,6 +1224,58 @@ export class ApiClient {
       undefined,
       options,
     )
+  }
+
+  seedFormalDemoHealth(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.request('/api/v1/demo/formal-health-seed', { method: 'POST' }, options)
+  }
+
+  listClassroomScenarios(
+    options?: RequestOptions,
+  ): Promise<{ scenarios: Array<Record<string, unknown>>; disclaimer?: string }> {
+    return this.request('/api/v1/demo/classroom-scenarios', undefined, options)
+  }
+
+  listKnowledgeStaging(options?: RequestOptions): Promise<{
+    items: Array<Record<string, unknown>>
+    total: number
+    auto_ingest: boolean
+    disclaimer?: string
+  }> {
+    return this.request('/api/v1/knowledge/crawl/staging', undefined, options)
+  }
+
+  knowledgeCrawlStatus(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.request('/api/v1/knowledge/crawl/status', undefined, options)
+  }
+
+  runKnowledgeCrawl(
+    options?: RequestOptions,
+    params?: { dueOnly?: boolean },
+  ): Promise<Record<string, unknown>> {
+    const query = params?.dueOnly ? '?due_only=true' : ''
+    return this.request(`/api/v1/knowledge/crawl/run${query}`, { method: 'POST' }, options)
+  }
+
+  reviewKnowledgeStaging(
+    sourceId: string,
+    input: { approve?: boolean; reject?: boolean; notes?: string },
+    options?: RequestOptions,
+  ): Promise<Record<string, unknown>> {
+    const params = new URLSearchParams()
+    if (input.approve) params.set('approve', 'true')
+    if (input.reject) params.set('reject', 'true')
+    if (input.notes) params.set('notes', input.notes)
+    const query = params.toString()
+    return this.request(
+      `/api/v1/knowledge/crawl/staging/${encodeURIComponent(sourceId)}/review${query ? `?${query}` : ''}`,
+      { method: 'POST' },
+      options,
+    )
+  }
+
+  promoteKnowledgeStaging(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.request('/api/v1/knowledge/crawl/promote', { method: 'POST' }, options)
   }
 }
 

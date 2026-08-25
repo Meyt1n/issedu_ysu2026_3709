@@ -2,7 +2,7 @@
 
 - Issue：[#237](https://github.com/Meyt1n/issedu_ysu2026_3709/issues/237)
 - 需求：NFR-01、NFR-02、NFR-06
-- 状态：进行中（静态策略、自动审计、本地构建和 Android 真机关键路径证据完成；真实设备迁移/多用户/受控 HTTPS 证书仍待补齐）
+- 状态：进行中（静态策略、自动审计、本地构建、真机关键路径和模拟器通知/多用户隔离证据完成；真实设备迁移还原与受控 HTTPS 证书仍待补齐）
 - 负责人：Shen-huang-123
 - 复核人：维护者合并时完成最终复核
 - 风险：R3（错误的备份或网络配置可能恢复身份/联系人，或把健康请求发送到明文公网）
@@ -42,7 +42,21 @@ Android 静态网络配置无法表达“任意 RFC1918/ULA 地址可明文、�
 - `adb shell bmgr backupnow com.homecaretwin.companion` 返回 `Backup is not allowed`；切换到 D2D transport 后，系统返回 transport 无法处理该包，随后已切回原云备份 transport。说明应用未被允许写入本机备份，但当前设备没有可完成的真实设备迁移/还原演练入口；
 - 当前应用数据为虚构演示数据；卸载后重新安装 Debug APK，首次安装时间重置且重新出现首启隐私告知，没有恢复旧登录/联系人/服务器设置的证据；
 - `npm run audit:android-security`、`npm run check`、`npm run test`（30 个文件 / 246 个测试）、`npm run build`、`npm run android:sync:debug`、Gradle Debug/Release 合并清单和 Debug/Release 构建均通过；
-- 真实设备迁移还原、分身用户启动隔离、受控 HTTPS 证书联调仍不可在本轮设备条件下完成，保持 Issue 进行中。
+
+### 2026-08-25 真机重连复核
+
+- 设备仍为荣耀 AAP-AN00，Android 16/API 36；用户 0 为机主、用户 128 为分身应用，`com.homecaretwin.companion` 仅安装在用户 0；
+- 在当前云备份 transport 下重新执行 `bmgr backupnow com.homecaretwin.companion`：包级结果为 `Backup is not allowed`，随后命令整体返回 `Backup finished with result: Success`；这表示备份调度命令完成，但应用没有被允许导出备份数据；
+- 当前真机通知权限为 `granted=true`，本次未清除数据、未安装证书、未切换系统用户，未影响手机已有应用数据；受控 HTTPS 端点仍未在本机运行，不能把公网 HTTPS 当作项目联调证据。
+
+### 2026-08-25 Android 模拟器补充复核
+
+- 设备：Android 15 / API 35 模拟器 `emulator-5554`；仅使用虚构演示数据；
+- 清除应用数据后首次启动出现系统通知授权对话框，选择拒绝后 `POST_NOTIFICATIONS` 为 `granted=false`，应用仍回到 `MainActivity` 正常运行；
+- 将同一权限置为系统 `USER_FIXED` 永久拒绝后强制停止并重启应用，仍直接进入 `MainActivity`，未再次弹出授权对话框；
+- 创建临时次用户 `10`，为该用户安装同一 APK 并启动应用：应用运行在 `u10`，数据目录为 `/data/user/10/com.homecaretwin.companion`，机主仍使用独立的 `/data/user/0/com.homecaretwin.companion`；验证后停止并删除临时用户，模拟器恢复为仅机主用户；
+- 切换模拟器到 `com.android.localtransport/.LocalTransport` 后执行 `bmgr backupnow com.homecaretwin.companion`，仍返回 `Backup is not allowed`，`bmgr list sets` 未出现该应用可恢复的备份集；测试结束已切回原云备份 transport，并重新安装确认最终包不含 `ALLOW_BACKUP`；
+- 该模拟器证据补齐通知拒绝/永久拒绝、多用户启动隔离和本地备份 transport 拒绝；真实设备迁移还原仍因没有可控 D2D/云备份恢复源无法完成，受控 HTTPS 证书联调仍需专用证书环境。
 
 ### 2026-08-24 最新 `master` 复核
 
@@ -74,5 +88,5 @@ Android 静态网络配置无法表达“任意 RFC1918/ULA 地址可明文、�
 
 ## 未完成证据与回滚
 
-- Android 真机拒绝/永久拒绝最终状态、真实设备迁移还原、分身用户启动隔离和受控 HTTPS 证书联调仍需在专用测试设备/环境执行；完成前 Issue 保持进行中。
+- 真实设备迁移还原和受控 HTTPS 证书联调仍需在专用测试设备/环境执行；完成前 Issue 保持进行中。通知拒绝/永久拒绝和多用户启动隔离已由 Android 15 模拟器补充验证。
 - PR 未合并前关闭分支；合并后 revert 本 PR，恢复上一份经验证的 Manifest/网络配置和构建脚本。回滚不得重新启用 Release 全局明文或系统备份。

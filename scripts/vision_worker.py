@@ -74,12 +74,14 @@ class Worker:
         actors: list[str],
         signing_key: str,
         *,
+        session_tokens: dict[str, str] | None = None,
         video_sample_interval_ms: int = 1000,
         video_max_frames: int = 8,
     ) -> None:
         self.api = api.rstrip("/")
         self.actors = actors
         self.signing_key = signing_key
+        self.session_tokens = session_tokens or {}
         self.video_sample_interval_ms = video_sample_interval_ms
         self.video_max_frames = video_max_frames
         self.http = requests.Session()
@@ -107,6 +109,17 @@ class Worker:
             )
         )
 
+    def _headers_for(self, actor: str) -> dict[str, str]:
+        token = self.session_tokens.get(actor) or os.environ.get(
+            f"HCT_WORKER_TOKEN_{actor.upper().replace('-', '_')}"
+        )
+        if not token:
+            token = os.environ.get("HCT_WORKER_TOKEN")
+        if token:
+            return {"Authorization": f"Bearer {token}"}
+        # Development fallback: X-Actor-Id (requires ALLOW_DEV_ACTOR_HEADER).
+        return {"X-Actor-ID": actor}
+
     def poll_once(self) -> int:
         processed = 0
         for actor in self.actors:
@@ -114,7 +127,7 @@ class Worker:
                 response = self.http.post(
                     f"{self.api}/vision-tasks/claim",
                     json={"limit": 10},
-                    headers={"X-Actor-ID": actor},
+                    headers=self._headers_for(actor),
                     timeout=30,
                 )
                 response.raise_for_status()
@@ -166,7 +179,7 @@ class Worker:
 
     def process(self, actor: str, task: dict) -> None:
         task_id = task["id"]
-        headers = {"X-Actor-ID": actor}
+        headers = self._headers_for(actor)
         media_type = task.get("media_type", "image")
         log(
             f"task {task_id[:8]} ({actor}): downloading {media_type} "
@@ -259,21 +272,40 @@ def main() -> int:
         default=8,
         help="upper bound of sampled frames processed per video task",
     )
+    parser.add_argument(
+        "--session-token",
+        action="append",
+        default=[],
+        metavar="ACTOR=TOKEN",
+        help=(
+            "Bearer session for one actor (repeatable). Prefer this (or "
+            "HCT_WORKER_TOKEN / HCT_WORKER_TOKEN_<ACTOR>) when "
+            "ALLOW_DEV_ACTOR_HEADER=false."
+        ),
+    )
     args = parser.parse_args()
 
     actors = [item.strip() for item in args.actors.split(",") if item.strip()]
     if not actors:
         raise SystemExit("no actors configured")
     signing_key = os.environ.get("HCT_ADAPTER_SIGNING_KEY", "dev-only-change-me")
+    session_tokens: dict[str, str] = {}
+    for item in args.session_token:
+        if "=" not in item:
+            raise SystemExit(f"invalid --session-token {item!r}; expected ACTOR=TOKEN")
+        actor_id, token = item.split("=", 1)
+        session_tokens[actor_id.strip()] = token.strip()
 
     worker = Worker(
         args.api,
         actors,
         signing_key,
+        session_tokens=session_tokens,
         video_sample_interval_ms=args.video_sample_interval_ms,
         video_max_frames=args.video_max_frames,
     )
-    log(f"claiming leased tasks for actors={actors} api={args.api}")
+    auth_mode = "bearer" if (session_tokens or os.environ.get("HCT_WORKER_TOKEN")) else "x-actor-id"
+    log(f"claiming leased tasks for actors={actors} api={args.api} auth={auth_mode}")
     while True:
         processed = worker.poll_once()
         if args.once:

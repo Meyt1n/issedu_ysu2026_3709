@@ -340,6 +340,51 @@ describe('请求回执追踪与超时区分（MOB-144）', () => {
     expect(reply.agent_trace?.[0]?.agent_id).toBe('router')
   })
 
+  it('assistantChatStream 解析 SSE token/done 且不携带音频字段', async () => {
+    let url = ''
+    let body = ''
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('event: token\ndata: {"token":"本"}\n\n'))
+        controller.enqueue(encoder.encode('event: token\ndata: {"token":"地"}\n\n'))
+        controller.enqueue(
+          encoder.encode(
+            'event: done\ndata: {"response":{"answer":"本地解释","sources":[],"confidence":"low","escalate":false,"degraded":false,"degrade_reason":null}}\n\n',
+          ),
+        )
+        controller.close()
+      },
+    })
+    const client = new ApiClient({
+      baseUrl: 'http://192.168.1.8:8000',
+      fetcher: async (input, init) => {
+        url = String(input)
+        body = String(init?.body ?? '')
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'text/event-stream' }),
+          body: stream,
+          text: async () => '',
+        } as unknown as Response
+      },
+    })
+
+    const tokens: string[] = []
+    const reply = await client.assistantChatStream(
+      { messages: [{ role: 'user', content: '用药提醒依据' }], max_tokens: 256 },
+      { onToken: (token) => tokens.push(token) },
+      'hh-1',
+      'm-1',
+    )
+
+    expect(url).toContain('/api/v1/assistant/chat/stream')
+    expect(body).not.toMatch(/audio|microphone|media/i)
+    expect(tokens.join('')).toBe('本地')
+    expect(reply.answer).toBe('本地解释')
+  })
+
   it('assistantChatStream 将 cancelled 事件作为可区分的取消错误', async () => {
     const encoder = new TextEncoder()
     const onCancelled = vi.fn()

@@ -39,6 +39,15 @@ const webSearchOps = ref<WebSearchOpsSnapshot | null>(null)
 const webSearchOpsLoading = ref(false)
 const webSearchOpsForbidden = ref(false)
 const webSearchOpsError = ref(false)
+const stagingItems = ref<Array<Record<string, unknown>>>([])
+const crawlStatus = ref<Record<string, unknown> | null>(null)
+const crawlBusy = ref(false)
+const crawlReport = ref('')
+
+const dueCount = computed(() => Number(crawlStatus.value?.due_count ?? 0))
+const stagingApprovedCount = computed(
+  () => stagingItems.value.filter((item) => item.status === 'approved').length,
+)
 
 const docDraft = reactive({
   title: '',
@@ -172,9 +181,84 @@ async function createSnapshot(): Promise<void> {
     busy.value = false
   }
 }
+
+async function loadStaging(): Promise<void> {
+  try {
+    const [staging, status] = await Promise.all([
+      apiClient.listKnowledgeStaging(requestOptions.value),
+      apiClient.knowledgeCrawlStatus(requestOptions.value),
+    ])
+    stagingItems.value = staging.items ?? []
+    crawlStatus.value = status
+  } catch {
+    stagingItems.value = []
+    crawlStatus.value = null
+  }
+}
+
+async function runCrawl(dueOnly = false): Promise<void> {
+  crawlBusy.value = true
+  crawlReport.value = ''
+  try {
+    const report = await apiClient.runKnowledgeCrawl(requestOptions.value, { dueOnly })
+    crawlReport.value = `抓取完成：${report.fetched ?? 0} 条，变更 ${report.changed ?? 0}，未变 ${report.unchanged ?? 0}（不会自动入库）`
+    pushToast('success', dueOnly ? '到期白名单已刷新到 staging' : '白名单来源已刷新到 staging')
+    await loadStaging()
+  } catch (cause) {
+    pushToast('error', formatError(cause))
+  } finally {
+    crawlBusy.value = false
+  }
+}
+
+async function approveStaging(sourceId: string): Promise<void> {
+  crawlBusy.value = true
+  try {
+    await apiClient.reviewKnowledgeStaging(sourceId, { approve: true, notes: 'web-approve' }, requestOptions.value)
+    pushToast('success', `已批准 ${sourceId}`)
+    await loadStaging()
+  } catch (cause) {
+    pushToast('error', formatError(cause))
+  } finally {
+    crawlBusy.value = false
+  }
+}
+
+async function rejectStaging(sourceId: string): Promise<void> {
+  crawlBusy.value = true
+  try {
+    await apiClient.reviewKnowledgeStaging(
+      sourceId,
+      { reject: true, notes: 'web-reject' },
+      requestOptions.value,
+    )
+    pushToast('info', `已拒绝 ${sourceId}`)
+    await loadStaging()
+  } catch (cause) {
+    pushToast('error', formatError(cause))
+  } finally {
+    crawlBusy.value = false
+  }
+}
+
+async function promoteStaging(): Promise<void> {
+  crawlBusy.value = true
+  try {
+    const report = await apiClient.promoteKnowledgeStaging(requestOptions.value)
+    pushToast('success', `已晋升 ${report.document_count ?? 0} 篇到 approved/incoming`)
+    crawlReport.value = String(report.ingest_hint ?? crawlReport.value)
+    await loadStaging()
+  } catch (cause) {
+    pushToast('error', formatError(cause))
+  } finally {
+    crawlBusy.value = false
+  }
+}
+
 onMounted(() => {
   void loadKnowledge()
   void loadWebSearchOps()
+  void loadStaging()
 })
 </script>
 
@@ -271,8 +355,11 @@ onMounted(() => {
           <div v-else class="section-stack" style="gap: 9px; margin-top: 14px">
             <div v-for="(hit, index) in retrieval.results" :key="index" class="chunk-hit">
               <span class="text-soft" style="font-size: 12px">
-                《{{ hit.document_title ?? '未命名文档' }}》
+                《{{ hit.document_title ?? hit.title ?? '未命名文档' }}》
                 <span v-if="hit.score != null" class="hit-score"> · 相关度 {{ Number(hit.score).toFixed(3) }}</span>
+              </span>
+              <span v-if="hit.match_reason" class="text-faint" style="font-size: 12px; display: block">
+                为何命中：{{ hit.match_reason }}
               </span>
               <span style="font-size: 13.5px; line-height: 1.65">{{ hit.text }}</span>
             </div>
@@ -395,6 +482,66 @@ onMounted(() => {
             {{ snapshotResult }}
           </p>
         </form>
+      </section>
+
+      <section class="card">
+        <div class="card-heading">
+          <div>
+            <p class="eyebrow">受控刷新</p>
+            <h3 class="card-title">知识爬虫 / Staging</h3>
+          </div>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap">
+            <button type="button" class="btn btn-ghost btn-small" :disabled="crawlBusy" @click="runCrawl(true)">
+              <AppIcon name="refresh" :size="15" />
+              {{ crawlBusy ? '刷新中' : `到期刷新${dueCount ? ` (${dueCount})` : ''}` }}
+            </button>
+            <button type="button" class="btn btn-ghost btn-small" :disabled="crawlBusy" @click="runCrawl(false)">
+              全量抓取
+            </button>
+          </div>
+        </div>
+        <p class="card-note" style="margin-top: 0">
+          只抓 allowlist 来源，写入 staging 草稿；<strong>不会自动入库</strong>。批准后晋升到 approved/incoming，再 dry-run 入库。
+        </p>
+        <p v-if="crawlStatus" class="row-meta" style="margin: 0 0 8px">
+          白名单 {{ crawlStatus.source_count ?? 0 }} 源 · 到期 {{ dueCount }} · staging {{ stagingItems.length }} ·
+          已批准待晋升 {{ stagingApprovedCount }} · auto_ingest 关闭
+        </p>
+        <p v-if="crawlReport" class="notice info" role="status">{{ crawlReport }}</p>
+        <div v-if="stagingItems.length === 0" class="empty-state">
+          <strong>暂无 staging 草稿</strong>
+          <p>点击「全量抓取」或「到期刷新」生成本地夹具草稿。</p>
+        </div>
+        <ul v-else class="list-plain" style="gap: 8px">
+          <li v-for="item in stagingItems" :key="String(item.source_id)" class="row-card" style="padding: 11px 14px">
+            <strong>{{ item.title }}</strong>
+            <span class="row-meta">
+              {{ item.status }} · {{ item.unchanged ? '未变更' : '有更新' }} ·
+              {{ String(item.content_sha256 || '').slice(0, 12) }}…
+            </span>
+            <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap">
+              <button
+                type="button"
+                class="btn btn-ghost btn-small"
+                :disabled="crawlBusy || item.status === 'approved' || item.status === 'promoted'"
+                @click="approveStaging(String(item.source_id))"
+              >
+                批准
+              </button>
+              <button
+                type="button"
+                class="btn btn-ghost btn-small"
+                :disabled="crawlBusy || item.status === 'rejected' || item.status === 'promoted'"
+                @click="rejectStaging(String(item.source_id))"
+              >
+                拒绝
+              </button>
+            </div>
+          </li>
+        </ul>
+        <button type="button" class="btn btn-clay btn-small" style="margin-top: 12px" :disabled="crawlBusy || stagingApprovedCount === 0" @click="promoteStaging">
+          晋升已批准草稿（{{ stagingApprovedCount }}）
+        </button>
       </section>
 
       <section class="card">

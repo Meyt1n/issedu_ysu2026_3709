@@ -14,6 +14,7 @@ import type {
 import emptyCorner from '../assets/empty-corner.jpg'
 import AppIcon from '../components/AppIcon.vue'
 import CountUp from '../components/CountUp.vue'
+import HealthNewsPanel from '../components/HealthNewsPanel.vue'
 import SkeletonList from '../components/SkeletonList.vue'
 import WeatherActionPanel from '../components/WeatherActionPanel.vue'
 import { vTilt } from '../ui/tilt'
@@ -291,6 +292,8 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
     <AppIcon name="alert" :size="16" />
     {{ loadError }}
   </p>
+
+  <HealthNewsPanel />
 
   <section class="stat-strip" aria-label="家庭健康概况">
     <div class="stat-cell pine">

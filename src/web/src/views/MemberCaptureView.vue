@@ -34,13 +34,8 @@ function onTaskCreated(task: VisionTask): void {
   <section class="page-hero member-portal-hero">
     <p class="eyebrow">拍照录药</p>
     <h2 class="hero-greeting">把药盒拍清楚就可以了</h2>
-    <p class="hero-sub">你只需要拍照并提交，药名和用法由家人检查后再保存。</p>
+    <p class="hero-sub">拍照提交后，由家人核对药名和用法。</p>
   </section>
-
-  <p class="notice ok member-confirmation-note" role="status">
-    <AppIcon name="lock" :size="16" />
-    你提交的是待确认照片，不会直接写进家庭本子。
-  </p>
 
   <VisionQualityPanel
     :actor-id="session.actorId"
@@ -51,8 +46,8 @@ function onTaskCreated(task: VisionTask): void {
   />
 
   <section v-if="submittedTask" class="card member-next-step">
-    <AppIcon name="check" :size="22" />
-    <div><strong>接下来由家人确认</strong><p>确认后，你可以在「我的记录」里看到结果。</p></div>
+    <AppIcon name="check" :size="20" />
+    <div><strong>接下来由家人确认</strong><p>确认后可在「我的记录」查看。</p></div>
   </section>
 
   <section v-if="trackedTasks.length" class="card member-capture-status">

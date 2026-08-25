@@ -314,7 +314,7 @@ class DuckDuckGoHtmlProvider:
         with httpx.Client(
             timeout=settings.agent_web_search_timeout_seconds,
             follow_redirects=False,
-            trust_env=True,
+            trust_env=False,
             headers={"User-Agent": "HomeCareTwin-local-agent/1.0"},
         ) as client:
             response = client.get(settings.agent_web_search_url.strip(), params=params)
@@ -335,7 +335,7 @@ class SearXNGProvider:
         with httpx.Client(
             timeout=settings.agent_web_search_timeout_seconds,
             follow_redirects=False,
-            trust_env=True,
+            trust_env=False,
             headers={"User-Agent": "HomeCareTwin-local-agent/1.0"},
         ) as client:
             response = client.get(endpoint, params=params)

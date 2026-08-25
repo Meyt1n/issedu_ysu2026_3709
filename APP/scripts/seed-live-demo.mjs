@@ -5,8 +5,8 @@
  * 用法：node scripts/seed-live-demo.mjs [--base http://127.0.0.1:8000] [--actor dev-wang]
  *
  * 事件语义与主仓库 app/projection.py 对齐：
- *   allergy_added / medication_added / plan_created（小写）。
- * 数据均为教学演示编造，禁止写入真实健康信息。
+ *   disease_added / allergy_added / medication_added / plan_created（小写）。
+ * 数据均为教学演示编造，病史—过敏—药品—计划故意互相关联，禁止写入真实健康信息。
  */
 
 const args = process.argv.slice(2)
@@ -43,31 +43,37 @@ async function main() {
   const health = await api('/health')
   console.log(`后端连接成功：${health.service} v${health.version}`)
 
-  // 幂等：同名家庭已存在则复用，避免重复造数。
+  // 幂等：同名家庭已存在则复用成员，仍尝试写入健康事件（idempotency_key 去重）。
   const households = await api('/api/v1/households')
   let household = households.find(h => h.name === HOUSEHOLD_NAME)
+  let grandma
+  let grandpa
   if (household) {
     console.log(`家庭已存在，复用：${household.id}`)
     const members = await api(`/api/v1/households/${household.id}/members`)
-    printSummary(household, members)
-    return
+    grandma = members.find(m => String(m.display_name || '').includes('王秀兰'))
+    grandpa = members.find(m => String(m.display_name || '').includes('李建国'))
+    if (!grandma || !grandpa) {
+      printSummary(household, members)
+      throw new Error('演示家庭已存在但缺少王秀兰/李建国成员，请清理后重跑或手工补成员。')
+    }
+  } else {
+    household = await api('/api/v1/households', { method: 'POST', body: { name: HOUSEHOLD_NAME } })
+    console.log(`已创建家庭：${household.id}（owner=${OWNER}）`)
+
+    async function addMember(display_name, role, actor_id = null) {
+      const member = await api(`/api/v1/households/${household.id}/members`, {
+        method: 'POST',
+        body: { display_name, role, actor_id },
+      })
+      console.log(`  成员：${display_name} -> ${member.id}`)
+      return member
+    }
+
+    grandma = await addMember('王秀兰（演示）', 'DEPENDENT')
+    grandpa = await addMember('李建国（演示）', 'DEPENDENT')
+    await addMember('王芳（演示·我）', 'SELF', OWNER)
   }
-
-  household = await api('/api/v1/households', { method: 'POST', body: { name: HOUSEHOLD_NAME } })
-  console.log(`已创建家庭：${household.id}（owner=${OWNER}）`)
-
-  async function addMember(display_name, role, actor_id = null) {
-    const member = await api(`/api/v1/households/${household.id}/members`, {
-      method: 'POST',
-      body: { display_name, role, actor_id },
-    })
-    console.log(`  成员：${display_name} -> ${member.id}`)
-    return member
-  }
-
-  const grandma = await addMember('王秀兰（演示）', 'DEPENDENT')
-  const grandpa = await addMember('李建国（演示）', 'DEPENDENT')
-  await addMember('王芳（演示·我）', 'SELF', OWNER)
 
   async function addEvent(memberId, event_type, payload, key) {
     const event = await api(`/api/v1/households/${household.id}/events`, {
@@ -85,7 +91,19 @@ async function main() {
     return event
   }
 
-  // 王秀兰：过敏 + 两种药（触发过敏冲突 SEVERE 与相互作用 INFO）+ 两条计划
+  // 王秀兰：病史 → 过敏 → 冲突药/治疗药 → 计划（全部虚构演示）
+  await addEvent(
+    grandma.id,
+    'disease_added',
+    { disease: '高血压（演示）', note: '教学病史，非诊断' },
+    'seed-disease-1',
+  )
+  await addEvent(
+    grandma.id,
+    'disease_added',
+    { disease: '2型糖尿病（演示）', note: '教学病史，非诊断' },
+    'seed-disease-2',
+  )
   await addEvent(grandma.id, 'allergy_added', { allergy: '阿司匹林' }, 'seed-allergy-1')
   await addEvent(
     grandma.id,
@@ -93,10 +111,11 @@ async function main() {
     {
       drug: '阿司匹林肠溶片（演示）',
       spec: '100mg×30片',
-      schedule: '每日 1 次，早餐前',
+      schedule: '每日 1 次，早餐前（演示，不给剂量建议）',
       expiry_date: '2026-08-01',
       stock: 12,
       ingredient: '阿司匹林',
+      note: '故意与过敏史对齐，仅用于冲突规则演示',
     },
     'seed-med-1',
   )
@@ -110,23 +129,63 @@ async function main() {
       expiry_date: '2027-03-01',
       stock: 4,
       ingredient: '氨氯地平',
+      related_disease: '高血压（演示）',
     },
     'seed-med-2',
+  )
+  await addEvent(
+    grandma.id,
+    'medication_added',
+    {
+      drug: '二甲双胍缓释片（演示）',
+      spec: '0.5g×30片',
+      schedule: '晚餐后（演示）',
+      expiry_date: '2027-09-01',
+      stock: 20,
+      ingredient: '二甲双胍',
+      related_disease: '2型糖尿病（演示）',
+    },
+    'seed-med-metformin',
   )
   const plan1 = await addEvent(
     grandma.id,
     'plan_created',
-    { drug: '苯磺酸氨氯地平片（演示）', schedule: '每日早餐后服用 1 片', due_time: '08:00', level: 'GENERAL' },
+    {
+      drug: '苯磺酸氨氯地平片（演示）',
+      schedule: '每日早餐后服用 1 片（演示）',
+      due_time: '08:00',
+      level: 'GENERAL',
+      related_disease: '高血压（演示）',
+    },
     'seed-plan-1',
   )
   const plan2 = await addEvent(
     grandma.id,
     'plan_created',
-    { drug: '二甲双胍缓释片（演示）', schedule: '晚餐后服用 1 片', due_time: '19:00', level: 'HIGH' },
+    {
+      drug: '二甲双胍缓释片（演示）',
+      schedule: '晚餐后服用 1 片（演示）',
+      due_time: '19:00',
+      level: 'HIGH',
+      related_disease: '2型糖尿病（演示）',
+    },
     'seed-plan-2',
   )
 
-  // 李建国：一条药 + 一条计划
+  // 李建国：血脂/冠心病病史 + 青霉素过敏冲突 + 他汀计划
+  await addEvent(
+    grandpa.id,
+    'disease_added',
+    { disease: '高脂血症（演示）', note: '教学病史，非诊断' },
+    'seed-disease-3',
+  )
+  await addEvent(
+    grandpa.id,
+    'disease_added',
+    { disease: '冠心病（演示）', note: '教学病史，非诊断' },
+    'seed-disease-4',
+  )
+  await addEvent(grandpa.id, 'allergy_added', { allergy: '青霉素' }, 'seed-allergy-2')
   await addEvent(
     grandpa.id,
     'medication_added',
@@ -137,13 +196,34 @@ async function main() {
       expiry_date: '2027-05-01',
       stock: 18,
       ingredient: '阿托伐他汀',
+      related_disease: '高脂血症（演示）',
     },
     'seed-med-3',
   )
   await addEvent(
     grandpa.id,
+    'medication_added',
+    {
+      drug: '青霉素V钾片（演示）',
+      spec: '250mg×24片',
+      schedule: '待与医嘱核对（演示）',
+      expiry_date: '2026-03-01',
+      stock: 10,
+      ingredient: '青霉素',
+      note: '故意与过敏史对齐，仅用于冲突规则演示',
+    },
+    'seed-med-4',
+  )
+  await addEvent(
+    grandpa.id,
     'plan_created',
-    { drug: '阿托伐他汀钙片（演示）', schedule: '每晚睡前服用 1 片', due_time: '21:00', level: 'GENERAL' },
+    {
+      drug: '阿托伐他汀钙片（演示）',
+      schedule: '每晚睡前服用 1 片（演示）',
+      due_time: '21:00',
+      level: 'GENERAL',
+      related_disease: '高脂血症（演示）',
+    },
     'seed-plan-3',
   )
 

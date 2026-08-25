@@ -638,6 +638,43 @@ export interface WeatherResponse {
   reason?: string
 }
 
+export interface HealthNewsItem {
+  id: string
+  kind?: 'seasonal_tip' | 'remote'
+  title: string
+  summary: string
+  tag: string
+  chat_prompt: string
+  source: 'seasonal_calendar' | 'remote_whitelist'
+  source_name?: string | null
+  source_url?: string | null
+  published_at?: string | null
+  fetched_at?: string | null
+}
+
+export interface HealthNewsResponse {
+  status?:
+    | 'ok'
+    | 'stale'
+    | 'local_only'
+    | 'disabled'
+    | 'unconfigured'
+    | 'egress_blocked'
+    | 'rate_limited'
+    | 'timeout'
+    | 'provider_unavailable'
+    | 'invalid_response'
+    | 'error'
+  cache_status?: 'none' | 'miss' | 'fresh' | 'stale'
+  season: string
+  generated_at: string
+  fetched_at?: string | null
+  disclaimer: string
+  degraded_reason?: string | null
+  sources_attempted?: string[]
+  items: HealthNewsItem[]
+}
+
 export interface AssistantChatInput {
   messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>
   model?: string
@@ -785,9 +822,13 @@ export interface KnowledgeRetrieveResult {
   chunk_id?: string
   document_id?: string
   document_title?: string
+  title?: string
   text?: string
   score?: number
   locator?: string | null
+  match_reason?: string
+  matched_terms?: string[]
+  matched_synonyms?: string[]
   [key: string]: unknown
 }
 
