@@ -68,7 +68,7 @@ The browser evidence added by this increment is `tests/browser/hct405-visible-wo
 - `npm.cmd run test:web`
 - `npm.cmd run test:e2e:web` (uses Playwright Chromium; on this Windows host it uses the installed Edge executable)
 - `npm.cmd run check:web`
-- `uv run pytest tests/e2e/test_hct405_core_flows.py tests/e2e/test_hct405_failure_degradation.py tests/e2e/test_hct405_scenario_manifest.py tests/e2e/test_hct405_vision_review_release.py tests/e2e/test_hct405_deletion_propagation.py tests/e2e/test_hct405_portal_continuous.py tests/e2e/test_hct405_member_risk_loop.py`
+- `uv run pytest tests/e2e/test_hct405_core_flows.py tests/e2e/test_hct405_failure_degradation.py tests/e2e/test_hct405_scenario_manifest.py tests/e2e/test_hct405_vision_review_release.py tests/e2e/test_hct405_deletion_propagation.py tests/e2e/test_hct405_portal_continuous.py tests/e2e/test_hct405_member_risk_loop.py tests/e2e/test_hct405_family_login.py`
 - `uv run pytest tests/integration/test_hct405_review_migration.py tests/integration/test_hct405_erasure_migration.py tests/unit/test_hct207_review.py tests/unit/test_hct405_erasure.py tests/contract/test_hct202_quality_api.py tests/contract/test_hct205_evidence_api.py`
 - `HCT405_MYSQL_TEST_URL=<disposable-mysql-8.4-url> uv run pytest tests/integration/test_hct405_review_migration.py::test_review_wiring_upgrade_and_downgrade_on_mysql` (automated in CI)
 - `uv run pytest`

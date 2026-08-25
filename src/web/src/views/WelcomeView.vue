@@ -15,6 +15,7 @@ import {
   formatError,
   getBoundFaceHouseholdId,
   getBoundFaceHouseholdName,
+  portalWelcomeMessage,
   pushToast,
   session,
 } from '../store'
@@ -59,8 +60,10 @@ const localError = ref('')
 const loginHouseholds = ref<Household[]>([])
 const householdsLoading = ref(false)
 const householdsError = ref('')
+const pinIdentityPreview = ref('')
 let householdsRequest: AbortController | null = null
 let householdsTimer: ReturnType<typeof setTimeout> | null = null
+let pinPreviewRequest: AbortController | null = null
 
 const householdDraft = reactive({
   name: '',
@@ -106,6 +109,7 @@ watch(
     householdsLoading.value = false
     householdsError.value = ''
     localError.value = ''
+    pinIdentityPreview.value = ''
 
     if (nextAuthMode !== 'session' || (nextCredentialMode !== 'pin' && nextCredentialMode !== 'face')) return
     const actor = nextActorId.trim()
@@ -144,16 +148,46 @@ watch(
   },
 )
 
+watch(
+  () => [credentialMode.value, householdId.value, actorId.value, accessPurpose.value] as const,
+  ([mode, nextHouseholdId, nextActorId, nextPurpose]) => {
+    pinPreviewRequest?.abort()
+    pinPreviewRequest = null
+    pinIdentityPreview.value = ''
+    if (mode !== 'pin' || !nextHouseholdId.trim() || !nextActorId.trim()) return
+    if (!/^[a-z][a-z0-9-]{1,63}$/.test(nextPurpose.trim())) return
+    const previewController = new AbortController()
+    pinPreviewRequest = previewController
+    void apiClient.listMembers(nextHouseholdId.trim(), {
+      actorId: nextActorId.trim(),
+      accessPurpose: nextPurpose.trim(),
+      signal: previewController.signal,
+    }).then(members => {
+      if (previewController.signal.aborted) return
+      const self = members.find(member => member.actor_id === nextActorId.trim())
+      pinIdentityPreview.value = self?.display_name ?? ''
+    }).catch(() => {
+      if (!previewController.signal.aborted) pinIdentityPreview.value = ''
+    })
+  },
+)
+
 onBeforeUnmount(() => {
   householdsRequest?.abort()
+  pinPreviewRequest?.abort()
   if (householdsTimer) clearTimeout(householdsTimer)
 })
+
+function announcePortalEntry(): void {
+  if (session.status !== 'ready') return
+  pushToast('success', portalWelcomeMessage())
+}
 
 async function submitConnect(): Promise<void> {
   connecting.value = true
   try {
     await connect(actorId.value, accessPurpose.value)
-    if (session.status === 'ready') pushToast('success', '已进入家庭健康空间。')
+    announcePortalEntry()
   } finally {
     connecting.value = false
   }
@@ -187,7 +221,8 @@ async function submitSession(): Promise<void> {
       password.value = ''
       pin.value = ''
       faceFrames.value = []
-      pushToast('success', registerMode.value ? '本地账号已注册并登录。' : '已建立本地安全会话。')
+      pinIdentityPreview.value = ''
+      announcePortalEntry()
     }
   } finally {
     connecting.value = false
@@ -343,7 +378,9 @@ async function submitCreate(): Promise<void> {
           </div>
           <label v-if="credentialMode === 'pin'" class="field">
             家庭成员身份
-            <input v-model="actorId" autocomplete="username" placeholder="例如 parent-1" required />
+            <input v-model="actorId" autocomplete="username" placeholder="例如 grandma-1" required />
+            <small v-if="pinIdentityPreview">将以 <strong>{{ pinIdentityPreview }}</strong> 的身份进入成员前台。</small>
+            <small v-else>填写管理员为你绑定的登录账号，不是家庭名称。</small>
           </label>
           <label v-if="credentialMode === 'password'" class="field">
             密码

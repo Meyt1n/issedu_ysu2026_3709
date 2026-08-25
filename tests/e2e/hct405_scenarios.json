@@ -284,6 +284,37 @@
       ],
       "limitations": ["合成规则事实不代表正式药品固定集或已发布模型。"],
       "acceptance_gate_scenario_id": "confirmed_event_to_rule_alert"
+    },
+    {
+      "id": "HCT405-15",
+      "title": "PIN/人脸正式登录后进入成员上下文",
+      "status": "automated",
+      "preconditions": ["合成家庭", "成员账号绑定 PIN", "HCT-439 门户分流"],
+      "roles": ["member", "owner"],
+      "steps": [
+        "成员 PIN 登录获得 Bearer 会话",
+        "服务端确认成员只能读取本人范围",
+        "成员不能访问复核队列",
+        "Web 端自动进入 member-home 并显示成员姓名"
+      ],
+      "expected_states": [
+        "family_login_to_member_context 场景 PASS",
+        "owner PIN 登录仍保留管理员复核范围"
+      ],
+      "permission_boundary": "成员 review-tasks 返回隐藏式 404；owner 可读全家复核队列。",
+      "audit_evidence": [
+        "tests/e2e/test_hct405_family_login.py",
+        "src/web/src/store.ts portalWelcomeMessage",
+        "tests/browser/hct423-pin-portal.spec.ts"
+      ],
+      "cleanup": "pytest fixture 删除临时家庭。",
+      "coverage_tags": ["pin-login", "member-portal", "formal-auth"],
+      "automated_tests": [
+        "tests/e2e/test_hct405_family_login.py::test_pin_login_establishes_member_context_and_blocks_admin_routes",
+        "tests/browser/hct423-pin-portal.spec.ts"
+      ],
+      "limitations": ["浏览器用例为 mock API；真实摄像头人脸仍待 R3。"],
+      "acceptance_gate_scenario_id": "family_login_to_member_context"
     }
   ]
 }

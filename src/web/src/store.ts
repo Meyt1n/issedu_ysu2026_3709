@@ -551,6 +551,14 @@ export function selectMember(memberId: string): void {
   state.selectedMemberId = memberId
 }
 
+export function portalWelcomeMessage(): string {
+  if (state.portal === 'member') {
+    const name = state.members.find(member => member.id === state.selectedMemberId)?.display_name
+    return name ? `你好，${name}。已进入家庭成员前台。` : '已进入家庭成员前台。'
+  }
+  return '已进入家庭管理后台。'
+}
+
 export async function loadHouseholdScope(): Promise<void> {
   const householdId = state.selectedHouseholdId
   if (!householdId) return

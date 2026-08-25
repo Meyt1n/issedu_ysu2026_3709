@@ -24,6 +24,9 @@ DEFAULT_OUTPUT = REPO_ROOT / "artifacts" / "hct405-local-evidence.json"
 AUTOMATED_TESTS = (
     "tests/e2e/test_hct405_core_flows.py",
     "tests/e2e/test_hct405_vision_review_release.py",
+    "tests/e2e/test_hct405_portal_continuous.py",
+    "tests/e2e/test_hct405_member_risk_loop.py",
+    "tests/e2e/test_hct405_family_login.py",
     "tests/integration/test_hct413_risk_ack.py",
 )
 
