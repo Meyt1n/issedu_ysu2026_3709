@@ -983,3 +983,91 @@ def test_medication_safety_without_reviewed_knowledge_degrades(
     assert result["degrade_reason"] in {"NO_AUTHORISED_DOCUMENTS", "EVIDENCE_REQUIRED"}
     assert result["query_type"] == "MEDICATION_SAFETY"
     assert result["sources"] == []
+
+
+def test_symptom_medication_empty_library_degrades_gently(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """HCT-448: symptom-material questions on an empty knowledge library get a
+    friendly teaching fallback, not the harsh evidence wall with escalate."""
+
+    def scripted_chat(_self: OllamaClient, **kwargs: object) -> dict:
+        messages = kwargs["messages"]  # type: ignore[index]
+        tool_names = [
+            message.get("name")
+            for message in messages
+            if isinstance(message, dict) and message.get("role") == "tool"
+        ]
+        if "retrieve_knowledge" not in tool_names:
+            return {
+                "message": {
+                    "content": "",
+                    "tool_calls": [{
+                        "function": {
+                            "name": "retrieve_knowledge",
+                            "arguments": {"query": "鼻塞 用药资料"},
+                        },
+                    }],
+                },
+            }
+        return {
+            "message": {
+                "content": json.dumps({
+                    "answer": "夏天空调直吹容易鼻塞，可以先补水休息观察一下。",
+                    "sources": [],
+                    "confidence": "low",
+                    "escalate": False,
+                }, ensure_ascii=False),
+            },
+        }
+
+    monkeypatch.setattr(OllamaClient, "chat", scripted_chat)
+    result = run_assistant(
+        db_session,
+        messages=[{
+            "role": "user",
+            "content": "夏天吹空调后有点鼻塞，一般可以了解哪些用药资料？",
+        }],
+        actor_id="symptom-owner",
+    )
+    assert result["query_type"] == "SYMPTOM_MEDICATION"
+    assert result["degraded"] is True
+    assert result["degrade_reason"] == "KNOWLEDGE_UNAVAILABLE"
+    assert result["escalate"] is False
+    assert "暂时没有" in result["answer"]
+    assert "医生或药师" in result["answer"]
+    assert "缺少可核验的本地知识引用" not in result["answer"]
+    assert result["suggested_questions"]
+    assert result["citations"] == []
+
+
+def test_symptom_medication_uncited_answer_degrades_gently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An uncited model draft for SYMPTOM_MEDICATION is dropped in favour of
+    the friendly fallback — never returned as if it were evidence-backed."""
+
+    def scripted_chat(_self: OllamaClient, **kwargs: object) -> dict:
+        return {
+            "message": {
+                "content": json.dumps({
+                    "answer": "感冒了多喝热水，可以吃点常备药看看。",
+                    "sources": [],
+                    "confidence": "medium",
+                    "escalate": False,
+                }, ensure_ascii=False),
+            },
+        }
+
+    monkeypatch.setattr(OllamaClient, "chat", scripted_chat)
+    result = run_assistant(
+        None,
+        messages=[{"role": "user", "content": "感冒了应该吃什么药？"}],
+        actor_id="symptom-owner",
+    )
+    assert result["query_type"] == "SYMPTOM_MEDICATION"
+    assert result["degraded"] is True
+    assert result["degrade_reason"] == "KNOWLEDGE_UNAVAILABLE"
+    assert result["escalate"] is False
+    assert "常备药" not in result["answer"]

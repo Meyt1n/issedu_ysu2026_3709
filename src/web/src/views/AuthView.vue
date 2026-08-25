@@ -10,6 +10,21 @@ import type {
   UpdateAuthorizationInput,
 } from '../api/types'
 import {
+  AUTHORIZATION_TEMPLATES,
+  PURPOSE_OPTIONS,
+  PURPOSE_PATTERN,
+  applyTemplate,
+  auditActionLabel,
+  auditOperationLabel,
+  auditOutcomeLabel,
+  auditReasonLabel,
+  buildHandoffText,
+  daysUntilExpiry,
+  isExpiringSoon,
+  purposeLabel,
+  type AuthorizationTemplate,
+} from '../authorization/authorizationTemplates'
+import {
   isAuthorizationActive,
 } from '../authorization/authorizationView'
 import AppIcon from '../components/AppIcon.vue'
@@ -35,7 +50,8 @@ const ACTION_OPTIONS: Array<{ value: AuthorizationAction; label: string }> = [
   { value: 'ACK_RISK', label: '确认风险已知晓' },
 ]
 
-const purposePattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/
+const CUSTOM_PURPOSE = '__custom__'
+const RENEW_DAYS = 30
 
 const authorizations = ref<Authorization[]>([])
 const audits = ref<AccessAudit[]>([])
@@ -45,6 +61,10 @@ const saving = ref(false)
 const formError = ref('')
 const selectedAuthorizationId = ref<string | null>(null)
 const showAudits = ref(false)
+const appliedTemplateId = ref<string | null>(null)
+const purposeChoice = ref<string>('family-care')
+const lastGrant = ref<{ authorization: Authorization; handoffText: string } | null>(null)
+const handoffTextarea = ref<HTMLTextAreaElement | null>(null)
 
 const draft = reactive({
   memberId: '',
@@ -65,8 +85,19 @@ const canSave = computed(
     draft.granteeActorId.trim().length > 0 &&
     draft.dataFields.length > 0 &&
     draft.actions.length > 0 &&
-    purposePattern.test(draft.purpose) &&
+    PURPOSE_PATTERN.test(draft.purpose) &&
     isFutureDate(draft.validUntil),
+)
+
+/** 家庭里已绑定账号的成员，作为「照护者账号」的选择建议；仍允许手工输入其它账号。 */
+const caregiverSuggestions = computed(() =>
+  session.members
+    .filter(member => member.actor_id && member.actor_id !== session.actorId)
+    .map(member => ({
+      actorId: member.actor_id as string,
+      displayName: member.display_name,
+      role: memberRoleLabel(member.role),
+    })),
 )
 
 function fieldLabel(value: string): string {
@@ -77,10 +108,9 @@ function actionLabel(value: string): string {
   return ACTION_OPTIONS.find(item => item.value === value)?.label ?? value
 }
 
-function purposeHint(purpose: string): string {
-  if (purpose === 'family-care') return '家庭日常照护'
-  if (purpose === 'emergency-care') return '紧急照护'
-  return purpose
+function describePurpose(purpose: string): string {
+  const label = purposeLabel(purpose)
+  return label === purpose ? purpose : `${label}（${purpose}）`
 }
 
 function localDateTimeInput(daysFromNow: number): string {
@@ -103,15 +133,44 @@ function isFutureDate(value: string): boolean {
   return Number.isFinite(timestamp) && timestamp > Date.now()
 }
 
+function syncPurposeChoice(purpose: string): void {
+  purposeChoice.value = PURPOSE_OPTIONS.some(option => option.code === purpose)
+    ? purpose
+    : CUSTOM_PURPOSE
+}
+
+function onPurposeChoiceChange(): void {
+  if (purposeChoice.value !== CUSTOM_PURPOSE) {
+    draft.purpose = purposeChoice.value
+  } else if (PURPOSE_OPTIONS.some(option => option.code === draft.purpose)) {
+    draft.purpose = ''
+  }
+}
+
 function resetDraft(): void {
   selectedAuthorizationId.value = null
   formError.value = ''
+  appliedTemplateId.value = null
   draft.memberId = session.members[0]?.id ?? ''
   draft.granteeActorId = ''
   draft.dataFields = ['health_events']
   draft.actions = ['READ_EVENTS']
   draft.purpose = 'family-care'
   draft.validUntil = localDateTimeInput(7)
+  syncPurposeChoice(draft.purpose)
+}
+
+function useTemplate(template: AuthorizationTemplate): void {
+  if (selectedAuthorization.value) return
+  const applied = applyTemplate(template)
+  draft.dataFields = applied.dataFields
+  draft.actions = applied.actions
+  draft.purpose = applied.purpose
+  draft.validUntil = toLocalDateTimeInput(applied.validUntil)
+  appliedTemplateId.value = template.id
+  formError.value = ''
+  lastGrant.value = null
+  syncPurposeChoice(draft.purpose)
 }
 
 async function loadAuthorizations(): Promise<void> {
@@ -153,6 +212,9 @@ function editAuthorization(authorization: Authorization): void {
   draft.purpose = authorization.purpose
   draft.validUntil = toLocalDateTimeInput(authorization.valid_until)
   formError.value = ''
+  appliedTemplateId.value = null
+  lastGrant.value = null
+  syncPurposeChoice(draft.purpose)
 }
 
 function updateSelectedFields(value: string, checked: boolean): void {
@@ -167,9 +229,38 @@ function updateSelectedActions(value: AuthorizationAction, checked: boolean): vo
     : draft.actions.filter(action => action !== value)
 }
 
+function buildGrantHandoff(authorization: Authorization): string {
+  return buildHandoffText({
+    granteeActorId: authorization.grantee_actor_id,
+    memberName: memberNames.value.get(authorization.member_id) ?? '家庭成员',
+    fieldLabels: authorization.data_fields.map(fieldLabel),
+    actionLabels: authorization.actions.map(actionLabel),
+    purposeCode: authorization.purpose,
+    validUntilText: formatDateTime(authorization.valid_until),
+  })
+}
+
+async function copyHandoff(): Promise<void> {
+  const grant = lastGrant.value
+  if (!grant) return
+  try {
+    await navigator.clipboard.writeText(grant.handoffText)
+    pushToast('success', '交接说明已复制，可以发给对方了。')
+  } catch {
+    const textarea = handoffTextarea.value
+    if (textarea) {
+      textarea.focus()
+      textarea.select()
+      pushToast('info', '已选中说明文本，请按 Ctrl+C 复制。')
+    } else {
+      pushToast('error', '复制失败，请手动全选文本复制。')
+    }
+  }
+}
+
 async function saveAuthorization(): Promise<void> {
   if (!session.selectedHouseholdId || !canSave.value) {
-    formError.value = '请完整选择成员、照护者身份、字段与动作，填写合法用途代码，并设置一个未来的到期时间。'
+    formError.value = '请完整选择成员、照护者账号、可见内容与允许操作，选择授权用途，并设置一个未来的到期时间。'
     return
   }
 
@@ -209,12 +300,43 @@ async function saveAuthorization(): Promise<void> {
         { ...requestOptions.value, idempotencyKey: createIdempotencyKey() },
       )
       authorizations.value = [...authorizations.value, created]
+      lastGrant.value = { authorization: created, handoffText: buildGrantHandoff(created) }
       pushToast('success', '授权已创建，默认遵循最小权限原则。')
     }
     resetDraft()
     void loadAudits()
   } catch (cause) {
     formError.value = formatError(cause)
+  } finally {
+    saving.value = false
+  }
+}
+
+async function renewAuthorization(authorization: Authorization): Promise<void> {
+  if (!session.selectedHouseholdId || !isAuthorizationActive(authorization)) return
+
+  const base = Math.max(Date.parse(authorization.valid_until), Date.now())
+  const nextValidUntil = new Date(base + RENEW_DAYS * 86_400_000)
+  const accepted = await askConfirm({
+    title: `续期 ${RENEW_DAYS} 天？`,
+    message: `「${memberNames.value.get(authorization.member_id) ?? '该成员'}」给 ${authorization.grantee_actor_id} 的授权将延长到 ${formatDateTime(nextValidUntil.toISOString())}，权限范围不变。`,
+    confirmText: '确认续期',
+  })
+  if (!accepted) return
+
+  saving.value = true
+  try {
+    const updated = await apiClient.updateAuthorization(
+      session.selectedHouseholdId,
+      authorization.id,
+      { expected_version: authorization.version, valid_until: nextValidUntil.toISOString() },
+      { ...requestOptions.value, idempotencyKey: createIdempotencyKey() },
+    )
+    authorizations.value = authorizations.value.map(item => (item.id === updated.id ? updated : item))
+    pushToast('success', `授权已续期到 ${formatDateTime(updated.valid_until)}。`)
+    void loadAudits()
+  } catch (cause) {
+    pushToast('error', formatError(cause))
   } finally {
     saving.value = false
   }
@@ -240,6 +362,7 @@ async function revokeAuthorization(authorization: Authorization): Promise<void> 
     )
     authorizations.value = authorizations.value.map(item => (item.id === revoked.id ? revoked : item))
     if (selectedAuthorizationId.value === authorization.id) resetDraft()
+    if (lastGrant.value?.authorization.id === authorization.id) lastGrant.value = null
     pushToast('success', '授权已撤回，对应照护者立即失去访问权限。')
     void loadAudits()
   } catch (cause) {
@@ -251,6 +374,10 @@ async function revokeAuthorization(authorization: Authorization): Promise<void> 
 
 function grantStatus(authorization: Authorization): { label: string; tone: string } {
   if (isAuthorizationActive(authorization)) {
+    if (isExpiringSoon(authorization)) {
+      const days = daysUntilExpiry(authorization.valid_until)
+      return { label: `即将到期 · 剩 ${days} 天`, tone: 'gold' }
+    }
     return { label: `有效至 ${formatDateTime(authorization.valid_until)}`, tone: 'pine' }
   }
   if (authorization.revoked_at) return { label: '已撤回', tone: 'rose' }
@@ -260,6 +387,7 @@ function grantStatus(authorization: Authorization): { label: string; tone: strin
 watch(
   () => session.selectedHouseholdId,
   () => {
+    lastGrant.value = null
     void loadAuthorizations()
     void loadAudits()
   },
@@ -277,11 +405,11 @@ onMounted(() => {
       <div>
         <h2 class="hero-greeting">授权管理</h2>
         <p class="hero-sub">
-          精细授权可见范围、用途与到期时间；撤回立即生效。
+          决定家里谁能看到哪些健康内容、能做什么、什么时候到期；撤回立即生效。
         </p>
         <p v-if="session.isOwnerView" class="hero-sub review-session-meta">
           登录 <strong>{{ session.actorId }}</strong>
-          · 用途 <strong>{{ purposeHint(session.accessPurpose) }}</strong>（{{ session.accessPurpose || '未填' }}）
+          · 用途 <strong>{{ purposeLabel(session.accessPurpose) }}</strong>（{{ session.accessPurpose || '未填' }}）
           · <span class="pill pine" style="display: inline-flex; margin-left: 4px">可管授权</span>
         </p>
       </div>
@@ -299,7 +427,7 @@ onMounted(() => {
       </div>
       <p class="card-note" style="margin-top: -2px">
         登录 <strong>{{ session.actorId }}</strong>
-        · 用途 <strong>{{ purposeHint(session.accessPurpose) }}</strong>
+        · 用途 <strong>{{ purposeLabel(session.accessPurpose) }}</strong>
         （{{ session.accessPurpose || '未填' }}）。服务端只返回已授权内容。
       </p>
       <ul class="list-plain" style="margin-top: 12px">
@@ -348,10 +476,24 @@ onMounted(() => {
             <span class="loading-dots"><span /><span /><span /></span>
             正在读取授权
           </div>
-          <div v-else-if="authorizations.length === 0" class="empty-state">
+          <div v-else-if="authorizations.length === 0" class="empty-state auth-empty-state">
             <AppIcon class="empty-art" name="key" :size="32" />
             <strong>还没有为照护者创建授权</strong>
-            <p>在右侧创建第一条授权，默认最小权限。</p>
+            <p>从一个常见场景开始，权限默认最小、随时可撤回：</p>
+            <div class="auth-empty-templates">
+              <button
+                v-for="template in AUTHORIZATION_TEMPLATES"
+                :key="template.id"
+                type="button"
+                class="btn btn-ghost btn-small"
+                @click="useTemplate(template)"
+              >
+                {{ template.name }}
+              </button>
+            </div>
+            <p class="text-faint" style="font-size: 12px; margin: 8px 0 0">
+              点击后右侧表单会自动填好，可再逐项调整。
+            </p>
           </div>
           <ul v-else class="list-plain">
             <li
@@ -372,9 +514,9 @@ onMounted(() => {
                 <span class="pill" :class="grantStatus(authorization).tone">{{ grantStatus(authorization).label }}</span>
               </div>
               <p class="row-meta" style="margin: 0">
-                字段：{{ authorization.data_fields.map(fieldLabel).join('、') }} ·
-                动作：{{ authorization.actions.map(actionLabel).join('、') }}<br />
-                用途：{{ purposeHint(authorization.purpose) }}（{{ authorization.purpose }}） · 版本 v{{ authorization.version }}
+                能看：{{ authorization.data_fields.map(fieldLabel).join('、') }} ·
+                能做：{{ authorization.actions.map(actionLabel).join('、') }}<br />
+                用途：{{ describePurpose(authorization.purpose) }} · 版本 v{{ authorization.version }}
               </p>
               <div class="row-actions" @click.stop>
                 <button
@@ -384,6 +526,14 @@ onMounted(() => {
                   @click="editAuthorization(authorization)"
                 >
                   编辑
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-small"
+                  :disabled="saving || !isAuthorizationActive(authorization)"
+                  @click="renewAuthorization(authorization)"
+                >
+                  续期 30 天
                 </button>
                 <button
                   type="button"
@@ -415,13 +565,15 @@ onMounted(() => {
                 <span class="timeline-dot" :class="audit.outcome === 'SUCCESS' || audit.outcome === 'ALLOWED' ? 'pine' : 'rose'" />
                 <div class="timeline-body">
                   <div class="timeline-title-row">
-                    <span class="timeline-event">{{ audit.operation }} · {{ audit.action }}</span>
+                    <span class="timeline-event">
+                      {{ auditOperationLabel(audit.operation) }} · {{ auditActionLabel(audit.action) }}
+                    </span>
                     <span class="pill" :class="audit.outcome === 'SUCCESS' || audit.outcome === 'ALLOWED' ? 'pine' : 'rose'">
-                      {{ audit.outcome }}
+                      {{ auditOutcomeLabel(audit.outcome) }}
                     </span>
                   </div>
-                  <span class="timeline-meta">
-                    {{ audit.actor_id }} · {{ audit.data_field }}{{ audit.reason ? ` · ${audit.reason}` : '' }} ·
+                  <span class="timeline-meta" :title="audit.reason ?? undefined">
+                    {{ audit.actor_id }} · {{ fieldLabel(audit.data_field) }}{{ audit.reason ? ` · ${auditReasonLabel(audit.reason)}` : '' }} ·
                     {{ formatDateTime(audit.created_at) }}
                   </span>
                 </div>
@@ -429,12 +581,49 @@ onMounted(() => {
             </ul>
           </template>
           <p v-else class="card-note" style="margin: 0">
-            授权变更与访问判定会留痕；点「展开」查看。
+            谁在什么时候访问或修改了哪些授权内容、被允许还是被拒绝，都会留痕；点「展开」查看。
           </p>
         </section>
       </div>
 
       <section class="card" style="align-self: start">
+        <div v-if="lastGrant" class="auth-success-panel" role="status">
+          <div class="row-top" style="align-items: center">
+            <span class="row-title">
+              <AppIcon name="check" :size="17" style="color: var(--pine)" />
+              授权已生效，接下来交给对方
+            </span>
+            <button type="button" class="btn btn-ghost btn-small" @click="lastGrant = null">关闭</button>
+          </div>
+          <ol class="auth-success-steps">
+            <li>
+              请对方用账号
+              <code class="auth-actor-id">{{ lastGrant.authorization.grantee_actor_id }}</code>
+              登录家健镜；
+            </li>
+            <li>
+              登录页「访问用途代码」填
+              <strong>{{ lastGrant.authorization.purpose }}</strong>
+              （{{ purposeLabel(lastGrant.authorization.purpose) }}），必须一致才能看到内容；
+            </li>
+            <li>
+              授权到 {{ formatDateTime(lastGrant.authorization.valid_until) }} 自动失效；
+              随时可在左侧列表撤回或续期。
+            </li>
+          </ol>
+          <textarea
+            ref="handoffTextarea"
+            class="auth-handoff-text"
+            readonly
+            rows="7"
+            aria-label="授权交接说明"
+            :value="lastGrant.handoffText"
+          />
+          <button type="button" class="btn btn-primary btn-small" @click="copyHandoff">
+            复制说明发给对方
+          </button>
+        </div>
+
         <div class="card-heading">
           <div>
             <p class="eyebrow">授权编辑器</p>
@@ -451,14 +640,50 @@ onMounted(() => {
             <code class="auth-actor-id">{{ selectedAuthorization.grantee_actor_id }}</code>
             可见：{{ selectedAuthorization.data_fields.map(fieldLabel).join('、') }}；
             可做：{{ selectedAuthorization.actions.map(actionLabel).join('、') }}；
-            用途 {{ purposeHint(selectedAuthorization.purpose) }}。
+            用途 {{ purposeLabel(selectedAuthorization.purpose) }}。
+          </p>
+        </div>
+
+        <div v-if="!selectedAuthorization" class="auth-template-block">
+          <p class="eyebrow" style="margin: 0 0 6px">按场景快速填写</p>
+          <div class="auth-template-list">
+            <button
+              v-for="template in AUTHORIZATION_TEMPLATES"
+              :key="template.id"
+              type="button"
+              class="auth-template-chip"
+              :class="{ active: appliedTemplateId === template.id }"
+              @click="useTemplate(template)"
+            >
+              <strong>{{ template.name }}</strong>
+              <span>{{ template.description }}</span>
+            </button>
+          </div>
+          <p class="text-faint" style="font-size: 12px; margin: 6px 0 0">
+            模板只是起点：不包含「追加事件」等写权限，套用后仍可逐项调整。
           </p>
         </div>
 
         <form class="section-stack" @submit.prevent="saveAuthorization">
           <label class="field">
-            照护者身份标识
-            <input v-model="draft.granteeActorId" autocomplete="off" required placeholder="例如 child-1" :disabled="Boolean(selectedAuthorization)" />
+            照护者账号
+            <input
+              v-model="draft.granteeActorId"
+              autocomplete="off"
+              required
+              placeholder="例如 child-1"
+              list="caregiver-account-options"
+              :disabled="Boolean(selectedAuthorization)"
+            />
+            <datalist id="caregiver-account-options">
+              <option
+                v-for="suggestion in caregiverSuggestions"
+                :key="suggestion.actorId"
+                :value="suggestion.actorId"
+                :label="`${suggestion.displayName}（${suggestion.role}）`"
+              />
+            </datalist>
+            <small>对方登录家健镜时使用的账号；家庭里已绑定账号的成员会出现在建议里。</small>
           </label>
           <label class="field">
             家庭成员
@@ -469,7 +694,7 @@ onMounted(() => {
             </select>
           </label>
           <fieldset>
-            <legend>数据字段</legend>
+            <legend>对方能看到的内容</legend>
             <label v-for="field in FIELD_OPTIONS" :key="field.value" class="check-row">
               <input
                 type="checkbox"
@@ -480,7 +705,7 @@ onMounted(() => {
             </label>
           </fieldset>
           <fieldset>
-            <legend>允许动作</legend>
+            <legend>对方能做的操作</legend>
             <label v-for="action in ACTION_OPTIONS" :key="action.value" class="check-row">
               <input
                 type="checkbox"
@@ -491,13 +716,33 @@ onMounted(() => {
             </label>
           </fieldset>
           <label class="field">
-            用途代码
-            <input v-model="draft.purpose" pattern="[A-Za-z0-9][A-Za-z0-9._:-]{0,63}" required placeholder="family-care" />
-            <small>例如 family-care = 家庭日常照护；访问时须用途一致。</small>
+            授权用途
+            <select v-model="purposeChoice" required @change="onPurposeChoiceChange">
+              <option v-for="option in PURPOSE_OPTIONS" :key="option.code" :value="option.code">
+                {{ option.label }}（{{ option.code }}）
+              </option>
+              <option :value="CUSTOM_PURPOSE">自定义代码…</option>
+            </select>
+            <small v-if="purposeChoice !== CUSTOM_PURPOSE">
+              {{ PURPOSE_OPTIONS.find(option => option.code === purposeChoice)?.description }}；
+              对方登录时填写的用途代码必须与这里一致。
+            </small>
+          </label>
+          <label v-if="purposeChoice === CUSTOM_PURPOSE" class="field">
+            自定义用途代码
+            <input
+              v-model="draft.purpose"
+              pattern="[A-Za-z0-9][A-Za-z0-9._:-]{0,63}"
+              required
+              placeholder="例如 rehab-support"
+              autocomplete="off"
+            />
+            <small>字母或数字开头，可含点、下划线、冒号、连字符；对方访问时必须填写同一代码。</small>
           </label>
           <label class="field">
             到期时间
             <input v-model="draft.validUntil" type="datetime-local" required />
+            <small>到期后对方自动看不到内容；可随时在左侧续期或撤回。</small>
           </label>
           <p v-if="formError" class="notice error" role="alert">
             <AppIcon name="alert" :size="16" />

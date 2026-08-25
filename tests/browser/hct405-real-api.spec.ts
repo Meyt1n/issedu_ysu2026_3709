@@ -34,7 +34,8 @@ function navItem(page: Page, label: string) {
 
 async function enterDevIdentity(page: Page, actorId: string): Promise<void> {
   await page.goto('/')
-  await expect(page.getByRole('button', { name: '进入家庭空间' })).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByRole('button', { name: '开发演示' })).toBeVisible({ timeout: 20_000 })
+  await page.getByRole('button', { name: '开发演示' }).click()
   await page.getByLabel('开发身份标识').fill(actorId)
   await page.getByRole('button', { name: '进入家庭空间' }).click()
   await expect(page.locator('.app-frame')).toBeVisible({ timeout: 20_000 })
@@ -87,12 +88,20 @@ test('管理员创建并撤回授权，审计链与服务端状态一致', async
   await navItem(page, '授权管理').click()
   await expect(page.getByRole('heading', { name: '新建授权' })).toBeVisible()
 
-  await page.getByLabel('照护者身份标识').fill(scope.caregiverId)
+  await page.getByLabel('照护者账号').fill(scope.caregiverId)
   await page.getByRole('button', { name: '创建授权' }).click()
   await expect(page.getByText('授权已创建，默认遵循最小权限原则。')).toBeVisible()
 
-  await page.getByLabel('输入照护者身份查看其可见范围').fill(scope.caregiverId)
-  await expect(page.getByText(/可见字段：health_events/)).toBeVisible()
+  // HCT-449：创建成功后出现交接闭环（对方账号 + 登录用途代码 + 到期时间）
+  const successPanel = page.locator('.auth-success-panel')
+  await expect(successPanel.getByText('授权已生效，接下来交给对方')).toBeVisible()
+  await expect(successPanel.getByLabel('授权交接说明')).toHaveValue(new RegExp(scope.caregiverId))
+
+  // 点选授权卡片查看对方可见范围（当前 UI；不加载健康事件正文）
+  const grantCard = page.locator('.auth-grant-card').filter({ hasText: scope.caregiverId })
+  await grantCard.click()
+  await expect(page.getByText('对方能看到什么')).toBeVisible()
+  await expect(page.getByText(/可见：已确认健康事件/)).toBeVisible()
 
   await page.getByRole('button', { name: '撤回授权' }).first().click()
   const dialog = page.getByRole('alertdialog')

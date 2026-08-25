@@ -147,6 +147,18 @@
       "query": "child 儿童误服药品怎么办",
       "expect_title_contains": "家庭药品存放与过期处置教学卡",
       "must_not_title_contains": ["指标趋势"]
+    },
+    {
+      "id": "kb-gold-025",
+      "query": "夏天吹空调后有点鼻塞，一般可以了解哪些用药资料",
+      "expect_title_contains": "感冒样症状居家照护教学卡",
+      "must_not_title_contains": ["天气行动卡", "语音交互"]
+    },
+    {
+      "id": "kb-gold-026",
+      "query": "感冒了可以了解哪些非处方资料",
+      "expect_title_contains": "感冒样症状居家照护教学卡",
+      "must_not_title_contains": ["药箱分类盘点"]
     }
   ]
 }

@@ -98,6 +98,27 @@ scripts/start.ps1 web
 
 `VISION_ADAPTER_SIGNING_KEY` 必须与 worker 的 `HCT_ADAPTER_SIGNING_KEY` 相同（示例均为 `dev-only-change-me`）。v5 尚未完成正式评估，输出只用于教学演示。
 
+### 可选：启用联网搜索与刷新知识库
+
+两项能力默认关闭/受限。**按步骤启用请看专文：**
+
+→ [联网搜索与知识库刷新启用指南](docs/demo/联网搜索与知识库刷新启用指南.md)
+
+（环境说明亦可对照[本地部署与 Demo 操作指南 §4.2/§4.3](docs/本地部署与Demo操作指南.md)。）
+
+**最短路径（课堂演示）：**
+
+1. `.env` 写入并重启 API：
+
+```dotenv
+AGENT_WEB_SEARCH_ENABLED=true
+AGENT_WEB_SEARCH_PROVIDER=fixture
+```
+
+2. 网页 Actor 填 `demo-parent` → 助手页勾选「补充联网参考」→ 提问。
+3. 同一身份打开「知识文档」→「一键教学闭环：抓取 → 批准 → 晋升」→ 按页面提示做 dry-run 入库。
+
+外部结果只作为「外部参考（非本地审核证据）」；爬虫**永不 auto_ingest**。
 ### 提交前检查
 
 ```powershell

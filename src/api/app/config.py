@@ -176,7 +176,13 @@ class Settings(BaseSettings):
             problems.append("BIOMETRIC_ENCRYPTION_KEY must be replaced")
         if not self.egress_default_deny:
             problems.append("EGRESS_DEFAULT_DENY must remain true")
-        if self.agent_web_search_enabled and not self.agent_web_search_allowed_domain_set:
+        if (
+            self.agent_web_search_enabled
+            # The offline teaching-fixture provider performs no egress, so it
+            # does not need (and must not pretend to need) a domain allowlist.
+            and self.agent_web_search_provider.strip().casefold() != "fixture"
+            and not self.agent_web_search_allowed_domain_set
+        ):
             problems.append("AGENT_WEB_SEARCH_ALLOWED_DOMAINS is required when search is enabled")
         if (
             self.health_news_adapter.strip().casefold() == "enabled"

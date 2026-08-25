@@ -196,7 +196,70 @@ Web Demo 可直接演示同一流程：
 
 Windows 本地开发代理固定使用 `127.0.0.1`，避免 `localhost` 解析为 IPv6 而 API 仅监听 IPv4。API 启动脚本和容器必须同时包含 `src/api` 与 `src` 的 Python 导入路径，否则质量模块无法加载。
 
-### 4.2 HCT-201 教学演示主数据（INTERNAL_TEACHING_DEMO）
+### 4.2 如何启用联网搜索（HCT-430，含离线教学夹具）
+
+> **用户向分步教程（含排障表）：** [联网搜索与知识库刷新启用指南](demo/联网搜索与知识库刷新启用指南.md)
+
+联网搜索默认关闭（`AGENT_WEB_SEARCH_ENABLED=false`），且必须**双重开启**：部署开关 + 每次请求在助手页勾选「补充联网参考」。未启用时助手页会显示不可用原因与本节指引；`/api/v1/assistant/agents` 返回 `web_search_ready` 与 `web_search_unavailable_reason`（`DEPLOYMENT_DISABLED` / `EGRESS_BLOCKED` / `OPT_IN_REQUIRED`）供排查。
+
+**路线 A：离线教学夹具（推荐课堂/无网演示，完全不出网）**
+
+在 `.env` 中设置并重启 API：
+
+```dotenv
+AGENT_WEB_SEARCH_ENABLED=true
+AGENT_WEB_SEARCH_PROVIDER=fixture
+```
+
+助手页勾选「补充联网参考」后，联网节点返回本机合成的教学夹具参考（域名固定为保留域 `fixture.invalid`，自带「教学夹具，非真实网页」标注），`agent_trace` 中该节点 `network_used=false`。夹具内容不构成医疗证据，只用于演示外部参考的展示样式。
+
+**路线 B：真实联网（白名单出口）**
+
+```dotenv
+AGENT_WEB_SEARCH_ENABLED=true
+AGENT_WEB_SEARCH_PROVIDER=duckduckgo_html
+AGENT_WEB_SEARCH_URL=https://html.duckduckgo.com/html/
+AGENT_WEB_SEARCH_ALLOWED_DOMAINS=html.duckduckgo.com
+```
+
+自建 SearXNG 可改用 `AGENT_WEB_SEARCH_PROVIDER=searxng` 并把 URL/白名单指向实例地址。硬边界不变：仅发送脱敏后的问题（自动移除 ID/手机号/邮箱/成员姓名），不发送任何健康记录；外部结果单独放在 `external_sources`，页面标注「外部参考（非本地审核证据）」，永不进入本地引用；搜索失败只降级联网节点，不影响本地档案/规则/知识链路。
+
+验证命令（重启 API 后）：
+
+```powershell
+curl.exe http://localhost:8000/api/v1/assistant/agents -H "X-Actor-ID: demo-parent"
+# 期望 web_search_ready=true 且 web_search_unavailable_reason=OPT_IN_REQUIRED
+```
+
+### 4.3 如何刷新知识库（HCT-401 受控爬虫闭环）
+
+> **用户向分步教程（含排障表）：** [联网搜索与知识库刷新启用指南](demo/联网搜索与知识库刷新启用指南.md)
+
+知识爬虫只抓 `docs/knowledge/crawl/allowlist.json` 白名单来源，默认仅本地夹具；结果进入 staging 草稿，**永不 auto_ingest**。Web 入口在「知识文档」页右侧「知识爬虫 / Staging」卡片，仅知识管理员可见可操作：演示身份用 `demo-parent`、`knowledge-steward` 或任意 `demo-` 前缀账号；正式部署把账号加入 `.env` 的 `KNOWLEDGE_ADMIN_ACTORS`（逗号分隔）后重启 API。非管理员会看到明确的「需要知识管理员身份」提示。
+
+Web 一键教学闭环：点击「一键教学闭环：抓取 → 批准 → 晋升」按钮即可完成夹具抓取、批准与晋升，页面随后展示 dry-run 入库命令。等价 CLI：
+
+```powershell
+# 抓取白名单夹具到 staging（默认离线；远程源需 allowlist enabled + --live）
+uv run python scripts/crawl_knowledge_sources.py
+uv run python scripts/crawl_knowledge_sources.py --status
+
+# 审核并批准 → 晋升到 approved/incoming
+uv run python scripts/promote_knowledge_staging.py review --source-id fixture-med-storage --reviewer alice --approve
+uv run python scripts/promote_knowledge_staging.py promote --actor-id knowledge-steward
+
+# dry-run 预检查通过后再去掉 --dry-run 正式入库（独立 index-version）
+uv run python scripts/ingest_local_knowledge.py `
+  --manifest docs/knowledge/approved/incoming/正式知识清单.crawl.json `
+  --source-root docs/knowledge/approved `
+  --actor-id knowledge-steward `
+  --index-version approved-crawl-v1 `
+  --dry-run
+```
+
+API 侧 `/api/v1/knowledge/crawl/run` 强制离线夹具（服务端不出网）；远程刷新只能走 CLI `--live` 且要求 allowlist 中 `enabled: true` 并命中 `policy.allowed_hosts`。详见 [知识爬虫 README](knowledge/crawl/README.md)。
+
+### 4.4 HCT-201 教学演示主数据（INTERNAL_TEACHING_DEMO）
 
 药品主数据分两条完全独立的路径，演示与文档必须诚实区分：
 

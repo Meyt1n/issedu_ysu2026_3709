@@ -92,6 +92,7 @@ from app.face_credentials import (
     check_face_liveness,
     decrypt_template,
     encrypt_template,
+    ensure_face_frame_quality,
     extract_face_template,
     extract_legacy_face_template,
     extract_v2_face_template,
@@ -2015,14 +2016,11 @@ async def auth_face_login(
             if upload.content_type == "image/png" and not data.startswith(b"\x89PNG\r\n\x1a\n"):
                 failed("FRAME_MAGIC_INVALID")
             frame_bytes.append(data)
-            from ai.vision.quality_gate import assess_image, decode_image
-
-            quality = assess_image(
-                decode_image(data),
-                source_id="face-login",
-                thresholds=settings.vision_quality_thresholds(),
-            )
-            if not quality["allow_downstream"]:
+            # Face-specific frame gate; the medicine-carton OCR gate falsely
+            # rejected valid guided webcam captures (HCT-424/HCT-425 fix).
+            try:
+                ensure_face_frame_quality(data)
+            except ValueError:
                 failed("FRAME_QUALITY_INVALID")
             extractor = _face_extractor_for_algorithm(credential.algorithm_version)
             if credential.algorithm_version.startswith("opencv-yunet-sface"):
@@ -2174,14 +2172,11 @@ async def auth_family_face_login(
             if upload.content_type == "image/png" and not data.startswith(b"\x89PNG\r\n\x1a\n"):
                 failed("FRAME_MAGIC_INVALID")
             frame_bytes.append(data)
-            from ai.vision.quality_gate import assess_image, decode_image
-
-            quality = assess_image(
-                decode_image(data),
-                source_id="family-face-login",
-                thresholds=settings.vision_quality_thresholds(),
-            )
-            if not quality["allow_downstream"]:
+            # Face-specific frame gate; the medicine-carton OCR gate falsely
+            # rejected valid guided webcam captures (HCT-424/HCT-425 fix).
+            try:
+                ensure_face_frame_quality(data)
+            except ValueError:
                 failed("FRAME_QUALITY_INVALID")
 
         # A household may contain legacy v1/v2 and current v3 credentials during
@@ -2552,8 +2547,6 @@ async def register_face_credential(
     metadata: dict[str, Any] | None = None
     packed_template = b""
     try:
-        from ai.vision.quality_gate import assess_image, decode_image
-
         for upload in uploads:
             filename = validate_filename(upload.filename or "unknown")
             extension = validate_extension(filename)
@@ -2567,13 +2560,10 @@ async def register_face_credential(
             image_bytes = await upload.read(2 * 1024 * 1024 + 1)
             if not image_bytes or len(image_bytes) > 2 * 1024 * 1024:
                 raise ValueError("FACE_FRAME_SIZE_INVALID")
-            quality = assess_image(
-                decode_image(image_bytes),
-                source_id="face-registration",
-                thresholds=settings.vision_quality_thresholds(),
-            )
-            if not quality["allow_downstream"]:
-                raise ValueError("FACE_FRAME_LOW_QUALITY")
+            # Face-specific frame gate (raises FACE_FRAME_LOW_QUALITY).  The
+            # medicine-carton OCR gate must not run here: it falsely rejected
+            # valid guided webcam captures (HCT-424 root-cause fix).
+            ensure_face_frame_quality(image_bytes)
             # Geometry gates (face size/pose/blur) run inside extract_face_template.
             template, frame_metadata = extract_face_template(image_bytes, enforce_geometry=True)
             templates.append(template)
@@ -3367,10 +3357,16 @@ def list_classroom_scenarios(
 
 
 def _require_knowledge_steward(actor_id: str) -> None:
+    """Gate crawl operations to demo stewards and configured knowledge admins.
+
+    Non-stewards receive an explicit ``KNOWLEDGE_STEWARD_REQUIRED`` error so the
+    UI can explain how to obtain access instead of showing an empty panel.
+    """
     if not (
         actor_id.startswith("demo-")
         or actor_id.startswith("test-")
         or actor_id in {"knowledge-steward", "demo-parent"}
+        or actor_id in get_settings().knowledge_admin_actor_set
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

@@ -32,7 +32,7 @@ def test_gold_set_top_hit_and_anti_cross(db_session) -> None:
         actor_id="demo-admin",
         index_version=gold["index_version"],
     )
-    assert result["index"]["document_count"] == 22
+    assert result["index"]["document_count"] == 23
 
     for case in gold["cases"]:
         hits = retrieve(

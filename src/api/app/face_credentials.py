@@ -73,6 +73,21 @@ FACE_AREA_RATIO_MIN = 0.06
 FACE_AREA_RATIO_MAX = 0.55
 FACE_CROP_BLUR_MIN = 35.0
 
+# Face frames come from the guided webcam capture (FaceVideoCapture.vue), not
+# from medicine-carton photos, so they get their own pre-gate instead of the
+# OCR quality gate in ai.vision.quality_gate.  That gate expects text-dense
+# cartons and falsely rejected valid selfies: a person in front of a plain
+# wall fails its edge-density/subject-contour checks, and common 16:9 low-res
+# webcams (640x360) fail its 480px height floor.  Face sharpness, size, pose
+# and single-subject rules remain enforced by YuNet detection plus
+# assess_face_frame_geometry, so this gate only rejects frames that are
+# clearly unusable: too small for a stable 112x112 SFace crop, or almost
+# entirely black/white (covered lens, hard backlight).
+FACE_FRAME_MIN_SIDE = 360
+FACE_FRAME_MIN_LONG_SIDE = 480
+FACE_FRAME_MIN_MEAN_LUMINANCE = 20.0
+FACE_FRAME_MAX_MEAN_LUMINANCE = 245.0
+
 # Desensitized auth failure buckets for audit aggregation (no scores/templates).
 FACE_FAILURE_REASON_BUCKETS = frozenset(
     {
@@ -347,6 +362,32 @@ def _decode_face_image(image_bytes: bytes) -> np.ndarray:
     if image is None:
         raise ValueError("FACE_FRAME_DECODE_FAILED")
     return image
+
+
+def ensure_face_frame_quality(image_bytes: bytes) -> dict[str, float]:
+    """Reject only clearly unusable webcam frames before face detection.
+
+    Raises ``ValueError("FACE_FRAME_LOW_QUALITY")`` when the frame is too
+    small for a stable SFace crop or almost entirely dark/clipped.  Everything
+    face-specific (face present, exactly one subject, size, pose, crop blur)
+    is enforced downstream by YuNet + ``assess_face_frame_geometry``.
+    """
+    image = _decode_face_image(image_bytes)
+    height, width = image.shape[:2]
+    if (
+        min(width, height) < FACE_FRAME_MIN_SIDE
+        or max(width, height) < FACE_FRAME_MIN_LONG_SIDE
+    ):
+        raise ValueError("FACE_FRAME_LOW_QUALITY")
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+    mean_luminance = float(gray.mean())
+    if not FACE_FRAME_MIN_MEAN_LUMINANCE <= mean_luminance <= FACE_FRAME_MAX_MEAN_LUMINANCE:
+        raise ValueError("FACE_FRAME_LOW_QUALITY")
+    return {
+        "width": float(width),
+        "height": float(height),
+        "mean_luminance": mean_luminance,
+    }
 
 
 def _detect_single_face_haar(gray: np.ndarray) -> tuple[int, int, int, int]:

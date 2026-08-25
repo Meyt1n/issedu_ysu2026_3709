@@ -2,6 +2,11 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 
 import { ApiClientError, apiClient } from '../api/client'
+import {
+  crawlAccessFromError,
+  pendingTeachingDrafts,
+  teachingLoopSummary,
+} from '../knowledge/crawlPanel'
 import type {
   AssistantTool,
   KnowledgeDocument,
@@ -43,6 +48,9 @@ const stagingItems = ref<Array<Record<string, unknown>>>([])
 const crawlStatus = ref<Record<string, unknown> | null>(null)
 const crawlBusy = ref(false)
 const crawlReport = ref('')
+const crawlForbidden = ref(false)
+const crawlLoadError = ref(false)
+const ingestHint = ref('')
 
 const dueCount = computed(() => Number(crawlStatus.value?.due_count ?? 0))
 const stagingApprovedCount = computed(
@@ -183,6 +191,8 @@ async function createSnapshot(): Promise<void> {
 }
 
 async function loadStaging(): Promise<void> {
+  crawlForbidden.value = false
+  crawlLoadError.value = false
   try {
     const [staging, status] = await Promise.all([
       apiClient.listKnowledgeStaging(requestOptions.value),
@@ -190,9 +200,16 @@ async function loadStaging(): Promise<void> {
     ])
     stagingItems.value = staging.items ?? []
     crawlStatus.value = status
-  } catch {
+  } catch (cause) {
     stagingItems.value = []
     crawlStatus.value = null
+    // KNOWLEDGE_STEWARD_REQUIRED must surface as guidance, not a silent
+    // empty panel that looks like "no drafts yet".
+    if (crawlAccessFromError(cause) === 'forbidden') {
+      crawlForbidden.value = true
+    } else {
+      crawlLoadError.value = true
+    }
   }
 }
 
@@ -246,7 +263,40 @@ async function promoteStaging(): Promise<void> {
   try {
     const report = await apiClient.promoteKnowledgeStaging(requestOptions.value)
     pushToast('success', `已晋升 ${report.document_count ?? 0} 篇到 approved/incoming`)
-    crawlReport.value = String(report.ingest_hint ?? crawlReport.value)
+    crawlReport.value = `已晋升 ${report.document_count ?? 0} 篇；下一步在终端执行 dry-run 预检查（仍不会自动入库）。`
+    ingestHint.value = String(report.ingest_hint ?? '')
+    await loadStaging()
+  } catch (cause) {
+    pushToast('error', formatError(cause))
+  } finally {
+    crawlBusy.value = false
+  }
+}
+
+/** One-click teaching loop: crawl fixtures → approve drafts → promote. */
+async function runTeachingLoop(): Promise<void> {
+  if (crawlBusy.value) return
+  crawlBusy.value = true
+  crawlReport.value = ''
+  try {
+    const report = await apiClient.runKnowledgeCrawl(requestOptions.value, {})
+    const staging = await apiClient.listKnowledgeStaging(requestOptions.value)
+    const pending = pendingTeachingDrafts(staging.items ?? [])
+    for (const item of pending) {
+      await apiClient.reviewKnowledgeStaging(
+        String(item.source_id),
+        { approve: true, notes: 'teaching-loop-web' },
+        requestOptions.value,
+      )
+    }
+    const promoted = await apiClient.promoteKnowledgeStaging(requestOptions.value)
+    crawlReport.value = teachingLoopSummary(
+      Number(report.fetched ?? 0),
+      pending.length,
+      Number(promoted.document_count ?? 0),
+    )
+    ingestHint.value = String(promoted.ingest_hint ?? '')
+    pushToast('success', '教学夹具闭环已完成；正式入库仍需人工 dry-run。')
     await loadStaging()
   } catch (cause) {
     pushToast('error', formatError(cause))
@@ -266,7 +316,7 @@ onMounted(() => {
   <section class="page-hero">
     <div class="card-heading" style="margin-bottom: 0">
       <div>
-        <h2 class="hero-greeting gradient-text">知识文档</h2>
+        <h2 class="hero-greeting">知识文档</h2>
         <p class="hero-sub">
           本地助手只引用这里登记的版本化知识；权限外或未登记的内容不会出现在回答里。
         </p>
@@ -490,7 +540,7 @@ onMounted(() => {
             <p class="eyebrow">受控刷新</p>
             <h3 class="card-title">知识爬虫 / Staging</h3>
           </div>
-          <div style="display: flex; gap: 8px; flex-wrap: wrap">
+          <div v-if="!crawlForbidden" style="display: flex; gap: 8px; flex-wrap: wrap">
             <button type="button" class="btn btn-ghost btn-small" :disabled="crawlBusy" @click="runCrawl(true)">
               <AppIcon name="refresh" :size="15" />
               {{ crawlBusy ? '刷新中' : `到期刷新${dueCount ? ` (${dueCount})` : ''}` }}
@@ -500,48 +550,72 @@ onMounted(() => {
             </button>
           </div>
         </div>
-        <p class="card-note" style="margin-top: 0">
-          只抓 allowlist 来源，写入 staging 草稿；<strong>不会自动入库</strong>。批准后晋升到 approved/incoming，再 dry-run 入库。
-        </p>
-        <p v-if="crawlStatus" class="row-meta" style="margin: 0 0 8px">
-          白名单 {{ crawlStatus.source_count ?? 0 }} 源 · 到期 {{ dueCount }} · staging {{ stagingItems.length }} ·
-          已批准待晋升 {{ stagingApprovedCount }} · auto_ingest 关闭
-        </p>
-        <p v-if="crawlReport" class="notice info" role="status">{{ crawlReport }}</p>
-        <div v-if="stagingItems.length === 0" class="empty-state">
-          <strong>暂无 staging 草稿</strong>
-          <p>点击「全量抓取」或「到期刷新」生成本地夹具草稿。</p>
+        <div v-if="crawlForbidden" class="notice warn" role="status">
+          <strong>需要知识管理员身份</strong>
+          <p style="margin: 6px 0 0; line-height: 1.65">
+            知识爬虫与草稿审核仅对知识管理员开放，当前身份无权查看或操作。
+            演示环境请在欢迎页把身份切换为 <span class="mono">demo-parent</span>、
+            <span class="mono">knowledge-steward</span> 或任意 <span class="mono">demo-</span> 开头的演示账号；
+            正式部署由负责人把账号加入 .env 的 <span class="mono">KNOWLEDGE_ADMIN_ACTORS</span> 后重启 API。
+          </p>
         </div>
-        <ul v-else class="list-plain" style="gap: 8px">
-          <li v-for="item in stagingItems" :key="String(item.source_id)" class="row-card" style="padding: 11px 14px">
-            <strong>{{ item.title }}</strong>
-            <span class="row-meta">
-              {{ item.status }} · {{ item.unchanged ? '未变更' : '有更新' }} ·
-              {{ String(item.content_sha256 || '').slice(0, 12) }}…
-            </span>
-            <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap">
-              <button
-                type="button"
-                class="btn btn-ghost btn-small"
-                :disabled="crawlBusy || item.status === 'approved' || item.status === 'promoted'"
-                @click="approveStaging(String(item.source_id))"
-              >
-                批准
-              </button>
-              <button
-                type="button"
-                class="btn btn-ghost btn-small"
-                :disabled="crawlBusy || item.status === 'rejected' || item.status === 'promoted'"
-                @click="rejectStaging(String(item.source_id))"
-              >
-                拒绝
-              </button>
-            </div>
-          </li>
-        </ul>
-        <button type="button" class="btn btn-clay btn-small" style="margin-top: 12px" :disabled="crawlBusy || stagingApprovedCount === 0" @click="promoteStaging">
-          晋升已批准草稿（{{ stagingApprovedCount }}）
-        </button>
+        <template v-else>
+          <p class="card-note" style="margin-top: 0">
+            只抓 allowlist 来源（默认仅本地夹具，远程需 CLI <span class="mono">--live</span>），写入 staging 草稿；
+            <strong>不会自动入库</strong>。批准后晋升到 approved/incoming，再 dry-run 入库。
+          </p>
+          <p v-if="crawlLoadError" class="card-note" style="margin: 0 0 8px">
+            爬虫状态暂时不可用，可稍后刷新。
+          </p>
+          <p v-if="crawlStatus" class="row-meta" style="margin: 0 0 8px">
+            白名单 {{ crawlStatus.source_count ?? 0 }} 源 · 到期 {{ dueCount }} · staging {{ stagingItems.length }} ·
+            已批准待晋升 {{ stagingApprovedCount }} · auto_ingest 关闭
+          </p>
+          <p v-if="crawlReport" class="notice info" role="status">{{ crawlReport }}</p>
+          <pre v-if="ingestHint" class="mono ingest-hint-block"><code>{{ ingestHint }}</code></pre>
+          <div v-if="stagingItems.length === 0" class="empty-state">
+            <strong>暂无 staging 草稿</strong>
+            <p>点击「全量抓取」或「到期刷新」生成本地夹具草稿，或用下方「一键教学闭环」演示完整流程。</p>
+          </div>
+          <ul v-else class="list-plain" style="gap: 8px">
+            <li v-for="item in stagingItems" :key="String(item.source_id)" class="row-card" style="padding: 11px 14px">
+              <strong>{{ item.title }}</strong>
+              <span class="row-meta">
+                {{ item.status }} · {{ item.unchanged ? '未变更' : '有更新' }} ·
+                {{ String(item.content_sha256 || '').slice(0, 12) }}…
+              </span>
+              <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap">
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-small"
+                  :disabled="crawlBusy || item.status === 'approved' || item.status === 'promoted'"
+                  @click="approveStaging(String(item.source_id))"
+                >
+                  批准
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-small"
+                  :disabled="crawlBusy || item.status === 'rejected' || item.status === 'promoted'"
+                  @click="rejectStaging(String(item.source_id))"
+                >
+                  拒绝
+                </button>
+              </div>
+            </li>
+          </ul>
+          <div style="display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap">
+            <button type="button" class="btn btn-clay btn-small" :disabled="crawlBusy || stagingApprovedCount === 0" @click="promoteStaging">
+              晋升已批准草稿（{{ stagingApprovedCount }}）
+            </button>
+            <button type="button" class="btn btn-ghost btn-small" :disabled="crawlBusy" @click="runTeachingLoop">
+              {{ crawlBusy ? '执行中' : '一键教学闭环：抓取 → 批准 → 晋升' }}
+            </button>
+          </div>
+          <p class="text-faint" style="font-size: 12px; line-height: 1.6; margin: 10px 0 0">
+            教学闭环只处理本地夹具草稿；晋升后仍须人工执行 dry-run 才能进入正式检索索引，永不 auto_ingest。
+          </p>
+        </template>
       </section>
 
       <section class="card">
@@ -565,3 +639,18 @@ onMounted(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+.ingest-hint-block {
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.55;
+  margin: 0 0 8px;
+  overflow-x: auto;
+  padding: 8px 10px;
+  user-select: all;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+</style>

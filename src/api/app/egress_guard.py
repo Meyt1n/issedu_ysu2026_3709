@@ -112,6 +112,11 @@ def is_web_search_egress_allowed(url: str, settings=None) -> bool:
     if not settings.agent_web_search_enabled:
         logger.warning("EGRESS_BLOCKED: local agent web search is disabled")
         return False
+    provider = (getattr(settings, "agent_web_search_provider", "") or "").strip().casefold()
+    if provider == "fixture":
+        # The teaching-fixture provider serves in-process synthetic results and
+        # never opens a connection, so there is no egress to allowlist.
+        return True
     parsed = urlparse(url)
     if parsed.scheme.lower() != "https":
         logger.warning("EGRESS_BLOCKED: agent web search requires HTTPS")
