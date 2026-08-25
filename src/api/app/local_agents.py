@@ -139,29 +139,28 @@ def plan_agent_execution(
     else:
         rules = AgentDecision(run=False, skip_reason="本类问题无需单独核对规则依据")
 
-    if query_type == "GENERAL":
-        knowledge = AgentDecision(
-            run=False, skip_reason="一般问题无需检索资料库",
-        )
-        web_search = AgentDecision(
-            run=False, skip_reason="一般问题默认不发起外部参考",
-        )
-    elif query_type == "RULE_EVIDENCE" and member_selected:
+    if query_type == "RULE_EVIDENCE" and member_selected:
         # Rule explanations cite the deterministic rule records returned by
         # the database step; retrieving generic documents adds no evidence.
         knowledge = AgentDecision(
             run=False, skip_reason="规则依据直接来自本地规则记录，无需检索资料库"
         )
     else:
+        # HCT-450: GENERAL teaching questions also retrieve the reviewed local
+        # library.  Retrieval is cheap and on-box; the reviewed cards are
+        # optional enrichment for a GENERAL answer (greetings never reach the
+        # plan — they use the dedicated fast path).
         knowledge = AgentDecision(run=True)
 
-    if query_type in {"URGENT", "GENERAL"}:
-        if query_type == "URGENT":
-            web_search = AgentDecision(
-                run=False, skip_reason="紧急问题优先本地处置，未发起外部搜索",
-            )
-        # GENERAL web_search already set above.
-    elif query_type != "GENERAL":
+    if query_type == "URGENT":
+        web_search = AgentDecision(
+            run=False, skip_reason="紧急问题优先本地处置，未发起外部搜索",
+        )
+    elif query_type == "GENERAL":
+        web_search = AgentDecision(
+            run=False, skip_reason="一般问题默认不发起外部参考",
+        )
+    else:
         web_search = AgentDecision(run=True)
 
     return {
@@ -990,6 +989,22 @@ def _synthesis_agent(
         f"【问题类型：{query_type}】只输出最终 JSON，不要复述内部智能体名称。"
         "sources 只能引用 database_agent 返回的 sources 或 knowledge_agent 返回的 chunk_id。"
     )
+    if allowed_citations:
+        listed_citations = "；".join(
+            f"{item['chunk_id']}（{item['document_title'] or '未命名资料'}）"
+            for item in allowed_citations[:5]
+        )
+        citation_rule = (
+            "回答要点必须来自这些片段的内容，并把真正用到的 chunk_id 原样填入 "
+            "sources（至少一个，不得改写、缩写或编造）。"
+            if query_type != "GENERAL"
+            else "如果回答用到了片段内容，就把对应 chunk_id 原样填入 sources；"
+            "用不上时保持 sources 为空即可，不要编造。"
+        )
+        routing_hint += (
+            f"\n本轮命中的本地知识片段（chunk_id｜资料名）：{listed_citations}。"
+            f"{citation_rule}"
+        )
     if query_type == "SYMPTOM_MEDICATION":
         routing_hint += (
             "这是症状用药资料问题：以已审核知识卡为主，结合过敏史/疾病史说明；"
@@ -1024,51 +1039,77 @@ def _synthesis_agent(
             if message.get("role") in {"user", "assistant"}
         ][-12:],
     ]
-    if on_status is not None:
-        on_status("generating")
-    try:
-        client = OllamaClient(settings.ollama_base_url)
-        # Always buffer the model draft.  Only the validated final answer is
-        # streamed to the client, so users never see half-formed JSON.
-        chunks: list[str] = []
-        for chunk in client.chat_stream(
-            model=model,
-            messages=conversation,
-            tools=None,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            timeout=settings.ollama_timeout_seconds,
-            cancel_check=cancelled,
-        ):
-            chunks.append(chunk)
-        raw = {"message": {"content": "".join(chunks)}}
-    except RuntimeError as exc:
-        if "CANCELLED" in str(exc):
-            raise OrchestrationCancelled("cancelled during synthesis") from exc
-        return degraded("MODEL_UNAVAILABLE")
+    client = OllamaClient(settings.ollama_base_url)
+    parsed = None
+    matched_citations: list[dict[str, str]] = []
+    # HCT-450: a model draft that forgot to echo the retrieved chunk_ids used
+    # to waste a real retrieval hit as a hard EVIDENCE_REQUIRED wall.  Give
+    # the model exactly one deterministic correction pass before degrading.
+    for attempt in range(2):
+        if on_status is not None:
+            on_status("generating")
+        try:
+            # Always buffer the model draft.  Only the validated final answer
+            # is streamed to the client, so users never see half-formed JSON.
+            chunks: list[str] = []
+            for chunk in client.chat_stream(
+                model=model,
+                messages=conversation,
+                tools=None,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                timeout=settings.ollama_timeout_seconds,
+                cancel_check=cancelled,
+            ):
+                chunks.append(chunk)
+            raw = {"message": {"content": "".join(chunks)}}
+        except RuntimeError as exc:
+            if "CANCELLED" in str(exc):
+                raise OrchestrationCancelled("cancelled during synthesis") from exc
+            return degraded("MODEL_UNAVAILABLE")
 
-    if cancelled():
-        raise OrchestrationCancelled("cancelled after synthesis")
+        if cancelled():
+            raise OrchestrationCancelled("cancelled after synthesis")
 
-    if on_status is not None:
-        on_status("validating")
+        if on_status is not None:
+            on_status("validating")
 
-    parsed = _parse_assistant_output((raw.get("message") or {}).get("content") or "")
-    if parsed is None:
-        return degraded("SCHEMA_VALIDATION_FAILED")
-    if _check_medical_boundary(parsed.answer):
-        return degraded("MEDICAL_BOUNDARY_VIOLATION")
-    if "http://" in parsed.answer or "https://" in parsed.answer:
-        return degraded("EXTERNAL_LINK_DETECTED")
+        parsed = _parse_assistant_output((raw.get("message") or {}).get("content") or "")
+        if parsed is None:
+            return degraded("SCHEMA_VALIDATION_FAILED")
+        if _check_medical_boundary(parsed.answer):
+            return degraded("MEDICAL_BOUNDARY_VIOLATION")
+        if "http://" in parsed.answer or "https://" in parsed.answer:
+            return degraded("EXTERNAL_LINK_DETECTED")
 
-    matched_citations = filter_claimed_citations(parsed.sources, allowed_citations)
+        matched_citations = filter_claimed_citations(parsed.sources, allowed_citations)
+        if allowed_citations and not matched_citations and attempt == 0:
+            conversation.append({
+                "role": "system",
+                "content": (
+                    "上一稿没有在 sources 中引用任何已命中的本地知识片段，"
+                    "服务端无法核验。请重新输出同样格式的 JSON："
+                    "正文继续基于片段要点回答，"
+                    "sources 必须包含前面列出的 chunk_id 中真正用到的那些，"
+                    "逐字原样填写，不要新增其它来源。"
+                ),
+            })
+            continue
+        break
+
+    assert parsed is not None
     unmatched = _unmatched_source_tokens(parsed.sources, matched_citations)
     unknown_sources = [
         token for token in unmatched if token not in allowed_fact_sources
     ]
     if any(_looks_like_knowledge_citation(token) for token in unknown_sources):
         return degraded("CITATION_NOT_FOUND")
-    if allowed_citations and not matched_citations:
+    if allowed_citations and not matched_citations and query_type != "GENERAL":
+        # After the correction pass the strict routes still refuse to present
+        # an uncited draft next to real retrieved evidence.  GENERAL teaching
+        # chats keep their (previously retrieval-free) uncited answer instead
+        # of gaining a brand-new failure wall; fabricated citations are still
+        # rejected above and the medical boundary has already been checked.
         return degraded("EVIDENCE_REQUIRED")
     if query_type == "MEDICATION_SAFETY" and not matched_citations:
         return degraded("EVIDENCE_REQUIRED")
@@ -1093,7 +1134,12 @@ def _synthesis_agent(
         "answer": append_teaching_reminder(parsed.answer, query_type),
         "sources": [item["chunk_id"] for item in matched_citations] + fact_sources,
         "citations": matched_citations,
-        "suggested_questions": suggest_follow_up_questions(messages, escalate=escalated),
+        "suggested_questions": suggest_follow_up_questions(
+            messages,
+            escalate=escalated,
+            query_type=query_type,
+            has_citations=bool(matched_citations),
+        ),
         "confidence": parsed.confidence,
         "escalate": escalated,
         "degraded": False,
@@ -1158,7 +1204,8 @@ def _classifier_explanation(detail: dict[str, Any]) -> str:
             f"词表识别为「{question_type_label(lexicon)}」；"
             "本地模型分类未返回可用结果，采用词表结果"
         )
-    return f"默认词表识别为「{question_type_label(merged)}」（模型分类默认关闭）"
+    # Default single-channel case: one plain sentence, no channel jargon.
+    return f"已按「{question_type_label(merged)}」处理这个问题"
 
 
 def run_local_multi_agent(
