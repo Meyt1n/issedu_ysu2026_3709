@@ -1,16 +1,15 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 
-// HCT-405 real-API browser coverage: these tests drive the Vue frontend through
-// the Vite proxy against a locally running FastAPI backend, with NO route mocks.
-// All data is synthetic and namespaced per run; nothing is cleaned from other runs.
+// HCT-405 real-API browser coverage: drive the current Vue portal against a locally
+// running FastAPI backend with NO route mocks. Labels match the Chinese UI shipped
+// with HCT-439 (开发身份标识 / 进入家庭空间 / 侧栏导航).
 //
 // Prerequisites (see docs/stories/HCT-405-core-e2e.md):
-//   1. alembic upgrade head            (DATABASE_URL -> a disposable sqlite file)
-//   2. uvicorn app.main:app on :8000   (PYTHONPATH=src/api;src)
+//   1. alembic upgrade head
+//   2. uvicorn app.main:app on :8000
 //   3. REAL_API_E2E=1 npx playwright test tests/browser/hct405-real-api.spec.ts
 //
-// Without REAL_API_E2E the whole file is skipped so the default suite stays
-// runnable in environments that only have the frontend toolchain.
+// Skipped unless REAL_API_E2E=1 so default CI/browser jobs stay frontend-only.
 
 const API_BASE = process.env.REAL_API_BASE ?? 'http://127.0.0.1:8000'
 
@@ -23,19 +22,33 @@ function runId(): string {
 interface Bootstrap {
   ownerId: string
   caregiverId: string
+  memberActorId: string
   householdId: string
   memberId: string
   memberName: string
 }
 
-async function bootstrapHousehold(request: APIRequestContext, id: string): Promise<Bootstrap> {
+function navItem(page: Page, label: string) {
+  return page.locator('aside.sidebar button.nav-item', { hasText: label })
+}
+
+async function enterDevIdentity(page: Page, actorId: string): Promise<void> {
+  await page.goto('/')
+  await expect(page.getByRole('button', { name: '进入家庭空间' })).toBeVisible({ timeout: 20_000 })
+  await page.getByLabel('开发身份标识').fill(actorId)
+  await page.getByRole('button', { name: '进入家庭空间' }).click()
+  await expect(page.locator('.app-frame')).toBeVisible({ timeout: 20_000 })
+}
+
+async function bootstrapPortalHousehold(request: APIRequestContext, id: string): Promise<Bootstrap> {
   const ownerId = `e2e-owner-${id}`
   const caregiverId = `e2e-caregiver-${id}`
-  const memberName = `Synthetic member ${id}`
+  const memberActorId = `e2e-member-${id}`
+  const memberName = `合成成员 ${id}`
 
   const householdResponse = await request.post(`${API_BASE}/api/v1/households`, {
     headers: { 'X-Actor-Id': ownerId },
-    data: { name: `Synthetic household ${id}` },
+    data: { name: `合成家庭 ${id}` },
   })
   expect(householdResponse.status(), 'household bootstrap must succeed').toBe(201)
   const household = await householdResponse.json()
@@ -44,64 +57,63 @@ async function bootstrapHousehold(request: APIRequestContext, id: string): Promi
     `${API_BASE}/api/v1/households/${household.id}/members`,
     {
       headers: { 'X-Actor-Id': ownerId },
-      data: { display_name: memberName, role: 'SELF', actor_id: ownerId },
+      data: {
+        display_name: memberName,
+        role: 'DEPENDENT',
+        actor_id: memberActorId,
+      },
     },
   )
   expect(memberResponse.status(), 'member bootstrap must succeed').toBe(201)
   const member = await memberResponse.json()
 
-  return { ownerId, caregiverId, householdId: household.id, memberId: member.id, memberName }
+  return {
+    ownerId,
+    caregiverId,
+    memberActorId,
+    householdId: household.id,
+    memberId: member.id,
+    memberName,
+  }
 }
 
-async function loadIdentity(page: Page, actorId: string): Promise<void> {
-  await page.goto('/')
-  await page.getByLabel('Development identity').fill(actorId)
-  await page.getByRole('button', { name: 'Load households' }).click()
-}
-
-test('owner creates and revokes a grant; the API persists and audits every step', async ({ page, request }) => {
+test('管理员创建并撤回授权，审计链与服务端状态一致', async ({ page, request }) => {
   const id = runId()
-  const scope = await bootstrapHousehold(request, id)
+  const scope = await bootstrapPortalHousehold(request, id)
 
-  await loadIdentity(page, scope.ownerId)
-  await expect(page.getByRole('heading', { name: 'Create grant' })).toBeVisible()
+  await enterDevIdentity(page, scope.ownerId)
+  await expect(page.getByText('家庭管理员后台', { exact: true })).toBeVisible()
 
-  await page.getByLabel('Caregiver identity', { exact: true }).fill(scope.caregiverId)
-  await page.getByRole('button', { name: 'Create grant' }).click()
-  await expect(
-    page.getByText('Authorization created. The preview now reflects the new active scope.'),
-  ).toBeVisible()
+  await navItem(page, '授权管理').click()
+  await expect(page.getByRole('heading', { name: '新建授权' })).toBeVisible()
 
-  // Reload: the grant must come back from the database, not from page state.
-  await loadIdentity(page, scope.ownerId)
-  await expect(page.getByRole('heading', { name: 'Create grant' })).toBeVisible()
-  const grantRow = page.locator('.grant-row', { hasText: scope.caregiverId })
-  await expect(grantRow).toContainText('health_events')
+  await page.getByLabel('照护者身份标识').fill(scope.caregiverId)
+  await page.getByRole('button', { name: '创建授权' }).click()
+  await expect(page.getByText('授权已创建，默认遵循最小权限原则。')).toBeVisible()
 
-  await page.getByLabel('Preview caregiver identity').fill(scope.caregiverId)
-  await expect(page.locator('.preview-panel')).toContainText('health_events')
+  await page.getByLabel('输入照护者身份查看其可见范围').fill(scope.caregiverId)
+  await expect(page.getByText(/可见字段：health_events/)).toBeVisible()
 
-  await grantRow.getByRole('button', { name: 'Revoke' }).click()
-  await expect(
-    page.getByText('Authorization revoked. It is removed from the caregiver preview immediately.'),
-  ).toBeVisible()
-  await expect(page.getByText('No active fields are granted to this caregiver.')).toBeVisible()
+  await page.getByRole('button', { name: '撤回授权' }).first().click()
+  const dialog = page.getByRole('alertdialog')
+  await expect(dialog).toBeVisible()
+  await dialog.getByRole('button', { name: '撤回授权' }).click()
+  await expect(page.getByText('授权已撤回，对应照护者立即失去访问权限。')).toBeVisible()
 
-  // Locate the browser actions in the API audit trail (owner-only endpoint).
   const auditResponse = await request.get(
     `${API_BASE}/api/v1/households/${scope.householdId}/authorization-audits`,
     { headers: { 'X-Actor-Id': scope.ownerId } },
   )
   expect(auditResponse.status()).toBe(200)
-  const audits: Array<{ operation: string; outcome: string }> = await auditResponse.json()
+  const audits: Array<{ operation: string }> = await auditResponse.json()
   const operations = audits.map(item => item.operation)
   expect(operations).toContain('CREATE')
   expect(operations).toContain('REVOKE')
 })
 
-test('a caregiver only sees the granted member scope, and revocation removes the household', async ({ page, request }) => {
+test('授权照护者进入成员前台且看不到后台入口；撤回后失去家庭可见性', async ({ page, request }) => {
   const id = runId()
-  const scope = await bootstrapHousehold(request, id)
+  const scope = await bootstrapPortalHousehold(request, id)
 
   const grantResponse = await request.post(
     `${API_BASE}/api/v1/households/${scope.householdId}/authorizations`,
@@ -120,14 +132,10 @@ test('a caregiver only sees the granted member scope, and revocation removes the
   expect(grantResponse.status()).toBe(201)
   const grant = await grantResponse.json()
 
-  await loadIdentity(page, scope.caregiverId)
-  await expect(
-    page.getByText('Caregiver view: the API has already filtered this identity to the granted member scope.'),
-  ).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Members available to this identity' })).toBeVisible()
-  await expect(page.locator('.member-list')).toContainText(scope.memberName)
-  // The owner-only grant editor must never render for a caregiver.
-  await expect(page.getByRole('heading', { name: 'Create grant' })).toHaveCount(0)
+  await enterDevIdentity(page, scope.caregiverId)
+  await expect(page.getByText('家庭成员前台', { exact: true })).toBeVisible()
+  await expect(navItem(page, '授权管理')).toHaveCount(0)
+  await expect(page.getByText(scope.memberName)).toBeVisible()
 
   const revokeResponse = await request.post(
     `${API_BASE}/api/v1/households/${scope.householdId}/authorizations/${grant.id}/revoke`,
@@ -138,13 +146,13 @@ test('a caregiver only sees the granted member scope, and revocation removes the
   )
   expect(revokeResponse.status()).toBe(200)
 
-  await loadIdentity(page, scope.caregiverId)
-  await expect(page.getByText('No household is visible to this identity.')).toBeVisible()
+  await enterDevIdentity(page, scope.caregiverId)
+  await expect(page.getByText(/还没有可见的家庭/)).toBeVisible()
 })
 
-test('a confirmed manual event reaches the dashboard projection and timeline', async ({ page, request }) => {
+test('绑定成员账号进入成员前台；已确认事件只出现在成员记录', async ({ page, request }) => {
   const id = runId()
-  const scope = await bootstrapHousehold(request, id)
+  const scope = await bootstrapPortalHousehold(request, id)
 
   const eventResponse = await request.post(
     `${API_BASE}/api/v1/households/${scope.householdId}/events`,
@@ -152,29 +160,28 @@ test('a confirmed manual event reaches the dashboard projection and timeline', a
       headers: { 'X-Actor-Id': scope.ownerId },
       data: {
         member_id: scope.memberId,
-        event_type: 'WATER_INTAKE',
+        event_type: 'medication_added',
         source: 'MANUAL',
         confirmation_status: 'CONFIRMED',
-        payload: { note: 'synthetic e2e evidence' },
-        idempotency_key: `e2e-event-${id}`,
+        payload: { drug: '合成布洛芬' },
+        idempotency_key: `e2e-portal-event-${id}`,
       },
     },
   )
-  expect(eventResponse.status(), 'confirmed manual event must be accepted').toBe(201)
+  expect(eventResponse.status(), 'owner confirmed event must persist').toBe(201)
 
-  await loadIdentity(page, scope.ownerId)
-  await expect(page.getByText('1 confirmed events')).toBeVisible()
-  const timeline = page.locator('.timeline-list')
-  await expect(timeline).toContainText('WATER_INTAKE')
-  await expect(timeline).toContainText('CONFIRMED')
+  await enterDevIdentity(page, scope.memberActorId)
+  await expect(page.getByText('家庭成员前台', { exact: true })).toBeVisible()
+  await expect(navItem(page, '人工复核')).toHaveCount(0)
 
-  // Rule evaluation runs against the real rules engine and must not error.
-  await page.getByRole('button', { name: 'Re-evaluate' }).click()
-  await expect(page.getByText(/Risk evaluation completed\. \d+ signals? returned\./)).toBeVisible()
+  await navItem(page, '我的记录').click()
+  await expect(page.getByRole('heading', { name: `${scope.memberName}的健康记录` })).toBeVisible()
+  await expect(page.getByText('药品：合成布洛芬')).toBeVisible()
+  await expect(page.getByText('这里只展示家庭管理员确认过的内容')).toBeVisible()
 })
 
-test('an unknown identity is shown no household and no health data', async ({ page }) => {
-  await loadIdentity(page, `e2e-stranger-${runId()}`)
-  await expect(page.getByText('No household is visible to this identity.')).toBeVisible()
-  await expect(page.getByText(/confirmed events/)).toHaveCount(0)
+test('未知身份看不到家庭与健康摘要', async ({ page }) => {
+  await enterDevIdentity(page, `e2e-stranger-${runId()}`)
+  await expect(page.getByText(/还没有可见的家庭/)).toBeVisible()
+  await expect(page.locator('.app-frame')).toHaveCount(0)
 })
