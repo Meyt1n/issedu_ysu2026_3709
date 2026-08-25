@@ -14,11 +14,14 @@ const props = withDefaults(defineProps<{
   disabled?: boolean
   mode?: FaceCaptureMode
   showFallback?: boolean
+  /** Shorter layout for welcome/login card — hide long bullet lists. */
+  compact?: boolean
   /** Default on for elder-friendly coaching; user can mute. */
   voiceEnabled?: boolean
 }>(), {
   mode: 'login',
   showFallback: true,
+  compact: false,
   voiceEnabled: true,
 })
 
@@ -180,7 +183,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="face-capture face-capture--elder" data-testid="face-video-capture">
+  <div
+    class="face-capture face-capture--elder"
+    :class="{ 'face-capture--compact': compact }"
+    data-testid="face-video-capture"
+  >
     <header class="face-capture-intro">
       <div class="face-capture-intro-top">
         <p class="face-capture-eyebrow">{{ modeLabel }} · 本地安全</p>
@@ -189,7 +196,10 @@ onBeforeUnmount(() => {
         </span>
       </div>
       <p class="face-capture-intro-title">{{ intro.title }}</p>
-      <ol class="face-capture-bullets">
+      <p v-if="compact" class="face-capture-compact-hint">
+        听语音把脸放进圆圈，按提示轻轻转头；不会时请改用 PIN。
+      </p>
+      <ol v-else class="face-capture-bullets">
         <li v-for="item in intro.bullets" :key="item">
           <span class="face-capture-bullet-mark" aria-hidden="true" />
           <span>{{ item }}</span>
@@ -288,7 +298,10 @@ onBeforeUnmount(() => {
       </button>
     </div>
     <p class="face-capture-footnote">
-      画面只在本机内存里处理，不会上传人脸照片。听不清或不会操作时，请点“使用 PIN 登录”，让家人帮忙也可以。
+      <template v-if="compact">画面只在本机处理，不会上传照片。</template>
+      <template v-else>
+        画面只在本机内存里处理，不会上传人脸照片。听不清或不会操作时，请点“使用 PIN 登录”，让家人帮忙也可以。
+      </template>
     </p>
   </div>
 </template>

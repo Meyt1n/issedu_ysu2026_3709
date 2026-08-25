@@ -235,10 +235,19 @@ async function submitSession(): Promise<void> {
 async function onFaceCaptured(frames: File[]): Promise<void> {
   if (!accessPurposeValid.value) {
     localError.value = '请先填写正确的访问用途代码，再开始人脸验证。'
+    pushToast('error', localError.value)
+    return
+  }
+  if (!faceModelsReady.value) {
+    localError.value = '人脸登录暂时不可用，请改用家庭 PIN 或账号密码。'
+    pushToast('error', localError.value)
     return
   }
   faceFrames.value = frames
   await submitSession()
+  if (session.status !== 'ready' && (localError.value || session.error)) {
+    pushToast('error', localError.value || session.error)
+  }
 }
 
 function usePinFallback(): void {
@@ -308,7 +317,11 @@ async function submitCreate(): Promise<void> {
         </div>
       </section>
 
-      <section v-if="!showCreateForm" class="welcome-form-card">
+      <section
+        v-if="!showCreateForm"
+        class="welcome-form-card"
+        :class="{ 'welcome-form-card--face': authMode === 'session' && credentialMode === 'face' }"
+      >
         <h2>进入家庭空间</h2>
         <div class="segmented-control" role="group" aria-label="选择登录方式">
           <button v-if="showDevelopmentEntry" type="button" :class="{ active: authMode === 'development' }" @click="authMode = 'development'">开发演示</button>
@@ -374,8 +387,8 @@ async function submitCreate(): Promise<void> {
             <AppIcon :name="faceBindingReady ? 'home' : 'lock'" :size="18" />
             <div>
               <strong>{{ faceBindingReady ? faceHouseholdLabel : '本机还没有绑定家庭' }}</strong>
-              <small v-if="faceBindingReady">人脸只会在这个家庭的成员中匹配，不会跨家庭搜索。</small>
-              <small v-else>首次使用请先用账号密码进入一次，在“人脸凭证”页面完成家庭绑定。</small>
+              <small v-if="faceBindingReady">只在这个家庭里认人，不会跨家搜索。</small>
+              <small v-else>请先用账号密码进入，在「人脸凭证」页完成本机家庭绑定。</small>
               <button v-if="!faceBindingReady" type="button" class="btn btn-ghost btn-small" @click="usePasswordFallback">先用账号密码进入</button>
             </div>
           </div>
@@ -393,17 +406,29 @@ async function submitCreate(): Promise<void> {
             六位数字 PIN
             <input v-model="pin" type="password" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required />
           </label>
+          <div
+            v-if="credentialMode === 'face' && faceBindingReady && !faceModelsReady"
+            class="welcome-face-unavailable"
+          >
+            <p class="notice warn" role="status">
+              <AppIcon name="info" :size="16" />
+              人脸登录暂时不可用，请改用家庭 PIN 或账号密码。
+            </p>
+            <div class="row-actions">
+              <button type="button" class="btn btn-primary" @click="usePinFallback">改用 PIN 登录</button>
+              <button type="button" class="btn btn-ghost" @click="usePasswordFallback">改用账号密码</button>
+            </div>
+          </div>
           <FaceVideoCapture
-            v-if="credentialMode === 'face'"
-            :disabled="connecting || !faceBindingReady || !accessPurposeValid || !faceModelsReady"
+            v-else-if="credentialMode === 'face'"
+            compact
+            :disabled="connecting || !faceBindingReady || !accessPurposeValid"
             @captured="onFaceCaptured"
             @fallback="usePinFallback"
           />
-          <p v-if="credentialMode === 'face' && !faceModelsReady" class="notice warn" role="status">
-            <AppIcon name="info" :size="16" />
-            本地人脸模型尚未就绪（YuNet/SFace）。请管理员先运行
-            <code>uv run python scripts/ensure_face_models.py</code>
-            并重启 API；当前请改用 PIN 或账号密码登录。
+          <p v-if="credentialMode === 'face' && connecting" class="notice ok" role="status" aria-live="polite">
+            <AppIcon name="check" :size="16" />
+            正在识别，请稍等…
           </p>
           <label v-if="authMode === 'development'" class="field">
             访问用途代码
