@@ -94,6 +94,8 @@ class Settings(BaseSettings):
     # HCT-442: optional loopback Ollama classifier merged with lexicon (default off).
     agent_classifier_enabled: bool = False
     agent_classifier_timeout_seconds: float = Field(default=3.0, gt=0, le=15)
+    # Session-scoped in-process cache for authorised local retrieval results.
+    agent_retrieval_cache_ttl_seconds: float = Field(default=120.0, ge=0, le=3600)
     weather_adapter: str = "disabled"
     weather_provider: str = "generic"
     weather_api_url: str = ""

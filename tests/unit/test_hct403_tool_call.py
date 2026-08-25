@@ -41,6 +41,7 @@ class TestToolWhitelist:
         assert "get_member_state" in names
         assert "get_applied_rules" in names
         assert "get_risk_alerts" in names
+        assert "get_care_plan_status" in names
         assert "get_document_metadata" in names
 
     def test_unknown_tool_rejected(self):

@@ -73,6 +73,12 @@ def classify_question_lexicon(query: str) -> str:
             "有哪些药",
             "药名",
             "用药",
+            "吃药了吗",
+            "今天吃药",
+            "有没有吃药",
+            "服药了吗",
+            "确认服药",
+            "今天药",
         )
     ):
         return "MEDICATION_RECORD"
@@ -198,26 +204,50 @@ def classify_question_dual(
     chat_factory: Callable[[str], Any] | None = None,
 ) -> str:
     """Lexicon always runs; optional loopback model merges by severity."""
-    lexicon_type = classify_question_lexicon(query)
-    if not model_enabled:
-        return lexicon_type
-    if not ollama_base_url or not ollama_model:
-        return lexicon_type
-    if is_loopback_url is not None and not is_loopback_url(ollama_base_url):
-        logger.warning("model classifier skipped: non-loopback Ollama URL")
-        return lexicon_type
-
-    chat_fn: Callable[..., dict[str, Any]] | None = None
-    if chat_factory is not None:
-        client = chat_factory(ollama_base_url)
-        chat_fn = client.chat if hasattr(client, "chat") else client
-    else:
-        return lexicon_type
-
-    model_type = classify_question_model(
+    return classify_question_dual_detail(
         query,
-        chat=chat_fn,
-        model=ollama_model,
-        timeout=ollama_timeout,
-    )
-    return merge_query_types(lexicon_type, model_type)
+        model_enabled=model_enabled,
+        is_loopback_url=is_loopback_url,
+        ollama_base_url=ollama_base_url,
+        ollama_model=ollama_model,
+        ollama_timeout=ollama_timeout,
+        chat_factory=chat_factory,
+    )["merged"]
+
+
+def classify_question_dual_detail(
+    query: str,
+    *,
+    model_enabled: bool = False,
+    is_loopback_url: Callable[[str], bool] | None = None,
+    ollama_base_url: str | None = None,
+    ollama_model: str | None = None,
+    ollama_timeout: float = 3.0,
+    chat_factory: Callable[[str], Any] | None = None,
+    override: str | None = None,
+) -> dict[str, Any]:
+    """Return lexicon / model / merged / override for agent_trace observability."""
+    lexicon_type = classify_question_lexicon(query)
+    model_type: str | None = None
+    if model_enabled and ollama_base_url and ollama_model:
+        if is_loopback_url is not None and not is_loopback_url(ollama_base_url):
+            logger.warning("model classifier skipped: non-loopback Ollama URL")
+        elif chat_factory is not None:
+            client = chat_factory(ollama_base_url)
+            chat_fn = client.chat if hasattr(client, "chat") else client
+            model_type = classify_question_model(
+                query,
+                chat=chat_fn,
+                model=ollama_model,
+                timeout=ollama_timeout,
+            )
+    auto_merged = merge_query_types(lexicon_type, model_type)
+    override_type = normalize_query_type(override)
+    merged = override_type or auto_merged
+    return {
+        "lexicon": lexicon_type,
+        "model": model_type,
+        "merged": merged,
+        "override": override_type,
+        "model_enabled": bool(model_enabled),
+    }
