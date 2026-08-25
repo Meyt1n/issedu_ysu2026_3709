@@ -110,6 +110,14 @@ let voiceFatalError = false
 
 const speechInputSupported = isSpeechInputSupported()
 const speechOutputSupported = isSpeechOutputSupported()
+let activeSendController: AbortController | null = null
+
+function cancelActiveSend(): void {
+  if (activeSendController) {
+    activeSendController.abort()
+    activeSendController = null
+  }
+}
 
 async function loadAgentCatalog(): Promise<void> {
   try {
@@ -285,6 +293,7 @@ function persistChatSession(): void {
 }
 
 function clearConversation(): void {
+  cancelActiveSend()
   stopVoiceInput()
   if (speakingIndex.value !== null) {
     stopSpeaking()
@@ -300,6 +309,7 @@ function clearConversation(): void {
   draft.value = ''
   sendError.value = ''
   voiceError.value = ''
+  sending.value = false
 }
 
 function useSuggestedQuestion(question: string): void {
@@ -354,6 +364,7 @@ function questionTypeLabel(queryType?: string | null): string {
 watch(
   () => [session.actorId, session.selectedHouseholdId, session.selectedMemberId] as const,
   ([actorId, householdId, memberId]) => {
+    cancelActiveSend()
     if (streamTimer) {
       clearInterval(streamTimer)
       streamTimer = null
@@ -556,6 +567,7 @@ async function send(text?: string): Promise<void> {
   const content = (text ?? draft.value).trim()
   if (!content || sending.value) return
 
+  cancelActiveSend()
   stopVoiceInput()
   if (speakingIndex.value !== null) {
     stopSpeaking()
@@ -576,38 +588,14 @@ async function send(text?: string): Promise<void> {
   }
   history.value.push(streamingEntry)
   const entryIndex = history.value.length - 1
+  const controller = new AbortController()
+  activeSendController = controller
 
-  try {
-    const reply = await apiClient.assistantChatStream(
-      {
-        messages: history.value
-          .slice(0, -1)
-          .map(entry => ({ role: entry.role, content: entry.content })),
-        max_tokens: 1024,
-        agent_mode: 'multi_agent',
-        allow_network_search: allowNetworkSearch.value,
-      },
-      {
-        onTrace: upsertWorkflowTrace,
-        onToken: token => {
-          const entry = history.value[entryIndex]
-          if (!entry || !token) return
-          entry.content += token
-          entry.revealed = entry.content.length
-          scrollToEnd()
-        },
-        onExternalSources: sources => {
-          const entry = history.value[entryIndex]
-          if (entry) entry.externalSources = sources
-        },
-      },
-      session.selectedHouseholdId || undefined,
-      session.selectedMemberId || undefined,
-      requestOptions.value,
-    )
+  const applyReply = (reply: Awaited<ReturnType<typeof apiClient.assistantChat>>) => {
     const entry = history.value[entryIndex]!
+    const alreadyStreamed = entry.content.length > 0 && entry.content === reply.answer
     entry.content = reply.answer
-    entry.revealed = 0
+    entry.revealed = alreadyStreamed ? reply.answer.length : 0
     entry.sources = reply.sources
     entry.citations = reply.citations
     entry.confidence = reply.confidence
@@ -627,33 +615,96 @@ async function send(text?: string): Promise<void> {
     workflowTrace.value = reply.agent_trace ?? []
     if (reply.model) modelLabel.value = formatModelLabel(reply.model)
     persistChatSession()
-    streamReveal(entry)
+    if (!alreadyStreamed) streamReveal(entry)
+  }
+
+  const chatInput = {
+    messages: history.value
+      .slice(0, -1)
+      .map(entry => ({ role: entry.role, content: entry.content })),
+    max_tokens: 1024,
+    agent_mode: 'multi_agent' as const,
+    allow_network_search: allowNetworkSearch.value,
+  }
+
+  try {
+    const reply = await apiClient.assistantChatStream(
+      chatInput,
+      {
+        onTrace: upsertWorkflowTrace,
+        onStatus: phase => {
+          if (phase === 'generating') {
+            const entry = history.value[entryIndex]
+            if (entry && !entry.content) {
+              entry.content = ''
+              entry.revealed = 0
+            }
+          }
+        },
+        onToken: token => {
+          const entry = history.value[entryIndex]
+          if (!entry || !token) return
+          // Tokens are already the validated final answer text.
+          entry.content += token
+          entry.revealed = entry.content.length
+          scrollToEnd()
+        },
+        onExternalSources: sources => {
+          const entry = history.value[entryIndex]
+          if (entry) entry.externalSources = sources
+        },
+      },
+      session.selectedHouseholdId || undefined,
+      session.selectedMemberId || undefined,
+      { ...requestOptions.value, signal: controller.signal },
+    )
+    applyReply(reply)
   } catch (cause) {
-    sendError.value = formatError(cause)
-    workflowTrace.value = []
-    if (history.value[entryIndex]?.role === 'assistant' && !history.value[entryIndex]?.sources) {
-      history.value.pop()
+    if (controller.signal.aborted) {
+      if (history.value[entryIndex]?.role === 'assistant') history.value.pop()
+      return
     }
-    const entry: ChatEntry = {
-      role: 'assistant',
-      content: '本地模型或其依赖当前不可用，无法生成回答。家庭事实、规则与任务不受影响，可直接在对应页面查看。',
-      revealed: 0,
-      degraded: true,
-      degradeReason: 'REQUEST_FAILED',
+    // Fall back to the non-streaming endpoint when SSE is unavailable.
+    try {
+      const reply = await apiClient.assistantChat(
+        chatInput,
+        session.selectedHouseholdId || undefined,
+        session.selectedMemberId || undefined,
+        { ...requestOptions.value, signal: controller.signal },
+      )
+      applyReply(reply)
+    } catch (fallbackCause) {
+      if (controller.signal.aborted) {
+        if (history.value[entryIndex]?.role === 'assistant') history.value.pop()
+        return
+      }
+      sendError.value = formatError(fallbackCause)
+      workflowTrace.value = []
+      if (history.value[entryIndex]?.role === 'assistant') history.value.pop()
+      const entry: ChatEntry = {
+        role: 'assistant',
+        content: '本地模型或其依赖当前不可用，无法生成回答。家庭事实、规则与任务不受影响，可直接在对应页面查看。',
+        revealed: 0,
+        degraded: true,
+        degradeReason: 'REQUEST_FAILED',
+      }
+      history.value.push(entry)
+      persistChatSession()
+      streamReveal(history.value[history.value.length - 1]!)
     }
-    history.value.push(entry)
-    persistChatSession()
-    streamReveal(history.value[history.value.length - 1]!)
   } finally {
+    if (activeSendController === controller) activeSendController = null
     sending.value = false
   }
 }
 
 function onMemberChange(event: Event): void {
+  cancelActiveSend()
   selectMember((event.target as HTMLSelectElement).value)
 }
 
 onBeforeUnmount(() => {
+  cancelActiveSend()
   if (streamTimer) clearInterval(streamTimer)
   stopVoiceInput()
   stopSpeaking()

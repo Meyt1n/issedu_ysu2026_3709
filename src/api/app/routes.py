@@ -5,7 +5,7 @@ import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from queue import Queue
-from threading import Thread
+from threading import Event, Thread
 from typing import Any, NoReturn
 
 from ai.vision.candidate_fusion import (
@@ -114,7 +114,7 @@ from app.file_upload import (
     validate_size,
 )
 from app.knowledge import KnowledgeDocument, RetrievalQuery
-from app.local_agents import get_agent_catalog, run_local_multi_agent
+from app.local_agents import OrchestrationCancelled, get_agent_catalog, run_local_multi_agent
 from app.models import (
     AccessAudit,
     CareAuthorization,
@@ -3462,6 +3462,7 @@ def assistant_chat_stream(
         member_id=member_id,
     )
     event_queue: Queue[tuple[str, dict[str, Any]] | None] = Queue()
+    cancel_event = Event()
 
     def worker() -> None:
         worker_session = SessionLocal()
@@ -3471,6 +3472,9 @@ def assistant_chat_stream(
 
             def on_token(token: str) -> None:
                 event_queue.put(("token", {"token": token}))
+
+            def on_status(phase: str) -> None:
+                event_queue.put(("status", {"phase": phase}))
 
             def on_external_sources(
                 sources: list[dict[str, str]],
@@ -3495,10 +3499,19 @@ def assistant_chat_stream(
                 sensitive_values=[member_display_name],
                 on_trace=on_trace,
                 on_synthesis_token=on_token,
+                on_status=on_status,
                 on_external_sources=on_external_sources,
+                cancel_event=cancel_event,
             )
-            worker_session.commit()
-            event_queue.put(("done", {"response": result}))
+            if cancel_event.is_set():
+                worker_session.rollback()
+                event_queue.put(("error", {"message": "CANCELLED", "code": "CANCELLED"}))
+            else:
+                worker_session.commit()
+                event_queue.put(("done", {"response": result}))
+        except OrchestrationCancelled:
+            worker_session.rollback()
+            event_queue.put(("error", {"message": "CANCELLED", "code": "CANCELLED"}))
         except Exception as exc:
             worker_session.rollback()
             logger.exception("assistant chat stream failed")
@@ -3510,12 +3523,17 @@ def assistant_chat_stream(
     Thread(target=worker, daemon=True).start()
 
     def generate():
-        while True:
-            item = event_queue.get()
-            if item is None:
-                break
-            kind, data = item
-            yield f"event: {kind}\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
+        try:
+            while True:
+                item = event_queue.get()
+                if item is None:
+                    break
+                kind, data = item
+                payload = json.dumps(data, ensure_ascii=False, default=str)
+                yield f"event: {kind}\ndata: {payload}\n\n"
+        finally:
+            # Client disconnect or generator close: stop Ollama and workers.
+            cancel_event.set()
 
     return StreamingResponse(
         generate(),
