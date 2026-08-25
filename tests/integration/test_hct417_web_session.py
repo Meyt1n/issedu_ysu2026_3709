@@ -58,6 +58,8 @@ def test_malformed_authorization_does_not_fall_back_to_dev_actor(client: TestCli
     assert response.json()["detail"] == "AUTH_REQUIRED"
 
 
+
+
 def test_auth_session_is_committed_across_request_boundaries(tmp_path, monkeypatch):
     """A successful login must survive the dependency session closing.
 

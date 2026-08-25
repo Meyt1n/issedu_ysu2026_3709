@@ -1581,6 +1581,9 @@ def auth_register(
     session: Session = Depends(get_session),
 ) -> dict:
     register_account(payload.actor_id, payload.password, session)
+    # Commit before the browser follows registration with a separate login
+    # request; the dependency also commits successful requests at the boundary.
+    session.commit()
     return {"status": "registered", "actor_id": payload.actor_id}
 
 
@@ -1589,9 +1592,13 @@ def auth_login(
     payload: AuthCredentials,
     session: Session = Depends(get_session),
 ) -> dict:
+    authentication = authenticate(payload.actor_id, payload.password, session)
+    # Persist the session before the frontend immediately loads its household
+    # scope in a new HTTP request; the dependency commits again at the boundary.
+    session.commit()
     return {
         "actor_id": payload.actor_id,
-        **authenticate(payload.actor_id, payload.password, session),
+        **authentication,
     }
 
 
@@ -1999,6 +2006,7 @@ def auth_set_pin(
 @router.post("/auth/logout")
 def auth_logout(payload: AuthSessionRequest, session: Session = Depends(get_session)) -> dict:
     logout(payload.session_token, session)
+    session.commit()
     return {"status": "logged_out"}
 
 

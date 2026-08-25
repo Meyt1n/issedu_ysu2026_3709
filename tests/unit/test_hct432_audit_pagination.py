@@ -40,7 +40,8 @@ def test_audit_cursor_rejects_tampering_or_wrong_secret() -> None:
         secret="test-secret",
     )
     encoded, signature = cursor.split(".", 1)
-    tampered = f"{encoded}.{signature[:-1]}A"
+    replacement = "A" if signature[-1] != "A" else "B"
+    tampered = f"{encoded}.{signature[:-1]}{replacement}"
 
     with pytest.raises(ValueError, match="AUDIT_CURSOR_INVALID"):
         decode_audit_cursor(tampered, secret="test-secret")
