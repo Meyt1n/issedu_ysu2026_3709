@@ -20,6 +20,11 @@ export default defineConfig(({ mode }) => {
   // npm run dev:web）。缺省保持 auto（裸开发入口，按账号角色进门户）。
   const portalMode =
     process.env.VITE_PORTAL_MODE ?? (mode === 'admin' || mode === 'member' ? mode : '')
+  if (portalMode) {
+    // 回写进程环境变量：Vite 会把 VITE_ 前缀的进程变量暴露到
+    // import.meta.env（dev 与 build 一致），比 define 更可靠地覆盖开发服务器。
+    process.env.VITE_PORTAL_MODE = portalMode
+  }
   const defaultPort =
     portalMode === 'admin' ? Number(process.env.HCT_ADMIN_WEB_PORT ?? 5174) : 5173
   const webPort = Number(process.env.HCT_WEB_PORT ?? defaultPort)
