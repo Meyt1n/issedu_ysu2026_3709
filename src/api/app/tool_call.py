@@ -86,14 +86,20 @@ ASSISTANT_SYSTEM_PROMPT = (
     "5. 用户问药品能否同服、停药、换药或个体剂量（一次吃多少、漏服补服等）时：先核对成员"
     "过敏/疾病/已确认用药（如有），再 retrieve_knowledge；只解释已命中的规则或文档，"
     "不自行决定是否同服、停换或具体片数。没有知识片段就明确无法判断并建议咨询医生或药师。\n"
-    "6. 普通问候要用简短中文正常、亲切地回应；不得把问候误识别为健康结论。\n"
-    "7. 需要更多事实时优先调用白名单工具。sources 只能填写本轮工具结果真实提供的"
+    "6. 命中知识片段时的组织方式：第一句先直接回应用户的问题本身；随后给出 2~4 条来自"
+    "命中片段的可执行要点（生活照护或资料阅读注意点），用自己的话概括、不整段照抄；"
+    "最后用一句自然的话提醒结合过敏史并注意就医边界。既然已有依据可讲，就不要再堆砌"
+    "「资料不足」「超出系统边界」这类套话。\n"
+    "7. 如果对话里已有上一轮问答，请直接衔接上文继续说，不要重新自我介绍、"
+    "不要把上一轮已给过的完整提醒原样再复述一遍。\n"
+    "8. 普通问候要用简短中文正常、亲切地回应；不得把问候误识别为健康结论。\n"
+    "9. 需要更多事实时优先调用白名单工具。sources 只能填写本轮工具结果真实提供的"
     "事件 ID、规则编号或知识片段 ID；"
     "联网参考不要写入 sources。没有依据时使用空数组，禁止伪造引用。\n"
-    "8. 绝不做诊断、开处方、决定个体用药剂量或建议停药换药；不提供购买链接、问诊导流或外部网址。\n"
-    "9. 用温和、口语化的简体中文，先关心处境再给依据，回答控制在 360 字以内。"
+    "10. 绝不做诊断、开处方、决定个体用药剂量或建议停药换药；不提供购买链接、问诊导流或外部网址。\n"
+    "11. 用温和、口语化的简体中文，先关心处境再给依据，回答控制在 360 字以内。"
     "症状用药类与用药安全类回答末尾由系统附加教学提醒，你不必重复粘贴提醒原文。\n"
-    "10. 输出必须是一个 JSON 对象，且只有 JSON，格式："
+    "12. 输出必须是一个 JSON 对象，且只有 JSON，格式："
     '{"answer": "回答正文", "sources": ["引用的依据标识"], '
     '"confidence": "high|medium|low", "escalate": false}。'
     "紧急情况（如疑似中毒、呼吸困难）时 escalate 设为 true 并提醒联系医务人员。"
@@ -664,6 +670,8 @@ def suggest_follow_up_questions(
     *,
     degraded: bool = False,
     escalate: bool = False,
+    query_type: str | None = None,
+    has_citations: bool = False,
 ) -> list[str]:
     """Generate safe, deterministic follow-ups from the latest user query.
 
@@ -672,6 +680,11 @@ def suggest_follow_up_questions(
     model's hidden reasoning, so an unknown query cannot disclose household
     data. Degraded responses return no suggestions because their evidence
     context is already incomplete.
+
+    ``query_type`` / ``has_citations`` (HCT-450) let routed callers offer
+    situation-specific follow-ups (e.g. allergy-history or when-to-see-a-
+    doctor prompts after a cited symptom answer) instead of one generic
+    evidence checklist; keyword-only callers keep the legacy ladder.
     """
     if degraded:
         return []
@@ -685,6 +698,24 @@ def suggest_follow_up_questions(
             "这条用药信息需要医生或药师确认哪些内容？",
             "当前药品记录的来源和确认状态是什么？",
             "如何查看这条信息对应的本地规则？",
+        ]
+    elif query_type == "SYMPTOM_MEDICATION" and has_citations:
+        candidates = [
+            "结合家里的过敏史，看这类资料还要注意什么？",
+            "哪些情况说明应该尽快就医，而不是继续自行查资料？",
+            "能看看这位成员相关的已确认健康记录吗？",
+        ]
+    elif query_type == "SYMPTOM_MEDICATION":
+        candidates = [
+            "哪些情况需要尽快联系医生或药师？",
+            "如何把已审核的资料卡加入本机知识库？",
+            "我还需要补充哪些症状和发生时间？",
+        ]
+    elif query_type == "GENERAL" and has_citations:
+        candidates = [
+            "这份资料里还有哪些要点值得注意？",
+            "结合家里成员的情况需要留意什么？",
+            "哪些情况建议咨询医生或药师？",
         ]
     elif any(term in normalized for term in _FOLLOW_UP_MEDICATION_TERMS):
         candidates = [
@@ -761,7 +792,11 @@ def symptom_knowledge_gap_result(
         model,
         query_type=query_type,
     )
-    result["suggested_questions"] = suggest_follow_up_questions(messages)
+    result["suggested_questions"] = suggest_follow_up_questions(
+        messages,
+        query_type=query_type,
+        has_citations=False,
+    )
     return result
 
 
@@ -1820,6 +1855,8 @@ def run_assistant(
         "suggested_questions": suggest_follow_up_questions(
             messages,
             escalate=escalated,
+            query_type=query_type,
+            has_citations=bool(matched_citations),
         ),
         "confidence": parsed.confidence,
         "escalate": escalated,

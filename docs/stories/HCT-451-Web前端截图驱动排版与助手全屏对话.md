@@ -1,4 +1,6 @@
-# HCT-450：Web 前端截图驱动排版修复与助手全屏对话
+# HCT-451：Web 前端截图驱动排版修复与助手全屏对话
+
+> 编号说明：本增量原拟使用 HCT-450，但 `master` 已由 [PR #453](https://github.com/Meyt1n/issedu_ysu2026_3709/pull/453) 占用 HCT-450（助手回复智能度与编排优化）。按 Story 编号唯一原则顺延为 HCT-451，并在此记录冲突。
 
 - Issue：待维护者创建后回填（本任务 agent 无 issues 写权限）；相关既有任务：
   Related to [#62](https://github.com/Meyt1n/issedu_ysu2026_3709/issues/62)（家庭总览 dashboard）、

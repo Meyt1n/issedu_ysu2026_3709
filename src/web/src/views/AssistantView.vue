@@ -26,6 +26,13 @@ import {
 } from '../assistant/chatSession'
 import { normalizeSuggestedQuestions } from '../assistant/followUp'
 import {
+  confidenceLabel,
+  extraFactSources,
+  questionTypeLabel,
+  routeSummary,
+  visibleRiskNotice,
+} from '../assistant/replyMeta'
+import {
   unavailableWebSearchAvailability,
   webSearchAvailabilityFromCatalog,
   webSearchDisabledLabel,
@@ -872,18 +879,6 @@ function citationTitle(citation: AssistantCitation): string {
   return citation.document_title?.trim() || citation.document_id
 }
 
-function questionTypeLabel(queryType?: string | null): string {
-  const labels: Record<string, string> = {
-    MEDICATION_SAFETY: '用药安全核对',
-    MEDICATION_RECORD: '用药记录查询',
-    FAMILY_RECORD: '家庭健康档案查询',
-    RULE_EVIDENCE: '规则与证据查询',
-    URGENT: '紧急情况分流',
-    GENERAL: '一般健康信息',
-  }
-  return labels[queryType ?? ''] ?? '一般健康信息'
-}
-
 let regenerateOnNextValidContext = false
 
 watch(
@@ -1393,14 +1388,6 @@ onBeforeUnmount(() => {
             v-if="entry.role === 'assistant' && !isStreaming(entry) && (entry.degraded || entry.escalate || entry.riskNotice || entry.queryType || entry.routeExplanation || (entry.sources?.length ?? 0) > 0 || entry.confidence || (entry.agentTrace?.length ?? 0) > 0 || (entry.externalSources?.length ?? 0) > 0)"
             class="chat-sources"
           >
-            <span v-if="entry.queryType" class="chat-evidence-summary">
-              <AppIcon name="compass" :size="12" style="vertical-align: -1px" />
-              问题类型：{{ questionTypeLabel(entry.queryType) }}
-            </span>
-            <span v-if="entry.routeExplanation" class="chat-route-explanation">
-              <AppIcon name="timeline" :size="12" style="vertical-align: -1px" />
-              分流说明：{{ entry.routeExplanation }}
-            </span>
             <span v-if="isKnowledgeGapDegrade(entry)" class="chat-evidence-summary">
               <AppIcon name="compass" :size="12" style="vertical-align: -1px" />
               本机暂无已审核的相关知识卡，以上是一般照护提示；具体用药请咨询医生或药师。
@@ -1409,13 +1396,17 @@ onBeforeUnmount(() => {
               ⚠ {{ degradeReasonLabel(entry.degradeReason) }}，以上为受控回复，不含模型生成的医疗判断。
             </span>
             <span v-if="entry.escalate" style="color: var(--rose)">
-              此问题超出系统边界，请联系医生或药师进一步确认。
+              此问题超出助手边界，请联系医生或药师进一步确认。
             </span>
-            <span v-if="entry.riskNotice" style="color: var(--rose)">
-              ⚠ {{ entry.riskNotice }}
+            <span v-else-if="visibleRiskNotice(entry.escalate, entry.riskNotice)" style="color: var(--rose)">
+              ⚠ {{ visibleRiskNotice(entry.escalate, entry.riskNotice) }}
             </span>
-            <span v-if="entry.confidence && !entry.degraded">回答把握程度：{{ entry.confidence }}（仍需人工确认）</span>
-            <span v-if="!entry.degraded" class="chat-evidence-summary">
+            <span v-if="routeSummary(entry.queryType, entry.routeExplanation)" class="chat-route-explanation">
+              <AppIcon name="compass" :size="12" style="vertical-align: -1px" />
+              {{ routeSummary(entry.queryType, entry.routeExplanation) }}
+              <template v-if="entry.confidence && !entry.degraded"> · 把握程度：{{ confidenceLabel(entry.confidence) }}</template>
+            </span>
+            <span v-if="!entry.degraded && (entry.citations?.length ?? 0) === 0" class="chat-evidence-summary">
               <AppIcon name="compass" :size="12" style="vertical-align: -1px" />
               依据状态：{{ evidenceSummary(entry) }}
             </span>
@@ -1430,8 +1421,8 @@ onBeforeUnmount(() => {
                 <small>{{ trace.network_used ? '联网' : '本机' }}</small>
               </span>
             </div>
-            <template v-if="(entry.sources?.length ?? 0) > 0">
-              <span v-for="source in entry.sources" :key="source">
+            <template v-if="extraFactSources(entry.sources, entry.citations).length > 0">
+              <span v-for="source in extraFactSources(entry.sources, entry.citations)" :key="source">
                 <AppIcon name="compass" :size="12" style="vertical-align: -1px" />
                 依据标识：{{ source }}
               </span>

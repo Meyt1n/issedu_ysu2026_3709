@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 
 import welcomeHero from '../assets/welcome-hero.jpg'
 import { apiClient } from '../api/client'
@@ -17,10 +17,12 @@ import {
   getBoundFaceHouseholdName,
   portalWelcomeMessage,
   pushToast,
+  refreshCapabilities,
   session,
 } from '../store'
 import { SHOW_DEV_LOGIN } from '../ui/featureFlags'
 import { THEMES, applyTheme, currentTheme } from '../ui/themes'
+import { faceBindingSummary } from '../ui/welcomeFaceBinding'
 
 const artRx = ref('0deg')
 const artRy = ref('0deg')
@@ -76,8 +78,8 @@ const householdDraft = reactive({
 const showCreateForm = computed(() => session.status === 'empty')
 const accessPurposeValid = computed(() => /^[a-z][a-z0-9-]{1,63}$/.test(accessPurpose.value.trim()))
 const faceBindingReady = computed(() => householdId.value.trim().length > 0)
-const faceHouseholdLabel = computed(
-  () => boundFaceHouseholdName.value || '当前绑定家庭（仅在本机使用）',
+const faceBinding = computed(() =>
+  faceBindingSummary(credentialMode.value, householdId.value, boundFaceHouseholdName.value),
 )
 const faceModelsReady = computed(
   () => session.capabilities?.available?.includes('face-recognition-local') ?? false,
@@ -114,17 +116,11 @@ watch(
     localError.value = ''
     pinIdentityPreview.value = ''
 
-    if (nextAuthMode !== 'session' || (nextCredentialMode !== 'pin' && nextCredentialMode !== 'face')) return
+    // 人脸 tab 的绑定状态由 faceBinding 卡片展示；这里只为 PIN 登录加载家庭列表。
+    if (nextAuthMode !== 'session' || nextCredentialMode !== 'pin') return
     const actor = nextActorId.trim()
     const purpose = nextAccessPurpose.trim()
-    if (!purpose || !accessPurposeValid.value) return
-    if (nextCredentialMode === 'face') {
-      householdsError.value = householdId.value
-        ? ''
-        : '这是第一次使用人脸登录。请先用账号密码进入，再到“人脸凭证”页面绑定当前家庭。'
-      return
-    }
-    if (!actor) return
+    if (!actor || !purpose || !accessPurposeValid.value) return
 
     householdsTimer = setTimeout(async () => {
       householdsTimer = null
@@ -175,6 +171,11 @@ watch(
   },
 )
 
+onMounted(() => {
+  // 人脸 tab 依赖 /meta/capabilities 判断模型是否就绪；登录前也需要预取。
+  if (!session.capabilities) void refreshCapabilities()
+})
+
 onBeforeUnmount(() => {
   householdsRequest?.abort()
   pinPreviewRequest?.abort()
@@ -206,7 +207,7 @@ async function submitSession(): Promise<void> {
   try {
     if (credentialMode.value === 'face') {
       if (!faceBindingReady.value) {
-        localError.value = '本机还没有绑定家庭，请先用账号密码进入完成首次设置。'
+        localError.value = '本机还没有绑定人脸登录家庭，请改用账号密码登录。'
         return
       }
       await connectWithFamilyFace(householdId.value, faceFrames.value, accessPurpose.value)
@@ -383,13 +384,15 @@ async function submitCreate(): Promise<void> {
             <small v-else-if="householdsError">家庭列表加载失败，可手动填写家庭唯一编号。</small>
             <small v-else>选好家庭名称即可；提交时由系统使用内部编号。</small>
           </label>
-          <div v-else class="face-family-summary" role="status">
-            <AppIcon :name="faceBindingReady ? 'home' : 'lock'" :size="18" />
+          <!-- 本机家庭绑定只服务人脸 1:N 登录，密码 / PIN 模式不渲染该卡片。 -->
+          <div v-if="faceBinding.visible" class="face-family-summary" role="status">
+            <AppIcon :name="faceBinding.bound ? 'home' : 'info'" :size="18" />
             <div>
-              <strong>{{ faceBindingReady ? faceHouseholdLabel : '本机还没有绑定家庭' }}</strong>
-              <small v-if="faceBindingReady">只在这个家庭里认人，不会跨家搜索。</small>
-              <small v-else>请先用账号密码进入，在「人脸凭证」页完成本机家庭绑定。</small>
-              <button v-if="!faceBindingReady" type="button" class="btn btn-ghost btn-small" @click="usePasswordFallback">先用账号密码进入</button>
+              <strong>{{ faceBinding.title }}</strong>
+              <small>{{ faceBinding.detail }}</small>
+              <button v-if="faceBinding.fallbackLabel" type="button" class="btn btn-ghost btn-small" @click="usePasswordFallback">
+                {{ faceBinding.fallbackLabel }}
+              </button>
             </div>
           </div>
           <label v-if="credentialMode === 'pin'" class="field">
@@ -420,9 +423,9 @@ async function submitCreate(): Promise<void> {
             </div>
           </div>
           <FaceVideoCapture
-            v-else-if="credentialMode === 'face'"
+            v-else-if="credentialMode === 'face' && faceBindingReady"
             compact
-            :disabled="connecting || !faceBindingReady || !accessPurposeValid"
+            :disabled="connecting || !accessPurposeValid"
             @captured="onFaceCaptured"
             @fallback="usePinFallback"
           />

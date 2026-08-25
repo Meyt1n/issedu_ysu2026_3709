@@ -500,9 +500,11 @@ def test_web_search_no_results_keeps_trace_clear(monkeypatch, body: str) -> None
     assert safe_query is not None
 
 
-def test_general_plan_skips_knowledge_and_web_search() -> None:
+def test_general_plan_retrieves_knowledge_but_skips_web_search() -> None:
+    """HCT-450: GENERAL teaching questions may use the reviewed local library
+    as optional enrichment; external search stays opt-out by default."""
     plan = plan_agent_execution("GENERAL", household_id="h", member_id="m")
-    assert plan["knowledge"].run is False
+    assert plan["knowledge"].run is True
     assert plan["web_search"].run is False
     assert plan["database"].run is True
     assert plan["rules"].run is False
