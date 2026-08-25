@@ -40,6 +40,7 @@ import {
 } from '../assistant/voice'
 import AppIcon from '../components/AppIcon.vue'
 import {
+  consumeAssistantSeedPrompt,
   formatError,
   requestOptions,
   selectMember,
@@ -679,6 +680,11 @@ onMounted(() => {
   void loadAgentCatalog()
   void bootstrapVoice()
   document.addEventListener('visibilitychange', onVisibilityChange)
+  const seeded = consumeAssistantSeedPrompt()
+  if (seeded) {
+    draft.value = seeded
+    void send(seeded)
+  }
 })
 
 function toggleVoiceInput(): void {

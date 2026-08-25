@@ -3646,6 +3646,21 @@ def list_assistant_agents(
     return get_agent_catalog(settings)
 
 
+@router.get("/health-news")
+def list_health_news(
+    actor_id: str = Depends(get_actor_id),
+) -> dict:
+    """Return proactive seasonal health-news cards for home screens.
+
+    Cards are calendar-based teaching reminders.  They do not invent live
+    outbreak names and carry a chat_prompt for jumping into the assistant.
+    """
+    del actor_id
+    from app.health_news import build_health_news
+
+    return build_health_news().model_dump(mode="json")
+
+
 def _summarize_event_payload(payload: dict | None) -> str:
     if not payload:
         return ""
