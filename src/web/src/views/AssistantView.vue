@@ -83,6 +83,7 @@ const webSearchAvailable = ref<boolean | null>(null)
 const workflowTrace = ref<AssistantAgentTrace[]>([])
 const selectedAgentId = ref<string | null>(null)
 const workflowExpanded = ref(false)
+const orchestrationPhase = ref<string | null>(null)
 type VoiceMode = 'off' | 'wake' | 'active'
 
 const voiceMode = ref<VoiceMode>('off')
@@ -178,19 +179,25 @@ function traceForAgent(agentId: string): AssistantAgentTrace | undefined {
   return workflowTrace.value.find(trace => trace.agent_id === agentId)
 }
 
-// Statuses shown here come from the backend agent_trace once a reply arrives;
-// while a request is in flight the UI only claims "processing", never a fake
-// step-by-step progression.
+// Prefer finished traces; while in flight highlight only the active phase stage.
 function agentStatus(stage: AgentStage): AgentVisualStatus {
   const trace = traceForAgent(stage.id)
   if (trace) {
-    if (trace.status === 'completed' || trace.status === 'skipped' || trace.status === 'blocked' || trace.status === 'degraded') {
-      return trace.status
+    if (['completed', 'skipped', 'blocked', 'degraded'].includes(trace.status)) {
+      return trace.status as AgentVisualStatus
     }
   }
   if (!sending.value) return 'idle'
-  if (stage.network && (!allowNetworkSearch.value || webSearchAvailable.value === false)) return 'skipped'
-  return 'running'
+  if (stage.network && (!allowNetworkSearch.value || webSearchAvailable.value === false)) {
+    return 'skipped'
+  }
+
+  const phase = orchestrationPhase.value
+  if (phase === 'routing' && stage.id === 'router') return 'running'
+  if (phase === 'retrieving' && (stage.id === 'database' || stage.id === 'knowledge')) return 'running'
+  if (phase === 'searching' && stage.id === 'web_search') return 'running'
+  if ((phase === 'generating' || phase === 'validating') && stage.id === 'synthesis') return 'running'
+  return 'pending'
 }
 
 function agentStatusLabel(status: AgentVisualStatus): string {
@@ -215,8 +222,27 @@ function agentStatusDetail(stage: AgentStage): string {
   return stage.description
 }
 
+const PHASE_LABELS: Record<string, string> = {
+  routing: '正在识别问题类型…',
+  retrieving: '正在核对档案与本地资料…',
+  searching: '正在获取脱敏联网参考…',
+  generating: '正在本机生成回答…',
+  validating: '正在校验引用与安全边界…',
+}
+
+const thinkingText = computed(() => {
+  if (orchestrationPhase.value && PHASE_LABELS[orchestrationPhase.value]) {
+    return PHASE_LABELS[orchestrationPhase.value]
+  }
+  return '正在本机核对证据并生成回答…'
+})
+
 const workflowSummary = computed(() => {
-  if (sending.value) return '正在本机分析中…'
+  if (sending.value) {
+    return orchestrationPhase.value && PHASE_LABELS[orchestrationPhase.value]
+      ? PHASE_LABELS[orchestrationPhase.value]
+      : '正在本机分析中…'
+  }
   const traces = workflowTrace.value
   if (traces.length > 0) {
     const completed = traces.filter(trace => trace.status === 'completed').length
@@ -306,6 +332,7 @@ function clearConversation(): void {
   clearChatSession(session.actorId, session.selectedHouseholdId, session.selectedMemberId)
   history.value = []
   workflowTrace.value = []
+  orchestrationPhase.value = null
   draft.value = ''
   sendError.value = ''
   voiceError.value = ''
@@ -579,6 +606,8 @@ async function send(text?: string): Promise<void> {
   sending.value = true
   sendError.value = ''
   workflowTrace.value = []
+  orchestrationPhase.value = 'routing'
+  workflowExpanded.value = true
   scrollToEnd()
 
   const streamingEntry: ChatEntry = {
@@ -633,13 +662,7 @@ async function send(text?: string): Promise<void> {
       {
         onTrace: upsertWorkflowTrace,
         onStatus: phase => {
-          if (phase === 'generating') {
-            const entry = history.value[entryIndex]
-            if (entry && !entry.content) {
-              entry.content = ''
-              entry.revealed = 0
-            }
-          }
+          orchestrationPhase.value = phase
         },
         onToken: token => {
           const entry = history.value[entryIndex]
@@ -694,6 +717,7 @@ async function send(text?: string): Promise<void> {
     }
   } finally {
     if (activeSendController === controller) activeSendController = null
+    orchestrationPhase.value = null
     sending.value = false
   }
 }
@@ -989,7 +1013,7 @@ onBeforeUnmount(() => {
         </span>
         <div class="chat-bubble thinking-bubble" role="status">
           <span class="thinking-wave" aria-hidden="true"><i /><i /><i /><i /></span>
-          <span class="thinking-text">正在本机核对证据并生成回答，通常需要一分钟内…</span>
+          <span class="thinking-text">{{ thinkingText }}</span>
         </div>
       </div>
     </div>
@@ -1020,6 +1044,15 @@ onBeforeUnmount(() => {
         >
           <AppIcon name="microphone" :size="15" />
           {{ voiceButtonLabel }}
+        </button>
+        <button
+          v-if="sending"
+          type="button"
+          class="btn btn-ghost"
+          aria-label="停止生成本次回答"
+          @click="cancelActiveSend"
+        >
+          停止
         </button>
         <button type="submit" class="btn btn-primary" :disabled="!canSend">
           {{ sending ? '发送中' : '发送' }}

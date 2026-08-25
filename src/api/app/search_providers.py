@@ -40,6 +40,24 @@ _MEDICAL_DOMAIN_HINTS = (
 
 _CACHE_LOCK = threading.Lock()
 _SEARCH_CACHE: dict[str, tuple[float, list[dict[str, str]]]] = {}
+_LAST_SEARCH_AT = 0.0
+
+
+class SearchRateLimited(RuntimeError):
+    """Raised when searches are fired faster than the configured interval."""
+
+
+def _enforce_min_interval(settings: Settings) -> None:
+    global _LAST_SEARCH_AT
+    interval = float(settings.agent_web_search_min_interval_seconds or 0)
+    if interval <= 0:
+        return
+    with _CACHE_LOCK:
+        now = time.monotonic()
+        wait = interval - (now - _LAST_SEARCH_AT)
+        if wait > 0:
+            raise SearchRateLimited(f"search rate limited for {wait:.2f}s")
+        _LAST_SEARCH_AT = now
 
 
 class SearchProvider(Protocol):
@@ -231,8 +249,10 @@ def _cache_put(key: str, results: list[dict[str, str]], ttl_seconds: float) -> N
 
 
 def clear_search_cache() -> None:
+    global _LAST_SEARCH_AT
     with _CACHE_LOCK:
         _SEARCH_CACHE.clear()
+        _LAST_SEARCH_AT = 0.0
 
 
 class DuckDuckGoHtmlProvider:
@@ -300,6 +320,7 @@ def execute_web_search(query: str, *, settings: Settings) -> list[dict[str, str]
             query, cached, max_results=settings.agent_web_search_max_results
         )
 
+    _enforce_min_interval(settings)
     raw = get_search_provider(settings).search(query, settings=settings)
     ranked = rank_search_results(
         query, raw, max_results=settings.agent_web_search_max_results

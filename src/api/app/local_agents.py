@@ -32,7 +32,7 @@ from app.config import Settings, get_settings
 from app.db import SessionLocal
 from app.egress_guard import is_web_search_egress_allowed
 from app.models import AccessAudit
-from app.search_providers import execute_web_search
+from app.search_providers import SearchRateLimited, execute_web_search
 from app.tool_call import (
     ASSISTANT_SYSTEM_PROMPT,
     OllamaClient,
@@ -425,6 +425,12 @@ def _web_search_agent(
             network_used=True,
             source_count=len(results),
         ), safe_query
+    except SearchRateLimited:
+        return [], _trace(
+            "web_search", _AGENT_ROLES["web_search"], "degraded", started,
+            "搜索请求过于频繁，已跳过本次联网参考",
+            network_used=False,
+        ), safe_query
     except Exception as exc:
         logger.warning("HCT-430 web search failed: %s", str(exc)[:160])
         return [], _trace(
@@ -677,6 +683,9 @@ def _synthesis_agent(
     if cancelled():
         raise OrchestrationCancelled("cancelled after synthesis")
 
+    if on_status is not None:
+        on_status("validating")
+
     parsed = _parse_assistant_output((raw.get("message") or {}).get("content") or "")
     if parsed is None:
         return degraded("SCHEMA_VALIDATION_FAILED")
@@ -813,6 +822,8 @@ def run_local_multi_agent(
 
     started = time.perf_counter()
     _ensure_active()
+    if on_status is not None:
+        on_status("routing")
     if query_type == "GENERAL" and _is_greeting(query):
         _append_trace(_trace(
             "router", _AGENT_ROLES["router"], "completed", started,
@@ -822,6 +833,8 @@ def run_local_multi_agent(
         _append_trace(_skipped("knowledge", "日常问候无需检索本地资料"))
         _append_trace(_skipped("web_search", "日常问候无需联网参考"))
         synthesis_started = time.perf_counter()
+        if on_status is not None:
+            on_status("generating")
         result = _greeting_result(messages, model=model_name, query_type=query_type)
         _emit_answer_tokens(str(result.get("answer") or ""), on_synthesis_token)
         _append_trace(_trace(
@@ -846,6 +859,8 @@ def run_local_multi_agent(
         executor = ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="hct430")
 
     if parallel_web and executor is not None:
+        if on_status is not None:
+            on_status("searching")
         web_future = executor.submit(
             _web_search_agent,
             query,
@@ -888,6 +903,9 @@ def run_local_multi_agent(
 
     try:
         _ensure_active()
+        if plan["database"].run or plan["knowledge"].run:
+            if on_status is not None:
+                on_status("retrieving")
         if plan["database"].run and plan["knowledge"].run and executor is not None:
             db_job = executor.submit(_database_worker)
             knowledge_job = executor.submit(_knowledge_worker)
@@ -929,6 +947,8 @@ def run_local_multi_agent(
                 [], _skipped("web_search", plan["web_search"].skip_reason), None,
             )
         else:
+            if on_status is not None and allow_network_search and plan["web_search"].run:
+                on_status("searching")
             external_sources, web_trace, network_query = _web_search_agent(
                 query,
                 sensitive_values=sensitive,
