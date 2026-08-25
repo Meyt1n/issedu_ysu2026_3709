@@ -709,6 +709,24 @@ def test_question_classifier_marks_medication_safety() -> None:
 @pytest.mark.parametrize(
     "query",
     [
+        "我感冒了应该吃什么药？",
+        "发烧了用什么药比较常见？",
+        "咳嗽可以吃什么药",
+        "感冒吃啥药",
+    ],
+)
+def test_question_classifier_marks_symptom_medication_guidance(query) -> None:
+    assert classify_question(query) == "SYMPTOM_MEDICATION"
+
+
+def test_question_classifier_keeps_household_formulary_as_medication_record() -> None:
+    assert classify_question("家里有哪些药？") == "MEDICATION_RECORD"
+    assert classify_question("刚才扫描的药叫什么") == "MEDICATION_RECORD"
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
         "这个药的剂量是多少？",
         "阿莫西林应该怎么吃？",
         "我今天漏服了一次降压药，需要补服吗？",
@@ -727,7 +745,6 @@ def test_question_classifier_marks_bare_dosage_terms_as_medication_safety(query)
     did not apply.
     """
     assert classify_question(query) == "MEDICATION_SAFETY"
-
 
 def test_medical_boundary_blocks_stop_medication_synonyms() -> None:
     from app.tool_call import _check_medical_boundary
@@ -811,6 +828,109 @@ def test_medication_safety_requires_reviewed_knowledge_and_exposes_risk_notice(
     assert result["risk_notice"] and "医生或药师" in result["risk_notice"]
     assert result["sources"] == [chunk.id]
     assert result["citations"][0]["version"] == "approved-v1"
+    assert "教学提醒" in result["answer"]
+
+
+def test_symptom_medication_answers_from_knowledge_without_household_drugs(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cold / what-medicine questions use knowledge + allergy history, not formulary."""
+    household = Household(name="guidance-hh", created_by="owner-g")
+    db_session.add(household)
+    db_session.flush()
+    member = Member(
+        household_id=household.id,
+        display_name="成员甲",
+        role="SELF",
+    )
+    db_session.add(member)
+    db_session.flush()
+    db_session.add(
+        HealthEvent(
+            household_id=household.id,
+            member_id=member.id,
+            sequence_no=1,
+            event_type="allergy_added",
+            payload={"allergy": "青霉素"},
+            evidence={},
+            source="TEST",
+            confirmation_status="CONFIRMED",
+            created_by="owner-g",
+            correlation_id="guidance-allergy-1",
+            schema_version=1,
+        )
+    )
+    document = add_document(
+        db_session,
+        title="Synthetic cold care card",
+        content=(
+            "合成审核知识：普通感冒可了解解热镇痛类非处方资料；"
+            "对青霉素过敏者应避开相关抗生素类说明，具体用药请咨询药师。"
+        ),
+        source="hct403-synthetic-cold",
+        created_by="owner-g",
+        version="cold-v1",
+        permission_scope={"created_by": "owner-g"},
+    )
+    db_session.commit()
+    chunk = db_session.query(KnowledgeChunk).filter_by(document_id=document.id).one()
+
+    def scripted_chat(_self: OllamaClient, **kwargs: object) -> dict:
+        messages = kwargs["messages"]  # type: ignore[index]
+        tool_names = [
+            message.get("name")
+            for message in messages
+            if isinstance(message, dict) and message.get("role") == "tool"
+        ]
+        if "retrieve_knowledge" not in tool_names:
+            return {
+                "message": {
+                    "content": "",
+                    "tool_calls": [{
+                        "function": {
+                            "name": "retrieve_knowledge",
+                            "arguments": {"query": "感冒 用药"},
+                        },
+                    }],
+                },
+            }
+        if "get_member_state" not in tool_names:
+            return {
+                "message": {
+                    "content": "",
+                    "tool_calls": [{
+                        "function": {"name": "get_member_state", "arguments": {}},
+                    }],
+                },
+            }
+        return {
+            "message": {
+                "content": json.dumps({
+                    "answer": (
+                        "本地知识卡提到普通感冒可了解解热镇痛类非处方资料；"
+                        "成员记录有青霉素过敏，相关抗生素类说明需避开，具体请咨询药师。"
+                    ),
+                    "sources": [chunk.id],
+                    "confidence": "medium",
+                    "escalate": False,
+                }, ensure_ascii=False),
+            },
+        }
+
+    monkeypatch.setattr(OllamaClient, "chat", scripted_chat)
+    result = run_assistant(
+        db_session,
+        messages=[{"role": "user", "content": "我感冒了应该吃什么药？"}],
+        actor_id="owner-g",
+        household_id=household.id,
+        member_id=member.id,
+    )
+    assert result["degraded"] is False
+    assert result["query_type"] == "SYMPTOM_MEDICATION"
+    assert result["sources"] == [chunk.id]
+    assert "教学提醒" in result["answer"]
+    assert "青霉素" in result["answer"] or result["risk_notice"]
 
 
 def test_medication_safety_without_reviewed_knowledge_degrades(
