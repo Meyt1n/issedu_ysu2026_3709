@@ -7,6 +7,9 @@ import time
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app import auth as auth_module
 from app.auth import (
@@ -21,6 +24,28 @@ from app.auth import (
     verify_password,
     verify_pin_challenge,
 )
+from app.models import Base
+
+
+@pytest.fixture(autouse=True)
+def isolated_auth_database(monkeypatch: pytest.MonkeyPatch):
+    """Keep pure auth tests independent from the developer's local database."""
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    monkeypatch.setattr(auth_module, "SessionLocal", session_factory)
+    auth_module._pin_challenges.clear()
+    auth_module._face_challenges.clear()
+    auth_module._face_failed_attempts.clear()
+    try:
+        yield
+    finally:
+        Base.metadata.drop_all(engine)
+        engine.dispose()
 
 
 class TestPasswordHashing:

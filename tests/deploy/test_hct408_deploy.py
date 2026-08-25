@@ -30,6 +30,8 @@ def _ps_syntax_check(script_path: Path) -> None:
         ],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=30,
     )
     assert "PS_SYNTAX_OK" in result.stdout, (
@@ -52,6 +54,8 @@ def _docker_compose_config_ok(profile: str) -> bool:
         ],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=60,
     )
     return result.returncode == 0
@@ -69,7 +73,11 @@ def _docker_compose_config_json(profile: str) -> dict:
             "--profile", profile,
             "config", "--format", "json",
         ],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=30,
     )
     if result.returncode != 0:
         return {}
@@ -217,6 +225,8 @@ def test_restore_rejects_missing_backup():
         ],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=30,
     )
     assert result.returncode != 0, "restore.ps1 should fail on missing backup"
