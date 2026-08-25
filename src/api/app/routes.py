@@ -52,6 +52,7 @@ from app.auth import (
     create_face_challenge,
     create_face_session,
     create_family_face_challenge,
+    enforce_registration_rate_limit,
     family_face_rate_actor,
     generate_pin_challenge,
     introspect_session,
@@ -1639,6 +1640,20 @@ def _actor_can_read_stored_file(
     return False
 
 
+def _actor_can_delete_stored_file(session: Session, storage_key: str, actor_id: str) -> bool:
+    """Allow household owners to delete evidence linked to their household tasks."""
+    tasks = session.scalars(
+        select(VisionTask).where(VisionTask.file_id == storage_key)
+    ).all()
+    for task in tasks:
+        household = session.get(Household, task.household_id)
+        if household is None or _is_erased(household):
+            continue
+        if household.created_by == actor_id:
+            return True
+    return False
+
+
 @router.get("/files/{storage_key}")
 def download_file(
     storage_key: str,
@@ -1646,7 +1661,11 @@ def download_file(
     access_purpose: str | None = Depends(get_access_purpose),
     session: Session = Depends(get_session),
 ) -> FileResponse:
-    """Download a stored file: uploader always, others via an authorized vision task."""
+    """Download a stored file: uploader always, others via an authorized vision task.
+
+    Legacy objects without ownership metadata are fail-closed: they are readable
+    only through the same vision-task authorization path (never by key alone).
+    """
     settings = get_settings()
     root = Path(settings.file_root).resolve()
     target = (root / storage_key).resolve()
@@ -1655,34 +1674,66 @@ def download_file(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="FILE_NOT_FOUND")
 
     owner = file_owner(storage_key)
-    # Legacy files without ownership metadata keep the previous behaviour.
-    if owner is not None and owner != actor_id:
+    if owner is None or owner != actor_id:
         if not _actor_can_read_stored_file(session, storage_key, actor_id, access_purpose):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="FILE_NOT_FOUND")
 
     logger.info("FILE_DOWNLOADED actor=%s key=%s", actor_id, storage_key)
-    return FileResponse(str(target))
+    return FileResponse(
+        str(target),
+        filename=Path(storage_key).name,
+        content_disposition_type="attachment",
+    )
 
 
 @router.delete("/files/{storage_key}")
 def delete_file(
     storage_key: str,
     actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
 ) -> dict:
     """Delete a file and its thumbnails/cache/index entries.
 
-    Destructive: when ownership metadata exists, only the uploader may delete
-    through the API.  Erasure tasks delete server-side and are not affected.
+    Uploaders may always delete their own objects. Household owners may delete
+    evidence linked to a vision task in their household (audited). Legacy
+    objects without ownership metadata follow the same rules (no open delete).
+    Erasure tasks delete server-side and are not affected.
     """
     owner = file_owner(storage_key)
-    if owner is not None and owner != actor_id:
+    as_uploader = owner == actor_id
+    as_household_owner = _actor_can_delete_stored_file(session, storage_key, actor_id)
+    if not as_uploader and not as_household_owner:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="FILE_NOT_FOUND")
+
+    audit_household_id: str | None = None
+    if as_household_owner and not as_uploader:
+        task = session.scalar(select(VisionTask).where(VisionTask.file_id == storage_key))
+        if task is not None:
+            audit_household_id = task.household_id
+
     deleted = delete_file_tree(storage_key)
+    if audit_household_id is not None:
+        session.add(
+            AccessAudit(
+                household_id=audit_household_id,
+                authorization_id=None,
+                actor_id=actor_id,
+                operation="DELETE",
+                action="DELETE_FILE",
+                data_field="file",
+                purpose=None,
+                outcome="ALLOWED",
+                reason="HOUSEHOLD_OWNER_EVIDENCE_CLEANUP",
+                request_id=current_request_id(),
+            )
+        )
+        session.commit()
     logger.info(
-        "FILE_DELETED actor=%s key=%s deleted_paths=%d",
+        "FILE_DELETED actor=%s key=%s deleted_paths=%d owner_cleanup=%s",
         actor_id,
         storage_key,
         len(deleted),
+        audit_household_id is not None,
     )
     return {"storage_key": storage_key, "deleted_paths": len(deleted)}
 
@@ -1693,8 +1744,15 @@ def delete_file(
 @router.post("/auth/register", response_model=dict, status_code=status.HTTP_201_CREATED)
 def auth_register(
     payload: AuthCredentials,
+    request: Request,
     session: Session = Depends(get_session),
 ) -> dict:
+    client_host = request.client.host if request.client else None
+    enforce_registration_rate_limit(
+        session,
+        actor_id=payload.actor_id,
+        client_key=client_host,
+    )
     register_account(payload.actor_id, payload.password, session)
     # Commit before the browser follows registration with a separate login
     # request; the dependency also commits successful requests at the boundary.
@@ -3119,13 +3177,23 @@ def list_knowledge_documents(
     """List active documents visible to the caller."""
     from app.knowledge import _check_permission
 
+    knowledge_admins = get_settings().knowledge_admin_actor_set
     stmt = (
         select(KnowledgeDocument)
         .where(KnowledgeDocument.status == "active")
         .order_by(KnowledgeDocument.created_at.desc())
     )
     docs = session.scalars(stmt).all()
-    return [d for d in docs if _check_permission(d.permission_scope, actor_id)]
+    return [
+        d
+        for d in docs
+        if _check_permission(
+            d.permission_scope or {},
+            actor_id,
+            doc_created_by=d.created_by,
+            knowledge_admin_ids=knowledge_admins,
+        )
+    ]
 
 
 @router.get("/knowledge/documents/{doc_id}", response_model=KnowledgeDocumentRead)
@@ -3139,7 +3207,12 @@ def get_knowledge_document(
     doc = session.get(KnowledgeDocument, doc_id)
     if doc is None or doc.status != "active":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="DOCUMENT_NOT_FOUND")
-    if not _check_permission(doc.permission_scope, actor_id):
+    if not _check_permission(
+        doc.permission_scope or {},
+        actor_id,
+        doc_created_by=doc.created_by,
+        knowledge_admin_ids=get_settings().knowledge_admin_actor_set,
+    ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="DOCUMENT_NOT_FOUND")
     return doc
 
@@ -5431,6 +5504,14 @@ def invalidate_export_manifest_endpoint(
 from app import model_binding as _mb  # noqa: E402
 
 
+def _can_govern_model_release(actor_id: str, binding: _mb.ModelVersionBinding) -> bool:
+    """Release activate/rollback: configured admins, else only the binding creator."""
+    admins = get_settings().model_release_admin_actor_set
+    if admins:
+        return actor_id in admins
+    return binding.created_by == actor_id
+
+
 def _mb_raise_val(err: str) -> NoReturn:
     mapping: dict[str, int] = {
         "BINDING_NOT_FOUND": 404,
@@ -5535,12 +5616,17 @@ def activate_model_binding_endpoint(
     actor_id: str = Depends(get_actor_id),
     session: Session = Depends(get_session),
 ) -> ModelVersionBindingRead:
-    """Activate a model release. High-risk governance: identity is mandatory."""
+    """Activate a model release. High-risk governance: identity + role required."""
     binding = _mb.get_binding(session, binding_id)
-    if binding is None:
+    if binding is None or not _can_govern_model_release(actor_id, binding):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="BINDING_NOT_FOUND")
+    if payload.approved_by != actor_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="APPROVED_BY_MUST_MATCH_ACTOR",
+        )
     try:
-        _mb.activate_binding(session, binding, approved_by=payload.approved_by)
+        _mb.activate_binding(session, binding, approved_by=actor_id)
     except ValueError as exc:
         _mb_raise_val(str(exc))
     session.commit()
@@ -5549,7 +5635,7 @@ def activate_model_binding_endpoint(
         "MODEL_BINDING_ACTIVATE_REQUESTED binding=%s actor=%s approved_by=%s",
         binding.id,
         actor_id,
-        payload.approved_by,
+        actor_id,
     )
     return ModelVersionBindingRead.model_validate(binding)
 
@@ -5566,7 +5652,7 @@ def rollback_model_binding_endpoint(
 ) -> ModelVersionBindingRead:
     """Roll back a model release, attributed to the authenticated caller."""
     binding = _mb.get_binding(session, binding_id)
-    if binding is None:
+    if binding is None or not _can_govern_model_release(actor_id, binding):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="BINDING_NOT_FOUND")
     try:
         _mb.rollback_binding(

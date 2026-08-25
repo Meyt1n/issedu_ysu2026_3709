@@ -147,6 +147,43 @@ def _clear_failures(db: Session, rate_key: str) -> None:
     db.execute(delete(AuthRateLimitAttempt).where(AuthRateLimitAttempt.rate_key == rate_key))
 
 
+def enforce_registration_rate_limit(
+    db: Session,
+    *,
+    actor_id: str,
+    client_key: str | None = None,
+    max_attempts: int = MAX_LOGIN_ATTEMPTS,
+) -> None:
+    """Throttle account creation by actor id and optional client fingerprint/IP."""
+    keys = [f"register:{actor_id}"]
+    if client_key:
+        keys.append(f"register-client:{client_key}")
+    for rate_key in keys:
+        cutoff = _now() - timedelta(seconds=LOCKOUT_SECONDS)
+        db.execute(
+            delete(AuthRateLimitAttempt).where(
+                AuthRateLimitAttempt.rate_key == rate_key,
+                AuthRateLimitAttempt.failed_at < cutoff,
+            )
+        )
+        count = (
+            db.scalar(
+                select(func.count(AuthRateLimitAttempt.id)).where(
+                    AuthRateLimitAttempt.rate_key == rate_key,
+                    AuthRateLimitAttempt.failed_at >= cutoff,
+                )
+            )
+            or 0
+        )
+        if count >= max_attempts:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="REGISTER_RATE_LIMITED",
+            )
+        db.add(AuthRateLimitAttempt(rate_key=rate_key, failed_at=_now()))
+    db.flush()
+
+
 def register_account(actor_id: str, password: str, session: Session | None = None) -> None:
     with _session_scope(session) as db:
         if db.get(AuthAccount, actor_id) is not None:

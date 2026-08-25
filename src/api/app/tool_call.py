@@ -1216,6 +1216,7 @@ def _execute_get_document_metadata(
     member_id: str | None,
     arguments: dict[str, Any],
 ) -> dict[str, Any]:
+    from app.config import get_settings
     from app.knowledge import KnowledgeDocument, _check_permission
 
     document_id = str(arguments.get("document_id") or "").strip()
@@ -1229,6 +1230,8 @@ def _execute_get_document_metadata(
         actor_id,
         household_id,
         member_id,
+        doc_created_by=document.created_by,
+        knowledge_admin_ids=get_settings().knowledge_admin_actor_set,
     ):
         return {"error": "DOCUMENT_NOT_FOUND"}
     return {

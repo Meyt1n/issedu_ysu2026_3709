@@ -1,13 +1,16 @@
-"""安全审计回归测试（八大注意点专项加固）。
+"""安全审计回归测试（八大注意点专项加固 + 二次加固）。
 
-覆盖本次防御性审计修复的四类问题：
+覆盖：
 
-1. 模型版本绑定治理端点（发布/回滚/读取）必须携带身份，回滚必须归因真实操作者；
-2. 文件下载/删除按上传者与视觉任务授权范围收口（IDOR / 越权删除）；
-3. 上传边界值：空文件（0KB）拒绝；路径遏制使用严格包含判断，兄弟目录前缀不能逃逸；
-4. 认证输入：注册 actor_id 与开发身份头必须符合受控字符集（日志注入 / STRIDE S-01）。
+1. 模型版本绑定治理端点必须携带身份；activate/rollback 限创建者或配置的发布管理员；
+   approved_by 必须等于会话身份；
+2. 文件下载/删除按上传者与视觉任务授权范围收口；无归属 sidecar 的历史文件 fail-closed；
+   家庭 owner 可清理本家庭任务关联证据；下载强制 attachment；
+3. 上传边界值与路径遏制；
+4. 认证输入字符集与注册速率限制；
+5. 知识库空 scope / internal 不再对全员放行。
 
-绑定 Story：HCT-102（授权）、HCT-104（安全上传）、HCT-004（威胁基线）、HCT-404（模型发布）。
+绑定 Story：HCT-102、HCT-104、HCT-004、HCT-401、HCT-404。
 """
 
 from __future__ import annotations
@@ -95,20 +98,39 @@ def test_model_binding_rollback_attributes_real_actor(client: TestClient) -> Non
     activated = client.post(
         f"/api/v1/model-version-bindings/{binding_id}/activate",
         headers=OWNER,
-        json={"approved_by": "independent-reviewer"},
+        json={"approved_by": "audit-owner"},
     )
     assert activated.status_code == 200, activated.text
+    assert activated.json()["approved_by"] == "audit-owner"
+
+    # 非创建者、未列入 MODEL_RELEASE_ADMIN_ACTORS 时不得回滚。
+    denied = client.post(
+        f"/api/v1/model-version-bindings/{binding_id}/rollback",
+        headers={"X-Actor-Id": "release-admin"},
+        json={"reason": "audit drill"},
+    )
+    assert denied.status_code == 404, denied.text
 
     rolled_back = client.post(
         f"/api/v1/model-version-bindings/{binding_id}/rollback",
-        headers={"X-Actor-Id": "release-admin"},
+        headers=OWNER,
         json={"reason": "audit drill"},
     )
     assert rolled_back.status_code == 200, rolled_back.text
     body = rolled_back.json()
     assert body["release_status"] == "revoked"
-    # 回滚不再硬编码为 "admin"，必须归因到真实认证身份。
-    assert body["revoked_by"] == "release-admin"
+    assert body["revoked_by"] == "audit-owner"
+
+
+def test_model_binding_rejects_spoofed_approved_by(client: TestClient) -> None:
+    binding_id = _create_binding(client)
+    response = client.post(
+        f"/api/v1/model-version-bindings/{binding_id}/activate",
+        headers=OWNER,
+        json={"approved_by": "independent-reviewer"},
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"] == "APPROVED_BY_MUST_MATCH_ACTOR"
 
 
 # ── 2. 文件所有权与越权访问 ───────────────────────────────────────────
@@ -168,20 +190,59 @@ def test_household_owner_reads_member_evidence_via_vision_task(
     )
     db_session.commit()
 
-    # 复核流：家庭 owner 可以查看成员提交的证据原图。
+    # 复核流：家庭 owner 可以查看成员提交的证据原图，并可清理误传证据。
     assert client.get(f"/api/v1/files/{storage_key}", headers=OWNER).status_code == 200
     # 未授权外人仍然不可见，也不能替成员删除。
     assert client.get(f"/api/v1/files/{storage_key}", headers=STRANGER).status_code == 404
-    assert client.delete(f"/api/v1/files/{storage_key}", headers=OWNER).status_code == 404
-    assert (file_root / storage_key).exists()
+    assert client.delete(f"/api/v1/files/{storage_key}", headers=STRANGER).status_code == 404
+    assert client.delete(f"/api/v1/files/{storage_key}", headers=OWNER).status_code == 200
+    assert not (file_root / storage_key).exists()
 
 
-def test_legacy_file_without_owner_metadata_keeps_working(
+def test_legacy_file_without_owner_metadata_is_fail_closed(
     client: TestClient, file_root: Path
 ) -> None:
     (file_root / "legacy-object.bin").write_bytes(b"legacy-bytes")
-    response = client.get("/api/v1/files/legacy-object.bin", headers=OWNER)
-    assert response.status_code == 200
+    # 无归属且无视觉任务关联：任何已认证用户都不能仅凭 key 读取。
+    assert client.get("/api/v1/files/legacy-object.bin", headers=OWNER).status_code == 404
+    assert client.delete("/api/v1/files/legacy-object.bin", headers=OWNER).status_code == 404
+    assert (file_root / "legacy-object.bin").exists()
+
+
+def test_legacy_file_readable_via_vision_task_authorization(
+    client: TestClient, file_root: Path, db_session: Session
+) -> None:
+    household = client.post(
+        "/api/v1/households", headers=OWNER, json={"name": "Legacy household"}
+    )
+    assert household.status_code == 201
+    household_id = household.json()["id"]
+    member = client.post(
+        f"/api/v1/households/{household_id}/members",
+        headers=OWNER,
+        json={"display_name": "Member", "role": "SELF", "actor_id": "audit-member"},
+    )
+    assert member.status_code == 201
+    member_id = member.json()["id"]
+
+    legacy_key = "legacy-evidence.jpg"
+    (file_root / legacy_key).write_bytes(JPEG_BYTES)
+    db_session.add(
+        VisionTask(
+            household_id=household_id,
+            member_id=member_id,
+            file_id=legacy_key,
+            task_type="ocr",
+            status="queued",
+            created_by="audit-member",
+        )
+    )
+    db_session.commit()
+
+    assert client.get(f"/api/v1/files/{legacy_key}", headers=OWNER).status_code == 200
+    assert client.get(f"/api/v1/files/{legacy_key}", headers=STRANGER).status_code == 404
+    downloaded = client.get(f"/api/v1/files/{legacy_key}", headers=OWNER)
+    assert downloaded.headers.get("content-disposition", "").startswith("attachment")
 
 
 # ── 3. 上传边界值与路径遏制 ───────────────────────────────────────────
@@ -263,3 +324,81 @@ def test_dev_actor_header_rejects_malformed_identity(client: TestClient) -> None
 
     well_formed = client.get("/api/v1/households", headers={"X-Actor-Id": "actor-ok.1"})
     assert well_formed.status_code == 200
+
+
+def test_register_is_rate_limited(client: TestClient) -> None:
+    password = "long-enough-password"
+    # Five distinct actor ids from the same client should succeed; the sixth is blocked.
+    for index in range(5):
+        response = client.post(
+            "/api/v1/auth/register",
+            json={"actor_id": f"reg-rate-{index}", "password": password},
+        )
+        assert response.status_code == 201, response.text
+    blocked = client.post(
+        "/api/v1/auth/register",
+        json={"actor_id": "reg-rate-blocked", "password": password},
+    )
+    assert blocked.status_code == 429
+    assert blocked.json()["detail"] == "REGISTER_RATE_LIMITED"
+
+
+def test_knowledge_empty_scope_is_creator_only(client: TestClient) -> None:
+    created = client.post(
+        "/api/v1/knowledge/documents",
+        headers=OWNER,
+        json={
+            "title": "Scoped doc",
+            "content": "阿莫西林 说明书 仅创建者可见",
+            "source": "audit",
+            "permission_scope": {},
+        },
+    )
+    assert created.status_code == 201, created.text
+    doc = created.json()
+    assert doc["permission_scope"]["created_by"] == "audit-owner"
+    doc_id = doc["id"]
+
+    assert client.get(f"/api/v1/knowledge/documents/{doc_id}", headers=OWNER).status_code == 200
+    assert (
+        client.get(f"/api/v1/knowledge/documents/{doc_id}", headers=STRANGER).status_code
+        == 404
+    )
+
+    listed_owner = client.get("/api/v1/knowledge/documents", headers=OWNER)
+    assert listed_owner.status_code == 200
+    assert any(item["id"] == doc_id for item in listed_owner.json())
+
+    listed_stranger = client.get("/api/v1/knowledge/documents", headers=STRANGER)
+    assert listed_stranger.status_code == 200
+    assert all(item["id"] != doc_id for item in listed_stranger.json())
+
+
+def test_knowledge_internal_requires_admin_allowlist(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    created = client.post(
+        "/api/v1/knowledge/documents",
+        headers=OWNER,
+        json={
+            "title": "Internal doc",
+            "content": "内部知识条目",
+            "source": "audit",
+            "permission_scope": {"internal": True},
+        },
+    )
+    assert created.status_code == 201, created.text
+    doc_id = created.json()["id"]
+
+    # Creator still reads via stamped created_by.
+    assert client.get(f"/api/v1/knowledge/documents/{doc_id}", headers=OWNER).status_code == 200
+    assert (
+        client.get(f"/api/v1/knowledge/documents/{doc_id}", headers=STRANGER).status_code
+        == 404
+    )
+
+    monkeypatch.setattr(get_settings(), "knowledge_admin_actors", "audit-stranger")
+    assert (
+        client.get(f"/api/v1/knowledge/documents/{doc_id}", headers=STRANGER).status_code
+        == 200
+    )
