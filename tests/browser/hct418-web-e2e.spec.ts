@@ -267,7 +267,7 @@ test('助手和知识文档链路显示本地依据，并保留受控检索结�
   await expect(page.getByText('Synthetic evidence fragment')).toBeVisible()
   await expect(page.getByText('《Synthetic care guide》')).toBeVisible()
 
-  await navItem(page, '本地助手').click()
+  await navItem(page, '健康助手').click()
   await expect(page.getByRole('heading', { name: '本地证据助手' })).toBeVisible()
   await page.locator('textarea[placeholder^="例如：最近的用药提醒"]').fill('这条证据依据什么？')
   await page.getByRole('button', { name: '发送' }).click()
@@ -282,7 +282,7 @@ test('助手和知识文档链路显示本地依据，并保留受控检索结�
 test('助手和业务页面把纵向滚动收进视口内容区，并随视口尺寸自适应', async ({ page }) => {
   await installSyntheticApi(page)
   await enterFamilySpace(page)
-  await navItem(page, '本地助手').click()
+  await navItem(page, '健康助手').click()
   await expect(page.getByRole('heading', { name: '本地证据助手' })).toBeVisible()
 
   for (const viewport of [
