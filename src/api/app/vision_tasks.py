@@ -14,17 +14,20 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from datetime import UTC, datetime
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
 from fastapi import HTTPException
 from fastapi import status as http_status
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.file_upload import delete_file_tree
 from app.models import VisionTask
+from app.review import ReviewStatus, ReviewTask
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +45,36 @@ class VisionTaskStatus(StrEnum):
 
 
 VISION_MEDIA_TYPES = frozenset({"image", "video"})
+
+_TERMINAL_STATUSES = frozenset(
+    {
+        VisionTaskStatus.SUCCEEDED,
+        VisionTaskStatus.FAILED,
+        VisionTaskStatus.TIMEOUT,
+        VisionTaskStatus.CANCELLED,
+    }
+)
+
+
+@dataclass(frozen=True)
+class VisionTaskCleanupReport:
+    """Safe, repeatable result of one temporary-video cleanup pass.
+
+    The task rows and their OCR/fusion results are deliberately retained as
+    audit metadata.  Only the uploaded file tree is removed.
+    """
+
+    cutoff_at: datetime
+    retention_seconds: int
+    dry_run: bool
+    scanned: int = 0
+    eligible: int = 0
+    skipped_recent: int = 0
+    skipped_pending_review: int = 0
+    skipped_shared_file: int = 0
+    deleted_artifacts: int = 0
+    missing_files: int = 0
+    failed_files: int = 0
 
 
 # Valid transitions: current_status → set of allowed next statuses
@@ -73,6 +106,144 @@ _ERROR_CODES: dict[str, str] = {
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _as_utc(value: datetime | None, *, fallback: datetime) -> datetime:
+    if value is None:
+        return fallback
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def cleanup_expired_video_files(
+    session: Session,
+    household_id: str,
+    *,
+    retention_seconds: int,
+    limit: int,
+    dry_run: bool = True,
+    now: datetime | None = None,
+) -> VisionTaskCleanupReport:
+    """Preview or remove expired video upload trees for one household.
+
+    Only terminal video tasks are considered.  A task with a pending manual
+    review or a file referenced by another vision task is protected.  The
+    operation does not delete task rows, so a retry, audit lookup and erasure
+    propagation can still see the original task metadata.  Re-running after a
+    successful deletion is safe because missing files are reported, not raised.
+    """
+
+    if retention_seconds <= 0:
+        raise ValueError("VISION_RETENTION_SECONDS_INVALID")
+    if limit <= 0:
+        raise ValueError("VISION_CLEANUP_LIMIT_INVALID")
+
+    current = _as_utc(now, fallback=_now())
+    cutoff = current - timedelta(seconds=retention_seconds)
+    terminal_values = [status.value for status in _TERMINAL_STATUSES]
+    timestamp_expr = func.coalesce(
+        VisionTask.finished_at,
+        VisionTask.updated_at,
+        VisionTask.created_at,
+    )
+    tasks = list(
+        session.scalars(
+            select(VisionTask)
+            .where(
+                VisionTask.household_id == household_id,
+                VisionTask.media_type == "video",
+                VisionTask.status.in_(terminal_values),
+            )
+            .order_by(timestamp_expr.asc())
+            .limit(limit)
+        ).all()
+    )
+
+    task_ids = [task.id for task in tasks]
+    pending_review_ids = {
+        task_id
+        for task_id in session.scalars(
+            select(ReviewTask.vision_task_id).where(
+                ReviewTask.vision_task_id.in_(task_ids),
+                ReviewTask.status == ReviewStatus.PENDING_REVIEW,
+            )
+        ).all()
+    } if task_ids else set()
+    file_ids = {task.file_id for task in tasks if task.file_id}
+    file_reference_counts = {
+        file_id: int(count)
+        for file_id, count in session.execute(
+            select(VisionTask.file_id, func.count(VisionTask.id))
+            .where(VisionTask.file_id.in_(file_ids))
+            .group_by(VisionTask.file_id)
+        ).all()
+    } if file_ids else {}
+
+    report = VisionTaskCleanupReport(
+        cutoff_at=cutoff,
+        retention_seconds=retention_seconds,
+        dry_run=dry_run,
+        scanned=len(tasks),
+    )
+    for task in tasks:
+        terminal_at = _as_utc(
+            task.finished_at or task.updated_at or task.created_at,
+            fallback=current,
+        )
+        if terminal_at > cutoff:
+            report = _replace_cleanup_report(report, skipped_recent=report.skipped_recent + 1)
+            continue
+        if task.id in pending_review_ids:
+            report = _replace_cleanup_report(
+                report,
+                skipped_pending_review=report.skipped_pending_review + 1,
+            )
+            continue
+        if file_reference_counts.get(task.file_id, 0) > 1:
+            report = _replace_cleanup_report(
+                report,
+                skipped_shared_file=report.skipped_shared_file + 1,
+            )
+            continue
+
+        report = _replace_cleanup_report(report, eligible=report.eligible + 1)
+        if dry_run:
+            continue
+        try:
+            deleted = delete_file_tree(task.file_id)
+        except OSError:
+            logger.warning("VISION_RETENTION_DELETE_FAILED household=%s", household_id)
+            report = _replace_cleanup_report(report, failed_files=report.failed_files + 1)
+            continue
+        if deleted:
+            report = _replace_cleanup_report(
+                report,
+                deleted_artifacts=report.deleted_artifacts + len(deleted),
+            )
+        else:
+            report = _replace_cleanup_report(report, missing_files=report.missing_files + 1)
+
+    logger.info(
+        "VISION_RETENTION_CLEANUP household=%s dry_run=%s scanned=%d eligible=%d "
+        "deleted=%d missing=%d failed=%d",
+        household_id,
+        dry_run,
+        report.scanned,
+        report.eligible,
+        report.deleted_artifacts,
+        report.missing_files,
+        report.failed_files,
+    )
+    return report
+
+
+def _replace_cleanup_report(
+    report: VisionTaskCleanupReport,
+    **changes: int,
+) -> VisionTaskCleanupReport:
+    """Keep the public report immutable while accumulating one cleanup pass."""
+    return replace(report, **changes)
 
 
 def _can_transition(current: str, next_: str) -> bool:

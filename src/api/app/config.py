@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     # closed and hide the video entry when the server lacks the ability.
     vision_video_max_duration_seconds: int = Field(default=30, gt=0, le=600)
     vision_video_tasks_enabled: bool = True
+    # HCT-439: uploaded videos are temporary evidence.  Keep a conservative
+    # default and let operators lengthen the window without changing code.
+    vision_video_retention_seconds: int = Field(default=86_400, ge=3_600, le=2_592_000)
+    vision_video_cleanup_batch_size: int = Field(default=100, ge=1, le=1_000)
     vision_quality_min_width: int = 640
     vision_quality_min_height: int = 480
     vision_quality_min_blur_variance: float = 80.0

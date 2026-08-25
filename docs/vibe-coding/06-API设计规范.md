@@ -92,6 +92,7 @@ HCT-103 事件写入支持最长 128 位 `Idempotency-Key`。家庭、key、操�
 | POST | `/vision-tasks/{id}/fusion` | 融合批准主数据候选并创建唯一待复核任务 |
 | GET | `/vision-tasks/{id}` | 查询任务、版本和证据结果 |
 | POST | `/vision-tasks/{id}/retry` | 失败/超时任务原地重新排队，不创建第二个任务 |
+| POST | `/households/{household_id}/vision-tasks/retention-cleanup` | Owner 预览或批量清理超过留存期的视频临时文件 |
 | GET | `/households/{household_id}/members/{member_id}/review-tasks` | 查询有权限成员的待复核任务 |
 | GET | `/households/{household_id}/review-tasks/{id}` | 查询单个复核任务和版本 |
 | POST | `/households/{household_id}/review-tasks/{id}/confirm` | 确认候选并追加健康事件 |
@@ -134,6 +135,8 @@ MATCHED/CONFLICT/UNKNOWN/REVIEW -> CONFIRMED | CORRECTED | REJECTED
 ```
 
 只有 `CONFIRMED`/`CORRECTED` 可触发正式状态投影、风险计算和药物计划；融合结果只创建 `PENDING_REVIEW`，不得先写健康事件。状态转换使用数据库条件更新和单调 `version` 乐观锁，重复复核保持幂等。返回值必须包含模型/OCR/匹配器版本、证据帧、字段来源和人工确认状态。`CORRECTED` 必须返回原预测、修正值、修正原因、操作者和训练同意状态。
+
+视频任务临时文件由 Owner-only 的 `POST /households/{household_id}/vision-tasks/retention-cleanup` 管理。请求默认 `dry_run=true`，并受服务端批量上限约束；执行只处理超过 `VISION_VIDEO_RETENTION_SECONDS` 的终态视频任务。queued/running、存在 `PENDING_REVIEW` 或被其他任务引用的文件必须保留。清理删除文件正文及已生成的 thumbnail/cache/index 派生文件，但保留视觉任务数据库行和结果元数据；文件已不存在时按幂等成功统计，不返回路径或原始内容。
 
 ## 4. 证据契约
 
