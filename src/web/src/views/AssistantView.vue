@@ -93,6 +93,11 @@ const draftInput = ref<HTMLTextAreaElement | null>(null)
 // reply, so the UI never hardcodes a runtime model.
 const modelLabel = ref('本地模型')
 
+function formatModelLabel(model?: string | null): string {
+  if (!model || model === 'unavailable') return '本地模型未配置'
+  return model
+}
+
 let streamTimer: ReturnType<typeof setInterval> | null = null
 let voiceRestartTimer: ReturnType<typeof setTimeout> | null = null
 let recognition: SpeechRecognitionLike | null = null
@@ -216,9 +221,21 @@ const selectedAgentTrace = computed(() => (
   selectedAgentId.value ? traceForAgent(selectedAgentId.value) : undefined
 ))
 const workflowProgressWidth = computed(() => {
-  if (sending.value) return '100%'
-  return workflowTrace.value.length > 0 ? '100%' : '0%'
+  if (workflowTrace.value.length === 0) return sending.value ? '12%' : '0%'
+  const completed = workflowTrace.value.filter(trace =>
+    ['completed', 'skipped', 'blocked', 'degraded'].includes(trace.status),
+  ).length
+  const progress = (completed / AGENT_STAGES.length) * 100
+  return `${Math.min(100, Math.max(sending.value ? 12 : 0, progress))}%`
 })
+
+function upsertWorkflowTrace(trace: AssistantAgentTrace): void {
+  const traces = [...workflowTrace.value]
+  const index = traces.findIndex(item => item.agent_id === trace.agent_id)
+  if (index >= 0) traces[index] = trace
+  else traces.push(trace)
+  workflowTrace.value = traces
+}
 
 function toggleAgentDetails(agentId: string): void {
   selectedAgentId.value = selectedAgentId.value === agentId ? null : agentId
@@ -528,48 +545,71 @@ async function send(text?: string): Promise<void> {
   workflowTrace.value = []
   scrollToEnd()
 
+  const streamingEntry: ChatEntry = {
+    role: 'assistant',
+    content: '',
+    revealed: 0,
+  }
+  history.value.push(streamingEntry)
+  const entryIndex = history.value.length - 1
+
   try {
-    const reply = await apiClient.assistantChat(
+    const reply = await apiClient.assistantChatStream(
       {
-        messages: history.value.map(entry => ({ role: entry.role, content: entry.content })),
-        // Qwen3 基座模型可能先生成内部思考；提高上限，确保最终 JSON 不会被提前截断。
+        messages: history.value
+          .slice(0, -1)
+          .map(entry => ({ role: entry.role, content: entry.content })),
         max_tokens: 1024,
         agent_mode: 'multi_agent',
         allow_network_search: allowNetworkSearch.value,
+      },
+      {
+        onTrace: upsertWorkflowTrace,
+        onToken: token => {
+          const entry = history.value[entryIndex]
+          if (!entry || !token) return
+          entry.content += token
+          entry.revealed = entry.content.length
+          scrollToEnd()
+        },
+        onExternalSources: sources => {
+          const entry = history.value[entryIndex]
+          if (entry) entry.externalSources = sources
+        },
       },
       session.selectedHouseholdId || undefined,
       session.selectedMemberId || undefined,
       requestOptions.value,
     )
-    const entry: ChatEntry = {
-      role: 'assistant',
-      content: reply.answer,
-      revealed: 0,
-      sources: reply.sources,
-      citations: reply.citations,
-      confidence: reply.confidence,
-      degraded: reply.degraded,
-      degradeReason: reply.degrade_reason,
-      escalate: reply.escalate,
-      suggestedQuestions: normalizeSuggestedQuestions(reply.suggested_questions),
-      route: reply.route,
-      queryType: reply.query_type,
-      riskNotice: reply.risk_notice,
-      orchestrationMode: reply.orchestration_mode,
-      allAgentsLocal: reply.all_agents_local,
-      networkUsed: reply.network_used,
-      networkQuery: reply.network_query,
-      agentTrace: reply.agent_trace,
-      externalSources: reply.external_sources,
-    }
+    const entry = history.value[entryIndex]!
+    entry.content = reply.answer
+    entry.revealed = 0
+    entry.sources = reply.sources
+    entry.citations = reply.citations
+    entry.confidence = reply.confidence
+    entry.degraded = reply.degraded
+    entry.degradeReason = reply.degrade_reason
+    entry.escalate = reply.escalate
+    entry.suggestedQuestions = normalizeSuggestedQuestions(reply.suggested_questions)
+    entry.route = reply.route
+    entry.queryType = reply.query_type
+    entry.riskNotice = reply.risk_notice
+    entry.orchestrationMode = reply.orchestration_mode
+    entry.allAgentsLocal = reply.all_agents_local
+    entry.networkUsed = reply.network_used
+    entry.networkQuery = reply.network_query
+    entry.agentTrace = reply.agent_trace
+    entry.externalSources = reply.external_sources
     workflowTrace.value = reply.agent_trace ?? []
-    if (reply.model) modelLabel.value = reply.model
-    history.value.push(entry)
+    if (reply.model) modelLabel.value = formatModelLabel(reply.model)
     persistChatSession()
-    streamReveal(history.value[history.value.length - 1]!)
+    streamReveal(entry)
   } catch (cause) {
     sendError.value = formatError(cause)
     workflowTrace.value = []
+    if (history.value[entryIndex]?.role === 'assistant' && !history.value[entryIndex]?.sources) {
+      history.value.pop()
+    }
     const entry: ChatEntry = {
       role: 'assistant',
       content: '本地模型或其依赖当前不可用，无法生成回答。家庭事实、规则与任务不受影响，可直接在对应页面查看。',
@@ -868,7 +908,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div v-if="sending" class="chat-bubble-row assistant">
+      <div v-if="sending && !(history[history.length - 1]?.role === 'assistant' && (history[history.length - 1]?.content.length ?? 0) > 0)" class="chat-bubble-row assistant">
         <span class="chat-avatar thinking" aria-hidden="true">
           <AppIcon name="assistant" :size="16" />
         </span>

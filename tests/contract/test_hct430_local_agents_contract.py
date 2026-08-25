@@ -36,3 +36,22 @@ def test_assistant_request_preserves_legacy_single_agent_default() -> None:
 
     assert payload.agent_mode == "single"
     assert payload.allow_network_search is False
+
+
+def test_agent_catalog_exposes_search_provider(client: TestClient) -> None:
+    response = client.get(
+        "/api/v1/assistant/agents",
+        headers={"X-Actor-Id": "hct430-contract-owner"},
+    )
+    assert response.status_code == 200
+    assert response.json()["web_search_provider"] == "duckduckgo_html"
+
+
+def test_assistant_stream_requires_multi_agent(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/assistant/chat/stream",
+        headers={"X-Actor-Id": "hct430-contract-owner"},
+        json={"messages": [{"role": "user", "content": "你好"}], "agent_mode": "single"},
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"] == "STREAM_REQUIRES_MULTI_AGENT"

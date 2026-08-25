@@ -688,6 +688,7 @@ export interface AssistantAgentCatalog {
   web_search_enabled: boolean
   /** True only when the deployment switch is on and the endpoint passes the allowlist. */
   web_search_ready?: boolean
+  web_search_provider?: string
   web_search_requires_request_opt_in: boolean
   agents: AssistantAgentCatalogItem[]
 }

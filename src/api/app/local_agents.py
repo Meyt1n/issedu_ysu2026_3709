@@ -17,22 +17,20 @@ list.
 
 from __future__ import annotations
 
-import html as html_lib
 import json
 import logging
 import re
 import time
 import uuid
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
-
-import httpx
 
 from app.config import Settings, get_settings
+from app.db import SessionLocal
 from app.egress_guard import is_web_search_egress_allowed
+from app.search_providers import execute_web_search
 from app.tool_call import (
     ASSISTANT_SYSTEM_PROMPT,
     OllamaClient,
@@ -115,7 +113,14 @@ def plan_agent_execution(
         else AgentDecision(run=False, skip_reason="未选择家庭成员，本次未读取健康档案")
     )
 
-    if query_type == "RULE_EVIDENCE" and member_selected:
+    if query_type == "GENERAL":
+        knowledge = AgentDecision(
+            run=False, skip_reason="一般问题无需检索资料库",
+        )
+        web_search = AgentDecision(
+            run=False, skip_reason="一般问题默认不发起外部参考",
+        )
+    elif query_type == "RULE_EVIDENCE" and member_selected:
         # Rule explanations cite the deterministic rule records returned by
         # the database step; retrieving generic documents adds no evidence.
         knowledge = AgentDecision(
@@ -124,14 +129,42 @@ def plan_agent_execution(
     else:
         knowledge = AgentDecision(run=True)
 
-    if query_type == "URGENT":
-        web_search = AgentDecision(
-            run=False, skip_reason="紧急问题优先本地处置，未发起外部搜索"
-        )
-    else:
+    if query_type in {"URGENT", "GENERAL"}:
+        if query_type == "URGENT":
+            web_search = AgentDecision(
+                run=False, skip_reason="紧急问题优先本地处置，未发起外部搜索",
+            )
+        # GENERAL web_search already set above.
+    elif query_type != "GENERAL":
         web_search = AgentDecision(run=True)
 
     return {"database": database, "knowledge": knowledge, "web_search": web_search}
+
+
+def _knowledge_has_evidence(knowledge: dict[str, Any]) -> bool:
+    return bool(knowledge.get("results")) and not knowledge.get("error")
+
+
+def _medication_safety_short_circuit(
+    messages: list[dict[str, Any]],
+    *,
+    model: str,
+    query_type: str,
+    started: float,
+) -> dict[str, Any]:
+    """Skip Ollama when medication safety has no approved local knowledge."""
+    result = degrade_result(
+        build_degrade_response("EVIDENCE_REQUIRED"),
+        model,
+        query_type=query_type,
+    )
+    result["_trace"] = _trace(
+        "synthesis", _AGENT_ROLES["synthesis"], "degraded", started,
+        "本地资料库暂无用药安全依据，已跳过模型生成",
+    )
+    result["suggested_questions"] = suggest_follow_up_questions(messages, escalate=True)
+    result["escalate"] = True
+    return result
 
 
 def redact_web_query(query: str, sensitive_values: list[str | None] | None = None) -> str:
@@ -148,121 +181,6 @@ def redact_web_query(query: str, sensitive_values: list[str | None] | None = Non
             redacted = re.sub(re.escape(value), " ", redacted, flags=re.I)
     redacted = re.sub(r"\s+", " ", redacted).strip()
     return redacted[:240]
-
-
-class _DuckDuckGoParser(HTMLParser):
-    """Small dependency-free parser for DuckDuckGo's HTML result page."""
-
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.results: list[dict[str, str]] = []
-        self._current: dict[str, str] | None = None
-        self._capture: str | None = None
-        self._buffer: list[str] = []
-        self._pending_title_link = False
-
-    @staticmethod
-    def _classes(attrs: list[tuple[str, str | None]]) -> set[str]:
-        raw = dict(attrs).get("class") or ""
-        return {item.strip() for item in raw.split() if item.strip()}
-
-    def _flush_buffer(self) -> None:
-        if self._current is not None and self._capture:
-            value = html_lib.unescape("".join(self._buffer)).strip()
-            if value:
-                self._current[self._capture] = re.sub(r"\s+", " ", value)
-        self._buffer = []
-
-    _RESULT_LINK_CLASSES = {"result__a", "result__title", "result-link"}
-    _TITLE_WRAPPER_CLASSES = {"result__title", "result-title"}
-    _SNIPPET_CLASSES = {"result__snippet", "result-snippet", "snippet"}
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        classes = self._classes(attrs)
-        if tag == "a":
-            href = dict(attrs).get("href") or ""
-            # Tolerate markup drift: accept known result-link classes, links
-            # inside a result-title wrapper, and DuckDuckGo redirect links.
-            if (
-                classes & self._RESULT_LINK_CLASSES
-                or self._pending_title_link
-                or "uddg=" in href
-            ):
-                self._pending_title_link = False
-                if self._current and self._current.get("title"):
-                    self.results.append(self._current)
-                self._current = {"title": "", "snippet": "", "url": href}
-                self._capture = "title"
-                self._buffer = []
-                return
-        elif classes & self._TITLE_WRAPPER_CLASSES:
-            self._pending_title_link = True
-        if self._current and classes & self._SNIPPET_CLASSES:
-            self._flush_buffer()
-            self._capture = "snippet"
-            self._buffer = []
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag in {"h1", "h2", "h3"}:
-            self._pending_title_link = False
-        if self._capture == "title" and tag == "a":
-            self._flush_buffer()
-            self._capture = None
-        elif self._capture == "snippet" and tag in {"div", "a", "span"}:
-            self._flush_buffer()
-            self._capture = None
-
-    def handle_data(self, data: str) -> None:
-        if self._capture:
-            self._buffer.append(data)
-
-    def close(self) -> None:
-        self._flush_buffer()
-        if self._current and self._current.get("title"):
-            self.results.append(self._current)
-        super().close()
-
-
-def _result_url(raw_url: str) -> str | None:
-    raw_url = html_lib.unescape(str(raw_url or "")).strip()
-    if raw_url.startswith("//"):
-        raw_url = "https:" + raw_url
-    parsed = urlparse(raw_url)
-    query = parse_qs(parsed.query)
-    if query.get("uddg"):
-        raw_url = unquote(query["uddg"][0])
-        parsed = urlparse(raw_url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        return None
-    return raw_url
-
-
-def parse_search_results(body: str, max_results: int = 5) -> list[dict[str, str]]:
-    parser = _DuckDuckGoParser()
-    try:
-        parser.feed(str(body or ""))
-        parser.close()
-    except Exception:
-        # A malformed page must degrade the search step, never the request.
-        logger.warning("HCT-430 search result page could not be parsed")
-    parsed: list[dict[str, str]] = []
-    seen: set[str] = set()
-    for item in parser.results:
-        url = _result_url(item.get("url", ""))
-        title = item.get("title", "").strip()
-        if not url or not title or url in seen:
-            continue
-        seen.add(url)
-        parsed.append({
-            "title": title[:180],
-            "url": url,
-            "snippet": (item.get("snippet") or "").strip()[:500],
-            "domain": urlparse(url).hostname or "",
-            "source": "external_web_search",
-        })
-        if len(parsed) >= max_results:
-            break
-    return parsed
 
 
 def _trace(
@@ -303,6 +221,7 @@ def get_agent_catalog(settings: Settings | None = None) -> dict[str, Any]:
         # endpoint passes the HTTPS/domain allowlist check, so the UI can show
         # an accurate availability state without probing the network.
         "web_search_ready": web_search_ready,
+        "web_search_provider": settings.agent_web_search_provider,
         "web_search_requires_request_opt_in": True,
         "agents": [
             {
@@ -494,22 +413,8 @@ def _web_search_agent(
             "搜索地址未通过安全校验",
         ), safe_query
 
-    params = {
-        "q": safe_query,
-        "kl": "cn-zh",
-        "kp": "-2",
-    }
     try:
-        with httpx.Client(
-            timeout=settings.agent_web_search_timeout_seconds,
-            # Do not follow a search-provider redirect to an unapproved host.
-            follow_redirects=False,
-            trust_env=True,
-            headers={"User-Agent": "HomeCareTwin-local-agent/1.0"},
-        ) as client:
-            response = client.get(endpoint, params=params)
-            response.raise_for_status()
-        results = parse_search_results(response.text, settings.agent_web_search_max_results)
+        results = execute_web_search(safe_query, settings=settings)
         # An empty result set is a completed search, not a failure: the trace
         # must make clear that the network call succeeded but found nothing.
         return results, _trace(
@@ -557,6 +462,7 @@ def _synthesis_agent(
     max_tokens: int,
     temperature: float,
     settings: Settings,
+    on_token: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     started = time.perf_counter()
     base = {
@@ -621,14 +527,30 @@ def _synthesis_agent(
         ][-12:],
     ]
     try:
-        raw = OllamaClient(settings.ollama_base_url).chat(
-            model=model,
-            messages=conversation,
-            tools=None,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            timeout=settings.ollama_timeout_seconds,
-        )
+        client = OllamaClient(settings.ollama_base_url)
+        if on_token is not None:
+            chunks: list[str] = []
+            for chunk in client.chat_stream(
+                model=model,
+                messages=conversation,
+                tools=None,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                timeout=settings.ollama_timeout_seconds,
+            ):
+                chunks.append(chunk)
+                on_token(chunk)
+            raw_content = "".join(chunks)
+            raw = {"message": {"content": raw_content}}
+        else:
+            raw = client.chat(
+                model=model,
+                messages=conversation,
+                tools=None,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                timeout=settings.ollama_timeout_seconds,
+            )
     except RuntimeError:
         return degraded("MODEL_UNAVAILABLE")
 
@@ -712,13 +634,16 @@ def run_local_multi_agent(
     temperature: float = 0.3,
     allow_network_search: bool = False,
     sensitive_values: list[str | None] | None = None,
+    on_trace: Callable[[dict[str, Any]], None] | None = None,
+    on_synthesis_token: Callable[[str], None] | None = None,
+    on_external_sources: Callable[[list[dict[str, str]], str | None], None] | None = None,
 ) -> dict[str, Any]:
     """Run the local router -> data/knowledge/web -> local Ollama pipeline.
 
     The router first classifies the question and builds an execution plan;
     only the agents that can contribute evidence for the classified question
-    actually run.  The gated web search runs concurrently with the local
-    retrieval steps because it never depends on database or knowledge output.
+    actually run.  Local retrieval and gated web search run concurrently when
+    safe; each worker uses its own database session.
     """
     settings = get_settings()
     orchestration_id = str(uuid.uuid4())
@@ -726,6 +651,11 @@ def run_local_multi_agent(
     query_type = classify_question(query)
     model_name = model or settings.ollama_model
     traces: list[dict[str, Any]] = []
+
+    def _append_trace(trace: dict[str, Any]) -> None:
+        traces.append(trace)
+        if on_trace is not None:
+            on_trace(trace)
 
     def _skipped(agent_id: str, reason: str) -> dict[str, Any]:
         return _trace(agent_id, _AGENT_ROLES[agent_id], "skipped", time.perf_counter(), reason)
@@ -746,46 +676,53 @@ def run_local_multi_agent(
 
     started = time.perf_counter()
     if query_type == "GENERAL" and _is_greeting(query):
-        traces.append(_trace(
+        _append_trace(_trace(
             "router", _AGENT_ROLES["router"], "completed", started,
             "已识别为日常问候，直接回复，无需检索",
         ))
-        traces.append(_skipped("database", "日常问候无需读取健康档案"))
-        traces.append(_skipped("knowledge", "日常问候无需检索本地资料"))
-        traces.append(_skipped("web_search", "日常问候无需联网参考"))
+        _append_trace(_skipped("database", "日常问候无需读取健康档案"))
+        _append_trace(_skipped("knowledge", "日常问候无需检索本地资料"))
+        _append_trace(_skipped("web_search", "日常问候无需联网参考"))
         synthesis_started = time.perf_counter()
         result = _greeting_result(messages, model=model_name, query_type=query_type)
-        traces.append(_trace(
+        _append_trace(_trace(
             "synthesis", _AGENT_ROLES["synthesis"], "completed", synthesis_started,
             "已直接生成问候回复",
         ))
         return _finalize(result, network_used=False, network_query=None, external_sources=[])
 
     plan = plan_agent_execution(query_type, household_id=household_id, member_id=member_id)
-    traces.append(_trace(
+    _append_trace(_trace(
         "router", _AGENT_ROLES["router"], "completed", started,
         f"已识别为「{question_type_label(query_type)}」，并按需安排检索步骤",
     ))
 
-    # The web search only receives the redacted query, so it can run in
-    # parallel with the local retrieval steps.  The database session stays on
-    # this thread: SQLAlchemy sessions are not thread-safe.
-    web_executor: ThreadPoolExecutor | None = None
+    sensitive = [actor_id, household_id, member_id, *(sensitive_values or [])]
+    executor: ThreadPoolExecutor | None = None
     web_future = None
-    if plan["web_search"].run and allow_network_search:
-        web_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="hct430-web")
-        web_future = web_executor.submit(
+    parallel_web = plan["web_search"].run and allow_network_search
+    parallel_local = plan["database"].run and plan["knowledge"].run
+    worker_count = (1 if parallel_web else 0) + (2 if parallel_local else 0)
+    if worker_count:
+        executor = ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="hct430")
+
+    if parallel_web and executor is not None:
+        web_future = executor.submit(
             _web_search_agent,
             query,
-            sensitive_values=[actor_id, household_id, member_id, *(sensitive_values or [])],
+            sensitive_values=sensitive,
             allow_network_search=allow_network_search,
             settings=settings,
         )
 
-    try:
-        if plan["database"].run:
-            database, database_trace = _database_agent(
-                db_session,
+    database: dict[str, Any] = {}
+    knowledge: dict[str, Any] = {}
+
+    def _database_worker() -> tuple[dict[str, Any], dict[str, Any]]:
+        session = SessionLocal()
+        try:
+            return _database_agent(
+                session,
                 query=query,
                 query_type=query_type,
                 actor_id=actor_id,
@@ -793,22 +730,56 @@ def run_local_multi_agent(
                 member_id=member_id,
                 access_purpose=access_purpose,
             )
-        else:
-            database, database_trace = {}, _skipped("database", plan["database"].skip_reason)
-        traces.append(database_trace)
+        finally:
+            session.close()
 
-        if plan["knowledge"].run:
-            knowledge, knowledge_trace = _knowledge_agent(
-                db_session,
+    def _knowledge_worker() -> tuple[dict[str, Any], dict[str, Any]]:
+        session = SessionLocal()
+        try:
+            return _knowledge_agent(
+                session,
                 query=query,
                 actor_id=actor_id,
                 household_id=household_id,
                 member_id=member_id,
                 access_purpose=access_purpose,
             )
+        finally:
+            session.close()
+
+    try:
+        if plan["database"].run and plan["knowledge"].run and executor is not None:
+            db_job = executor.submit(_database_worker)
+            knowledge_job = executor.submit(_knowledge_worker)
+            database, database_trace = db_job.result()
+            knowledge, knowledge_trace = knowledge_job.result()
         else:
-            knowledge, knowledge_trace = {}, _skipped("knowledge", plan["knowledge"].skip_reason)
-        traces.append(knowledge_trace)
+            if plan["database"].run:
+                database, database_trace = _database_agent(
+                    db_session,
+                    query=query,
+                    query_type=query_type,
+                    actor_id=actor_id,
+                    household_id=household_id,
+                    member_id=member_id,
+                    access_purpose=access_purpose,
+                )
+            else:
+                database_trace = _skipped("database", plan["database"].skip_reason)
+            if plan["knowledge"].run:
+                knowledge, knowledge_trace = _knowledge_agent(
+                    db_session,
+                    query=query,
+                    actor_id=actor_id,
+                    household_id=household_id,
+                    member_id=member_id,
+                    access_purpose=access_purpose,
+                )
+            else:
+                knowledge_trace = _skipped("knowledge", plan["knowledge"].skip_reason)
+
+        _append_trace(database_trace)
+        _append_trace(knowledge_trace)
 
         if web_future is not None:
             external_sources, web_trace, network_query = web_future.result()
@@ -817,18 +788,39 @@ def run_local_multi_agent(
                 [], _skipped("web_search", plan["web_search"].skip_reason), None,
             )
         else:
-            # Not requested for this message: record the skip without
-            # spawning a worker.
             external_sources, web_trace, network_query = _web_search_agent(
                 query,
-                sensitive_values=[actor_id, household_id, member_id, *(sensitive_values or [])],
+                sensitive_values=sensitive,
                 allow_network_search=allow_network_search,
                 settings=settings,
             )
-        traces.append(web_trace)
+        _append_trace(web_trace)
+        if on_external_sources is not None and external_sources:
+            on_external_sources(external_sources, network_query)
     finally:
-        if web_executor is not None:
-            web_executor.shutdown(wait=False)
+        if executor is not None:
+            executor.shutdown(wait=False)
+
+    if (
+        query_type == "MEDICATION_SAFETY"
+        and plan["knowledge"].run
+        and not _knowledge_has_evidence(knowledge)
+    ):
+        synthesis = _medication_safety_short_circuit(
+            messages,
+            model=model_name,
+            query_type=query_type,
+            started=time.perf_counter(),
+        )
+        synthesis_trace = synthesis.pop("_trace", None)
+        if synthesis_trace:
+            _append_trace(synthesis_trace)
+        return _finalize(
+            synthesis,
+            network_used=web_trace.get("network_used", False),
+            network_query=network_query,
+            external_sources=external_sources,
+        )
 
     synthesis = _synthesis_agent(
         messages=messages,
@@ -840,10 +832,11 @@ def run_local_multi_agent(
         max_tokens=max_tokens,
         temperature=temperature,
         settings=settings,
+        on_token=on_synthesis_token,
     )
     synthesis_trace = synthesis.pop("_trace", None)
     if synthesis_trace:
-        traces.append(synthesis_trace)
+        _append_trace(synthesis_trace)
 
     return _finalize(
         synthesis,

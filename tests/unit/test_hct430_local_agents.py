@@ -10,11 +10,11 @@ from app.local_agents import (
     _database_agent,
     _web_search_agent,
     get_agent_catalog,
-    parse_search_results,
     plan_agent_execution,
     redact_web_query,
     run_local_multi_agent,
 )
+from app.search_providers import parse_search_results
 
 
 def test_web_query_redacts_identity_values_and_ids() -> None:
@@ -77,31 +77,18 @@ def test_web_search_egress_requires_https_and_configured_host() -> None:
 def test_web_search_uses_redacted_query_and_allowlist(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    class FakeResponse:
-        text = (
-            '<a class="result__a" href="https://example.com/a">参考</a>'
-            '<div class="result__snippet">摘要</div>'
-        )
+    def fake_execute(query: str, *, settings: Settings):
+        captured["query"] = query
+        captured["settings"] = settings
+        return [{
+            "title": "参考",
+            "url": "https://example.com/a",
+            "snippet": "摘要",
+            "domain": "example.com",
+            "source": "external_web_search",
+        }]
 
-        def raise_for_status(self) -> None:
-            return None
-
-    class FakeClient:
-        def __init__(self, **kwargs):
-            captured["client_kwargs"] = kwargs
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def get(self, url, params):
-            captured["url"] = url
-            captured["params"] = params
-            return FakeResponse()
-
-    monkeypatch.setattr("app.local_agents.httpx.Client", FakeClient)
+    monkeypatch.setattr("app.local_agents.execute_web_search", fake_execute)
     results, trace, safe_query = _web_search_agent(
         "member_id=member-secret 布洛芬和 13812345678",
         sensitive_values=["member-secret"],
@@ -120,7 +107,7 @@ def test_web_search_uses_redacted_query_and_allowlist(monkeypatch) -> None:
     assert safe_query is not None
     assert "member-secret" not in safe_query
     assert "13812345678" not in safe_query
-    assert captured["url"] == "https://example.com/search"
+    assert captured["settings"].agent_web_search_url == "https://example.com/search"
 
 
 def test_database_agent_only_uses_approved_read_tools(monkeypatch) -> None:
@@ -205,7 +192,7 @@ def test_greeting_fast_path_never_touches_model_or_tools(monkeypatch) -> None:
 
     monkeypatch.setattr("app.local_agents.OllamaClient", _forbidden)
     monkeypatch.setattr("app.local_agents.execute_whitelisted_tool", _forbidden)
-    monkeypatch.setattr("app.local_agents.httpx.Client", _forbidden)
+    monkeypatch.setattr("app.local_agents.execute_web_search", _forbidden)
 
     result = run_local_multi_agent(
         None,
@@ -298,26 +285,10 @@ def test_search_parser_handles_empty_or_broken_body() -> None:
 
 @pytest.mark.parametrize("body", ["", "<html><body><p>no results</p></body></html>"])
 def test_web_search_no_results_keeps_trace_clear(monkeypatch, body: str) -> None:
-    class FakeResponse:
-        text = body
+    def fake_execute(query: str, *, settings: Settings):
+        return []
 
-        def raise_for_status(self) -> None:
-            return None
-
-    class FakeClient:
-        def __init__(self, **kwargs):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def get(self, url, params):
-            return FakeResponse()
-
-    monkeypatch.setattr("app.local_agents.httpx.Client", FakeClient)
+    monkeypatch.setattr("app.local_agents.execute_web_search", fake_execute)
     results, trace, safe_query = _web_search_agent(
         "布洛芬注意事项",
         sensitive_values=[],
@@ -335,3 +306,49 @@ def test_web_search_no_results_keeps_trace_clear(monkeypatch, body: str) -> None
     assert trace["network_used"] is True
     assert "未找到" in trace["summary"]
     assert safe_query is not None
+
+
+def test_general_plan_skips_knowledge_and_web_search() -> None:
+    plan = plan_agent_execution("GENERAL", household_id="h", member_id="m")
+    assert plan["knowledge"].run is False
+    assert plan["web_search"].run is False
+    assert plan["database"].run is True
+
+
+def test_medication_safety_short_circuits_without_knowledge(monkeypatch) -> None:
+    class _ForbiddenOllama:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("no model")
+
+    monkeypatch.setattr("app.local_agents.OllamaClient", _ForbiddenOllama)
+
+    def fake_database(session, **kwargs):
+        return {"get_member_state": {"sources": []}}, {
+            "agent_id": "database", "role": "健康档案核对", "status": "completed",
+            "local": True, "network_used": False, "duration_ms": 1,
+            "summary": "", "source_count": 0,
+        }
+
+    def fake_knowledge(session, **kwargs):
+        return {"results": []}, {
+            "agent_id": "knowledge", "role": "本地资料检索", "status": "completed",
+            "local": True, "network_used": False, "duration_ms": 1,
+            "summary": "", "source_count": 0,
+        }
+
+    monkeypatch.setattr("app.local_agents._database_agent", fake_database)
+    monkeypatch.setattr("app.local_agents._knowledge_agent", fake_knowledge)
+
+    result = run_local_multi_agent(
+        None,
+        messages=[{"role": "user", "content": "布洛芬和阿莫西林能否同服？"}],
+        actor_id="actor",
+        household_id="household",
+        member_id="member",
+    )
+
+    assert result["degraded"] is True
+    assert result["degrade_reason"] == "EVIDENCE_REQUIRED"
+    synthesis = next(trace for trace in result["agent_trace"] if trace["agent_id"] == "synthesis")
+    assert synthesis["status"] == "degraded"
+    assert "跳过模型" in synthesis["summary"]

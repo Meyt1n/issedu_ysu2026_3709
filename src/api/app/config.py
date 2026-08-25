@@ -63,6 +63,8 @@ class Settings(BaseSettings):
     # default so HCT-004's default-deny posture is preserved.
     agent_orchestration_enabled: bool = True
     agent_web_search_enabled: bool = False
+    # duckduckgo_html: parse the HTML endpoint; searxng: JSON API on the same URL.
+    agent_web_search_provider: str = "duckduckgo_html"
     agent_web_search_url: str = "https://html.duckduckgo.com/html/"
     agent_web_search_timeout_seconds: float = Field(default=8.0, gt=0, le=20)
     agent_web_search_max_results: int = Field(default=5, ge=1, le=10)
