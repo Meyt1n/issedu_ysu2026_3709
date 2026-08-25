@@ -299,12 +299,12 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="view-container">
+  <div class="face-credential-page">
     <div class="page-heading">
       <div>
         <p class="eyebrow">家庭账号安全</p>
         <h1>人脸凭证注册</h1>
-        <p class="page-subtitle">为家人采集三张动态画面；系统只保存加密特征，不保存照片原片。注册成功后页面上方会明确提示。</p>
+        <p class="page-subtitle">为家人采集三张动态画面；系统只保存加密特征，不保存照片原片。</p>
       </div>
       <button type="button" class="btn btn-ghost" :disabled="loading" @click="loadCredentials"><AppIcon name="refresh" :size="15" /> 刷新</button>
     </div>
@@ -323,31 +323,10 @@ onMounted(() => {
     <p v-if="error" class="notice error" role="alert"><AppIcon name="alert" :size="16" /> {{ error }}</p>
 
     <div v-if="session.isOwnerView" class="grid-main-side">
-      <section class="card">
-        <div class="card-heading"><div><p class="eyebrow">本机登录范围</p><h3 class="card-title">绑定一个家庭</h3></div><AppIcon name="home" :size="20" style="color: var(--sky)" /></div>
-        <p class="card-note">人脸自动识别只在绑定家庭的成员中进行，不会跨家庭搜索。绑定后，欢迎页可以直接识别爷爷、奶奶等成员并进入对应小账号。</p>
-          <p class="notice" :class="boundFaceHouseholdId === session.selectedHouseholdId ? 'ok' : 'warn'" role="status">
-            <AppIcon :name="boundFaceHouseholdId ? 'check' : 'info'" :size="16" />
-          {{ boundFaceHouseholdId ? `当前绑定家庭：${boundFaceHouseholdLabel}` : '本机尚未绑定家庭' }}
-          </p>
-        <div class="row-actions">
-          <button type="button" class="btn btn-primary btn-small" :disabled="!session.selectedHouseholdId || boundFaceHouseholdId === session.selectedHouseholdId" @click="bindCurrentHouseholdToDevice">绑定当前家庭</button>
-          <button v-if="boundFaceHouseholdId" type="button" class="btn btn-ghost btn-small" @click="clearDeviceFaceHousehold">解除绑定</button>
-        </div>
-      </section>
-      <section v-if="unboundMembers.length > 0" class="card">
-        <div class="card-heading"><div><p class="eyebrow">先绑定家庭账号</p><h3 class="card-title">给成员分配登录账号</h3></div><AppIcon name="members" :size="20" style="color: var(--sky)" /></div>
-        <p class="card-note">当前家庭有成员还没有登录账号。先绑定一个账号 ID，成员才能用人脸或 PIN 快速进入自己的家庭账号。</p>
-        <form class="section-stack" @submit.prevent="bindMemberAccount">
-          <label class="field">成员<select v-model="accountMemberId" required><option value="" disabled>请选择成员</option><option v-for="member in unboundMembers" :key="member.id" :value="member.id">{{ member.display_name }}</option></select></label>
-          <label class="field">登录账号 ID<input v-model="accountActorId" autocomplete="username" required placeholder="例如 grandpa-1" /><small>只用于本地家庭登录，不是姓名，也不要填密码。</small></label>
-          <p v-if="accountBindingError" class="notice error" role="alert"><AppIcon name="alert" :size="16" /> {{ accountBindingError }}</p>
-          <button type="submit" class="btn btn-primary" :disabled="accountBindingSaving || !accountMemberId || !accountActorId.trim()"><AppIcon name="key" :size="15" /> {{ accountBindingSaving ? '正在绑定' : '绑定登录账号' }}</button>
-        </form>
-      </section>
+      <div class="section-stack">
       <section class="card">
         <div class="card-heading"><div><p class="eyebrow">明确同意与二次确认</p><h3 class="card-title">注册或重新绑定</h3></div></div>
-        <p class="card-note">适合老人：打开语音后，按屏幕圆圈和播报一步一步做；家人可以在旁边帮忙。画面只在本机处理，不会上传照片。</p>
+        <p class="card-note">打开语音后按屏幕提示一步步拍摄，家人可在旁协助；画面只在本机处理，不上传照片。</p>
         <p v-if="session.authMode !== 'session'" class="notice warn" role="status"><AppIcon name="lock" :size="16" /> 开发演示身份只能读取家庭数据；注册人脸凭证需要正式账号会话。</p>
         <form class="section-stack" @submit.prevent="registerCredential">
           <label class="field">家庭账号<select v-model="selectedActorId" required><option v-for="option in actorOptions" :key="option.id" :value="option.id">{{ option.label }} · {{ option.id }}</option></select></label>
@@ -370,18 +349,6 @@ onMounted(() => {
             <AppIcon name="shield" :size="15" />
             {{ saving ? '正在保存…' : '完成注册' }}
           </button>
-        </form>
-      </section>
-
-      <section class="card">
-        <div class="card-heading"><div><p class="eyebrow">家庭账号安全</p><h3 class="card-title">设置家庭 PIN</h3></div></div>
-        <p class="form-sub">PIN 绑定当前登录身份 <strong>{{ session.actorId }}</strong> 和当前家庭 <strong>{{ session.selectedHouseholdId }}</strong>；每个家庭身份可以分别设置自己的六位 PIN。</p>
-        <form class="section-stack" @submit.prevent="savePin">
-          <label class="field">六位数字 PIN<input v-model="pinDraft" type="password" inputmode="numeric" autocomplete="new-password" pattern="[0-9]{6}" maxlength="6" required placeholder="例如 123456" /></label>
-          <label class="field">再次输入 PIN<input v-model="pinConfirmation" type="password" inputmode="numeric" autocomplete="new-password" pattern="[0-9]{6}" maxlength="6" required placeholder="再次输入六位 PIN" /></label>
-          <p v-if="pinError" class="notice error" role="alert"><AppIcon name="alert" :size="16" /> {{ pinError }}</p>
-          <p v-if="pinSuccess" class="notice ok" role="status"><AppIcon name="check" :size="16" /> {{ pinSuccess }}</p>
-          <button type="submit" class="btn btn-primary" :disabled="pinSaving || !/^\d{6}$/.test(pinDraft) || pinDraft !== pinConfirmation"><AppIcon name="key" :size="15" /> {{ pinSaving ? '正在保存' : '保存家庭 PIN' }}</button>
         </form>
       </section>
 
@@ -421,6 +388,54 @@ onMounted(() => {
           </li>
         </ul>
       </section>
+      </div>
+
+      <div class="section-stack">
+        <section class="card">
+          <div class="card-heading"><div><p class="eyebrow">本机登录范围</p><h3 class="card-title">绑定一个家庭</h3></div><AppIcon name="home" :size="20" style="color: var(--sky)" /></div>
+          <p class="card-note">人脸识别只在绑定家庭的成员中进行，不跨家庭搜索；绑定后欢迎页可直接识别成员进入对应账号。</p>
+          <p class="notice" :class="boundFaceHouseholdId === session.selectedHouseholdId ? 'ok' : 'warn'" role="status">
+            <AppIcon :name="boundFaceHouseholdId ? 'check' : 'info'" :size="16" />
+            {{ boundFaceHouseholdId ? `当前绑定家庭：${boundFaceHouseholdLabel}` : '本机尚未绑定家庭' }}
+          </p>
+          <div class="row-actions">
+            <button type="button" class="btn btn-primary btn-small" :disabled="!session.selectedHouseholdId || boundFaceHouseholdId === session.selectedHouseholdId" @click="bindCurrentHouseholdToDevice">绑定当前家庭</button>
+            <button v-if="boundFaceHouseholdId" type="button" class="btn btn-ghost btn-small" @click="clearDeviceFaceHousehold">解除绑定</button>
+          </div>
+        </section>
+
+        <section v-if="unboundMembers.length > 0" class="card">
+          <div class="card-heading"><div><p class="eyebrow">先绑定家庭账号</p><h3 class="card-title">给成员分配登录账号</h3></div><AppIcon name="members" :size="20" style="color: var(--sky)" /></div>
+          <p class="card-note">成员有登录账号后，才能用人脸或 PIN 进入自己的家庭账号。</p>
+          <form class="section-stack" @submit.prevent="bindMemberAccount">
+            <label class="field">成员<select v-model="accountMemberId" required><option value="" disabled>请选择成员</option><option v-for="member in unboundMembers" :key="member.id" :value="member.id">{{ member.display_name }}</option></select></label>
+            <label class="field">登录账号 ID<input v-model="accountActorId" autocomplete="username" required placeholder="例如 grandpa-1" /><small>只用于本地家庭登录，不是姓名，也不要填密码。</small></label>
+            <p v-if="accountBindingError" class="notice error" role="alert"><AppIcon name="alert" :size="16" /> {{ accountBindingError }}</p>
+            <button type="submit" class="btn btn-primary" :disabled="accountBindingSaving || !accountMemberId || !accountActorId.trim()"><AppIcon name="key" :size="15" /> {{ accountBindingSaving ? '正在绑定' : '绑定登录账号' }}</button>
+          </form>
+        </section>
+
+        <section class="card">
+          <div class="card-heading"><div><p class="eyebrow">家庭账号安全</p><h3 class="card-title">设置家庭 PIN</h3></div></div>
+          <p class="form-sub">PIN 绑定当前登录身份 <strong>{{ session.actorId }}</strong> 与当前家庭；每个家庭身份可分别设置六位 PIN。</p>
+          <form class="section-stack" @submit.prevent="savePin">
+            <label class="field">六位数字 PIN<input v-model="pinDraft" type="password" inputmode="numeric" autocomplete="new-password" pattern="[0-9]{6}" maxlength="6" required placeholder="例如 123456" /></label>
+            <label class="field">再次输入 PIN<input v-model="pinConfirmation" type="password" inputmode="numeric" autocomplete="new-password" pattern="[0-9]{6}" maxlength="6" required placeholder="再次输入六位 PIN" /></label>
+            <p v-if="pinError" class="notice error" role="alert"><AppIcon name="alert" :size="16" /> {{ pinError }}</p>
+            <p v-if="pinSuccess" class="notice ok" role="status"><AppIcon name="check" :size="16" /> {{ pinSuccess }}</p>
+            <button type="submit" class="btn btn-primary" :disabled="pinSaving || !/^\d{6}$/.test(pinDraft) || pinDraft !== pinConfirmation"><AppIcon name="key" :size="15" /> {{ pinSaving ? '正在保存' : '保存家庭 PIN' }}</button>
+          </form>
+        </section>
+      </div>
     </div>
   </div>
 </template>
+
+<style scoped>
+/* 图八：去掉页面内嵌的第二层 view-container，改为普通纵向栈。 */
+.face-credential-page {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+}
+</style>

@@ -551,6 +551,8 @@ button:focus-visible, a:focus-visible {
 .icon-button:hover { background: var(--paper-deep); color: var(--ink); }
 
 .view-container {
+  /* 内容从顶部开始排布；不足一屏时不再把多余高度摊进行间距（图三/图七等大空隙问题）。 */
+  align-content: start;
   display: grid;
   gap: 16px;
   flex: 1 1 auto;
@@ -581,34 +583,27 @@ button:focus-visible, a:focus-visible {
  * .view-container 自己滚动。这样浏览器缩放只会改变可用视口，页面不会
  * 产生一层额外的全局纵向滚动条。
  */
+/* 图五/图六：助手页占满主区（除全局侧栏外整块视口都是对话画布）。 */
 .view-container.view-assistant {
   align-content: stretch;
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: clamp(10px, 1.6vh, 22px);
+  gap: 0;
+  max-width: none;
   overflow: hidden;
-  padding: clamp(14px, 2.8vh, 30px) clamp(16px, 2.5vw, 34px) clamp(12px, 2.4vh, 30px);
+  padding: 0;
 }
 
-.view-assistant > .page-hero { flex: 0 0 auto; }
-
-.view-assistant > .card {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
-  padding: clamp(14px, 2vh, 24px) clamp(16px, 2vw, 26px);
-}
-
-.view-assistant .session-bar {
-  margin: calc(-1 * clamp(14px, 2vh, 24px)) calc(-1 * clamp(16px, 2vw, 26px)) clamp(10px, 1.6vh, 20px);
-}
+/*
+ * 助手外壳铺满整个容器且容器无内边距富余，卡片入场的 translateY(14px)
+ * 会在动画期间形成 14px 的纵向滚动溢出；页面级过渡已提供入场动效，
+ * 这里豁免卡片入场，保证任何时刻内容都收在视口内。
+ */
+.view-container.view-assistant > * { animation: none; }
 
 .view-assistant .agent-workflow-panel {
   flex: 0 0 auto;
-  margin-bottom: clamp(8px, 1.4vh, 18px);
 }
 
 .view-assistant .chat-window {
@@ -621,7 +616,7 @@ button:focus-visible, a:focus-visible {
 .view-assistant .chat-compose,
 .view-assistant .agent-network-toggle,
 .view-assistant .voice-session-panel,
-.view-assistant > .card > .text-faint {
+.view-assistant .notice {
   flex: 0 0 auto;
 }
 
@@ -988,7 +983,13 @@ button:focus-visible, a:focus-visible {
 /* ---------- 双栏与三栏 ---------- */
 
 .grid-two { display: grid; gap: 14px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.grid-main-side { display: grid; gap: 14px; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); }
+/* 图七/图八/图十：两列内容各按内容高度排布，不再把矮的一侧拉成空白高卡。 */
+.grid-main-side {
+  align-items: start;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+}
 
 /* ---------- 欢迎页 ---------- */
 
@@ -1290,13 +1291,14 @@ button:focus-visible, a:focus-visible {
   position: absolute;
   z-index: 2;
 }
+/* 图十一：放大取景引导，让虚线取景框与椭圆引导的视觉分量一致。 */
 .face-guide-ring {
-  height: min(74%, 280px);
+  height: min(80%, 320px);
   left: 50%;
   position: absolute;
-  top: 46%;
+  top: 48%;
   transform: translate(-50%, -50%);
-  width: min(62%, 240px);
+  width: min(68%, 268px);
 }
 .face-guide-oval {
   aspect-ratio: 3 / 4;
@@ -1311,21 +1313,21 @@ button:focus-visible, a:focus-visible {
   width: 100%;
 }
 .face-guide-markers {
-  inset: 18% 16% 22%;
+  inset: 10% 9% 12%;
   position: absolute;
 }
 .face-guide-markers i {
   background: rgba(244, 237, 221, 0.75);
   border-radius: 2px;
   display: block;
-  height: 14px;
+  height: 18px;
   position: absolute;
-  width: 2px;
+  width: 2.5px;
 }
-.face-guide-markers i:nth-child(1) { left: 0; top: 0; height: 2px; width: 14px; }
-.face-guide-markers i:nth-child(2) { right: 0; top: 0; height: 2px; width: 14px; }
-.face-guide-markers i:nth-child(3) { bottom: 0; left: 0; height: 2px; width: 14px; }
-.face-guide-markers i:nth-child(4) { bottom: 0; right: 0; height: 2px; width: 14px; }
+.face-guide-markers i:nth-child(1) { left: 0; top: 0; height: 2.5px; width: 18px; }
+.face-guide-markers i:nth-child(2) { right: 0; top: 0; height: 2.5px; width: 18px; }
+.face-guide-markers i:nth-child(3) { bottom: 0; left: 0; height: 2.5px; width: 18px; }
+.face-guide-markers i:nth-child(4) { bottom: 0; right: 0; height: 2.5px; width: 18px; }
 
 .face-countdown {
   align-items: center;
@@ -1384,56 +1386,7 @@ button:focus-visible, a:focus-visible {
   line-height: 1.45;
 }
 
-.face-step-rail {
-  bottom: 12px;
-  display: flex;
-  gap: 8px;
-  justify-content: center;
-  left: 0;
-  padding: 0 12px;
-  position: absolute;
-  right: 0;
-  z-index: 3;
-}
-.face-step-chip {
-  align-items: center;
-  backdrop-filter: blur(8px);
-  background: rgba(255, 253, 248, 0.14);
-  border: 1px solid rgba(255, 253, 248, 0.22);
-  border-radius: var(--radius-pill);
-  color: rgba(244, 237, 221, 0.82);
-  display: inline-flex;
-  font-size: 12.5px;
-  font-weight: 600;
-  gap: 6px;
-  min-height: 30px;
-  padding: 4px 10px 4px 6px;
-}
-.face-step-chip em {
-  align-items: center;
-  background: rgba(255, 253, 248, 0.18);
-  border-radius: 999px;
-  display: inline-grid;
-  font-style: normal;
-  height: 20px;
-  justify-items: center;
-  width: 20px;
-}
-.face-step-chip.current {
-  background: rgba(255, 253, 248, 0.92);
-  border-color: transparent;
-  color: var(--pine-deep);
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
-}
-.face-step-chip.current em {
-  background: var(--pine);
-  color: var(--cream-text);
-}
-.face-step-chip.done {
-  background: color-mix(in srgb, var(--pine) 55%, rgba(255, 253, 248, 0.2));
-  border-color: transparent;
-  color: var(--cream-text);
-}
+/* 图十一：三个姿势气泡（1 正对 / 2 左转 / 3 右转）已移除，提示统一走顶部横幅与语音。 */
 
 .face-progress {
   font-size: 15px;
@@ -1538,9 +1491,16 @@ button:focus-visible, a:focus-visible {
 .capture-zone .capture-hint { color: var(--ink-soft); font-size: 13.5px; line-height: 1.6; }
 .capture-zone .app-icon { color: var(--clay); }
 
+/* 图二：左侧虚线上传框与右侧拍摄参考面板等宽等高。 */
 .capture-layout {
-  align-items: start;
-  grid-template-columns: minmax(0, 1.1fr) minmax(280px, .9fr);
+  align-items: stretch;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.capture-layout > .capture-zone {
+  align-content: center;
+  height: 100%;
+  min-height: 300px;
 }
 
 .capture-zone {
@@ -2218,7 +2178,7 @@ button:focus-visible, a:focus-visible {
 
 .capability-chips { display: flex; flex-wrap: wrap; gap: 7px; }
 
-.section-stack { display: grid; gap: 12px; }
+.section-stack { align-content: start; display: grid; gap: 12px; }
 
 .text-soft { color: var(--ink-soft); }
 .text-faint { color: var(--ink-faint); }
@@ -2373,9 +2333,35 @@ button:focus-visible, a:focus-visible {
 }
 
 .graph-node { cursor: pointer; transition: transform 0.22s ease; transform-box: fill-box; transform-origin: center; }
-.graph-node:hover { transform: scale(1.12); }
-.graph-node circle { transition: filter 0.2s ease; }
-.graph-node:hover circle { filter: drop-shadow(0 3px 9px rgba(84, 70, 41, 0.35)); }
+.graph-node:hover, .graph-node:focus-visible { transform: translateY(-3px) scale(1.12); }
+.graph-node circle {
+  filter: drop-shadow(0 5px 8px rgba(42, 80, 69, 0.26));
+  transition: filter 0.2s ease;
+}
+.graph-node:hover circle,
+.graph-node:focus-visible circle { filter: drop-shadow(0 10px 16px rgba(42, 80, 69, 0.4)); }
+
+/* 图四：节点做成带高光的“小球”，轻微悬浮呼吸；投影椭圆增加落地感。 */
+.graph-node-inner {
+  animation: node-float 5.4s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.graph-node-shadow { fill: rgba(42, 80, 69, 0.14); }
+
+.graph-center-sphere { filter: drop-shadow(0 9px 18px rgba(28, 55, 47, 0.42)); }
+
+@keyframes node-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .graph-node-inner { animation: none; }
+  .graph-node:hover, .graph-node:focus-visible { transform: none; }
+  .graph-particle { display: none; }
+}
 
 .graph-node text {
   fill: var(--ink);
@@ -2419,16 +2405,18 @@ button:focus-visible, a:focus-visible {
 
 .bigscreen {
   background:
-    radial-gradient(900px 480px at 80% -10%, color-mix(in srgb, var(--pine) 16%, transparent), transparent 60%),
-    radial-gradient(700px 420px at 6% 100%, color-mix(in srgb, var(--clay) 12%, transparent), transparent 60%),
+    radial-gradient(900px 480px at 80% -10%, color-mix(in srgb, var(--pine) 24%, transparent), transparent 62%),
+    radial-gradient(700px 420px at 6% 100%, color-mix(in srgb, var(--clay) 18%, transparent), transparent 62%),
+    radial-gradient(560px 320px at 40% 40%, color-mix(in srgb, var(--sky) 10%, transparent), transparent 70%),
     linear-gradient(170deg, var(--card) 0%, var(--paper-deep) 100%);
   border: 1px solid var(--line);
   border-radius: 22px;
-  box-shadow: var(--shadow-lift);
+  box-shadow: var(--shadow-lift), 0 30px 70px rgba(64, 84, 74, 0.14);
   color: var(--ink);
   display: grid;
   gap: 16px;
   padding: 24px 26px 20px;
+  perspective: 1200px;
 }
 
 .bigscreen-top { align-items: center; display: flex; flex-wrap: wrap; gap: 14px; justify-content: space-between; }
@@ -2476,15 +2464,41 @@ button:focus-visible, a:focus-visible {
 
 .bigscreen-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
 
+/* 图九：指标瓦片做玻璃 + 立体层次，悬停轻抬，动效克制。 */
 .bs-tile {
-  background: color-mix(in srgb, var(--card) 88%, var(--pine-tint));
-  border: 1px solid var(--line-soft);
-  border-radius: 15px;
+  backdrop-filter: blur(8px) saturate(1.15);
+  background:
+    linear-gradient(155deg, color-mix(in srgb, #ffffff 55%, transparent) 0%, transparent 46%),
+    color-mix(in srgb, var(--card) 82%, var(--pine-tint));
+  border: 1px solid color-mix(in srgb, var(--pine) 18%, var(--line-soft));
+  border-radius: 16px;
+  box-shadow:
+    0 12px 26px rgba(64, 84, 74, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.55);
   display: grid;
   gap: 4px;
   overflow: hidden;
   padding: 14px 16px;
   position: relative;
+  transition: box-shadow 0.24s ease, transform 0.24s ease;
+}
+
+.bs-tile::after {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--pine) 55%, transparent), color-mix(in srgb, var(--clay) 45%, transparent), transparent);
+  border-radius: 999px;
+  content: "";
+  height: 3px;
+  left: 14px;
+  position: absolute;
+  top: 0;
+  width: 46%;
+}
+
+.bs-tile:hover {
+  box-shadow:
+    0 20px 38px rgba(64, 84, 74, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.62);
+  transform: translateY(-4px) rotateX(2deg);
 }
 
 .bs-tile::before {
@@ -2551,11 +2565,39 @@ button:focus-visible, a:focus-visible {
 .bs-member-chip span { color: var(--pine-deep); font-size: 12px; }
 .bs-member-chip small { color: var(--ink-faint); font-size: 11.5px; }
 
+.bs-value { text-shadow: 0 2px 10px rgba(64, 84, 74, 0.12); }
+
+.bs-member-chip {
+  box-shadow: 0 8px 18px rgba(64, 84, 74, 0.08);
+  transition: box-shadow 0.22s ease, transform 0.22s ease;
+}
+
+.bs-member-chip:hover {
+  box-shadow: 0 14px 26px rgba(64, 84, 74, 0.14);
+  transform: translateY(-3px);
+}
+
 .bs-panel {
-  background: var(--card);
+  backdrop-filter: blur(8px) saturate(1.12);
+  background:
+    linear-gradient(160deg, color-mix(in srgb, #ffffff 40%, transparent) 0%, transparent 42%),
+    color-mix(in srgb, var(--card) 88%, transparent);
   border: 1px solid var(--line-soft);
-  border-radius: 15px;
+  border-radius: 16px;
+  box-shadow: 0 14px 30px rgba(64, 84, 74, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.5);
   padding: 16px 18px;
+  transition: box-shadow 0.24s ease, transform 0.24s ease;
+}
+
+.bs-panel:hover {
+  box-shadow: 0 20px 40px rgba(64, 84, 74, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.56);
+  transform: translateY(-2px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bs-tile, .bs-tile:hover,
+  .bs-panel, .bs-panel:hover,
+  .bs-member-chip, .bs-member-chip:hover { transform: none; transition: none; }
 }
 
 .bs-panel h3 {
@@ -3065,6 +3107,10 @@ button:focus-visible, a:focus-visible {
   flex-wrap: wrap;
   padding: 20px 0;
 }
+
+/* 图三：用药安全页标题、信号数字与风险区块之间收紧纵向节奏。 */
+.view-risks .stat-strip { padding: 14px 0; }
+.view-risks .sec-head { margin-bottom: 14px; }
 
 .stat-cell {
   display: grid;
@@ -5203,6 +5249,7 @@ button:focus-visible, a:focus-visible {
     max-width: 200px;
   }
   .view-container { padding: 20px 18px 40px; }
+  .view-container.view-assistant { padding: 0; }
   .app-footer { padding: 14px 18px 20px; }
   .chat-bubble { max-width: 92%; }
   .member-quick-grid { grid-template-columns: 1fr; }
@@ -5213,10 +5260,7 @@ button:focus-visible, a:focus-visible {
 @media (max-height: 820px) and (min-width: 861px) {
   .view-container { padding-bottom: 20px; padding-top: 18px; }
 
-  .view-container.view-assistant { gap: 10px; }
-  .view-assistant .page-hero .hero-greeting { font-size: clamp(24px, 3.4vh, 30px); }
-  .view-assistant .page-hero .hero-sub { font-size: 13px; line-height: 1.4; }
-  .view-assistant > .card { padding-bottom: 12px; padding-top: 12px; }
+  .view-container.view-assistant { padding: 0; }
   .view-assistant .agent-workflow-panel { padding: 10px 12px 8px; }
   .view-assistant .agent-workflow-heading { margin-bottom: 8px; }
   .view-assistant .agent-stage { gap: 2px; min-height: 78px; padding: 7px 8px; }

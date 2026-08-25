@@ -759,3 +759,20 @@ onMounted(() => {
     </div>
   </template>
 </template>
+
+<style scoped>
+/* 图七：右侧授权表单更紧凑——勾选项两列排布、缩小纵向间距。 */
+form.section-stack { gap: 10px; }
+
+fieldset {
+  column-gap: 12px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+
+fieldset legend { padding: 0 4px; }
+
+fieldset .check-row { margin: 5px 0; }
+
+.auth-grant-card .row-actions { margin-top: 8px; }
+</style>

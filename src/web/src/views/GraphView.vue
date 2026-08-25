@@ -24,12 +24,15 @@ interface GraphNode extends RelationshipGraphNode {
 const CENTER_X = 500
 const CENTER_Y = 330
 
-const CATEGORY_META: Record<RelationshipGraphNode['category'], { label: string; tone: string; fill: string; stroke: string }> = {
-  drug: { label: '在用药品', tone: 'pine', fill: '#e3ece7', stroke: '#38665a' },
-  allergy: { label: '过敏史', tone: 'rose', fill: '#f4dde0', stroke: '#ad4152' },
-  disease: { label: '关注疾病', tone: 'gold', fill: '#f4e8c8', stroke: '#a97e1f' },
-  plan: { label: '用药计划', tone: 'sky', fill: '#dfe9ef', stroke: '#47708c' },
-  caregiver: { label: '照护者', tone: 'sage', fill: '#e6ede4', stroke: '#6e8a74' },
+const CATEGORY_META: Record<
+  RelationshipGraphNode['category'],
+  { label: string; tone: string; fill: string; stroke: string; sphereEdge: string }
+> = {
+  drug: { label: '在用药品', tone: 'pine', fill: '#e3ece7', stroke: '#38665a', sphereEdge: '#b7cfc4' },
+  allergy: { label: '过敏史', tone: 'rose', fill: '#f4dde0', stroke: '#ad4152', sphereEdge: '#e2b6bd' },
+  disease: { label: '关注疾病', tone: 'gold', fill: '#f4e8c8', stroke: '#a97e1f', sphereEdge: '#e2cd97' },
+  plan: { label: '用药计划', tone: 'sky', fill: '#dfe9ef', stroke: '#47708c', sphereEdge: '#b9cedb' },
+  caregiver: { label: '照护者', tone: 'sage', fill: '#e6ede4', stroke: '#6e8a74', sphereEdge: '#c6d6c1' },
 }
 
 const graph = ref<{ eventsCount: number; nodes: RelationshipGraphNode[] }>({
@@ -175,6 +178,25 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
       <p>录入药品、过敏或计划后，{{ selectedMember?.display_name ?? '成员' }}的健康关系会在这里生长出来。</p>
     </div>
     <svg v-else viewBox="0 0 1000 660" role="img" :aria-label="`${selectedMember?.display_name ?? '成员'}的健康关系图谱`">
+      <defs>
+        <radialGradient
+          v-for="(meta, key) in CATEGORY_META"
+          :id="`node-sphere-${key}`"
+          :key="`sphere-${key}`"
+          cx="0.34"
+          cy="0.3"
+          r="0.92"
+        >
+          <stop offset="0%" stop-color="#ffffff" />
+          <stop offset="46%" :stop-color="meta.fill" />
+          <stop offset="100%" :stop-color="meta.sphereEdge" />
+        </radialGradient>
+        <radialGradient id="node-sphere-center" cx="0.34" cy="0.3" r="0.95">
+          <stop offset="0%" stop-color="#5d8d7d" />
+          <stop offset="55%" stop-color="#2a5045" />
+          <stop offset="100%" stop-color="#1c372f" />
+        </radialGradient>
+      </defs>
       <path
         v-for="node in nodes"
         :id="edgeDomId(node)"
@@ -205,7 +227,7 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
       </circle>
 
       <circle class="graph-center-pulse" :cx="CENTER_X" :cy="CENTER_Y" r="58" fill="none" stroke="#38665a" stroke-width="1.5" />
-      <circle :cx="CENTER_X" :cy="CENTER_Y" r="46" fill="#2a5045" />
+      <circle class="graph-center-sphere" :cx="CENTER_X" :cy="CENTER_Y" r="46" fill="url(#node-sphere-center)" />
       <circle :cx="CENTER_X" :cy="CENTER_Y" r="46" fill="none" stroke="#f4eddd" stroke-opacity="0.35" stroke-width="1.5" />
       <text :x="CENTER_X" :y="CENTER_Y - 2" text-anchor="middle" fill="#f4eddd" font-size="16" font-weight="700">
         {{ truncate(selectedMember?.display_name ?? '成员', 4) }}
@@ -215,7 +237,7 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
       </text>
 
       <g
-        v-for="node in nodes"
+        v-for="(node, index) in nodes"
         :key="node.id"
         class="graph-node"
         role="button"
@@ -224,17 +246,26 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
         @click="selectedNodeId = selectedNodeId === node.id ? null : node.id"
         @keydown.enter="selectedNodeId = selectedNodeId === node.id ? null : node.id"
       >
-        <circle
-          :cx="node.x"
-          :cy="node.y"
-          r="24"
-          :fill="CATEGORY_META[node.category]!.fill"
-          :stroke="CATEGORY_META[node.category]!.stroke"
-          :stroke-width="selectedNodeId === node.id ? 3 : 1.8"
-        />
-        <text :x="node.x" :y="node.y + 4" :fill="CATEGORY_META[node.category]!.stroke" font-size="11" font-weight="800">
-          {{ truncate(node.label, 3) }}
-        </text>
+        <g class="graph-node-inner" :style="{ animationDelay: `${(index % 6) * 0.55}s` }">
+          <ellipse
+            class="graph-node-shadow"
+            :cx="node.x"
+            :cy="node.y + 30"
+            rx="17"
+            ry="4.5"
+          />
+          <circle
+            :cx="node.x"
+            :cy="node.y"
+            r="24"
+            :fill="`url(#node-sphere-${node.category})`"
+            :stroke="CATEGORY_META[node.category]!.stroke"
+            :stroke-width="selectedNodeId === node.id ? 3 : 1.8"
+          />
+          <text :x="node.x" :y="node.y + 4" :fill="CATEGORY_META[node.category]!.stroke" font-size="11" font-weight="800">
+            {{ truncate(node.label, 3) }}
+          </text>
+        </g>
         <text class="node-label" :x="node.x" :y="node.y + 44" text-anchor="middle">
           {{ truncate(node.label, 10) }}
         </text>

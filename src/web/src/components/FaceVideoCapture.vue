@@ -265,6 +265,7 @@ onBeforeUnmount(() => {
         {{ countdown }}
       </div>
 
+      <!-- 图十一：取消“1 正对 / 2 左转 / 3 右转”三个气泡；姿势提示由横幅文字与语音承担。 -->
       <div class="face-stage-banner" role="status" aria-live="polite">
         <p class="face-stage-kicker">
           {{ activeStep ? faceStepLabel(stepIndex) : capturing ? '准备中' : '准备开始' }}
@@ -272,21 +273,6 @@ onBeforeUnmount(() => {
         <strong :class="{ 'is-count': countdown > 0 }">{{ overlayLabel }}</strong>
         <span v-if="activeStep && countdown === 0">{{ activeStep.hint }}</span>
         <span v-else-if="!capturing">坐稳后点下面的大按钮开始</span>
-      </div>
-
-      <div class="face-step-rail" aria-hidden="true">
-        <div
-          v-for="(step, index) in FACE_CAPTURE_STEPS"
-          :key="step.title"
-          class="face-step-chip"
-          :class="{
-            done: stepIndex > index,
-            current: stepIndex === index,
-          }"
-        >
-          <em>{{ index + 1 }}</em>
-          <span>{{ index === 0 ? '正对' : index === 1 ? '左转' : '右转' }}</span>
-        </div>
       </div>
     </div>
 
