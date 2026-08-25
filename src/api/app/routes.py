@@ -1905,7 +1905,9 @@ def auth_face_challenge(
         client_key=client_host,
     )
     session.commit()
-    return create_face_challenge(payload.actor_id, payload.household_id)
+    challenge = create_face_challenge(payload.actor_id, payload.household_id, session)
+    session.commit()
+    return challenge
 
 
 @router.post("/auth/family-face-challenge", response_model=FaceChallengeRead)
@@ -1922,7 +1924,9 @@ def auth_family_face_challenge(
         client_key=client_host,
     )
     session.commit()
-    return create_family_face_challenge(payload.household_id)
+    challenge = create_family_face_challenge(payload.household_id, session)
+    session.commit()
+    return challenge
 
 
 @router.post("/auth/face-login", response_model=AuthSessionRead)
@@ -1960,7 +1964,7 @@ async def auth_face_login(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="FACE_AUTH_FAILED")
 
     try:
-        consume_face_challenge(challenge_id, actor_id, household_id)
+        consume_face_challenge(challenge_id, actor_id, household_id, session)
     except HTTPException:
         failed("CHALLENGE_INVALID")
 
@@ -2114,7 +2118,7 @@ async def auth_family_face_login(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="FACE_AUTH_FAILED")
 
     try:
-        consume_family_face_challenge(challenge_id, household_id)
+        consume_family_face_challenge(challenge_id, household_id, session)
     except HTTPException:
         failed("CHALLENGE_INVALID")
 

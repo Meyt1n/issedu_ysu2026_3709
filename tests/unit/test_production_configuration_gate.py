@@ -16,26 +16,14 @@ def test_production_configuration_blocks_dev_shortcuts_and_process_local_face() 
         )
 
 
-def test_production_configuration_blocks_process_local_face_challenges() -> None:
-    with pytest.raises(ValueError, match="face login challenges are process-local"):
-        Settings(
-            app_env="production",
-            allow_dev_actor_header=False,
-            cursor_signing_key="prod-cursor-key",
-            vision_adapter_signing_key="prod-vision-key",
-            biometric_encryption_key="prod-biometric-key",
-            allow_process_local_face_challenges_in_production=False,
-        )
-
-
-def test_production_configuration_allows_single_node_face_drill_when_opted_in() -> None:
+def test_production_configuration_accepts_durable_face_challenges() -> None:
+    """Face challenges are DB-backed (migration 0023): no face blocker remains."""
     settings = Settings(
         app_env="production",
         allow_dev_actor_header=False,
         cursor_signing_key="prod-cursor-key",
         vision_adapter_signing_key="prod-vision-key",
         biometric_encryption_key="prod-biometric-key",
-        allow_process_local_face_challenges_in_production=True,
     )
     assert settings.app_env == "production"
 
