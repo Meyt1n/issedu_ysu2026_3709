@@ -24,16 +24,11 @@ from typing import Any, Literal
 from urllib.parse import urlparse
 
 import httpx
-from ai.safety.classifier import (
-    classify_question_dual_detail,
-    classify_question_lexicon,
-)
+from ai.safety.classifier import classify_question_dual_detail
 from ai.safety.lexicon import (
     DATA_EXFILTRATION_TERMS,
     FOLLOW_UP_RISK_TERMS,
     MEDICAL_BOUNDARY_TERMS,
-    MEDICATION_SAFETY_ROUTE_TERMS,
-    URGENT_ROUTE_TERMS,
     medical_boundary_hits,
 )
 from pydantic import BaseModel, Field, ValidationError, field_validator

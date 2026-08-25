@@ -238,6 +238,7 @@ from app.schemas import (
     VisionTaskLeaseRequest,
     VisionTaskRead,
 )
+from app.search_providers import search_ops_snapshot
 from app.security import (
     get_access_purpose,
     get_actor_id,
@@ -248,7 +249,6 @@ from app.security import (
     require_household_owner,
     require_session_token,
 )
-from app.search_providers import search_ops_snapshot
 from app.tool_call import (
     get_approved_tools,
     run_assistant,

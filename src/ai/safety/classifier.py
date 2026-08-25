@@ -11,7 +11,8 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from ai.safety.lexicon import MEDICATION_SAFETY_ROUTE_TERMS, URGENT_ROUTE_TERMS
 
