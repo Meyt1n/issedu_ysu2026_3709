@@ -24,6 +24,7 @@ from typing import Any, Literal
 from urllib.parse import urlparse
 
 import httpx
+from ai.safety.classifier import classify_question_dual, classify_question_lexicon
 from ai.safety.lexicon import (
     DATA_EXFILTRATION_TERMS,
     FOLLOW_UP_RISK_TERMS,
@@ -544,36 +545,32 @@ _QUESTION_TYPES = {
 
 
 def classify_question(query: str) -> str:
-    """Classify the latest question with a deterministic, local safety route.
+    """Classify the latest question with lexicon + optional local model.
 
     This is a routing hint, not a medical conclusion.  High-risk medication
     questions are intentionally routed to both member facts and approved
     knowledge retrieval before Ollama is allowed to produce an answer.
+
+    HCT-442: lexicon is always on. When ``AGENT_CLASSIFIER_ENABLED=true`` and
+    Ollama is loopback, a short local classification pass merges by severity
+    (prefer MEDICATION_SAFETY / URGENT). Model failure falls back to lexicon.
     """
-    normalized = re.sub(r"\s+", "", query.casefold())
-    if any(term in normalized for term in URGENT_ROUTE_TERMS):
-        return "URGENT"
-    if any(term in normalized for term in ("一起吃", "一同服用", "共同服用")) and any(
-        term in normalized for term in ("药", "阿莫西林", "布洛芬", "处方")
-    ):
-        return "MEDICATION_SAFETY"
-    if any(term in normalized for term in MEDICATION_SAFETY_ROUTE_TERMS):
-        return "MEDICATION_SAFETY"
-    if any(term in normalized for term in (
-        "吃什么药", "正在用药", "在用药", "用药记录", "药品记录", "药品清单",
-        "扫描的药", "刚才扫描", "有哪些药", "药名", "用药",
-    )):
-        return "MEDICATION_RECORD"
-    if any(term in normalized for term in (
-        "家庭档案", "健康档案", "健康记录", "最近发生", "最近有哪些", "过敏史",
-        "疾病记录", "成员信息", "健康变化", "健康事件",
-    )):
-        return "FAMILY_RECORD"
-    if any(term in normalized for term in (
-        "规则", "提醒依据", "风险依据", "引用", "来源", "证据", "依据",
-    )):
-        return "RULE_EVIDENCE"
-    return "GENERAL"
+    try:
+        from app.config import get_settings
+
+        settings = get_settings()
+        return classify_question_dual(
+            query,
+            model_enabled=bool(settings.agent_classifier_enabled),
+            is_loopback_url=is_loopback_ollama_url,
+            ollama_base_url=settings.ollama_base_url,
+            ollama_model=settings.ollama_model,
+            ollama_timeout=float(settings.agent_classifier_timeout_seconds),
+            chat_factory=lambda base_url: OllamaClient(base_url=base_url),
+        )
+    except Exception:  # noqa: BLE001 — routing must never fail open to crash
+        logger.exception("dual classifier failed; falling back to lexicon")
+        return classify_question_lexicon(query)
 
 
 def question_type_label(query_type: str) -> str:

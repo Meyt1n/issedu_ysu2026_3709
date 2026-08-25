@@ -28,9 +28,20 @@ interface ChatEntry {
   degradeReason?: string | null
   sources?: string[]
   suggestedQuestions?: string[]
+  queryType?: string | null
+  networkUsed?: boolean
+  agentTraceSummary?: string
 }
 
 type VoiceMode = 'off' | 'wake' | 'active'
+
+const PHASE_LABELS: Record<string, string> = {
+  routing: '正在识别问题类型…',
+  retrieving: '正在核对档案与本地资料…',
+  searching: '正在获取脱敏联网参考…',
+  generating: '正在本机生成回答…',
+  validating: '正在校验引用与安全边界…',
+}
 
 const { session } = useSession()
 const { settings } = useA11y()
@@ -46,12 +57,20 @@ const voicePreview = ref('')
 const voiceMode = ref<VoiceMode>('off')
 const speakingIndex = ref<number | null>(null)
 const chatEnd = ref<HTMLElement | null>(null)
+const orchestrationPhase = ref<string | null>(null)
+const allowNetworkSearch = ref(false)
 
 const speechInputSupported = isSpeechInputSupported()
 const listening = computed(() => voiceMode.value !== 'off')
 const liveMode = computed(() => session.dataMode === 'live')
 const serverLabel = computed(() => session.serverBaseUrl.trim() || '（未填写服务器地址）')
 const assistantReady = computed(() => liveMode.value && Boolean(session.serverBaseUrl.trim()))
+const thinkingText = computed(() => {
+  if (orchestrationPhase.value && PHASE_LABELS[orchestrationPhase.value]) {
+    return PHASE_LABELS[orchestrationPhase.value]
+  }
+  return '正在本机分析…'
+})
 
 const voiceStatusLabel = computed(() => {
   if (voiceMode.value === 'wake') return '等待唤醒：请说「小燕小燕」'
@@ -65,6 +84,14 @@ let voiceStopRequested = false
 let voiceFatalError = false
 let voiceDraftPrefix = ''
 let voiceRestartTimer: ReturnType<typeof setTimeout> | null = null
+let activeSendController: AbortController | null = null
+
+function cancelActiveSend(): void {
+  if (activeSendController) {
+    activeSendController.abort()
+    activeSendController = null
+  }
+}
 
 function scrollToEnd(): void {
   void nextTick(() => chatEnd.value?.scrollIntoView({ block: 'end', behavior: 'smooth' }))
@@ -237,10 +264,49 @@ function applySuggested(question: string): void {
   stopVoiceInput()
 }
 
+function summarizeAgentTrace(reply: AssistantResponse): string | undefined {
+  const traces = reply.agent_trace ?? []
+  if (!traces.length) return undefined
+  const completed = traces.filter((item) => item.status === 'completed').length
+  const skipped = traces.filter((item) => item.status === 'skipped').length
+  const parts = [`本地分析 ${completed} 步完成`]
+  if (skipped) parts.push(`${skipped} 步跳过`)
+  if (reply.network_used) parts.push('含脱敏联网参考')
+  return parts.join(' · ')
+}
+
+function pushAssistantReply(reply: AssistantResponse): void {
+  history.value.push({
+    role: 'assistant',
+    content: reply.answer,
+    degraded: reply.degraded,
+    degradeReason: reply.degrade_reason,
+    sources: reply.sources,
+    suggestedQuestions: (reply.suggested_questions ?? []).filter(
+      (item) => typeof item === 'string' && item.trim(),
+    ),
+    queryType: reply.query_type,
+    networkUsed: reply.network_used,
+    agentTraceSummary: summarizeAgentTrace(reply),
+  })
+  if (reply.degraded) {
+    sendError.value = reply.degrade_reason
+      ? `回答已降级：${reply.degrade_reason}`
+      : '回答已降级，请稍后重试或检查家庭服务器与模型服务。'
+  }
+  scrollToEnd()
+  if (settings.voiceBroadcast && reply.answer.trim()) {
+    const lastIndex = history.value.length - 1
+    speakingIndex.value = lastIndex
+    if (!manualSpeaker.speak(reply.answer)) speakingIndex.value = null
+  }
+}
+
 async function send(text?: string): Promise<void> {
   const content = (text ?? draft.value).trim()
   if (!content || sending.value) return
 
+  cancelActiveSend()
   stopVoiceInput()
   manualSpeaker.stop()
   speech.stop()
@@ -250,6 +316,7 @@ async function send(text?: string): Promise<void> {
   draft.value = ''
   sending.value = true
   sendError.value = ''
+  orchestrationPhase.value = 'routing'
   scrollToEnd()
 
   if (!liveMode.value) {
@@ -261,6 +328,7 @@ async function send(text?: string): Promise<void> {
       degradeReason: 'demo_mode',
     })
     sending.value = false
+    orchestrationPhase.value = null
     scrollToEnd()
     return
   }
@@ -273,6 +341,7 @@ async function send(text?: string): Promise<void> {
       degradeReason: 'missing_server',
     })
     sending.value = false
+    orchestrationPhase.value = null
     scrollToEnd()
     return
   }
@@ -286,58 +355,107 @@ async function send(text?: string): Promise<void> {
       degradeReason: 'auth_required',
     })
     sending.value = false
+    orchestrationPhase.value = null
     scrollToEnd()
     return
   }
 
+  const controller = new AbortController()
+  activeSendController = controller
+  const messages = history.value.map((entry) => ({ role: entry.role, content: entry.content }))
+  const chatInput = {
+    messages,
+    max_tokens: 1024,
+    agent_mode: 'multi_agent' as const,
+    allow_network_search: allowNetworkSearch.value,
+  }
+  const householdId = session.currentHouseholdId || undefined
+  const memberId = session.currentMemberId || undefined
+  const requestOpts = { ...requestOptions(), signal: controller.signal }
+
+  let streamingAnswer = ''
+  let streamStarted = false
+
   try {
-    const messages = history.value.map((entry) => ({ role: entry.role, content: entry.content }))
-    const reply: AssistantResponse = await client.assistantChat(
-      {
-        messages,
-        max_tokens: 1024,
-        agent_mode: 'multi_agent',
-        allow_network_search: false,
-      },
-      session.currentHouseholdId || undefined,
-      session.currentMemberId || undefined,
-      requestOptions(),
-    )
-    history.value.push({
-      role: 'assistant',
-      content: reply.answer,
-      degraded: reply.degraded,
-      degradeReason: reply.degrade_reason,
-      sources: reply.sources,
-      suggestedQuestions: (reply.suggested_questions ?? []).filter((item) => typeof item === 'string' && item.trim()),
-    })
-    scrollToEnd()
-    // 长辈「语音播报」开启时，在用户主动发送后自动朗读最新回答。
-    if (settings.voiceBroadcast) {
-      const lastIndex = history.value.length - 1
-      speakingIndex.value = lastIndex
-      if (!manualSpeaker.speak(reply.answer)) speakingIndex.value = null
+    try {
+      const reply = await client.assistantChatStream(
+        chatInput,
+        {
+          onStatus: (phase) => {
+            orchestrationPhase.value = phase || 'retrieving'
+          },
+          onToken: (token) => {
+            if (!token) return
+            streamStarted = true
+            streamingAnswer += token
+            orchestrationPhase.value = 'generating'
+          },
+        },
+        householdId,
+        memberId,
+        requestOpts,
+      )
+      pushAssistantReply(reply)
+    } catch (streamError) {
+      if (controller.signal.aborted) {
+        history.value.push({
+          role: 'assistant',
+          content: '已停止本次回答。',
+          degraded: true,
+          degradeReason: 'cancelled',
+        })
+        return
+      }
+      if (streamStarted && streamingAnswer.trim()) {
+        history.value.push({
+          role: 'assistant',
+          content: streamingAnswer.trim(),
+          degraded: true,
+          degradeReason: 'stream_incomplete',
+        })
+        sendError.value = '流式连接中断，已保留已生成内容。'
+        scrollToEnd()
+        return
+      }
+      const reply = await client.assistantChat(chatInput, householdId, memberId, requestOpts)
+      pushAssistantReply(reply)
     }
   } catch (cause) {
-    const message =
-      cause instanceof ApiClientError
-        ? cause.message
-        : '家庭服务器暂时无法回答。请确认电脑后端已启动，且手机与电脑在同一局域网。'
-    sendError.value = message
-    history.value.push({
-      role: 'assistant',
-      content:
-        '本地模型或其依赖当前不可用，无法生成回答。家庭事实、任务与提醒不受影响，可直接在对应页面查看。',
-      degraded: true,
-      degradeReason: 'request_failed',
-    })
+    if (controller.signal.aborted) {
+      history.value.push({
+        role: 'assistant',
+        content: '已停止本次回答。',
+        degraded: true,
+        degradeReason: 'cancelled',
+      })
+    } else {
+      const message =
+        cause instanceof ApiClientError
+          ? cause.message
+          : '家庭服务器暂时无法回答。请确认电脑后端已启动，且手机与电脑在同一局域网。'
+      sendError.value = message
+      history.value.push({
+        role: 'assistant',
+        content:
+          '本地模型或其依赖当前不可用，无法生成回答。家庭事实、任务与提醒不受影响，可直接在对应页面查看。',
+        degraded: true,
+        degradeReason: 'request_failed',
+      })
+    }
     scrollToEnd()
   } finally {
+    if (activeSendController === controller) activeSendController = null
     sending.value = false
+    orchestrationPhase.value = null
   }
 }
 
+function stopGenerating(): void {
+  cancelActiveSend()
+}
+
 function clearChat(): void {
+  cancelActiveSend()
   stopVoiceInput()
   manualSpeaker.stop()
   speech.stop()
@@ -346,9 +464,11 @@ function clearChat(): void {
   draft.value = ''
   sendError.value = ''
   voiceError.value = ''
+  orchestrationPhase.value = null
 }
 
 onBeforeUnmount(() => {
+  cancelActiveSend()
   stopVoiceInput()
   manualSpeaker.stop()
 })
@@ -375,13 +495,17 @@ onBeforeUnmount(() => {
       <p class="meta-line">
         {{
           liveMode
-            ? '将请求你电脑上的 /api/v1/assistant/chat；音频不会上传。'
+            ? '联机后走本地多智能体流式接口；识别文字确认发送才请求家庭服务器，音频不会上传。'
             : '演示模式不调用后端。切换联机并填写电脑局域网地址后即可对话。'
         }}
       </p>
       <p v-if="assistantReady && liveMode" class="meta-line">
         家庭 {{ session.currentHouseholdId || '未选' }} · 成员 {{ session.currentMemberId || '未选' }}
       </p>
+      <label v-if="liveMode" class="network-toggle">
+        <input v-model="allowNetworkSearch" type="checkbox" :disabled="sending" />
+        允许本次脱敏联网参考（需家庭服务器已开启搜索）
+      </label>
     </section>
 
     <section class="card chat-card" aria-label="对话">
@@ -397,6 +521,8 @@ onBeforeUnmount(() => {
         <p class="bubble-role">{{ entry.role === 'user' ? '我' : '助手' }}</p>
         <p class="bubble-text">{{ entry.content }}</p>
         <p v-if="entry.degraded" class="meta-line">降级说明：{{ entry.degradeReason || '受控降级' }}</p>
+        <p v-if="entry.agentTraceSummary" class="meta-line">{{ entry.agentTraceSummary }}</p>
+        <p v-if="entry.networkUsed" class="meta-line">含外部参考 · 需人工确认，不作诊断</p>
         <div v-if="entry.role === 'assistant'" class="bubble-actions">
           <button
             type="button"
@@ -422,6 +548,7 @@ onBeforeUnmount(() => {
       <div ref="chatEnd" />
     </section>
 
+    <p v-if="sending" class="thinking-line" role="status" aria-live="polite">{{ thinkingText }}</p>
     <p v-if="sendError" class="error-line" role="alert">{{ sendError }}</p>
     <p v-if="voiceError" class="error-line" role="status">{{ voiceError }}</p>
     <p v-if="voicePreview" class="voice-preview" role="status">{{ voicePreview }}</p>
@@ -453,8 +580,16 @@ onBeforeUnmount(() => {
         <button type="button" class="btn btn-secondary" :disabled="sending || history.length === 0" @click="clearChat">
           清空
         </button>
+        <button
+          v-if="sending"
+          type="button"
+          class="btn btn-secondary"
+          @click="stopGenerating"
+        >
+          停止
+        </button>
         <button type="submit" class="btn btn-primary" :disabled="sending || !draft.trim()">
-          {{ sending ? '发送中…' : '发送' }}
+          {{ sending ? '分析中…' : '发送' }}
         </button>
       </div>
     </form>
@@ -565,5 +700,20 @@ onBeforeUnmount(() => {
 }
 @media (max-width: 380px) {
   .composer-actions { grid-template-columns: 1fr; }
+}
+
+.network-toggle {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 8px;
+  min-height: var(--tap);
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+.thinking-line {
+  margin: 0;
+  color: var(--accent);
+  font-weight: 600;
 }
 </style>
