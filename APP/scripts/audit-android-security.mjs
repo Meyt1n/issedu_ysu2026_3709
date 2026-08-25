@@ -46,6 +46,8 @@ requireMatch(networkRelease, /cleartextTrafficPermitted="false"/, 'Release 网�
 requireMatch(debugManifest, /android:usesCleartextTraffic="true"/, 'Debug Manifest 应显式声明受控明文联调覆盖。')
 requireMatch(debugManifest, /@xml\/network_security_config_debug/, 'Debug Manifest 缺少独立网络安全配置。')
 requireMatch(networkDebug, /cleartextTrafficPermitted="true"/, 'Debug 网络安全配置未启用局域网联调所需明文能力。')
+requireMatch(networkDebug, /@raw\/controlled_https_ca/, 'Debug 网络安全配置缺少受控 HTTPS 测试 CA。')
+forbidMatch(networkRelease, /controlled_https_ca/, 'Release 网络安全配置不得信任受控 Debug 测试 CA。')
 
 for (const domain of ['root', 'file', 'database', 'sharedpref', 'external']) {
   const excluded = new RegExp(`<exclude\\s+domain="${domain}"\\s+path="\\."\\s*\\/>`)

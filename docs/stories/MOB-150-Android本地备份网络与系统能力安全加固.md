@@ -2,7 +2,7 @@
 
 - Issue：[#237](https://github.com/Meyt1n/issedu_ysu2026_3709/issues/237)
 - 需求：NFR-01、NFR-02、NFR-06
-- 状态：进行中（静态策略、自动审计、本地构建、真机关键路径和模拟器通知/多用户隔离证据完成；真实设备迁移还原与受控 HTTPS 证书仍待补齐）
+- 状态：完成（静态策略、自动审计、本地构建、真机/模拟器备份拒绝与隔离证据、受控 HTTPS 真机联调均已完成；设备迁移还原无可用恢复源，已以备份拒绝和无恢复集作为负向验收）
 - 负责人：Shen-huang-123
 - 复核人：维护者合并时完成最终复核
 - 风险：R3（错误的备份或网络配置可能恢复身份/联系人，或把健康请求发送到明文公网）
@@ -17,6 +17,7 @@
 
 - Main/Release：`allowBackup=false`，全量排除旧版 full-backup 和 Android 12+ cloud-backup/device-transfer 域；`usesCleartextTraffic=false` 且 base network policy 拒绝明文流量；
 - Debug：独立 manifest/network config 允许明文流量，仅配合 `android-debug` Web 构建使用；APP 地址校验仍只接受 localhost/`.local`/私网 IPv4/IPv6，拒绝公网 HTTP；
+- Debug 受控 HTTPS：仅 Debug resource 信任合成测试 CA；`controlled-https-fixture.mjs` 只返回虚构健康状态、能力快照和空家庭列表，用于真机证书/请求链路验收；Release 不打包该 CA；
 - PWA/Vite production 与 Android Release：APP 地址策略只允许 HTTPS；开发模式和 `android-debug` 模式才开放私网 HTTP；
 - 权限：源码主 Manifest 只保留 `INTERNET`；最终合并 Manifest 由 `@capacitor/local-notifications` 带入并实际使用 `POST_NOTIFICATIONS`、`RECEIVE_BOOT_COMPLETED`、`WAKE_LOCK`、`SCHEDULE_EXACT_ALARM` 和 AndroidX 动态接收器权限。相机/文件使用用户主动触发的系统选择器，拨号只打开 `tel:` 界面，不申请相机、电话或存储敏感权限；
 - 自动审计：校验源码 Manifest、备份/迁移、网络策略和权限白名单；若已构建 Release，则进一步检查最终合并 Manifest，避免只审计源码 Manifest 而漏掉插件权限，并记录 APK 哈希。
@@ -28,6 +29,7 @@ Android 静态网络配置无法表达“任意 RFC1918/ULA 地址可明文、�
 - Given Release/Main 构建；When 检查 Manifest 和 data extraction 规则；Then 系统备份与设备迁移均不能导出应用私有域。
 - Given Release/Main 构建；When 请求 HTTP 地址；Then APP 地址校验和 Android 网络策略均 fail-closed；HTTPS 继续可用。
 - Given Android Debug 联调；When 输入家庭私网 HTTP；Then Debug 平台允许请求，APP 仍拒绝公网 HTTP、凭据、查询参数和恶意协议。
+- Given Android Debug 联调；When 通过 `adb reverse` 访问受控 HTTPS fixture；Then App 内“测试连接”成功，且 Release 审计确认不信任 Debug 合成 CA。
 - Given 检查系统权限；When 审计源码和最终合并 Manifest；Then 源码基线只存在 `INTERNET`，合并结果只包含提醒插件所需权限，没有未使用的相机、电话或存储权限；通知权限在用户主动开启本地提醒时按系统对话框处理。
 - Given 升级、自动恢复或设备迁移；When应用启动；Then旧身份、联系人、服务器地址和 WebView 私有数据不应被系统恢复；该项须以真机/模拟器备份命令补充最终证据。
 
@@ -47,7 +49,14 @@ Android 静态网络配置无法表达“任意 RFC1918/ULA 地址可明文、�
 
 - 设备仍为荣耀 AAP-AN00，Android 16/API 36；用户 0 为机主、用户 128 为分身应用，`com.homecaretwin.companion` 仅安装在用户 0；
 - 在当前云备份 transport 下重新执行 `bmgr backupnow com.homecaretwin.companion`：包级结果为 `Backup is not allowed`，随后命令整体返回 `Backup finished with result: Success`；这表示备份调度命令完成，但应用没有被允许导出备份数据；
-- 当前真机通知权限为 `granted=true`，本次未清除数据、未安装证书、未切换系统用户，未影响手机已有应用数据；受控 HTTPS 端点仍未在本机运行，不能把公网 HTTPS 当作项目联调证据。
+- 当前真机通知权限为 `granted=true`，该次重连复核未清除数据、未安装证书、未切换系统用户，未影响手机已有应用数据；受控 HTTPS 联调随后在独立的 Debug fixture 验收中完成，详见下一节。
+
+### 2026-08-25 受控 HTTPS 真机联调
+
+- 服务端：运行 `npm run serve:controlled-https -- --pfx <临时 PKCS12> --password <临时密码> --port 18448`，绑定电脑 `127.0.0.1`，仅提供 `/health`、`/api/v1/meta/capabilities` 和空 `/api/v1/households`，不读取或写入家庭健康数据；
+- Debug APK：重新执行 `npm run android:sync:debug`、Gradle `assembleDebug`，通过 `adb -s AVXB6R6529004067 install -r` 安装；使用 `adb reverse tcp:18448 tcp:18448` 将手机 `127.0.0.1:18448` 映射到受控 fixture；
+- 荣耀 AAP-AN00（Android 16/API 36）在“我的 → 家庭服务器（联机）”输入 `https://127.0.0.1:18448` 并点击“测试连接”，界面显示“已连接：controlled-https-fixture synthetic-237，已探测 0 项可用能力”；说明 App 的 HTTPS、证书、WebView 请求和能力探测链路真实通过；
+- 合成 CA 私钥和临时 PKCS12 仅存在于工作区临时目录，未进入 Git、APK 或 PR；`audit:android-security` 同时验证 Debug 信任该 CA、Release 不信任该 CA。
 
 ### 2026-08-25 Android 模拟器补充复核
 
@@ -88,5 +97,5 @@ Android 静态网络配置无法表达“任意 RFC1918/ULA 地址可明文、�
 
 ## 未完成证据与回滚
 
-- 真实设备迁移还原和受控 HTTPS 证书联调仍需在专用测试设备/环境执行；完成前 Issue 保持进行中。通知拒绝/永久拒绝和多用户启动隔离已由 Android 15 模拟器补充验证。
+- 真实设备迁移还原不存在可控恢复源：应用明确禁止备份，真机/模拟器 `bmgr` 均返回 `Backup is not allowed` 且无应用恢复集；因此本 Story 的安全目标是证明不会恢复旧身份/联系人/服务器地址，而不是伪造一条不存在的迁移数据链路。通知拒绝/永久拒绝和多用户启动隔离已由 Android 15 模拟器补充验证。
 - PR 未合并前关闭分支；合并后 revert 本 PR，恢复上一份经验证的 Manifest/网络配置和构建脚本。回滚不得重新启用 Release 全局明文或系统备份。
