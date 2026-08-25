@@ -10,7 +10,6 @@ import type {
   UpdateAuthorizationInput,
 } from '../api/types'
 import {
-  buildAuthorizationPreview,
   isAuthorizationActive,
 } from '../authorization/authorizationView'
 import AppIcon from '../components/AppIcon.vue'
@@ -45,7 +44,6 @@ const loadError = ref('')
 const saving = ref(false)
 const formError = ref('')
 const selectedAuthorizationId = ref<string | null>(null)
-const previewActorId = ref('')
 const showAudits = ref(false)
 
 const draft = reactive({
@@ -60,15 +58,6 @@ const draft = reactive({
 const selectedAuthorization = computed(
   () => authorizations.value.find(item => item.id === selectedAuthorizationId.value) ?? null,
 )
-
-const authorizationPreview = computed(() => {
-  const previewActor = previewActorId.value.trim()
-  if (!previewActor) return []
-  return buildAuthorizationPreview(authorizations.value, previewActor).map(scope => ({
-    ...scope,
-    memberName: memberNames.value.get(scope.memberId) ?? '已授权成员',
-  }))
-})
 
 const canSave = computed(
   () =>
@@ -365,7 +354,13 @@ onMounted(() => {
             <p>在右侧创建第一条授权，默认最小权限。</p>
           </div>
           <ul v-else class="list-plain">
-            <li v-for="authorization in authorizations" :key="authorization.id" class="row-card">
+            <li
+              v-for="authorization in authorizations"
+              :key="authorization.id"
+              class="row-card auth-grant-card"
+              :class="{ selected: selectedAuthorizationId === authorization.id }"
+              @click="editAuthorization(authorization)"
+            >
               <div class="row-top">
                 <span class="row-title">
                   <span class="auth-grant-pair">
@@ -381,7 +376,7 @@ onMounted(() => {
                 动作：{{ authorization.actions.map(actionLabel).join('、') }}<br />
                 用途：{{ purposeHint(authorization.purpose) }}（{{ authorization.purpose }}） · 版本 v{{ authorization.version }}
               </p>
-              <div class="row-actions">
+              <div class="row-actions" @click.stop>
                 <button
                   type="button"
                   class="btn btn-ghost btn-small"
@@ -399,36 +394,6 @@ onMounted(() => {
                   撤回授权
                 </button>
               </div>
-            </li>
-          </ul>
-        </section>
-
-        <section class="card">
-          <div class="card-heading">
-            <div>
-              <p class="eyebrow">照护者预览</p>
-              <h3 class="card-title">对方能看到什么</h3>
-            </div>
-          </div>
-          <label class="field">
-            输入照护者身份查看其可见范围
-            <input v-model="previewActorId" autocomplete="off" placeholder="照护者身份标识，例如 child-1" />
-            <small>只预览授权元数据，不加载健康内容。</small>
-          </label>
-          <p v-if="!previewActorId" class="card-note" style="margin: 8px 0 0">
-            输入身份后显示其可见字段与用途。
-          </p>
-          <p v-else-if="authorizationPreview.length === 0" class="notice warn" style="margin-top: 10px">
-            <AppIcon name="info" :size="15" />
-            该照护者当前没有任何有效授权字段。
-          </p>
-          <ul v-else-if="authorizationPreview.length > 0" class="list-plain" style="margin-top: 12px">
-            <li v-for="scope in authorizationPreview" :key="scope.authorizationId" class="row-card">
-              <span class="row-title">{{ scope.memberName }}</span>
-              <p class="row-meta" style="margin: 0">
-                可见字段：{{ scope.fields.map(fieldLabel).join('、') }} · 允许动作：{{ scope.actions.map(actionLabel).join('、') }}<br />
-                用途 {{ purposeHint(scope.purpose) }}（{{ scope.purpose }}） · 有效至 {{ formatDateTime(scope.validUntil) }}
-              </p>
             </li>
           </ul>
         </section>
@@ -464,7 +429,7 @@ onMounted(() => {
             </ul>
           </template>
           <p v-else class="card-note" style="margin: 0">
-            每一次授权变更与访问判定都会留痕，包括被拒绝的访问及其原因。
+            授权变更与访问判定会留痕；点「展开」查看。
           </p>
         </section>
       </div>
@@ -478,6 +443,16 @@ onMounted(() => {
           <button v-if="selectedAuthorization" type="button" class="btn btn-ghost btn-small" @click="resetDraft">
             改为新建
           </button>
+        </div>
+
+        <div v-if="selectedAuthorization" class="auth-selected-preview">
+          <p class="eyebrow" style="margin: 0">对方能看到什么</p>
+          <p class="card-note" style="margin: 6px 0 0">
+            <code class="auth-actor-id">{{ selectedAuthorization.grantee_actor_id }}</code>
+            可见：{{ selectedAuthorization.data_fields.map(fieldLabel).join('、') }}；
+            可做：{{ selectedAuthorization.actions.map(actionLabel).join('、') }}；
+            用途 {{ purposeHint(selectedAuthorization.purpose) }}。
+          </p>
         </div>
 
         <form class="section-stack" @submit.prevent="saveAuthorization">
@@ -518,7 +493,7 @@ onMounted(() => {
           <label class="field">
             用途代码
             <input v-model="draft.purpose" pattern="[A-Za-z0-9][A-Za-z0-9._:-]{0,63}" required placeholder="family-care" />
-            <small>ASCII 代码，1–64 位。例如 family-care = 家庭日常照护。照护者访问时需携带一致的用途。</small>
+            <small>例如 family-care = 家庭日常照护；访问时须用途一致。</small>
           </label>
           <label class="field">
             到期时间
@@ -531,8 +506,8 @@ onMounted(() => {
           <button type="submit" class="btn btn-primary" :disabled="saving || !canSave">
             {{ saving ? '正在保存' : selectedAuthorization ? '保存修改' : '创建授权' }}
           </button>
-          <p class="text-faint" style="font-size: 12px; line-height: 1.6; margin: 0">
-            默认最小权限。授权、修改与撤回全部写入审计记录；撤回后照护者页面与 API 会立即隐藏相应字段。
+          <p class="text-faint" style="font-size: 12px; line-height: 1.5; margin: 0">
+            默认最小权限；撤回后对方立即看不到相应字段。
           </p>
         </form>
       </section>

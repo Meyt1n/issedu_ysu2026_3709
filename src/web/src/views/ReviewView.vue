@@ -432,7 +432,7 @@ onMounted(() => void loadTasks())
           </p>
         </details>
 
-        <div class="row-actions">
+        <div class="review-actions">
           <button
             v-if="task.candidates.length > 0"
             type="button"
@@ -441,16 +441,18 @@ onMounted(() => void loadTasks())
           >
             确认保存
           </button>
-          <button type="button" class="btn btn-ghost btn-small" @click="openPanel(task, 'correct')">
-            人工修正
-          </button>
           <button type="button" class="btn btn-ghost btn-small" @click="toggleEvidence(task)">
             <AppIcon name="eye" :size="14" />
-            {{ evidenceOpenId === task.id ? '收起原图' : '原图与定位' }}
+            {{ evidenceOpenId === task.id ? '收起原图' : '看原图' }}
           </button>
-          <button type="button" class="btn btn-danger btn-small" @click="openPanel(task, 'skip')">
-            跳过
-          </button>
+          <div class="review-actions-more">
+            <button type="button" class="btn btn-ghost btn-small" @click="openPanel(task, 'correct')">
+              人工修正
+            </button>
+            <button type="button" class="btn btn-danger btn-small" @click="openPanel(task, 'skip')">
+              跳过
+            </button>
+          </div>
         </div>
 
         <form

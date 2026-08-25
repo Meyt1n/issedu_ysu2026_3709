@@ -218,7 +218,7 @@ test('管理员创建授权后撤回，照护者可见范围立即清空', async
   await enterFamilySpace(page)
 
   // 进入家庭空间后，侧栏必须保持本地数据承诺
-  await expect(page.getByText('家庭健康数据默认不出网，全部保存在本地可信域。')).toBeVisible()
+  await expect(page.getByText('健康数据默认只保存在本地。')).toBeVisible()
 
   await navItem(page, '授权管理').click()
   await expect(viewHeading(page)).toHaveText('授权管理')
@@ -228,18 +228,20 @@ test('管理员创建授权后撤回，照护者可见范围立即清空', async
   await page.getByRole('button', { name: '创建授权' }).click()
   await expect(page.getByText('授权已创建，默认遵循最小权限原则。')).toBeVisible()
 
-  // 照护者预览：授权元数据可见（不加载健康事件内容）
-  await page.getByLabel('输入照护者身份查看其可见范围').fill('caregiver-1')
-  await expect(page.getByText(/可见字段：health_events/)).toBeVisible()
+  // 点选授权后，右侧展示对方可见范围（不加载健康事件内容）
+  const grantCard = page.locator('.auth-grant-card').filter({ hasText: 'caregiver-1' })
+  await grantCard.click()
+  await expect(page.getByText('对方能看到什么')).toBeVisible()
+  await expect(page.getByText(/可见：已确认健康事件/)).toBeVisible()
 
   // 撤回需要经过确认弹窗，防止误触
-  await page.getByRole('button', { name: '撤回授权' }).first().click()
+  await grantCard.getByRole('button', { name: '撤回授权' }).click()
   const dialog = page.getByRole('alertdialog')
   await expect(dialog).toBeVisible()
   await dialog.getByRole('button', { name: '撤回授权' }).click()
 
   await expect(page.getByText('授权已撤回，对应照护者立即失去访问权限。')).toBeVisible()
-  await expect(page.getByText('该照护者当前没有任何有效授权字段。')).toBeVisible()
+  await expect(page.getByText('已撤回', { exact: true })).toBeVisible()
 })
 
 test('命令面板 Ctrl+K 可以在十二个视图之间快速跳转', async ({ page }) => {
@@ -255,8 +257,9 @@ test('命令面板 Ctrl+K 可以在十二个视图之间快速跳转', async ({ 
   await expect(palette).toHaveCount(0)
   await expect(viewHeading(page)).toHaveText('授权管理')
 
-  // 顶栏按钮同样可以打开；无匹配时给出无导流的空态提示
-  await page.getByRole('button', { name: /快速跳转/ }).click()
+  // 顶栏「工具与主题」菜单里同样可以打开；无匹配时给出无导流的空态提示
+  await page.getByRole('button', { name: '工具与主题' }).click()
+  await page.getByRole('menuitem', { name: /快速跳转/ }).click()
   await palette.getByLabel('搜索命令').fill('购药')
   await expect(palette.getByText(/没有匹配「购药」的命令/)).toBeVisible()
   await page.keyboard.press('Escape')
@@ -312,7 +315,7 @@ test('本地 API 不可用时不进入家庭空间，也不渲染任何健康摘
 test('可见界面始终保持本地优先与无导流安全边界', async ({ page }) => {
   await page.goto('/')
 
-  await expect(page.getByText('健康数据默认保存在本地家庭可信域')).toBeVisible()
+  await expect(page.getByText('健康信息默认只保存在家里')).toBeVisible()
   await expect(page.getByText('家庭健康记录仅供日常参考，不提供诊断、处方或用药决策；紧急情况请联系医生或当地急救服务。')).toBeVisible()
   await expect(page.locator('body')).not.toContainText(
     /购药入口|立即购买|去问诊|在线咨询|广告推荐|buy medicine|purchase|online consultation|advertisement|commission/i,

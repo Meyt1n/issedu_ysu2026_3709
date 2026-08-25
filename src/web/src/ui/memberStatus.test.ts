@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   isMemberTaskActive,
+  isMemberTaskNeedsRetake,
   memberVisionStatusHint,
   memberVisionStatusLabel,
 } from './memberStatus'
@@ -55,7 +56,12 @@ describe('成员前台状态文案映射（HCT-439 阶段二）', () => {
     for (const status of ['failed', 'timeout']) {
       expect(memberVisionStatusLabel(status)).toBe('没看清楚，请重新拍一张')
       expect(memberVisionStatusHint(status)).toContain('再拍一次')
+      expect(isMemberTaskNeedsRetake(status)).toBe(true)
     }
+    expect(isMemberTaskNeedsRetake('cancelled')).toBe(true)
+    expect(isMemberTaskNeedsRetake('succeeded')).toBe(false)
+    expect(isMemberTaskNeedsRetake('CONFLICT')).toBe(false)
+    expect(isMemberTaskNeedsRetake('LOW_QUALITY')).toBe(true)
   })
 
   it('未知/内部状态一律回落到兜底文案，绝不透出内部代码', () => {

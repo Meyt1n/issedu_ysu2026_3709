@@ -4729,7 +4729,60 @@ button:focus-visible, a:focus-visible {
 .member-summary-grid { align-items: start; }
 .member-empty { padding: 14px 12px; }
 .member-empty > .app-icon { color: var(--pine); margin-bottom: 4px; }
-.member-risk-card { border-left: 4px solid var(--gold); margin-top: 4px; }
+.auth-grant-card {
+  cursor: pointer;
+}
+
+.auth-grant-card.selected {
+  border-color: color-mix(in srgb, var(--pine) 45%, var(--glass-border));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--pine) 28%, transparent);
+}
+
+.auth-selected-preview {
+  background: var(--card-soft);
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  margin-bottom: 12px;
+  padding: 12px 14px;
+}
+
+.review-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.review-actions-more {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.theme-tool-status {
+  align-items: center;
+  color: var(--ink-soft);
+  display: flex;
+  font-size: 12.5px;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 0 4px;
+}
+
+.theme-tool-status i {
+  background: var(--rose);
+  border-radius: 50%;
+  display: inline-block;
+  height: 8px;
+  width: 8px;
+}
+
+.theme-tool-status i.on {
+  background: var(--pine);
+}
+
+.member-risk-card { border-left: 4px solid var(--gold); margin-top: 0; }
 .member-risk-count { color: var(--rose); font-size: 13px; font-weight: 700; }
 .member-risk-intro { color: var(--ink-soft); font-size: 13px; line-height: 1.5; margin: -2px 0 10px; }
 .member-risk-list { display: grid; gap: 8px; }

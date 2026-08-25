@@ -24,11 +24,14 @@ const loadError = ref('')
 let removeHealthRefreshListener: (() => void) | null = null
 
 const {
+  homePhotoTasks,
+  needsRetakeTasks,
   awaitingConfirmationTasks,
   confirmedTaskIds,
   hasActiveTasks,
   taskStatusLabel,
   taskStatusHint,
+  taskNeedsRetake,
   refreshTracking,
 } = useMemberVisionTracking()
 
@@ -45,6 +48,29 @@ const visibleRisks = computed(() =>
     message: memberRiskMessage(alert),
   })),
 )
+
+const photoBlockTitle = computed(() =>
+  needsRetakeTasks.value.length > 0 ? '有照片需要重新拍' : '等待家人确认的照片',
+)
+const photoBlockCue = computed(() =>
+  needsRetakeTasks.value.length > 0
+    ? '换个光线好、字清楚的角度再拍一次。'
+    : '确认后会出现在「我的记录」。',
+)
+const photoPrimaryAction = computed(() =>
+  needsRetakeTasks.value.length > 0
+    ? { label: '去重拍', view: 'member-capture' as const }
+    : { label: '看看进度', view: 'member-capture' as const },
+)
+const captureQuickAction = computed(() => {
+  if (needsRetakeTasks.value.length > 0) {
+    return { title: '重拍药盒', hint: '刚才没看清，再拍一张', primary: true }
+  }
+  if (awaitingConfirmationTasks.value.length > 0) {
+    return { title: '再拍一张', hint: '上一张还在等家人确认', primary: false }
+  }
+  return { title: '拍照录药', hint: '拍药盒，交给家人', primary: true }
+})
 
 async function loadHome(): Promise<void> {
   const householdId = session.selectedHouseholdId
@@ -93,42 +119,70 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
     暂时没有读取到最新记录，拍照录药仍然可以使用。
   </p>
 
-  <section v-if="awaitingConfirmationTasks.length" class="card member-pending-card" aria-label="等待家人确认的照片">
+  <section v-if="visibleRisks.length" class="card member-risk-card" aria-label="需要留意的情况">
     <div class="card-heading">
       <div>
-        <p class="eyebrow">等待确认</p>
-        <h3 class="card-title">等待家人确认的照片</h3>
+        <p class="eyebrow">家人已确认</p>
+        <h3 class="card-title">需要留意的情况</h3>
+      </div>
+      <span class="member-risk-count">{{ risks?.total }} 条</span>
+    </div>
+    <p class="member-risk-intro">不确定时，请先问家人或医生。</p>
+    <ul class="list-plain member-risk-list">
+      <li v-for="alert in visibleRisks" :key="alert.key" class="member-risk-row" :class="alert.level">
+        <span class="member-risk-level">{{ alert.levelLabel }}</span>
+        <span>{{ alert.message }}</span>
+      </li>
+    </ul>
+  </section>
+
+  <section v-if="homePhotoTasks.length" class="card member-pending-card" :aria-label="photoBlockTitle">
+    <div class="card-heading">
+      <div>
+        <p class="eyebrow">{{ needsRetakeTasks.length ? '需要处理' : '等待确认' }}</p>
+        <h3 class="card-title">{{ photoBlockTitle }}</h3>
       </div>
       <span v-if="hasActiveTasks" class="pill gold">正在看照片</span>
+      <span v-else-if="needsRetakeTasks.length" class="pill clay">{{ needsRetakeTasks.length }} 张待重拍</span>
       <span v-else class="member-pending-count">{{ awaitingConfirmationTasks.length }} 张</span>
     </div>
-    <p class="member-pending-intro">确认后会出现在「我的记录」。</p>
+    <p class="member-pending-intro">{{ photoBlockCue }}</p>
     <div class="member-pending-body">
       <ul class="list-plain member-status-list">
-        <li v-for="task in awaitingConfirmationTasks" :key="task.id" class="member-status-row">
+        <li v-for="task in homePhotoTasks" :key="task.id" class="member-status-row">
           <span
             class="member-status-icon"
-            :class="confirmedTaskIds.has(task.id) ? 'confirmed' : task.status === 'failed' || task.status === 'timeout' ? 'failed' : 'pending'"
+            :class="confirmedTaskIds.has(task.id) ? 'confirmed' : taskNeedsRetake(task) ? 'failed' : 'pending'"
           >
             <AppIcon
-              :name="confirmedTaskIds.has(task.id) ? 'check' : task.status === 'failed' || task.status === 'timeout' ? 'alert' : 'scan'"
+              :name="confirmedTaskIds.has(task.id) ? 'check' : taskNeedsRetake(task) ? 'alert' : 'scan'"
               :size="17"
             />
           </span>
           <span><strong>{{ taskStatusLabel(task) }}</strong><small>{{ taskStatusHint(task) }}</small></span>
         </li>
       </ul>
-      <button type="button" class="btn btn-ghost btn-small member-pending-link" @click="setView('member-capture')">
+      <button
+        type="button"
+        class="btn btn-small member-pending-link"
+        :class="needsRetakeTasks.length ? 'btn-clay' : 'btn-ghost'"
+        @click="setView(photoPrimaryAction.view)"
+      >
         <AppIcon name="scan" :size="15" />
-        看看进度
+        {{ photoPrimaryAction.label }}
       </button>
     </div>
   </section>
 
   <section class="member-quick-grid" aria-label="常用功能">
-    <button type="button" class="member-action-card member-action-primary" @click="setView('member-capture')">
+    <button
+      type="button"
+      class="member-action-card"
+      :class="{ 'member-action-primary': captureQuickAction.primary }"
+      @click="setView('member-capture')"
+    >
       <span class="member-action-icon"><AppIcon name="scan" :size="24" /></span>
-      <span><strong>拍照录药</strong><small>拍药盒，交给家人</small></span>
+      <span><strong>{{ captureQuickAction.title }}</strong><small>{{ captureQuickAction.hint }}</small></span>
       <AppIcon name="arrow-right" :size="16" />
     </button>
     <button type="button" class="member-action-card" @click="setView('member-plans')">
@@ -165,22 +219,5 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
         </li>
       </ul>
     </article>
-  </section>
-
-  <section v-if="visibleRisks.length" class="card member-risk-card" aria-label="需要留意的情况">
-    <div class="card-heading">
-      <div>
-        <p class="eyebrow">家人已确认</p>
-        <h3 class="card-title">需要留意的情况</h3>
-      </div>
-      <span class="member-risk-count">{{ risks?.total }} 条</span>
-    </div>
-    <p class="member-risk-intro">不确定时，请先问家人或医生。</p>
-    <ul class="list-plain member-risk-list">
-      <li v-for="alert in visibleRisks" :key="alert.key" class="member-risk-row" :class="alert.level">
-        <span class="member-risk-level">{{ alert.levelLabel }}</span>
-        <span>{{ alert.message }}</span>
-      </li>
-    </ul>
   </section>
 </template>
