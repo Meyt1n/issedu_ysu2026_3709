@@ -93,13 +93,38 @@ _CHINESE_STOPWORDS = frozenset({
 })
 _TOKEN_PATTERN = re.compile(r"[a-z0-9_]+|[\u3400-\u9fff]+", re.IGNORECASE)
 
+# Teaching / demo aliases only — expands short or colloquial drug queries so
+# TF-IDF can hit the longer authorised document wording.  Not a formulary.
+_DRUG_QUERY_ALIASES: dict[str, tuple[str, ...]] = {
+    "阿莫": ("阿莫西林",),
+    "阿莫西林": ("阿莫西林胶囊", "阿莫西林颗粒"),
+    "布洛": ("布洛芬",),
+    "布洛芬": ("布洛芬缓释胶囊", "布洛芬片"),
+    "头孢": ("头孢拉定", "头孢克肟"),
+    "维生素c": ("维生素C", "抗坏血酸"),
+    "vc": ("维生素C", "抗坏血酸"),
+}
+
+
+def _expand_query_aliases(text: str) -> str:
+    """Append known demo drug aliases so short queries still retrieve."""
+    extras: list[str] = []
+    lowered = text.casefold()
+    for needle, aliases in _DRUG_QUERY_ALIASES.items():
+        if needle.casefold() in lowered:
+            extras.extend(aliases)
+    if not extras:
+        return text
+    return f"{text} {' '.join(dict.fromkeys(extras))}"
+
 
 def _tokenize(text: str) -> list[str]:
     """Tokenize Latin words and unsegmented Chinese text for local retrieval.
 
     Chinese source documents rarely contain spaces between words.  Keeping a
-    segment plus overlapping bigrams lets a short query match a longer
-    sentence without requiring an external segmenter.
+    segment plus overlapping bigrams / trigrams lets a short query match a
+    longer sentence without requiring an external segmenter.  Query-side
+    callers should pass text through ``_expand_query_aliases`` first.
     """
     tokens: list[str] = []
     for raw_token in _TOKEN_PATTERN.findall(text.casefold()):
@@ -112,9 +137,18 @@ def _tokenize(text: str) -> list[str]:
                     raw_token[index : index + 2]
                     for index in range(len(raw_token) - 1)
                 )
+            if len(raw_token) > 3:
+                tokens.extend(
+                    raw_token[index : index + 3]
+                    for index in range(len(raw_token) - 2)
+                )
         elif len(raw_token) > 1:
             tokens.append(raw_token)
     return tokens
+
+
+def _query_tokens(text: str) -> list[str]:
+    return _tokenize(_expand_query_aliases(text))
 
 
 def _tf(text: str) -> dict[str, int]:
@@ -273,7 +307,7 @@ def retrieve(
     member_id: str | None = None,
     top_k: int = 5,
 ) -> list[dict]:
-    q_tokens = _tokenize(query)
+    q_tokens = _query_tokens(query)
     if not q_tokens:
         raise ValueError("EMPTY_QUERY")
 

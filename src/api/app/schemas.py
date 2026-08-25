@@ -523,9 +523,44 @@ class RiskDetailResponse(BaseModel):
 # ── HCT-207: Manual review schemas ────────────────────────────────────
 
 
+class MedicationReviewPayload(BaseModel):
+    """Whitelist for medication confirm / correct health-event payloads.
+
+    Aligns with HCT-207 candidate cards and the fields HCT-103 / HCT-435
+    projection reads from ``medication_confirmed`` / ``medication_corrected``
+    events.  Unknown keys are rejected so a dirty dict cannot land in the
+    immutable event log.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    drug_name: str = Field(min_length=1, max_length=200)
+    drug: str | None = Field(default=None, max_length=200)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    evidence: list[str] = Field(default_factory=list)
+    dosage: str | None = Field(default=None, max_length=120)
+    frequency: str | None = Field(default=None, max_length=120)
+    candidate_id: str | None = Field(default=None, max_length=128)
+    rank: int | None = Field(default=None, ge=1)
+    conflicts: list[str] = Field(default_factory=list)
+    specification: str | None = Field(default=None, max_length=200)
+    manufacturer: str | None = Field(default=None, max_length=200)
+    active_ingredients: list[Any] = Field(default_factory=list)
+    indications: list[Any] = Field(default_factory=list)
+    cautions: list[Any] = Field(default_factory=list)
+    contraindications: list[Any] = Field(default_factory=list)
+    interaction_warnings: list[Any] = Field(default_factory=list)
+    master_data_version: str | None = Field(default=None, max_length=128)
+    expiry_date: str | None = Field(default=None, max_length=40)
+    stock: Any = None
+    ingredient: str | None = Field(default=None, max_length=200)
+
+
 class CandidateItem(BaseModel):
-    drug_name: str
-    confidence: float | None = None
+    """Compact candidate card shown in review UI (subset of the whitelist)."""
+
+    drug_name: str = Field(min_length=1, max_length=200)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     evidence: list[str] = Field(default_factory=list)
     dosage: str | None = None
     frequency: str | None = None
@@ -539,7 +574,7 @@ class ReviewTaskConfirm(BaseModel):
 
 class ReviewTaskCorrect(BaseModel):
     expected_version: int = Field(ge=1)
-    manual_payload: dict[str, Any] = Field(min_length=1)
+    manual_payload: MedicationReviewPayload
     correction_note: str | None = None
 
 
