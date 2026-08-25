@@ -48,7 +48,7 @@ const registrationBlockReason = computed(() => {
   if (!session.isOwnerView) return '只有家庭管理员可以注册人脸凭证。'
   if (!session.selectedHouseholdId) return '请先选择一个家庭。'
   if (!selectedActorId.value) return '请先选择要绑定人脸的家庭账号。'
-  if (selectedFrames.value.length < 2) return '请先点击“开始动态采集”，完成至少两帧画面。'
+  if (selectedFrames.value.length < 2) return '请先点大按钮开始录入，听语音把脸放进圆圈并拍满三张。'
   if (!confirmationCodeValid.value) {
     return confirmationMethod.value === 'pin' ? '请输入已设置的六位家庭 PIN。' : '请输入当前正式账号密码（至少八位）。'
   }
@@ -303,6 +303,7 @@ onMounted(() => {
       </section>
       <section class="card">
         <div class="card-heading"><div><p class="eyebrow">明确同意与二次确认</p><h3 class="card-title">注册或重新绑定</h3></div></div>
+        <p class="card-note">适合老人：打开语音后，按屏幕圆圈和播报一步一步做；家人可以在旁边帮忙。画面只在本机处理，不会上传照片。</p>
         <p v-if="session.authMode !== 'session'" class="notice warn" role="status"><AppIcon name="lock" :size="16" /> 开发演示身份只能读取家庭数据；注册人脸凭证需要正式账号会话。</p>
         <form class="section-stack" @submit.prevent="registerCredential">
           <label class="field">家庭账号<select v-model="selectedActorId" required><option v-for="option in actorOptions" :key="option.id" :value="option.id">{{ option.label }} · {{ option.id }}</option></select></label>
