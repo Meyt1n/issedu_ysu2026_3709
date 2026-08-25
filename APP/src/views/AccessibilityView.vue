@@ -10,6 +10,8 @@ import {
   loadVoicePreferences,
   saveVoicePreferences,
   SILENCE_PRESETS,
+  validateWakePhrase,
+  WAKE_PHRASE_PRESETS,
   type VoicePackReport,
   type VoicePreferences,
 } from '@/composables/useVoiceInput'
@@ -35,6 +37,8 @@ const feedbackSpeaker = createSpeaker(() => true)
 const voiceReport = ref<VoicePackReport | null>(null)
 const voiceChecking = ref(false)
 const voicePrefs = ref<VoicePreferences>(loadVoicePreferences())
+const wakePhraseDraft = ref(voicePrefs.value.wakePhrase)
+const wakePhraseError = ref('')
 
 const silencePresetId = computed(() => {
   const match = SILENCE_PRESETS.find(
@@ -55,6 +59,23 @@ function applySilencePreset(presetId: string): void {
 
 function toggleVoicePref<K extends keyof VoicePreferences>(key: K, value: VoicePreferences[K]): void {
   voicePrefs.value = saveVoicePreferences({ [key]: value })
+}
+
+function applyWakePreset(phrase: string): void {
+  wakePhraseDraft.value = phrase
+  saveWakePhrase()
+}
+
+function saveWakePhrase(): void {
+  const checked = validateWakePhrase(wakePhraseDraft.value)
+  if (!checked.ok) {
+    wakePhraseError.value = checked.message
+    wakePhraseDraft.value = voicePrefs.value.wakePhrase
+    return
+  }
+  wakePhraseError.value = ''
+  voicePrefs.value = saveVoicePreferences({ wakePhrase: checked.phrase })
+  wakePhraseDraft.value = checked.phrase
 }
 
 const FONT_OPTIONS: Array<{ value: FontScale; label: string }> = [
@@ -165,6 +186,28 @@ async function checkVoicePacks(): Promise<void> {
       />
       <h3 class="subheading">助手听写偏好</h3>
       <label class="pref-row">
+        <span>唤醒词</span>
+        <input
+          v-model="wakePhraseDraft"
+          type="text"
+          maxlength="8"
+          aria-label="自定义唤醒词"
+          @change="saveWakePhrase"
+        />
+      </label>
+      <div class="wake-presets">
+        <button
+          v-for="preset in WAKE_PHRASE_PRESETS"
+          :key="preset.id"
+          type="button"
+          class="btn btn-quiet"
+          @click="applyWakePreset(preset.phrase)"
+        >
+          {{ preset.label }}
+        </button>
+      </div>
+      <p v-if="wakePhraseError" class="meta-line wake-error">{{ wakePhraseError }}</p>
+      <label class="pref-row">
         <span>静音结束</span>
         <select :value="silencePresetId" @change="applySilencePreset(($event.target as HTMLSelectElement).value)">
           <option v-for="preset in SILENCE_PRESETS" :key="preset.id" :value="preset.id">
@@ -180,9 +223,15 @@ async function checkVoicePacks(): Promise<void> {
       />
       <SwitchRow
         title="双次唤醒确认"
-        description="连续识别两次「小燕小燕」才进入听写，降低误唤醒"
+        description="连续识别两次唤醒词才进入听写，降低误唤醒（唤醒词见上方设置）"
         :model-value="voicePrefs.doubleWake"
         @update:model-value="value => toggleVoicePref('doubleWake', value)"
+      />
+      <SwitchRow
+        title="听写后语音指令"
+        description="听写结束后聆听白名单指令：发送吧（需两遍确认）、取消、上一条再说一遍、停止朗读、重说"
+        :model-value="voicePrefs.voiceCommands"
+        @update:model-value="value => toggleVoicePref('voiceCommands', value)"
       />
       <div class="voice-actions">
         <button type="button" class="btn btn-quiet" @click="tryVoice">
@@ -264,6 +313,19 @@ html[data-contrast='high'] .font-preview { border: 2px solid #000; background: #
   border-radius: 10px;
   padding: 8px 10px;
 }
+.pref-row input {
+  flex: 1;
+  min-height: var(--tap);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+.wake-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.wake-error { color: var(--danger, #b42318); }
 .ghost-link {
   display: inline-flex;
   margin-top: 10px;

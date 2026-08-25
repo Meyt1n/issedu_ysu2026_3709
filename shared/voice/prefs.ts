@@ -1,5 +1,8 @@
 /** 语音交互本地偏好（不上传、不含健康数据）。 */
 
+import { DEFAULT_WAKE_PHRASE } from './recognition'
+import { sanitizeWakePhraseInput, validateWakePhrase } from './wakePhrase'
+
 const PREF_KEY = 'hct-voice-prefs:v1'
 
 export interface VoicePreferences {
@@ -11,6 +14,10 @@ export interface VoicePreferences {
   confirmSound: boolean
   /** 需要连续两次识别到唤醒词才进入听写，降低误唤醒。 */
   doubleWake: boolean
+  /** 可配置唤醒词（本机偏好，默认小燕小燕）。 */
+  wakePhrase: string
+  /** 听写结束后是否聆听白名单语音指令（发送/重读等）。 */
+  voiceCommands: boolean
 }
 
 export const DEFAULT_VOICE_PREFERENCES: VoicePreferences = {
@@ -18,6 +25,8 @@ export const DEFAULT_VOICE_PREFERENCES: VoicePreferences = {
   continuationSilenceMs: 3200,
   confirmSound: true,
   doubleWake: true,
+  wakePhrase: DEFAULT_WAKE_PHRASE,
+  voiceCommands: true,
 }
 
 export const SILENCE_PRESETS = [
@@ -32,6 +41,12 @@ function storage(): Storage | null {
   } catch {
     return null
   }
+}
+
+function normalizeWakePhrase(value: unknown): string {
+  if (typeof value !== 'string') return DEFAULT_WAKE_PHRASE
+  const checked = validateWakePhrase(value)
+  return checked.ok ? checked.phrase : DEFAULT_WAKE_PHRASE
 }
 
 export function loadVoicePreferences(): VoicePreferences {
@@ -52,6 +67,8 @@ export function loadVoicePreferences(): VoicePreferences {
           : DEFAULT_VOICE_PREFERENCES.continuationSilenceMs,
       confirmSound: raw.confirmSound !== false,
       doubleWake: raw.doubleWake !== false,
+      wakePhrase: normalizeWakePhrase(raw.wakePhrase),
+      voiceCommands: raw.voiceCommands !== false,
     }
   } catch {
     return { ...DEFAULT_VOICE_PREFERENCES }
@@ -59,11 +76,15 @@ export function loadVoicePreferences(): VoicePreferences {
 }
 
 export function saveVoicePreferences(prefs: Partial<VoicePreferences>): VoicePreferences {
-  const next = { ...loadVoicePreferences(), ...prefs }
+  const merged = { ...loadVoicePreferences(), ...prefs }
+  if (prefs.wakePhrase !== undefined) {
+    const checked = validateWakePhrase(sanitizeWakePhraseInput(prefs.wakePhrase))
+    merged.wakePhrase = checked.ok ? checked.phrase : loadVoicePreferences().wakePhrase
+  }
   try {
-    storage()?.setItem(PREF_KEY, JSON.stringify(next))
+    storage()?.setItem(PREF_KEY, JSON.stringify(merged))
   } catch {
     // ignore
   }
-  return next
+  return merged
 }

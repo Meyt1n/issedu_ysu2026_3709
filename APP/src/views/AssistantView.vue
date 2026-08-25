@@ -11,7 +11,7 @@ import { createLiveApiClient } from '@/data'
 import {
   clearChatSession,
   createDictationController,
-  DEFAULT_WAKE_PHRASE,
+  createSendConfirmGate,
   getSpeakingIndex,
   getSpeakingSegments,
   isSpeechInputSupported,
@@ -20,13 +20,18 @@ import {
   memberNameHotwordPairs,
   loadChatSession,
   saveChatSession,
+  saveVoicePreferences,
   sessionEntryToStored,
   skipSpeakingSegment,
   speakText,
   stopSpeaking,
+  validateWakePhrase,
+  WAKE_PHRASE_PRESETS,
   type DictationController,
   type DictationMode,
   type StoredChatEntry,
+  type VoiceCommandId,
+  type VoicePreferences,
 } from '@/composables/useVoiceInput'
 import { useA11y } from '@/stores/accessibility'
 import { useSession } from '@/stores/session'
@@ -58,27 +63,52 @@ const draftInput = ref<HTMLTextAreaElement | null>(null)
 const sendButton = ref<HTMLButtonElement | null>(null)
 const memberSummaries = ref<MemberSummary[]>([])
 const speakingSegmentIndex = ref(0)
+const voicePrefs = ref<VoicePreferences>(loadVoicePreferences())
+const wakePhraseDraft = ref(voicePrefs.value.wakePhrase)
+const voiceSendHint = ref('')
 
 const speechInputSupported = isSpeechInputSupported()
+const wakePhrase = computed(() => voicePrefs.value.wakePhrase)
+
+const sendConfirmGate = createSendConfirmGate({
+  onPrompt: () => {
+    voiceSendHint.value = '请再说一遍「发送吧」以确认发送'
+    if (loadVoicePreferences().confirmSound) speakText('请再说一遍发送吧，确认发送')
+  },
+  onConfirmed: () => {
+    voiceSendHint.value = ''
+  },
+  onCancelled: () => {
+    voiceSendHint.value = '已取消语音发送'
+  },
+  onExpired: () => {
+    voiceSendHint.value = '确认已超时，请再说「发送吧」或点发送'
+  },
+})
 const memberHotwordExtras = computed(() =>
   memberNameHotwordPairs(memberSummaries.value.map(member => member.name)),
 )
-const listening = computed(() => voiceMode.value === 'wake' || voiceMode.value === 'active')
+const listening = computed(() =>
+  voiceMode.value === 'wake' || voiceMode.value === 'active' || voiceMode.value === 'command',
+)
 const liveMode = computed(() => session.dataMode === 'live')
 const serverLabel = computed(() => session.serverBaseUrl.trim() || '（未填写服务器地址）')
 const assistantReady = computed(() => liveMode.value && Boolean(session.serverBaseUrl.trim()))
 
 const voiceStatusLabel = computed(() => {
-  if (voiceMode.value === 'wake') return `正在聆听唤醒词：「${DEFAULT_WAKE_PHRASE}」`
+  if (voiceMode.value === 'wake') return `正在聆听唤醒词：「${wakePhrase.value}」`
   if (voiceMode.value === 'active') return '已唤醒，识别中的文字会实时填入草稿'
   if (voiceMode.value === 'ready') return '已听完，请确认草稿后发送'
+  if (voiceMode.value === 'command') {
+    return voiceSendHint.value || '可说白名单指令：发送吧（需两遍）、取消、上一条再说一遍、停止朗读、重说'
+  }
   return needMicGesture.value ? '点按下方按钮一次以开启麦克风聆听' : ''
 })
 
 const voiceButtonLabel = computed(() => {
   if (voiceMode.value === 'wake') return '等待唤醒'
   if (voiceMode.value === 'active') return '停止语音'
-  if (voiceMode.value === 'ready') return '重新聆听'
+  if (voiceMode.value === 'ready' || voiceMode.value === 'command') return '重新聆听'
   return needMicGesture.value ? '允许麦克风并聆听' : '开启唤醒'
 })
 
@@ -116,6 +146,73 @@ function restoreChatSession(entries: StoredChatEntry[]): void {
   scrollToEnd()
 }
 
+function applyWakePreset(phrase: string): void {
+  wakePhraseDraft.value = phrase
+  saveWakePhrase()
+}
+
+function saveWakePhrase(): void {
+  const checked = validateWakePhrase(wakePhraseDraft.value)
+  if (!checked.ok) {
+    voiceError.value = checked.message
+    wakePhraseDraft.value = voicePrefs.value.wakePhrase
+    return
+  }
+  voiceError.value = ''
+  voicePrefs.value = saveVoicePreferences({ wakePhrase: checked.phrase })
+  wakePhraseDraft.value = checked.phrase
+  if (listening.value || voiceMode.value === 'command' || voiceMode.value === 'ready') {
+    void beginWakeListening()
+  }
+}
+
+function repeatLastAnswer(): void {
+  const last = [...history.value].reverse().find(entry => entry.role === 'assistant' && entry.content.trim())
+  if (!last) {
+    voiceError.value = '还没有可朗读的回答。'
+    return
+  }
+  const index = history.value.lastIndexOf(last)
+  toggleSpeech(index, last.content)
+}
+
+function handleVoiceCommand(command: VoiceCommandId): void {
+  if (command === 'confirm_send') {
+    if (!draft.value.trim() || sending.value) {
+      voiceError.value = '没有可发送的草稿。'
+      return
+    }
+    const result = sendConfirmGate.handleSendIntent()
+    if (result === 'confirmed') {
+      voiceSendHint.value = ''
+      void send()
+    }
+    return
+  }
+  if (command === 'cancel_send') {
+    sendConfirmGate.cancel()
+    return
+  }
+  if (command === 'repeat_answer') {
+    repeatLastAnswer()
+    return
+  }
+  if (command === 'stop_speaking') {
+    stopSpeaking()
+    speakingIndex.value = null
+    speakingProgress.value = ''
+    return
+  }
+  if (command === 'redo_dictation') {
+    sendConfirmGate.reset()
+    ensureDictation().redoDictation()
+    return
+  }
+  if (command === 'resume_dictation') {
+    ensureDictation().resumeDictation()
+  }
+}
+
 function ensureDictation(): DictationController {
   if (dictation) return dictation
   dictation = createDictationController({
@@ -136,10 +233,15 @@ function ensureDictation(): DictationController {
     },
     onUtteranceComplete: () => {
       needMicGesture.value = false
+      sendConfirmGate.reset()
+      voiceSendHint.value = ''
       void nextTick(() => sendButton.value?.focus())
       if (loadVoicePreferences().confirmSound) {
         speakText('好的，请确认后发送')
       }
+    },
+    onCommand: (command) => {
+      handleVoiceCommand(command)
     },
   }, {
     getHotwordExtras: () => memberHotwordExtras.value,
@@ -185,6 +287,8 @@ function stopVoiceInput(): void {
   dictation?.stop()
   voicePreview.value = ''
   needMicGesture.value = false
+  sendConfirmGate.reset()
+  voiceSendHint.value = ''
 }
 
 async function beginWakeListening(): Promise<void> {
@@ -461,7 +565,7 @@ onBeforeUnmount(() => {
         <p class="eyebrow">随身助手</p>
         <h1>语音提问</h1>
         <p class="lede">
-          进入本页后会自动尝试聆听；首次需点按允许麦克风，再说「{{ DEFAULT_WAKE_PHRASE }}」。识别只进草稿，确认后点发送。
+          进入本页后会自动尝试聆听；首次需点按允许麦克风，再说「{{ wakePhrase }}」。识别只进草稿，确认后点发送或说两遍「发送吧」。
         </p>
       </div>
       <RouterLink class="ghost-link" to="/me/voice-check">语音自检</RouterLink>
@@ -551,10 +655,13 @@ onBeforeUnmount(() => {
     <p v-if="sendError" class="error-line" role="alert">{{ sendError }}</p>
     <p v-if="voiceError" class="error-line" role="status">{{ voiceError }}</p>
     <p v-if="needMicGesture && !listening" class="voice-status" role="status">
-      需要一次点按开启麦克风后，才会自动等待「{{ DEFAULT_WAKE_PHRASE }}」。
+      需要一次点按开启麦克风后，才会自动等待「{{ wakePhrase }}」。
     </p>
     <p v-if="voicePreview" class="voice-preview" role="status">{{ voicePreview }}</p>
     <p v-if="voiceStatusLabel" class="voice-status" role="status">{{ voiceStatusLabel }}</p>
+    <p v-if="voiceSendHint && voiceMode === 'command'" class="voice-send-hint" role="status">
+      {{ voiceSendHint }}
+    </p>
 
     <form class="composer card" @submit.prevent="send()">
       <label class="sr-only" for="assistant-draft">问题草稿</label>
@@ -600,6 +707,40 @@ onBeforeUnmount(() => {
         </button>
       </div>
     </form>
+
+    <section class="card voice-prefs-hint" aria-label="语音偏好说明">
+      <p class="meta-line">
+        唤醒词与听写偏好可在
+        <RouterLink to="/me/accessibility">无障碍设置</RouterLink>
+        或
+        <RouterLink to="/me/voice-check">语音自检</RouterLink>
+        中调整。
+      </p>
+      <label class="pref-row">
+        <span>唤醒词</span>
+        <input
+          v-model="wakePhraseDraft"
+          type="text"
+          maxlength="8"
+          aria-label="自定义唤醒词"
+          @change="saveWakePhrase"
+        />
+      </label>
+      <div class="wake-presets">
+        <button
+          v-for="preset in WAKE_PHRASE_PRESETS"
+          :key="preset.id"
+          type="button"
+          class="chip"
+          @click="applyWakePreset(preset.phrase)"
+        >
+          {{ preset.label }}
+        </button>
+      </div>
+      <p class="meta-line">
+        听写结束后可说白名单指令（发送需说两遍「发送吧」确认）；开放域语句不会当作指令执行。
+      </p>
+    </section>
   </main>
 </template>
 
@@ -709,7 +850,28 @@ onBeforeUnmount(() => {
   outline: 2px solid color-mix(in srgb, var(--accent) 35%, transparent);
 }
 .error-line { color: var(--danger, #b42318); margin: 0; }
-.voice-preview, .voice-status { margin: 0; color: var(--muted); }
+.voice-preview, .voice-status, .voice-send-hint { margin: 0; color: var(--muted); }
+.voice-send-hint { color: var(--accent); font-weight: 600; }
+.voice-prefs-hint { display: grid; gap: 8px; }
+.voice-prefs-hint .pref-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 0.92rem;
+}
+.voice-prefs-hint .pref-row input {
+  flex: 1;
+  min-height: var(--tap);
+  border-radius: 10px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--text) 14%, transparent);
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+}
+.wake-presets { display: flex; flex-wrap: wrap; gap: 8px; }
+.voice-prefs-hint a { color: var(--accent); font-weight: 600; }
 .sr-only {
   position: absolute;
   width: 1px;

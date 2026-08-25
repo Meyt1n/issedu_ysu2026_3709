@@ -1,20 +1,23 @@
+import { matchVoiceCommand, VOICE_COMMAND_HINT, type VoiceCommandId } from './commands'
 import { applyHotwordCorrections, endsWithContinuationCue, type HotwordPair } from './hotwords'
 import {
-  containsWakePhrase,
   createSpeechRecognition,
   DEFAULT_WAKE_PHRASE,
   DICTATION_SILENCE_MS,
   isSpeechInputSupported,
   latestTranscriptFromEvent,
   queryMicrophonePermission,
-  transcriptAfterWakePhrase,
   transcriptFromEvent,
   VOICE_RESTART_DELAY_MS,
   type SpeechRecognitionLike,
 } from './recognition'
 import { DEFAULT_VOICE_PREFERENCES, type VoicePreferences } from './prefs'
+import {
+  containsConfiguredWakePhrase,
+  transcriptAfterConfiguredWakePhrase,
+} from './wakePhrase'
 
-export type DictationMode = 'off' | 'wake' | 'active' | 'paused' | 'ready'
+export type DictationMode = 'off' | 'wake' | 'active' | 'paused' | 'ready' | 'command'
 
 export interface DictationHandlers {
   onModeChange?: (mode: DictationMode) => void
@@ -25,16 +28,22 @@ export interface DictationHandlers {
   onUtteranceComplete?: (draft: string) => void
   /** 需要一次用户手势才能开麦时回调（页面可展示大按钮）。 */
   onNeedGesture?: () => void
+  /** 白名单语音指令（不含开放域意图）。 */
+  onCommand?: (command: VoiceCommandId, draft: string) => void
 }
 
 export interface DictationControllerOptions {
   getHotwordExtras?: () => ReadonlyArray<HotwordPair>
-  getPreferences?: () => Pick<VoicePreferences, 'silenceMs' | 'continuationSilenceMs' | 'doubleWake'>
+  getPreferences?: () => Pick<
+    VoicePreferences,
+    'silenceMs' | 'continuationSilenceMs' | 'doubleWake' | 'wakePhrase' | 'voiceCommands'
+  >
 }
 
 export interface DictationController {
   getMode: () => DictationMode
   getDraft: () => string
+  getWakePhrase: () => string
   /** 已授权则直接唤醒聆听；否则触发 onNeedGesture。 */
   tryAutoStart: () => Promise<void>
   startWake: (draftPrefix?: string) => void
@@ -44,6 +53,8 @@ export interface DictationController {
   resumeDictation: () => void
   /** ready 态：清空本次口述并重新听写。 */
   redoDictation: () => void
+  /** 在 ready 后聆听白名单指令。 */
+  startCommandListen: () => void
   stop: () => void
   dispose: () => void
 }
@@ -52,7 +63,7 @@ const WAKE_CONFIRM_MS = 2500
 
 /**
  * 共享听写状态机：
- * off → wake（可要求双次唤醒）→ active → ready；active 可 pause/resume。
+ * off → wake → active → ready →（可选）command；active 可 pause/resume。
  */
 export function createDictationController(
   handlers: DictationHandlers = {},
@@ -76,6 +87,10 @@ export function createDictationController(
       ...DEFAULT_VOICE_PREFERENCES,
       ...options.getPreferences?.(),
     }
+  }
+
+  function wakePhrase(): string {
+    return prefs().wakePhrase?.trim() || DEFAULT_WAKE_PHRASE
   }
 
   function setMode(next: DictationMode): void {
@@ -116,6 +131,12 @@ export function createDictationController(
     setMode('ready')
     handlers.onPreview?.(draft ? `已记下：${draft}` : '已停止聆听，请确认后发送')
     handlers.onUtteranceComplete?.(draft)
+    if (prefs().voiceCommands) {
+      // 稍后再开指令聆听，避免把确认音吃进指令。
+      setTimeout(() => {
+        if (!disposed && mode === 'ready') startCommandListen()
+      }, 400)
+    }
   }
 
   function armSilenceTimer(): void {
@@ -135,7 +156,7 @@ export function createDictationController(
     restartTimer = setTimeout(() => {
       restartTimer = null
       if (disposed || id !== sessionId || stopRequested || fatal) return
-      if (mode !== 'wake' && mode !== 'active') return
+      if (mode !== 'wake' && mode !== 'active' && mode !== 'command') return
       startRecognition(id)
     }, VOICE_RESTART_DELAY_MS)
   }
@@ -153,6 +174,7 @@ export function createDictationController(
 
   function noteWakeHit(probe: string): boolean {
     const settings = prefs()
+    const phrase = wakePhrase()
     if (!settings.doubleWake) {
       acceptWake()
       return true
@@ -166,16 +188,26 @@ export function createDictationController(
       acceptWake()
       return true
     }
-    handlers.onPreview?.(`听到唤醒（${probe}），请再说一次「${DEFAULT_WAKE_PHRASE}」确认`)
+    handlers.onPreview?.(`听到唤醒（${probe}），请再说一次「${phrase}」确认`)
     if (wakeConfirmTimer) clearTimeout(wakeConfirmTimer)
     wakeConfirmTimer = setTimeout(() => {
       wakeConfirmTimer = null
       wakeHits = 0
       if (mode === 'wake') {
-        handlers.onPreview?.(`等待唤醒：请说「${DEFAULT_WAKE_PHRASE}」`)
+        handlers.onPreview?.(`等待唤醒：请说「${phrase}」`)
       }
     }, WAKE_CONFIRM_MS)
     return false
+  }
+
+  function handleCommandTranscript(raw: string): void {
+    const command = matchVoiceCommand(raw)
+    if (!command) {
+      handlers.onPreview?.(`未识别指令。${VOICE_COMMAND_HINT}`)
+      return
+    }
+    handlers.onPreview?.(`指令：${command}`)
+    handlers.onCommand?.(command, currentDraft.trim())
   }
 
   function startRecognition(id: number): void {
@@ -197,6 +229,8 @@ export function createDictationController(
       return
     }
 
+    const phrase = wakePhrase()
+
     next.onstart = () => {
       if (id !== sessionId) return
       handlers.onError?.('')
@@ -207,9 +241,25 @@ export function createDictationController(
       const transcript = transcriptFromEvent(event)
       if (!latest && !transcript) return
 
+      if (mode === 'command') {
+        const probe = latest || transcript
+        // 仅在出现较完整短语时匹配，减少 interim 误触
+        if (probe.trim().length < 2) return
+        const command = matchVoiceCommand(probe) ?? matchVoiceCommand(transcript)
+        if (!command) {
+          handlers.onPreview?.(`正在听指令：${probe}`)
+          return
+        }
+        handleCommandTranscript(probe)
+        return
+      }
+
       if (mode === 'wake') {
         const wakeProbe = latest || transcript
-        if (!containsWakePhrase(wakeProbe) && !containsWakePhrase(transcript)) {
+        if (
+          !containsConfiguredWakePhrase(wakeProbe, phrase)
+          && !containsConfiguredWakePhrase(transcript, phrase)
+        ) {
           handlers.onPreview?.(`正在聆听：${wakeProbe || transcript}`)
           return
         }
@@ -218,13 +268,13 @@ export function createDictationController(
 
       if (mode !== 'active') return
 
-      const spokenSource = containsWakePhrase(transcript)
+      const spokenSource = containsConfiguredWakePhrase(transcript, phrase)
         ? transcript
-        : containsWakePhrase(latest)
+        : containsConfiguredWakePhrase(latest, phrase)
           ? latest
           : transcript
-      const spokenRaw = containsWakePhrase(spokenSource)
-        ? transcriptAfterWakePhrase(spokenSource)
+      const spokenRaw = containsConfiguredWakePhrase(spokenSource, phrase)
+        ? transcriptAfterConfiguredWakePhrase(spokenSource, phrase)
         : spokenSource.trim()
       const spoken = correct(spokenRaw)
       if (spoken) {
@@ -261,7 +311,7 @@ export function createDictationController(
       if (id !== sessionId) return
       if (recognition === next) recognition = null
       if (mode === 'ready' || mode === 'off' || mode === 'paused') return
-      if (!stopRequested && !fatal && (mode === 'wake' || mode === 'active')) {
+      if (!stopRequested && !fatal && (mode === 'wake' || mode === 'active' || mode === 'command')) {
         if (mode === 'active') {
           draftPrefix = currentDraft.trim() ? `${currentDraft.trim()} ` : ''
         }
@@ -304,7 +354,7 @@ export function createDictationController(
   }
 
   function pause(): void {
-    if (mode !== 'active' && mode !== 'wake') return
+    if (mode !== 'active' && mode !== 'wake' && mode !== 'command') return
     stopRecognitionOnly()
     fatal = false
     setMode('paused')
@@ -332,12 +382,34 @@ export function createDictationController(
     draftPrefix = prefix.trim() ? `${prefix.trim()} ` : ''
     currentDraft = prefix.trim()
     const id = ++sessionId
+    const phrase = wakePhrase()
     setMode('wake')
     handlers.onPreview?.(
       prefs().doubleWake
-        ? `等待唤醒：请连说两遍「${DEFAULT_WAKE_PHRASE}」（或间隔再说一次确认）`
-        : `等待唤醒：请说「${DEFAULT_WAKE_PHRASE}」`,
+        ? `等待唤醒：请连说两遍「${phrase}」（或间隔再说一次确认）`
+        : `等待唤醒：请说「${phrase}」`,
     )
+    startRecognition(id)
+  }
+
+  function startCommandListen(): void {
+    if (disposed) return
+    if (!prefs().voiceCommands) return
+    if (!isSpeechInputSupported()) return
+    stopRequested = false
+    fatal = false
+    wakeHits = 0
+    clearTimers()
+    const current = recognition
+    recognition = null
+    try {
+      current?.abort()
+    } catch {
+      // ignore
+    }
+    const id = ++sessionId
+    setMode('command')
+    handlers.onPreview?.(VOICE_COMMAND_HINT)
     startRecognition(id)
   }
 
@@ -399,11 +471,13 @@ export function createDictationController(
   return {
     getMode: () => mode,
     getDraft: () => currentDraft,
+    getWakePhrase: () => wakePhrase(),
     tryAutoStart,
     startWake,
     pause,
     resumeDictation,
     redoDictation,
+    startCommandListen,
     stop,
     dispose,
   }

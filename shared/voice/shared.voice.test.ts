@@ -18,6 +18,12 @@ import { createDictationController } from './dictation'
 import { loadChatSession, saveChatSession, clearChatSession } from './chatSession'
 import { loadVoicePreferences, saveVoicePreferences, DEFAULT_VOICE_PREFERENCES } from './prefs'
 import { splitSpeechSegments } from './tts'
+import {
+  containsConfiguredWakePhrase,
+  validateWakePhrase,
+  WAKE_PHRASE_PRESETS,
+} from './wakePhrase'
+import { createSendConfirmGate, matchVoiceCommand } from './commands'
 
 describe('shared voice recognition', () => {
   it('uses 小燕小燕 as the default wake phrase', () => {
@@ -277,5 +283,43 @@ describe('hotwords and chat session', () => {
       if (previous === undefined) delete (globalThis as { window?: unknown }).window
       else Object.defineProperty(globalThis, 'window', { configurable: true, value: previous })
     }
+  })
+})
+
+describe('wake phrase and voice commands', () => {
+  it('validates custom wake phrase length and accepts presets', () => {
+    expect(validateWakePhrase('家健镜').ok).toBe(true)
+    expect(validateWakePhrase('a').ok).toBe(false)
+    expect(WAKE_PHRASE_PRESETS.some(p => p.phrase === '家健镜')).toBe(true)
+  })
+
+  it('matches configured wake phrase with near-homophones for 家健镜', () => {
+    expect(containsConfiguredWakePhrase('家建镜查询用药', '家健镜')).toBe(true)
+    expect(containsConfiguredWakePhrase('加健静今天血压', '家健镜')).toBe(true)
+    expect(containsConfiguredWakePhrase('小燕小燕', '家健镜')).toBe(false)
+  })
+
+  it('matches whitelist voice commands and ignores open-domain phrases', () => {
+    expect(matchVoiceCommand('发送吧')).toBe('confirm_send')
+    expect(matchVoiceCommand('上一条再说一遍')).toBe('repeat_answer')
+    expect(matchVoiceCommand('停止朗读')).toBe('stop_speaking')
+    expect(matchVoiceCommand('帮我查一下血压')).toBe(null)
+    expect(matchVoiceCommand('打开药盒拍照')).toBe(null)
+    expect(matchVoiceCommand('今天天气怎么样')).toBe(null)
+  })
+
+  it('createSendConfirmGate prompts then confirms on second intent', () => {
+    const prompts: string[] = []
+    const confirmed: string[] = []
+    const gate = createSendConfirmGate({
+      onPrompt: () => prompts.push('prompt'),
+      onConfirmed: () => confirmed.push('confirmed'),
+    })
+    expect(gate.handleSendIntent()).toBe('prompt')
+    expect(prompts).toEqual(['prompt'])
+    expect(confirmed).toEqual([])
+    expect(gate.handleSendIntent()).toBe('confirmed')
+    expect(confirmed).toEqual(['confirmed'])
+    expect(gate.isPending()).toBe(false)
   })
 })

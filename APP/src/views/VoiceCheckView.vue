@@ -5,6 +5,7 @@ import { useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import {
   inspectChineseVoicePacks,
+  loadVoicePreferences,
   runVoicePreflight,
   type VoicePackReport,
   type VoicePreflightReport,
@@ -13,6 +14,7 @@ import { useSession } from '@/stores/session'
 
 const router = useRouter()
 const { session } = useSession()
+const voicePrefs = loadVoicePreferences()
 
 const voiceReport = ref<VoicePackReport | null>(null)
 const preflightReport = ref<VoicePreflightReport | null>(null)
@@ -43,6 +45,7 @@ async function runChecks(): Promise<void> {
       <h1>助手语音预检</h1>
       <p class="screen-subtitle">
         检查麦克风、中文语音包与（联机时）家庭服务器连通；不上传音频，仅本机诊断。
+        当前唤醒词：「{{ voicePrefs.wakePhrase }}」（可在无障碍设置中修改）。
       </p>
     </header>
 
@@ -63,6 +66,9 @@ async function runChecks(): Promise<void> {
       <ul class="checklist">
         <li :data-ok="preflightReport.speechInput">
           语音输入（SpeechRecognition）：{{ preflightReport.speechInput ? '支持' : '不支持' }}
+        </li>
+        <li :data-ok="true">
+          唤醒词偏好：「{{ voicePrefs.wakePhrase }}」；近音字可匹配（如家健镜/家建镜）
         </li>
         <li :data-ok="preflightReport.microphone === 'granted'">
           麦克风权限：{{ preflightReport.microphone ?? '未知' }}
