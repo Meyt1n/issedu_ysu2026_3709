@@ -1436,6 +1436,19 @@ button:focus-visible, a:focus-visible {
 
 .welcome-disclaimer { color: var(--ink-faint); font-size: 12px; line-height: 1.65; margin: 2px 0 0; }
 
+/* HCT-453 分端口入口：跨端指引与入口/门户不匹配提示 */
+.welcome-cross-entry { font-size: 12.5px; margin: 6px 0 0; }
+.welcome-cross-entry a { color: var(--accent, inherit); font-weight: 600; text-decoration: underline; }
+.entry-conflict {
+  align-items: flex-start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  line-height: 1.6;
+}
+.entry-conflict .btn { flex: none; }
+.entry-conflict-hint { font-size: 12.5px; }
+
 /* ---------- 扫描页 ---------- */
 
 .capture-zone {

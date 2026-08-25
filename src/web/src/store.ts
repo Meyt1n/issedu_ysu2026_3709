@@ -3,6 +3,12 @@ import { computed, reactive, readonly } from 'vue'
 import { ApiClientError, apiClient } from './api/client'
 import { clearChatSessionsForActor } from './assistant/chatSession'
 import { SHOW_ADVANCED_LAB } from './ui/featureFlags'
+import {
+  activePortalEntryMode,
+  portalEntryConflict,
+  portalEntryConflictNotice,
+  type PortalEntryConflict,
+} from './ui/portalEntry'
 import type {
   AuthSession,
   CapabilityResponse,
@@ -81,6 +87,11 @@ interface SessionState {
   pendingReviewCount: number
   toasts: Toast[]
   assistantSeedPrompt: string
+  /**
+   * HCT-453：登录账号的真实门户与当前入口（成员前台 / 管理后台端口）不匹配。
+   * 命中时会话已被登出，欢迎页据此渲染跨端指引按钮。
+   */
+  entryConflict: PortalEntryConflict | null
 }
 
 const state = reactive<SessionState>({
@@ -103,6 +114,7 @@ const state = reactive<SessionState>({
   pendingReviewCount: 0,
   toasts: [],
   assistantSeedPrompt: '',
+  entryConflict: null,
 })
 
 let toastSeq = 0
@@ -283,6 +295,7 @@ function clearSessionContext(): void {
   state.sessionExpiresAt = null
   state.status = 'signed-out'
   state.error = ''
+  state.entryConflict = null
   state.currentView = 'overview'
   state.portal = 'member'
   state.households = []
@@ -307,6 +320,18 @@ function scheduleSessionExpiry(sessionToken: string, expiresAt: number): void {
 export function expireSession(): void {
   clearSessionContext()
   state.error = '会话已过期或已被撤销，请重新登录。'
+}
+
+/**
+ * HCT-453：账号真实门户与当前入口不匹配时，撤销本次登录并留下跨端指引。
+ * 入口锁只做减法（不在错误端口渲染另一门户的界面），授权真相仍由服务端
+ * 的 HCT-439 owner 判定与成员级授权决定。
+ */
+function rejectPortalEntry(conflict: PortalEntryConflict): void {
+  const notice = portalEntryConflictNotice(conflict)
+  signOut()
+  state.entryConflict = conflict
+  state.error = notice.message
 }
 
 export async function connect(actorId: string, accessPurpose: string): Promise<void> {
@@ -644,6 +669,15 @@ export async function loadHouseholdScope(): Promise<void> {
       state.households.find(item => item.id === householdId)?.created_by === state.actorId
 
     state.portal = state.isOwnerView ? 'admin' : 'member'
+
+    // HCT-453：入口锁。成员前台端口不渲染管理后台、管理后台端口不渲染
+    // 成员前台；不匹配时登出并让欢迎页给出「去另一入口」指引。
+    const conflict = portalEntryConflict(activePortalEntryMode(), state.portal)
+    if (conflict) {
+      rejectPortalEntry(conflict)
+      return
+    }
+
     const allowedViews = state.portal === 'admin' ? undefined : MEMBER_VIEWS
     if (allowedViews && !allowedViews.includes(state.currentView)) {
       state.currentView = 'member-home'
