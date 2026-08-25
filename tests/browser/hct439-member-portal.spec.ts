@@ -68,7 +68,7 @@ async function installMemberApi(page: Page): Promise<void> {
         alerts: [{
           rule_id: 'allergy_conflict',
           level: 'SEVERE',
-          message: '请和家庭管理员一起核对这条记录',
+          message: '请和家人一起核对这条记录',
           source_event_ids: ['event-confirmed-1'],
           created_at: '2026-08-24T08:00:00Z',
           rule_version: 'demo-rules-v1',
@@ -140,7 +140,7 @@ test('家庭成员进入前台，只看到自己的照护入口和已确认记�
   await page.getByRole('button', { name: '进入家庭空间' }).click()
 
   await expect(page.locator('.app-frame')).toBeVisible()
-  await expect(page.getByText('家庭成员前台', { exact: true })).toBeVisible()
+  await expect(page.getByText('家庭成员', { exact: true })).toBeVisible()
   await expect(page.locator('.identity-chip')).not.toContainText('grandma-account')
   await expect(page.locator('aside.sidebar').getByRole('button', { name: '我的家庭' })).toBeVisible()
   await expect(page.locator('aside.sidebar').getByRole('button', { name: '拍照录药' })).toBeVisible()
@@ -150,8 +150,8 @@ test('家庭成员进入前台，只看到自己的照护入口和已确认记�
   await expect(page.locator('aside.sidebar').getByRole('button', { name: '人工复核' })).toHaveCount(0)
   await expect(page.getByText('教学演示系统')).toHaveCount(0)
   await expect(page.getByRole('heading', { name: '需要留意的情况' })).toBeVisible()
-  await expect(page.getByText('请和家庭管理员一起核对这条记录')).toBeVisible()
-  await expect(page.getByText('请先问家人或医生')).toBeVisible()
+  await expect(page.getByText('请和家人一起核对这条记录')).toBeVisible()
+  await expect(page.getByText('不要自行停药或加药')).toBeVisible()
   await expect(page.getByText('重要', { exact: true })).toBeVisible()
   await expect(page.getByText('allergy_conflict')).toHaveCount(0)
   await expect(page.getByText('SEVERE')).toHaveCount(0)
@@ -161,15 +161,15 @@ test('家庭成员进入前台，只看到自己的照护入口和已确认记�
   })
   await page.locator('aside.sidebar').getByRole('button', { name: '我的家庭', exact: true }).click()
   await expect(page.getByRole('heading', { name: '等待家人确认的照片' })).toBeVisible()
-  await expect(page.getByText('正在识别', { exact: true })).toBeVisible()
+  await expect(page.getByText('正在看照片', { exact: true }).first()).toBeVisible()
   await page.locator('aside.sidebar').getByRole('button', { name: '拍照录药', exact: true }).click()
   await expect(page.getByRole('heading', { name: '把药盒拍清楚就可以了' })).toBeVisible()
-  await expect(page.getByText('正在识别', { exact: true })).toBeVisible()
+  await expect(page.getByText('正在看照片', { exact: true }).first()).toBeVisible()
 
   await page.locator('aside.sidebar').getByRole('button', { name: '我的记录', exact: true }).click()
   await expect(page.getByRole('heading', { name: '奶奶的健康记录' })).toBeVisible()
   await expect(page.getByText('药品：布洛芬缓释胶囊')).toBeVisible()
-  await expect(page.getByText('这里只展示家庭管理员确认过的内容')).toBeVisible()
+  await expect(page.getByText('这里只展示家人确认过的内容')).toBeVisible()
 })
 
 /* ── HCT-439 阶段四/六：成员拍照 → 待确认 → 管理员确认 → 前台可见（mock API 全链路 UI 演示，
@@ -303,7 +303,7 @@ test('成员拍照提交后可见待确认状态，管理员确认后前台出�
   await page.getByRole('button', { name: '进入家庭空间' }).click()
   await expect(page.locator('.app-frame')).toBeVisible()
 
-  // 成员提交照片：质量检查 → 提交给家庭管理员。
+  // 成员提交照片：检查照片 → 交给家人。
   await page.locator('aside.sidebar').getByRole('button', { name: '拍照录药', exact: true }).click()
   await expect(page.getByRole('heading', { name: '把药盒拍清楚就可以了' })).toBeVisible()
   await page.locator('input[type="file"]').setInputFiles({
@@ -312,30 +312,30 @@ test('成员拍照提交后可见待确认状态，管理员确认后前台出�
     buffer: TINY_PNG,
   })
   await page.getByRole('button', { name: '检查照片' }).click()
-  await expect(page.getByText('照片清楚，可以提交给家庭管理员确认。')).toBeVisible()
-  await page.getByRole('button', { name: '提交给家庭管理员' }).click()
-  await expect(page.getByText('照片已提交，等待家庭管理员确认')).toBeVisible()
+  await expect(page.getByText('照片清楚，可以交给家人确认。')).toBeVisible()
+  await page.getByRole('button', { name: '交给家人确认' }).click()
+  await expect(page.getByRole('strong').filter({ hasText: '照片已交给家人' })).toBeVisible()
 
   // 待确认状态只出现生活化文案，不出现 OCR 原始结果或内部状态码。
-  await expect(page.getByText('正在识别', { exact: true })).toBeVisible()
+  await expect(page.getByText('正在看照片', { exact: true }).first()).toBeVisible()
   await expect(page.locator('.member-capture-status')).not.toContainText('queued')
   await expect(page.locator('.member-capture-status')).not.toContainText('flow-task-1')
 
   // 本机识别完成 → 等待家人确认（轮询自动刷新）。
   state.taskStatus = 'succeeded'
-  await expect(page.getByText('已提交，等待家人确认')).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByText('已交给家人，等待确认')).toBeVisible({ timeout: 15_000 })
 
   // 首页固定块同步展示待确认照片，无需进入拍照页。
   await page.locator('aside.sidebar').getByRole('button', { name: '我的家庭', exact: true }).click()
   await expect(page.getByRole('heading', { name: '等待家人确认的照片' })).toBeVisible()
-  await expect(page.getByText('已提交，等待家人确认')).toBeVisible()
+  await expect(page.getByText('已交给家人，等待确认')).toBeVisible()
 
   // 模拟管理员在后台确认：时间线出现带 vision_task_id 证据的已确认事件。
   state.adminConfirmed = true
   await page.locator('aside.sidebar').getByRole('button', { name: '我的家庭', exact: true }).click()
   await page.locator('aside.sidebar').getByRole('button', { name: '拍照录药', exact: true }).click()
-  await expect(page.getByText('已确认', { exact: true })).toBeVisible()
-  await expect(page.getByText('家庭管理员已确认，药品信息已进入家庭记录。')).toBeVisible()
+  await expect(page.getByText('家人已确认', { exact: true })).toBeVisible()
+  await expect(page.getByText('家人已经核对过，药品信息已记进家庭本子。')).toBeVisible()
 
   // 成员在“我的记录”里看到确认后的药品，且没有任何后台技术词。
   await page.locator('aside.sidebar').getByRole('button', { name: '我的记录', exact: true }).click()

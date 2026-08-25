@@ -554,7 +554,7 @@ export function selectMember(memberId: string): void {
 export function portalWelcomeMessage(): string {
   if (state.portal === 'member') {
     const name = state.members.find(member => member.id === state.selectedMemberId)?.display_name
-    return name ? `你好，${name}。已进入家庭成员前台。` : '已进入家庭成员前台。'
+    return name ? `你好，${name}。欢迎回家。` : '欢迎回家。'
   }
   return '已进入家庭管理后台。'
 }

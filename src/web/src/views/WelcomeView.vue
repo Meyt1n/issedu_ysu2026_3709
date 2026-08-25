@@ -282,26 +282,26 @@ async function submitCreate(): Promise<void> {
       <section class="welcome-intro">
         <span class="welcome-badge">
           <AppIcon name="lock" :size="15" />
-          健康数据默认保存在本地家庭可信域
+          健康信息默认只保存在家里
         </span>
         <h1 class="welcome-title">
           把家人的健康变化，<br />
           <span class="accent">温柔而可靠</span>地记下来
         </h1>
         <p class="welcome-lede">
-          家健镜持续记录家庭健康事实的每一次变化，用确定性规则发现冲突与风险，
-          再以带证据的方式解释给每一位照护者听。
+          家健镜帮家人记下用药和提醒，发现需要核对的情况，
+          再用清楚明白的方式告诉每一位照护者。
         </p>
         <div class="welcome-art" :style="{ '--par-rx': artRx, '--par-ry': artRy }">
           <img :src="welcomeHero" alt="温馨的家庭照护插画：家人围坐在洒满阳光的窗边" />
           <span class="art-caption">本地家庭插画 · 不上传原图</span>
           <span class="art-float f1"><AppIcon name="lock" :size="13" />数据不出网</span>
-          <span class="art-float f2"><AppIcon name="heart" :size="13" />事实可追溯</span>
+          <span class="art-float f2"><AppIcon name="heart" :size="13" />记错了也能改</span>
         </div>
         <div class="welcome-chip-row">
-          <span class="welcome-chip"><AppIcon name="timeline" :size="14" />事件不可覆盖 · 可更正</span>
-          <span class="welcome-chip"><AppIcon name="scan" :size="14" />多证据识别 · 人工确认</span>
-          <span class="welcome-chip"><AppIcon name="key" :size="14" />字段级授权 · 随时撤回</span>
+          <span class="welcome-chip"><AppIcon name="timeline" :size="14" />记错了也能改</span>
+          <span class="welcome-chip"><AppIcon name="scan" :size="14" />拍药盒，家人核对后才保存</span>
+          <span class="welcome-chip"><AppIcon name="key" :size="14" />谁能看什么，家人说了算</span>
         </div>
       </section>
 
@@ -312,7 +312,7 @@ async function submitCreate(): Promise<void> {
           <button type="button" :class="{ active: authMode === 'session' }" @click="authMode = 'session'">正式账号登录</button>
         </div>
         <p v-if="authMode === 'development'" class="form-sub">仅用于非生产本地演示，使用开发身份标识；不会建立正式会话。</p>
-        <p v-else class="form-sub">使用本地账号建立短期会话。令牌只保存在当前页面内存，不写入浏览器持久缓存。</p>
+        <p v-else class="form-sub">用家里的账号进入。登录信息只留在当前页面，关掉后需要重新登录。</p>
         <form v-if="authMode === 'development'" class="section-stack" @submit.prevent="submitConnect">
           <label class="field">
             开发身份标识
@@ -360,12 +360,12 @@ async function submitCreate(): Promise<void> {
               v-else
               v-model="householdId"
               autocomplete="off"
-              placeholder="请输入家庭唯一编号"
+              placeholder="请输入家庭编号（请问家人）"
               required
             />
             <small v-if="householdsLoading">正在加载可访问的家庭...</small>
             <small v-else-if="householdsError">家庭列表加载失败，可手动填写家庭唯一编号。</small>
-            <small v-else>家庭名称仅用于展示，提交时使用系统唯一编号。</small>
+            <small v-else>选好家庭名称即可；提交时由系统使用内部编号。</small>
           </label>
           <div v-else class="face-family-summary" role="status">
             <AppIcon :name="faceBindingReady ? 'home' : 'lock'" :size="18" />
@@ -377,10 +377,10 @@ async function submitCreate(): Promise<void> {
             </div>
           </div>
           <label v-if="credentialMode === 'pin'" class="field">
-            家庭成员身份
-            <input v-model="actorId" autocomplete="username" placeholder="例如 grandma-1" required />
-            <small v-if="pinIdentityPreview">将以 <strong>{{ pinIdentityPreview }}</strong> 的身份进入成员前台。</small>
-            <small v-else>填写管理员为你绑定的登录账号，不是家庭名称。</small>
+            你的登录名
+            <input v-model="actorId" autocomplete="username" placeholder="家人帮你设好的登录名" required />
+            <small v-if="pinIdentityPreview">将以 <strong>{{ pinIdentityPreview }}</strong> 的身份进入。</small>
+            <small v-else>填写家人帮你设好的登录名，不是家庭名称。</small>
           </label>
           <label v-if="credentialMode === 'password'" class="field">
             密码
@@ -413,7 +413,7 @@ async function submitCreate(): Promise<void> {
             {{ localError || session.error }}
           </p>
           <button v-if="credentialMode !== 'face'" type="submit" class="btn btn-primary" :disabled="!accessPurposeValid || !actorId.trim() || (credentialMode === 'password' ? password.length < 8 : !householdId.trim() || !/^\d{6}$/.test(pin)) || connecting">
-            {{ connecting ? '正在建立会话' : credentialMode === 'pin' ? '使用 PIN 登录' : registerMode ? '注册并登录' : '登录' }}
+            {{ connecting ? '正在进入…' : credentialMode === 'pin' ? '使用 PIN 登录' : registerMode ? '注册并登录' : '登录' }}
             <AppIcon v-if="!connecting" name="arrow-right" :size="17" />
           </button>
           <button v-if="credentialMode === 'password'" type="button" class="btn btn-ghost btn-small" @click="registerMode = !registerMode">
@@ -462,7 +462,7 @@ async function submitCreate(): Promise<void> {
             <AppIcon v-if="!creating" name="heart" :size="17" />
           </button>
         </form>
-        <p class="welcome-disclaimer">创建动作只写入本地数据库，随时可以通过补偿事件更正。</p>
+        <p class="welcome-disclaimer">创建后只保存在家里，记错了以后还能更正。</p>
       </section>
     </div>
 
