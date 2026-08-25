@@ -185,6 +185,16 @@ async function installSyntheticApi(page: Page): Promise<void> {
       hasAuthorization = true
       return respond(authorization, 201)
     }
+    if (request.method() === 'PATCH' && path.includes('/authorizations/')) {
+      const body = request.postDataJSON() as { valid_until?: string }
+      authorization = {
+        ...authorization,
+        valid_until: body.valid_until ?? authorization.valid_until,
+        version: authorization.version + 1,
+        updated_at: '2026-08-12T02:00:00Z',
+      }
+      return respond(authorization)
+    }
     if (request.method() === 'POST' && path.endsWith('/revoke')) {
       authorization = { ...authorization, revoked_at: '2026-08-12T01:00:00Z', version: 2 }
       return respond(authorization)
@@ -250,7 +260,7 @@ test('家庭总览显著展示简洁的环境行动卡', async ({ page }) => {
   await expect(panel.getByText(/更新于/)).toBeVisible()
 })
 
-test('管理员创建授权后撤回，照护者可见范围立即清空', async ({ page }) => {
+test('管理员用模板创建授权，看到交接闭环后撤回', async ({ page }) => {
   await installSyntheticApi(page)
   await enterFamilySpace(page)
 
@@ -261,9 +271,29 @@ test('管理员创建授权后撤回，照护者可见范围立即清空', async
   await expect(viewHeading(page)).toHaveText('授权管理')
   await expect(page.getByRole('heading', { name: '新建授权' })).toBeVisible()
 
-  await page.getByLabel('照护者身份标识').fill('caregiver-1')
+  // 空状态提供模板直达入口（HCT-448）
+  const emptyState = page.locator('.auth-empty-state')
+  await expect(emptyState.getByText('还没有为照护者创建授权')).toBeVisible()
+  await emptyState.getByRole('button', { name: '子女日常照护' }).click()
+
+  // 模板填入最小权限组合：只读 + 确认风险，不含追加事件写权限
+  await expect(page.getByLabel('已确认健康事件')).toBeChecked()
+  await expect(page.getByLabel('风险确认回执')).toBeChecked()
+  await expect(page.getByLabel('查看已确认事件')).toBeChecked()
+  await expect(page.getByLabel('确认风险已知晓')).toBeChecked()
+  await expect(page.getByLabel('追加已确认事件')).not.toBeChecked()
+  await expect(page.getByLabel('授权用途')).toHaveValue('family-care')
+
+  await page.getByLabel('照护者账号').fill('caregiver-1')
   await page.getByRole('button', { name: '创建授权' }).click()
   await expect(page.getByText('授权已创建，默认遵循最小权限原则。')).toBeVisible()
+
+  // 创建成功后出现交接闭环：对方账号、登录时的用途代码、到期与撤回提示
+  const successPanel = page.locator('.auth-success-panel')
+  await expect(successPanel.getByText('授权已生效，接下来交给对方')).toBeVisible()
+  await expect(successPanel.getByText('family-care')).toBeVisible()
+  await expect(successPanel.getByLabel('授权交接说明')).toHaveValue(/caregiver-1/)
+  await expect(successPanel.getByLabel('授权交接说明')).toHaveValue(/家庭日常照护/)
 
   // 点选授权后，右侧展示对方可见范围（不加载健康事件内容）
   const grantCard = page.locator('.auth-grant-card').filter({ hasText: 'caregiver-1' })
@@ -279,6 +309,26 @@ test('管理员创建授权后撤回，照护者可见范围立即清空', async
 
   await expect(page.getByText('授权已撤回，对应照护者立即失去访问权限。')).toBeVisible()
   await expect(page.getByText('已撤回', { exact: true })).toBeVisible()
+})
+
+test('管理员可以给生效中的授权续期 30 天', async ({ page }) => {
+  await installSyntheticApi(page)
+  await enterFamilySpace(page)
+
+  await navItem(page, '授权管理').click()
+  await page.getByLabel('照护者账号').fill('caregiver-1')
+  await page.getByRole('button', { name: '创建授权' }).click()
+  await expect(page.getByText('授权已创建，默认遵循最小权限原则。')).toBeVisible()
+
+  // 续期是既有 PATCH 的快捷方式：先二次确认，权限范围不变
+  const grantCard = page.locator('.auth-grant-card').filter({ hasText: 'caregiver-1' })
+  await grantCard.getByRole('button', { name: '续期 30 天' }).click()
+  const dialog = page.getByRole('alertdialog')
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByText(/权限范围不变/)).toBeVisible()
+  await dialog.getByRole('button', { name: '确认续期' }).click()
+
+  await expect(page.getByText(/授权已续期到/)).toBeVisible()
 })
 
 test('命令面板 Ctrl+K 可以在十二个视图之间快速跳转', async ({ page }) => {

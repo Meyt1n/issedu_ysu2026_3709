@@ -87,12 +87,20 @@ test('管理员创建并撤回授权，审计链与服务端状态一致', async
   await navItem(page, '授权管理').click()
   await expect(page.getByRole('heading', { name: '新建授权' })).toBeVisible()
 
-  await page.getByLabel('照护者身份标识').fill(scope.caregiverId)
+  await page.getByLabel('照护者账号').fill(scope.caregiverId)
   await page.getByRole('button', { name: '创建授权' }).click()
   await expect(page.getByText('授权已创建，默认遵循最小权限原则。')).toBeVisible()
 
-  await page.getByLabel('输入照护者身份查看其可见范围').fill(scope.caregiverId)
-  await expect(page.getByText(/可见字段：health_events/)).toBeVisible()
+  // HCT-448：创建成功后出现交接闭环（对方账号 + 登录用途代码 + 到期时间）
+  const successPanel = page.locator('.auth-success-panel')
+  await expect(successPanel.getByText('授权已生效，接下来交给对方')).toBeVisible()
+  await expect(successPanel.getByLabel('授权交接说明')).toHaveValue(new RegExp(scope.caregiverId))
+
+  // 点选授权卡片查看对方可见范围（当前 UI；不加载健康事件正文）
+  const grantCard = page.locator('.auth-grant-card').filter({ hasText: scope.caregiverId })
+  await grantCard.click()
+  await expect(page.getByText('对方能看到什么')).toBeVisible()
+  await expect(page.getByText(/可见：已确认健康事件/)).toBeVisible()
 
   await page.getByRole('button', { name: '撤回授权' }).first().click()
   const dialog = page.getByRole('alertdialog')
