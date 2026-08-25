@@ -174,10 +174,10 @@ export function formatError(cause: unknown): string {
       return `请求内容未通过校验：${cause.message}`
     }
     if (cause.status === 503 && cause.message === 'FACE_DETECTOR_UNAVAILABLE') {
-      return '本地人脸模型尚未就绪。请管理员运行 uv run python scripts/ensure_face_models.py 后重启 API，或先改用 PIN/密码登录。'
+      return '人脸功能暂时不可用，请改用家庭 PIN 或账号密码登录。'
     }
     if (cause.status === 503 && cause.message === 'FACE_AUTH_UNAVAILABLE') {
-      return '人脸识别服务暂时不可用（模型未就绪或解密失败），本次未创建会话；请改用 PIN 或账号密码登录。'
+      return '人脸识别暂时不可用，本次未进入家庭；请改用 PIN 或账号密码登录。'
     }
     if (cause.status === 429) {
       const lockMatch = /^LOCKED:(\d+)$/.exec(cause.message)

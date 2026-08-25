@@ -7,8 +7,6 @@ import ConfirmDialog from './components/ConfirmDialog.vue'
 import SkeletonList from './components/SkeletonList.vue'
 import {
   dismissToast,
-  MEMBER_VIEWS,
-  SHARED_VIEWS,
   onHealthDataRefresh,
   refreshPendingReviewCount,
   selectHousehold,
@@ -20,6 +18,7 @@ import {
 } from './store'
 import { householdOptionLabel, memberVisibleHouseholds } from './ui/demoData'
 import { SHOW_ADVANCED_LAB } from './ui/featureFlags'
+import { activeNavItem, groupNavItems, NAV_ITEMS, visibleNavItemsFor } from './ui/navigation'
 import { installRipple, vMagnet } from './ui/motion'
 import { THEMES, applyTheme, currentTheme, type ThemeId } from './ui/themes'
 // 欢迎页是首屏必经路径，保持同步加载；十二个业务视图按需拆包，
@@ -77,31 +76,6 @@ const MemberPlansView = lazyView(VIEW_LOADERS['member-plans'])
 const MemberRecordsView = lazyView(VIEW_LOADERS['member-records'])
 const MemberHelpView = lazyView(VIEW_LOADERS['member-help'])
 
-// 管理员后台固定五组导航（HCT-439 阶段三）：
-// 日常照护 / 证据录入 / 安全与洞察 / 权限与凭证 / 家庭与研发。
-const NAV_ITEMS: Array<{ view: ViewName; label: string; icon: string; group: string }> = [
-  { view: 'member-home', label: '我的家庭', icon: 'home', group: '我的照护' },
-  { view: 'member-capture', label: '拍照录药', icon: 'scan', group: '我的照护' },
-  { view: 'member-plans', label: '服药提醒', icon: 'plan', group: '我的照护' },
-  { view: 'member-records', label: '我的记录', icon: 'compass', group: '我的照护' },
-  { view: 'member-help', label: '使用帮助', icon: 'info', group: '我的照护' },
-  { view: 'assistant', label: '健康助手', icon: 'assistant', group: '我的照护' },
-  { view: 'overview', label: '家庭总览', icon: 'home', group: '日常照护' },
-  { view: 'members', label: '成员档案', icon: 'members', group: '日常照护' },
-  { view: 'plans', label: '健康计划', icon: 'plan', group: '日常照护' },
-  { view: 'scan', label: '视觉扫描', icon: 'scan', group: '证据录入' },
-  { view: 'review', label: '人工复核', icon: 'review', group: '证据录入' },
-  { view: 'risks', label: '用药安全', icon: 'shield', group: '安全与洞察' },
-  { view: 'graph', label: '健康图谱', icon: 'compass', group: '安全与洞察' },
-  { view: 'assistant', label: '本地助手', icon: 'assistant', group: '安全与洞察' },
-  { view: 'authorizations', label: '授权管理', icon: 'key', group: '权限与凭证' },
-  { view: 'face-credentials', label: '人脸凭证', icon: 'shield', group: '权限与凭证' },
-  { view: 'bigscreen', label: '家庭大屏', icon: 'sun', group: '家庭与研发' },
-  { view: 'knowledge', label: '知识文档', icon: 'leaf', group: '家庭与研发' },
-  { view: 'modellab', label: '模型实验室', icon: 'sparkle', group: '家庭与研发' },
-  { view: 'demo-lab', label: '演示造数', icon: 'sparkle', group: '家庭与研发' },
-]
-
 const VIEW_COMPONENTS: Record<ViewName, unknown> = {
   'member-home': MemberHomeView,
   'member-capture': MemberCaptureView,
@@ -124,29 +98,13 @@ const VIEW_COMPONENTS: Record<ViewName, unknown> = {
   'demo-lab': DemoLabView,
 }
 
-const visibleNavItems = computed(() => {
-  const portalItems =
-    session.portal === 'member'
-      ? NAV_ITEMS.filter(
-          item => MEMBER_VIEWS.includes(item.view) || SHARED_VIEWS.includes(item.view),
-        )
-      : NAV_ITEMS.filter(item => !MEMBER_VIEWS.includes(item.view))
-  return SHOW_ADVANCED_LAB ? portalItems : portalItems.filter(item => item.view !== 'modellab')
-})
+// 导航条目、门户过滤与按 view 去重都在 ui/navigation.ts（HCT-447）：
+// 保证同一 view（如共享的 assistant）在任一门户下只渲染一条、只高亮一条。
+const visibleNavItems = computed(() => visibleNavItemsFor(session.portal, SHOW_ADVANCED_LAB))
 
-const navGroups = computed(() => {
-  const groups: Array<{ name: string; items: typeof NAV_ITEMS }> = []
-  for (const item of visibleNavItems.value) {
-    const group = groups.find(entry => entry.name === item.group)
-    if (group) group.items.push(item)
-    else groups.push({ name: item.group, items: [item] })
-  }
-  return groups
-})
+const navGroups = computed(() => groupNavItems(visibleNavItems.value))
 
-const activeNav = computed(
-  () => visibleNavItems.value.find(item => item.view === session.currentView) ?? visibleNavItems.value[0]!,
-)
+const activeNav = computed(() => activeNavItem(visibleNavItems.value, session.currentView)!)
 
 const currentMemberLabel = computed(() => selectedMember.value?.display_name ?? '当前成员')
 const currentHouseholdLabel = computed(

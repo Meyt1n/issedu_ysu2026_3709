@@ -1094,6 +1094,74 @@ button:focus-visible, a:focus-visible {
   gap: 14px;
 }
 .face-capture--elder { gap: 16px; }
+.face-capture--compact { gap: 10px; }
+.face-capture--compact .face-capture-intro {
+  gap: 6px;
+  padding: 10px 12px 12px;
+}
+.face-capture--compact .face-capture-intro-title {
+  font-size: clamp(16px, 2vw, 18px);
+}
+.face-capture-compact-hint {
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0;
+}
+.face-capture--compact .face-preview {
+  max-height: 220px;
+  min-height: 168px;
+}
+.face-capture--compact .face-stage-banner {
+  padding: 10px 12px 20px;
+}
+.face-capture--compact .face-stage-banner strong {
+  font-size: clamp(15px, 2vw, 18px);
+}
+.face-capture--compact .face-capture-start {
+  font-size: 15px;
+  min-height: 46px;
+  width: 100%;
+}
+.face-capture--compact .face-capture-actions {
+  gap: 8px;
+}
+.face-capture--compact .face-capture-footnote {
+  font-size: 12px;
+}
+.welcome-form-card--face {
+  gap: 12px;
+  padding: 22px 22px 18px;
+}
+.welcome-face-unavailable {
+  display: grid;
+  gap: 10px;
+}
+.welcome-face-unavailable .row-actions,
+.row-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.welcome-face-unavailable .btn {
+  justify-self: start;
+}
+.face-register-success {
+  scroll-margin-top: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.face-register-success .btn {
+  margin-left: auto;
+}
+.face-credential-list-anchor {
+  scroll-margin-top: 20px;
+}
+.row-card.is-just-registered {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--pine) 55%, transparent);
+}
 
 .face-capture-intro {
   background:
