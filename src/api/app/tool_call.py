@@ -1300,8 +1300,7 @@ def _execute_get_care_plan_status(
     pending_confirm = [
         compact(item)
         for item in workbench
-        if item.get("status") in {"REMINDER", "ESCALATED"}
-        and "CONFIRM" in (item.get("allowed_actions") or [])
+        if "CONFIRM" in (item.get("allowed_actions") or [])
     ]
     sources = list(dict.fromkeys(
         str(item["plan_event_id"])
