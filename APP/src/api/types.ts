@@ -67,6 +67,30 @@ export interface RiskAlert {
   message: string
   source_event_ids: string[]
   created_at: string | null
+  /** 服务端规则/确认契约；缺失时移动端必须显式标注，不得回退固定版本。 */
+  rule_version?: string | null
+  risk_fingerprint?: string | null
+  acknowledgement?: RiskAcknowledgement | null
+  /** 未来风险预算契约的可选字段；移动端只读取，不自行推断。 */
+  deduplication_key?: string | null
+  merged_count?: number | null
+  budget_status?: string | null
+  budget_reason?: string | null
+  next_visible_at?: string | null
+  valid_until?: string | null
+  evidence_summary?: string | null
+}
+
+export interface RiskAcknowledgement {
+  receipt_id: string
+  household_id: string
+  member_id: string
+  rule_id: string
+  rule_version: string
+  risk_fingerprint: string
+  actor_id: string
+  acknowledged_at: string
+  replayed: boolean
 }
 
 export interface RiskListResponse {
@@ -75,6 +99,9 @@ export interface RiskListResponse {
   total: number
   severe_count: number
   warning_count: number
+  ruleset_version?: string | null
+  non_severe_budget?: number | null
+  suppressed_count?: number | null
 }
 
 export interface RiskSourceEventRead {

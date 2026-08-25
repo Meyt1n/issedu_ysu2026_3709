@@ -12,6 +12,8 @@ import type {
   QualityCheckResult,
   RecognitionCandidate,
   RiskCard,
+  RiskAuditMetadata,
+  RiskSummary,
   TaskAction,
   TaskActionPayload,
   TimelineItem,
@@ -22,6 +24,20 @@ import type {
 } from './types'
 
 const WEEKDAY_LABELS = ['日', '一', '二', '三', '四', '五', '六']
+
+function demoRiskMetadata(ruleId: string, sourceCount: number): Pick<RiskCard, 'riskFingerprint' | 'acknowledgement' | 'audit'> {
+  const audit: RiskAuditMetadata = {
+    deduplicationKey: `demo-${ruleId}`,
+    mergedCount: sourceCount,
+    budgetStatus: 'VISIBLE',
+    budgetReason: '演示服务器已返回该信号；严重信号不受普通预算压制。',
+    nextVisibleAt: null,
+    validUntil: null,
+    evidenceSummary: `合成演示证据 ${sourceCount} 条，仅用于界面验收。`,
+    complete: true,
+  }
+  return { riskFingerprint: `demo-${ruleId}`, acknowledgement: null, audit }
+}
 
 /**
  * 演示模式数据：全部为虚构人物与虚构药品记录，仅用于教学演示体验，
@@ -163,6 +179,7 @@ function buildInitialState(): DemoState {
     risks: [
       {
         ruleId: 'rule-expiry-01',
+        ...demoRiskMetadata('rule-expiry-01', 2),
         ruleVersion: 'v1.2',
         level: 'SEVERE',
         message: `阿司匹林肠溶片（批次 A2025-118）已于 ${formatDay(EXPIRED_DATE)} 过期`,
@@ -192,6 +209,7 @@ function buildInitialState(): DemoState {
       },
       {
         ruleId: 'rule-duplicate-02',
+        ...demoRiskMetadata('rule-duplicate-02', 2),
         ruleVersion: 'v1.0',
         level: 'WARNING',
         message: '感冒灵颗粒 与 对乙酰氨基酚片 含相同成分「对乙酰氨基酚」',
@@ -221,6 +239,7 @@ function buildInitialState(): DemoState {
       },
       {
         ruleId: 'rule-stock-03',
+        ...demoRiskMetadata('rule-stock-03', 1),
         ruleVersion: 'v1.1',
         level: 'INFO',
         message: '苯磺酸氨氯地平片 剩余约 4 天用量',
@@ -242,6 +261,7 @@ function buildInitialState(): DemoState {
       },
       {
         ruleId: 'rule-weather-04',
+        ...demoRiskMetadata('rule-weather-04', 1),
         ruleVersion: 'v1.0',
         level: 'TIP',
         message: '明日最低气温 3°C，较今日下降 8°C',
@@ -479,6 +499,20 @@ export const demoProvider: DataProvider = {
     await delay(180)
     const list = memberId ? state.risks.filter(r => r.memberId === memberId) : state.risks
     return clone(list)
+  },
+
+  async getRiskSummary(): Promise<RiskSummary> {
+    await delay(100)
+    const risks = state.risks
+    return {
+      rulesetVersion: 'demo-rules-v1',
+      nonSevereBudget: 10,
+      suppressedCount: 0,
+      total: risks.length,
+      severeCount: risks.filter(r => r.level === 'SEVERE').length,
+      warningCount: risks.filter(r => r.level === 'WARNING').length,
+      complete: true,
+    }
   },
 
   async getRiskDetail(memberId: string, ruleId: string): Promise<RiskCard> {
