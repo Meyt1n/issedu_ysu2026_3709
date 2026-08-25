@@ -11,7 +11,7 @@ from sqlalchemy import create_engine, inspect, text
 from app.config import get_settings
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CURRENT_HEAD = "0019_hct404_release_evidence"
+CURRENT_HEAD = "0020_hct441_vision_task_leases"
 RESTORED_TABLES = {
     "projection_checkpoint",
     "review_task",

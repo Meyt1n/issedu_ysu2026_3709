@@ -44,6 +44,12 @@ class Settings(BaseSettings):
     # default and let operators lengthen the window without changing code.
     vision_video_retention_seconds: int = Field(default=86_400, ge=3_600, le=2_592_000)
     vision_video_cleanup_batch_size: int = Field(default=100, ge=1, le=1_000)
+    # HCT-441: asynchronous workers claim jobs with a bounded lease.  An
+    # expired lease is eligible for another worker, while repeated failures
+    # eventually become a visible timeout instead of staying stuck in running.
+    vision_worker_lease_seconds: int = Field(default=900, ge=30, le=86_400)
+    vision_worker_max_attempts: int = Field(default=3, ge=1, le=10)
+    vision_worker_claim_batch_size: int = Field(default=10, ge=1, le=100)
     vision_quality_min_width: int = 640
     vision_quality_min_height: int = 480
     vision_quality_min_blur_variance: float = 80.0
@@ -67,6 +73,8 @@ class Settings(BaseSettings):
     # default so HCT-004's default-deny posture is preserved.
     agent_orchestration_enabled: bool = True
     agent_web_search_enabled: bool = False
+    # duckduckgo_html: parse the HTML endpoint; searxng: JSON API on the same URL.
+    agent_web_search_provider: str = "duckduckgo_html"
     agent_web_search_url: str = "https://html.duckduckgo.com/html/"
     agent_web_search_timeout_seconds: float = Field(default=8.0, gt=0, le=20)
     agent_web_search_max_results: int = Field(default=5, ge=1, le=10)

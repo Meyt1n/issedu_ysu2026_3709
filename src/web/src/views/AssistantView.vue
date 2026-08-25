@@ -16,10 +16,12 @@ import {
   createSpeechRecognition,
   isSpeechInputSupported,
   isSpeechOutputSupported,
+  latestTranscriptFromEvent,
   speakText,
   stopSpeaking,
   transcriptAfterWakePhrase,
   transcriptFromEvent,
+  VOICE_RESTART_DELAY_MS,
   type SpeechRecognitionLike,
 } from '../assistant/voice'
 import AppIcon from '../components/AppIcon.vue'
@@ -64,11 +66,11 @@ interface AgentStage {
 }
 
 const AGENT_STAGES: AgentStage[] = [
-  { id: 'router', title: '本地路由', description: '判断问题类型', icon: 'compass', network: false },
-  { id: 'database', title: '数据库查询', description: '读取授权事实', icon: 'timeline', network: false },
-  { id: 'knowledge', title: '知识库检索', description: '匹配本地文档', icon: 'pill', network: false },
-  { id: 'web_search', title: '联网搜索', description: '脱敏外部参考', icon: 'cloud', network: true },
-  { id: 'synthesis', title: 'Ollama 综合', description: '本机生成回答', icon: 'assistant', network: false },
+  { id: 'router', title: '问题识别', description: '判断问题类型与所需资料', icon: 'compass', network: false },
+  { id: 'database', title: '档案核对', description: '读取授权范围内的健康记录', icon: 'timeline', network: false },
+  { id: 'knowledge', title: '资料检索', description: '匹配已审核的本地资料', icon: 'pill', network: false },
+  { id: 'web_search', title: '联网参考', description: '获取脱敏后的公开参考', icon: 'cloud', network: true },
+  { id: 'synthesis', title: '回答生成', description: '在本机汇总证据并生成回答', icon: 'assistant', network: false },
 ]
 
 const history = ref<ChatEntry[]>([])
@@ -80,21 +82,25 @@ const allowNetworkSearch = ref(false)
 const webSearchAvailable = ref<boolean | null>(null)
 const workflowTrace = ref<AssistantAgentTrace[]>([])
 const selectedAgentId = ref<string | null>(null)
+const workflowExpanded = ref(false)
 type VoiceMode = 'off' | 'wake' | 'active'
 
 const voiceMode = ref<VoiceMode>('off')
 const listening = computed(() => voiceMode.value !== 'off')
 const voicePreview = ref('')
 const speakingIndex = ref<number | null>(null)
-const thinkingPhase = ref(0)
 const chatWindow = ref<HTMLElement | null>(null)
 const draftInput = ref<HTMLTextAreaElement | null>(null)
-// Demo-facing product label stays stable while the local runtime model can be
-// switched independently through OLLAMA_MODEL.
-const modelLabel = 'hct402-qlora-v5'
+// The generic label is replaced by the model name the API reports with each
+// reply, so the UI never hardcodes a runtime model.
+const modelLabel = ref('本地模型')
+
+function formatModelLabel(model?: string | null): string {
+  if (!model || model === 'unavailable') return '本地模型未配置'
+  return model
+}
 
 let streamTimer: ReturnType<typeof setInterval> | null = null
-let phaseTimer: ReturnType<typeof setInterval> | null = null
 let voiceRestartTimer: ReturnType<typeof setTimeout> | null = null
 let recognition: SpeechRecognitionLike | null = null
 let voiceDraftPrefix = ''
@@ -108,7 +114,9 @@ const speechOutputSupported = isSpeechOutputSupported()
 async function loadAgentCatalog(): Promise<void> {
   try {
     const catalog = await apiClient.listAssistantAgents(requestOptions.value)
-    webSearchAvailable.value = catalog.web_search_enabled
+    // web_search_ready also verifies the endpoint allowlist; fall back to
+    // the enable switch for older API versions.
+    webSearchAvailable.value = catalog.web_search_ready ?? catalog.web_search_enabled
   } catch {
     // Keep the control usable if an older API does not expose HCT-430 yet.
     webSearchAvailable.value = null
@@ -135,34 +143,26 @@ const SUGGESTIONS = [
   '这位成员正在使用哪些药品？',
 ]
 
-const THINKING_PHASES = [
-  '连接本地模型',
-  '检索家庭事实',
-  '匹配规则与知识',
-  '本地推理生成中（约需一分钟）',
-  '组织回答与引用',
-]
-
 const AGENT_DETAILS: Record<string, { boundary: string; action: string }> = {
   router: {
-    boundary: '只读取当前问题，不读取家庭健康数据。',
-    action: '本地规则判断问题类型，决定后续节点是否需要调用。',
+    boundary: '仅分析当前问题文本，不读取家庭健康数据。',
+    action: '识别问题类型，按需规划后续的检索步骤。',
   },
   database: {
-    boundary: '只访问当前授权家庭和成员范围，不能执行任意 SQL。',
-    action: '通过服务端只读工具读取已确认事件、成员状态和规则结果。',
+    boundary: '仅访问当前授权成员的只读记录，无法扩大查询范围。',
+    action: '核对已确认的健康事件、成员状态和提醒规则。',
   },
   knowledge: {
-    boundary: '只检索本地已审核知识文档，不访问外部网站。',
-    action: '检索药品说明、护理知识和规则依据，并绑定可核验引用。',
+    boundary: '仅检索本地已审核资料，不访问外部网站。',
+    action: '检索药品说明与护理资料，并附带可核验的出处。',
   },
   web_search: {
-    boundary: '仅发送脱敏问题；不发送成员身份、健康记录、图片或数据库结果。',
-    action: '在部署开关和本次请求都允许时，获取外部补充参考。',
+    boundary: '仅发送脱敏后的问题；不发送成员身份、健康记录、图片或档案数据。',
+    action: '在部署与本次请求都允许时，补充公开的外部参考。',
   },
   synthesis: {
-    boundary: '模型地址必须是本机 Ollama 回环地址，不能连接云端模型。',
-    action: '综合本地证据和可选外部摘要，生成结构化回答并接受安全校验。',
+    boundary: '仅使用本机模型，健康数据不离开本机。',
+    action: '汇总检索到的证据，生成带出处的回答并通过安全校验。',
   },
 }
 
@@ -170,7 +170,10 @@ function traceForAgent(agentId: string): AssistantAgentTrace | undefined {
   return workflowTrace.value.find(trace => trace.agent_id === agentId)
 }
 
-function agentStatus(stage: AgentStage, index: number): AgentVisualStatus {
+// Statuses shown here come from the backend agent_trace once a reply arrives;
+// while a request is in flight the UI only claims "processing", never a fake
+// step-by-step progression.
+function agentStatus(stage: AgentStage): AgentVisualStatus {
   const trace = traceForAgent(stage.id)
   if (trace) {
     if (trace.status === 'completed' || trace.status === 'skipped' || trace.status === 'blocked' || trace.status === 'degraded') {
@@ -179,37 +182,40 @@ function agentStatus(stage: AgentStage, index: number): AgentVisualStatus {
   }
   if (!sending.value) return 'idle'
   if (stage.network && (!allowNetworkSearch.value || webSearchAvailable.value === false)) return 'skipped'
-  if (index < thinkingPhase.value) return 'completed'
-  if (index === thinkingPhase.value) return 'running'
-  return 'pending'
+  return 'running'
 }
 
 function agentStatusLabel(status: AgentVisualStatus): string {
   const labels: Record<AgentVisualStatus, string> = {
-    idle: '待调用',
+    idle: '待执行',
     pending: '等待中',
-    running: '执行中',
+    running: '处理中',
     completed: '已完成',
-    skipped: '未启用',
+    skipped: '已跳过',
     blocked: '已拦截',
     degraded: '已降级',
   }
   return labels[status]
 }
 
-function agentStatusDetail(stage: AgentStage, index: number): string {
+function agentStatusDetail(stage: AgentStage): string {
   const trace = traceForAgent(stage.id)
   if (trace?.summary) return trace.summary
-  if (agentStatus(stage, index) === 'skipped' && stage.network) {
-    return webSearchAvailable.value === false ? '后端配置未开启' : '本次请求未允许联网'
+  if (agentStatus(stage) === 'skipped' && stage.network) {
+    return webSearchAvailable.value === false ? '当前部署未启用联网参考' : '本次请求未开启联网搜索'
   }
   return stage.description
 }
 
 const workflowSummary = computed(() => {
-  if (sending.value) return `正在执行第 ${Math.min(thinkingPhase.value + 1, AGENT_STAGES.length)} 个节点`
-  if (workflowTrace.value.length > 0) return '本次执行已返回后端真实轨迹'
-  return '发送问题后，五个节点会按授权范围协作'
+  if (sending.value) return '正在本机分析中…'
+  const traces = workflowTrace.value
+  if (traces.length > 0) {
+    const completed = traces.filter(trace => trace.status === 'completed').length
+    const usedNetwork = traces.some(trace => trace.network_used)
+    return `已完成 ${completed} 个步骤${usedNetwork ? '，含脱敏联网参考' : '，全程在本机完成'}`
+  }
+  return '发送问题后，可在此查看处理进度'
 })
 
 const selectedAgent = computed(() => AGENT_STAGES.find(stage => stage.id === selectedAgentId.value) ?? null)
@@ -217,15 +223,29 @@ const selectedAgentTrace = computed(() => (
   selectedAgentId.value ? traceForAgent(selectedAgentId.value) : undefined
 ))
 const workflowProgressWidth = computed(() => {
-  if (sending.value) {
-    const progress = ((thinkingPhase.value + 0.55) / (AGENT_STAGES.length - 1)) * 100
-    return `${Math.min(100, Math.max(8, progress))}%`
-  }
-  return workflowTrace.value.length > 0 ? '100%' : '0%'
+  if (workflowTrace.value.length === 0) return sending.value ? '12%' : '0%'
+  const completed = workflowTrace.value.filter(trace =>
+    ['completed', 'skipped', 'blocked', 'degraded'].includes(trace.status),
+  ).length
+  const progress = (completed / AGENT_STAGES.length) * 100
+  return `${Math.min(100, Math.max(sending.value ? 12 : 0, progress))}%`
 })
+
+function upsertWorkflowTrace(trace: AssistantAgentTrace): void {
+  const traces = [...workflowTrace.value]
+  const index = traces.findIndex(item => item.agent_id === trace.agent_id)
+  if (index >= 0) traces[index] = trace
+  else traces.push(trace)
+  workflowTrace.value = traces
+}
 
 function toggleAgentDetails(agentId: string): void {
   selectedAgentId.value = selectedAgentId.value === agentId ? null : agentId
+}
+
+function toggleWorkflowPanel(): void {
+  workflowExpanded.value = !workflowExpanded.value
+  if (!workflowExpanded.value) selectedAgentId.value = null
 }
 
 function selectedAgentBoundary(): string {
@@ -274,10 +294,6 @@ function clearConversation(): void {
     clearInterval(streamTimer)
     streamTimer = null
   }
-  if (phaseTimer) {
-    clearInterval(phaseTimer)
-    phaseTimer = null
-  }
   clearChatSession(session.actorId, session.selectedHouseholdId, session.selectedMemberId)
   history.value = []
   workflowTrace.value = []
@@ -304,6 +320,8 @@ function degradeReasonLabel(reason?: string | null): string {
     TOOL_SCOPE_DENIED: '工具调用超出当前授权范围',
     EXTERNAL_LINK_DETECTED: '回答包含被禁止的外部链接',
     LOCAL_MODEL_ENDPOINT_REQUIRED: '本地模型地址不是回环地址',
+    SCHEMA_VALIDATION_FAILED: '本地模型输出未通过格式校验',
+    MEDICAL_BOUNDARY_VIOLATION: '回答触及医疗边界，已被安全拦截',
   }
   return labels[reason ?? ''] ?? reason ?? '受控降级'
 }
@@ -370,14 +388,14 @@ function scheduleVoiceRecognition(sessionId: number): void {
     voiceRestartTimer = null
     if (sessionId !== voiceSessionId || voiceStopRequested || voiceFatalError || !listening.value) return
     startVoiceRecognition(sessionId)
-  }, 80)
+  }, VOICE_RESTART_DELAY_MS)
 }
 
 function startVoiceRecognition(sessionId: number): void {
   const nextRecognition = createSpeechRecognition('zh-CN', {
     continuous: true,
     interimResults: true,
-    maxAlternatives: 1,
+    maxAlternatives: 3,
   })
   if (!nextRecognition) {
     voiceFatalError = true
@@ -392,20 +410,30 @@ function startVoiceRecognition(sessionId: number): void {
   }
   nextRecognition.onresult = event => {
     if (sessionId !== voiceSessionId) return
+    // 唤醒看最新 interim 片段，降低“说完一整句才切 active”的延迟。
+    const latest = latestTranscriptFromEvent(event)
     const transcript = transcriptFromEvent(event)
-    if (!transcript) return
+    if (!latest && !transcript) return
 
     if (voiceMode.value === 'wake') {
-      if (!containsWakePhrase(transcript)) {
-        voicePreview.value = `正在聆听：${transcript}`
+      const wakeProbe = latest || transcript
+      if (!containsWakePhrase(wakeProbe) && !containsWakePhrase(transcript)) {
+        voicePreview.value = `正在聆听：${wakeProbe || transcript}`
         return
       }
       voiceMode.value = 'active'
+      // 唤醒瞬间清空预览前缀噪声，后续只保留提问内容。
+      voiceDraftPrefix = draft.value.trim() ? `${draft.value.trim()} ` : ''
     }
 
-    const spoken = containsWakePhrase(transcript)
-      ? transcriptAfterWakePhrase(transcript)
-      : transcript.trim()
+    const spokenSource = containsWakePhrase(transcript)
+      ? transcript
+      : containsWakePhrase(latest)
+        ? latest
+        : transcript
+    const spoken = containsWakePhrase(spokenSource)
+      ? transcriptAfterWakePhrase(spokenSource)
+      : spokenSource.trim()
     if (spoken) {
       // interimResults=true means this is intentionally updated before the
       // browser marks the utterance final; it never submits the message.
@@ -440,6 +468,11 @@ function startVoiceRecognition(sessionId: number): void {
     if (sessionId !== voiceSessionId) return
     if (recognition === nextRecognition) recognition = null
     if (!voiceStopRequested && !voiceFatalError && listening.value) {
+      // 浏览器识别会话结束后其结果列表会清空；把已写入的草稿折叠进前缀，
+      // 重启聆听时继续追加，而不是覆盖之前说过的内容。
+      if (voiceMode.value === 'active') {
+        voiceDraftPrefix = draft.value.trim() ? `${draft.value.trim()} ` : ''
+      }
       scheduleVoiceRecognition(sessionId)
     }
   }
@@ -468,6 +501,11 @@ function toggleVoiceInput(): void {
     return
   }
 
+  // 听说互斥：开始聆听前停止朗读，避免麦克风把合成语音写进草稿。
+  if (speakingIndex.value !== null) {
+    stopSpeaking()
+    speakingIndex.value = null
+  }
   voiceDraftPrefix = draft.value.trim() ? `${draft.value.trim()} ` : ''
   voicePreview.value = ''
   voiceStopRequested = false
@@ -484,6 +522,8 @@ function toggleSpeech(index: number, content: string): void {
     return
   }
   voiceError.value = ''
+  // 听说互斥：朗读回答前先停止语音输入，识别不会把播报内容当作提问。
+  if (listening.value) stopVoiceInput()
   const started = speakText(content, () => {
     if (speakingIndex.value === index) speakingIndex.value = null
   })
@@ -526,54 +566,74 @@ async function send(text?: string): Promise<void> {
   draft.value = ''
   sending.value = true
   sendError.value = ''
-  thinkingPhase.value = 0
   workflowTrace.value = []
   scrollToEnd()
-  phaseTimer = setInterval(() => {
-    thinkingPhase.value = Math.min(thinkingPhase.value + 1, THINKING_PHASES.length - 1)
-  }, 950)
+
+  const streamingEntry: ChatEntry = {
+    role: 'assistant',
+    content: '',
+    revealed: 0,
+  }
+  history.value.push(streamingEntry)
+  const entryIndex = history.value.length - 1
 
   try {
-    const reply = await apiClient.assistantChat(
+    const reply = await apiClient.assistantChatStream(
       {
-        messages: history.value.map(entry => ({ role: entry.role, content: entry.content })),
-        // Qwen3 基座模型可能先生成内部思考；提高上限，确保最终 JSON 不会被提前截断。
+        messages: history.value
+          .slice(0, -1)
+          .map(entry => ({ role: entry.role, content: entry.content })),
         max_tokens: 1024,
         agent_mode: 'multi_agent',
         allow_network_search: allowNetworkSearch.value,
+      },
+      {
+        onTrace: upsertWorkflowTrace,
+        onToken: token => {
+          const entry = history.value[entryIndex]
+          if (!entry || !token) return
+          entry.content += token
+          entry.revealed = entry.content.length
+          scrollToEnd()
+        },
+        onExternalSources: sources => {
+          const entry = history.value[entryIndex]
+          if (entry) entry.externalSources = sources
+        },
       },
       session.selectedHouseholdId || undefined,
       session.selectedMemberId || undefined,
       requestOptions.value,
     )
-    const entry: ChatEntry = {
-      role: 'assistant',
-      content: reply.answer,
-      revealed: 0,
-      sources: reply.sources,
-      citations: reply.citations,
-      confidence: reply.confidence,
-      degraded: reply.degraded,
-      degradeReason: reply.degrade_reason,
-      escalate: reply.escalate,
-      suggestedQuestions: normalizeSuggestedQuestions(reply.suggested_questions),
-      route: reply.route,
-      queryType: reply.query_type,
-      riskNotice: reply.risk_notice,
-      orchestrationMode: reply.orchestration_mode,
-      allAgentsLocal: reply.all_agents_local,
-      networkUsed: reply.network_used,
-      networkQuery: reply.network_query,
-      agentTrace: reply.agent_trace,
-      externalSources: reply.external_sources,
-    }
+    const entry = history.value[entryIndex]!
+    entry.content = reply.answer
+    entry.revealed = 0
+    entry.sources = reply.sources
+    entry.citations = reply.citations
+    entry.confidence = reply.confidence
+    entry.degraded = reply.degraded
+    entry.degradeReason = reply.degrade_reason
+    entry.escalate = reply.escalate
+    entry.suggestedQuestions = normalizeSuggestedQuestions(reply.suggested_questions)
+    entry.route = reply.route
+    entry.queryType = reply.query_type
+    entry.riskNotice = reply.risk_notice
+    entry.orchestrationMode = reply.orchestration_mode
+    entry.allAgentsLocal = reply.all_agents_local
+    entry.networkUsed = reply.network_used
+    entry.networkQuery = reply.network_query
+    entry.agentTrace = reply.agent_trace
+    entry.externalSources = reply.external_sources
     workflowTrace.value = reply.agent_trace ?? []
-    history.value.push(entry)
+    if (reply.model) modelLabel.value = formatModelLabel(reply.model)
     persistChatSession()
-    streamReveal(history.value[history.value.length - 1]!)
+    streamReveal(entry)
   } catch (cause) {
     sendError.value = formatError(cause)
     workflowTrace.value = []
+    if (history.value[entryIndex]?.role === 'assistant' && !history.value[entryIndex]?.sources) {
+      history.value.pop()
+    }
     const entry: ChatEntry = {
       role: 'assistant',
       content: '本地模型或其依赖当前不可用，无法生成回答。家庭事实、规则与任务不受影响，可直接在对应页面查看。',
@@ -586,10 +646,6 @@ async function send(text?: string): Promise<void> {
     streamReveal(history.value[history.value.length - 1]!)
   } finally {
     sending.value = false
-    if (phaseTimer) {
-      clearInterval(phaseTimer)
-      phaseTimer = null
-    }
   }
 }
 
@@ -599,7 +655,6 @@ function onMemberChange(event: Event): void {
 
 onBeforeUnmount(() => {
   if (streamTimer) clearInterval(streamTimer)
-  if (phaseTimer) clearInterval(phaseTimer)
   stopVoiceInput()
   stopSpeaking()
 })
@@ -657,88 +712,100 @@ onBeforeUnmount(() => {
       <span class="session-item">
         <AppIcon name="assistant" :size="17" />
         <span class="session-text">
-          <span class="session-label">协作模式</span>
-          <span class="session-value">多智能体本地编排</span>
+          <span class="session-label">处理方式</span>
+          <span class="session-value">本地多步核对</span>
         </span>
       </span>
       <span class="session-item">
         <AppIcon name="leaf" :size="17" />
         <span class="session-text">
           <span class="session-label">使用边界</span>
-          <span class="session-value">教学演示 · 不作医疗建议</span>
+          <span class="session-value">健康参考 · 需人工确认</span>
         </span>
       </span>
     </div>
-    <section class="agent-workflow-panel" aria-label="本地多智能体协作链路">
+    <section class="agent-workflow-panel" aria-label="本地分析流程">
       <div class="agent-workflow-heading">
         <div>
-          <span class="agent-workflow-kicker"><AppIcon name="sparkle" :size="13" />智能体协作链路</span>
-          <strong>五个节点接力完成回答</strong>
+          <span class="agent-workflow-kicker"><AppIcon name="sparkle" :size="13" />本地分析流程</span>
+          <strong>识别 · 检索 · 生成，全程在本机完成</strong>
           <small>{{ workflowSummary }}</small>
         </div>
-        <span class="agent-local-badge">
-          <i />本机编排 · Ollama 本地
-        </span>
-      </div>
-      <div class="agent-workflow-grid">
-        <span class="agent-flow-rail" aria-hidden="true">
-          <span class="agent-flow-fill" :style="{ width: workflowProgressWidth }">
-            <i v-if="sending" class="agent-flow-runner" />
+        <div class="agent-workflow-actions">
+          <span class="agent-local-badge">
+            <i />数据不离开本机
           </span>
-        </span>
-        <button
-          v-for="(stage, index) in AGENT_STAGES"
-          :key="stage.id"
-          type="button"
-          class="agent-stage"
-          :class="[`is-${agentStatus(stage, index)}`, { 'is-selected': selectedAgentId === stage.id }]"
-          :aria-expanded="selectedAgentId === stage.id"
-          :aria-label="`${stage.title}，${agentStatusLabel(agentStatus(stage, index))}，点击查看详情`"
-          @click="toggleAgentDetails(stage.id)"
-        >
-          <div class="agent-stage-topline">
-            <span class="agent-stage-icon"><AppIcon :name="stage.icon" :size="17" /></span>
-            <span class="agent-stage-status">{{ agentStatusLabel(agentStatus(stage, index)) }}</span>
-          </div>
-          <strong>{{ stage.title }}</strong>
-          <small>{{ agentStatusDetail(stage, index) }}</small>
-          <span class="agent-stage-kind">{{ stage.network ? '网络工具' : '本地节点' }}</span>
-        </button>
-      </div>
-      <section v-if="selectedAgent" class="agent-detail-panel" :aria-label="`${selectedAgent.title}详情`">
-        <div class="agent-detail-heading">
-          <div class="agent-detail-title">
-            <span class="agent-stage-icon"><AppIcon :name="selectedAgent.icon" :size="18" /></span>
-            <div>
-              <strong>{{ selectedAgent.title }}</strong>
-              <small>{{ selectedAgent.network ? '受控网络工具' : '本地节点' }} · {{ agentStatusLabel(agentStatus(selectedAgent, AGENT_STAGES.findIndex(item => item.id === selectedAgent.id))) }}</small>
-            </div>
-          </div>
-          <button type="button" class="btn btn-ghost btn-small" @click="selectedAgentId = null">
-            <AppIcon name="close" :size="13" />关闭
+          <button
+            type="button"
+            class="btn btn-ghost btn-small"
+            :aria-expanded="workflowExpanded"
+            @click="toggleWorkflowPanel"
+          >
+            {{ workflowExpanded ? '收起详情' : '查看详情' }}
           </button>
         </div>
-        <div class="agent-detail-grid">
-          <div>
-            <span>职责</span>
-            <p>{{ selectedAgentAction() }}</p>
-          </div>
-          <div>
-            <span>数据边界</span>
-            <p>{{ selectedAgentBoundary() }}</p>
-          </div>
-          <div>
-            <span>本次执行</span>
-            <p v-if="selectedAgentTrace">
-              {{ selectedAgentTrace.summary || '已返回执行结果' }} · {{ selectedAgentTrace.duration_ms ?? 0 }} ms · {{ selectedAgentTrace.source_count ?? 0 }} 条依据
-            </p>
-            <p v-else class="text-faint">尚未执行；发送问题后这里会显示后端返回的真实轨迹。</p>
-          </div>
+      </div>
+      <template v-if="workflowExpanded">
+        <div class="agent-workflow-grid">
+          <span class="agent-flow-rail" aria-hidden="true">
+            <span class="agent-flow-fill" :class="{ 'is-indeterminate': sending }" :style="{ width: workflowProgressWidth }">
+              <i v-if="sending" class="agent-flow-runner" />
+            </span>
+          </span>
+          <button
+            v-for="stage in AGENT_STAGES"
+            :key="stage.id"
+            type="button"
+            class="agent-stage"
+            :class="[`is-${agentStatus(stage)}`, { 'is-selected': selectedAgentId === stage.id }]"
+            :aria-expanded="selectedAgentId === stage.id"
+            :aria-label="`${stage.title}，${agentStatusLabel(agentStatus(stage))}，点击查看详情`"
+            @click="toggleAgentDetails(stage.id)"
+          >
+            <div class="agent-stage-topline">
+              <span class="agent-stage-icon"><AppIcon :name="stage.icon" :size="17" /></span>
+              <span class="agent-stage-status">{{ agentStatusLabel(agentStatus(stage)) }}</span>
+            </div>
+            <strong>{{ stage.title }}</strong>
+            <small>{{ agentStatusDetail(stage) }}</small>
+            <span class="agent-stage-kind">{{ stage.network ? '联网参考（可选）' : '本机步骤' }}</span>
+          </button>
         </div>
-      </section>
-      <p class="agent-workflow-note">
-        <AppIcon name="lock" :size="12" />数据库和健康上下文不会发送给联网搜索；最终回答只接受服务端校验过的本地引用。
-      </p>
+        <section v-if="selectedAgent" class="agent-detail-panel" :aria-label="`${selectedAgent.title}详情`">
+          <div class="agent-detail-heading">
+            <div class="agent-detail-title">
+              <span class="agent-stage-icon"><AppIcon :name="selectedAgent.icon" :size="18" /></span>
+              <div>
+                <strong>{{ selectedAgent.title }}</strong>
+                <small>{{ selectedAgent.network ? '受控联网步骤' : '本机步骤' }} · {{ agentStatusLabel(agentStatus(selectedAgent)) }}</small>
+              </div>
+            </div>
+            <button type="button" class="btn btn-ghost btn-small" @click="selectedAgentId = null">
+              <AppIcon name="close" :size="13" />关闭
+            </button>
+          </div>
+          <div class="agent-detail-grid">
+            <div>
+              <span>职责</span>
+              <p>{{ selectedAgentAction() }}</p>
+            </div>
+            <div>
+              <span>数据边界</span>
+              <p>{{ selectedAgentBoundary() }}</p>
+            </div>
+            <div>
+              <span>本次执行</span>
+              <p v-if="selectedAgentTrace">
+                {{ selectedAgentTrace.summary || '已返回执行结果' }} · {{ selectedAgentTrace.duration_ms ?? 0 }} ms · {{ selectedAgentTrace.source_count ?? 0 }} 条依据
+              </p>
+              <p v-else class="text-faint">尚未执行；发送问题后这里会显示实际的处理结果。</p>
+            </div>
+          </div>
+        </section>
+        <p class="agent-workflow-note">
+          <AppIcon name="lock" :size="12" />健康档案不会发送到外部；回答只引用通过服务端校验的本地资料。
+        </p>
+      </template>
     </section>
     <div ref="chatWindow" class="chat-window">
       <div v-if="history.length === 0" class="empty-state">
@@ -789,13 +856,13 @@ onBeforeUnmount(() => {
             </span>
             <span v-if="entry.orchestrationMode === 'multi_agent'" class="chat-agent-locality">
               <AppIcon name="assistant" :size="12" style="vertical-align: -1px" />
-              智能体与 Ollama 均在本机运行
-              <span v-if="entry.networkUsed" class="chat-agent-network">本次使用了脱敏联网搜索</span>
+              分析全程在本机完成
+              <span v-if="entry.networkUsed" class="chat-agent-network">已补充脱敏联网参考</span>
             </span>
-            <div v-if="(entry.agentTrace?.length ?? 0) > 0" class="chat-agent-trace" aria-label="智能体执行过程">
+            <div v-if="(entry.agentTrace?.length ?? 0) > 0" class="chat-agent-trace" aria-label="处理步骤">
               <span v-for="trace in entry.agentTrace" :key="trace.agent_id" class="chat-agent-chip">
                 {{ trace.role }} · {{ trace.status === 'completed' ? '完成' : trace.status === 'skipped' ? '跳过' : trace.status === 'blocked' ? '拦截' : '降级' }}
-                <small>{{ trace.network_used ? '网络工具' : '本地' }}</small>
+                <small>{{ trace.network_used ? '联网' : '本机' }}</small>
               </span>
             </div>
             <template v-if="(entry.sources?.length ?? 0) > 0">
@@ -865,15 +932,13 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div v-if="sending" class="chat-bubble-row assistant">
+      <div v-if="sending && !(history[history.length - 1]?.role === 'assistant' && (history[history.length - 1]?.content.length ?? 0) > 0)" class="chat-bubble-row assistant">
         <span class="chat-avatar thinking" aria-hidden="true">
           <AppIcon name="assistant" :size="16" />
         </span>
         <div class="chat-bubble thinking-bubble" role="status">
           <span class="thinking-wave" aria-hidden="true"><i /><i /><i /><i /></span>
-          <Transition name="fade" mode="out-in">
-            <span :key="thinkingPhase" class="thinking-text">{{ THINKING_PHASES[thinkingPhase] }}…</span>
-          </Transition>
+          <span class="thinking-text">正在本机核对证据并生成回答，通常需要一分钟内…</span>
         </div>
       </div>
     </div>
@@ -913,9 +978,9 @@ onBeforeUnmount(() => {
     <label class="agent-network-toggle">
       <input v-model="allowNetworkSearch" type="checkbox" :disabled="sending || webSearchAvailable === false" />
       <span>
-        <strong>允许联网搜索</strong>
-        <small v-if="webSearchAvailable === false">后端尚未开启联网搜索；当前请求仍会全部在本机完成。</small>
-        <small v-else>智能体仍全部在本机运行；仅把脱敏后的问题发送到配置的搜索站点，不发送家庭成员、健康记录或图片。</small>
+        <strong>补充联网参考</strong>
+        <small v-if="webSearchAvailable === false">联网参考当前未启用，全部分析在本机完成。</small>
+        <small v-else>开启后仅将脱敏后的问题发送到可信搜索服务以补充公开参考；家庭成员、健康记录与图片始终保留在本机。</small>
       </span>
     </label>
     <div

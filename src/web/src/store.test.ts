@@ -154,7 +154,7 @@ describe('family face entry context', () => {
     expect(session.portal).toBe('member')
     expect(session.currentView).toBe('member-home')
     expect(selectedMember.value?.display_name).toBe('奶奶')
-    expect(portalWelcomeMessage()).toBe('你好，奶奶。已进入家庭成员前台。')
+    expect(portalWelcomeMessage()).toBe('你好，奶奶。欢迎回家。')
   })
 })
 

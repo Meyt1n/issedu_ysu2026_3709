@@ -99,10 +99,10 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
         <p class="eyebrow">等待确认</p>
         <h3 class="card-title">等待家人确认的照片</h3>
       </div>
-      <span v-if="hasActiveTasks" class="pill gold">识别中</span>
+      <span v-if="hasActiveTasks" class="pill gold">正在看照片</span>
       <span v-else class="member-pending-count">{{ awaitingConfirmationTasks.length }} 张</span>
     </div>
-    <p class="member-pending-intro">这些照片已交给家庭管理员核对，确认后会出现在「我的记录」里。</p>
+    <p class="member-pending-intro">这些照片已交给家人核对，确认后会出现在「我的记录」里。</p>
     <ul class="list-plain member-status-list">
       <li v-for="task in awaitingConfirmationTasks" :key="task.id" class="member-status-row">
         <span
@@ -119,14 +119,14 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
     </ul>
     <button type="button" class="btn btn-ghost btn-small member-pending-link" @click="setView('member-capture')">
       <AppIcon name="scan" :size="15" />
-      查看拍照进度
+      看看照片进度
     </button>
   </section>
 
   <section class="member-quick-grid" aria-label="常用功能">
     <button type="button" class="member-action-card member-action-primary" @click="setView('member-capture')">
       <span class="member-action-icon"><AppIcon name="scan" :size="27" /></span>
-      <span><strong>拍照录药</strong><small>拍下药盒，交给家庭管理员确认</small></span>
+      <span><strong>拍照录药</strong><small>拍下药盒，交给家人确认</small></span>
       <AppIcon name="arrow-right" :size="18" />
     </button>
     <button type="button" class="member-action-card" @click="setView('member-plans')">
@@ -145,7 +145,7 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
     <article class="card">
       <div class="card-heading"><div><p class="eyebrow">接下来</p><h3 class="card-title">近期提醒</h3></div></div>
       <div v-if="loading" class="inline-loading">正在读取提醒</div>
-      <div v-else-if="nextPlans.length === 0" class="empty-state member-empty"><AppIcon name="plan" :size="30" /><strong>暂时没有提醒</strong><p>家庭管理员设置提醒后，会显示在这里。</p></div>
+      <div v-else-if="nextPlans.length === 0" class="empty-state member-empty"><AppIcon name="plan" :size="30" /><strong>暂时没有提醒</strong><p>家人设置提醒后，会显示在这里。</p></div>
       <ul v-else class="list-plain member-list">
         <li v-for="plan in nextPlans" :key="plan.plan_event_id" class="row-card">
           <strong><AppIcon name="pill" :size="16" />{{ plan.drug }}</strong>
@@ -155,10 +155,10 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
     </article>
     <article class="card">
       <div class="card-heading"><div><p class="eyebrow">已确认</p><h3 class="card-title">最近记录</h3></div></div>
-      <div v-if="recentEvents.length === 0" class="empty-state member-empty"><AppIcon name="compass" :size="30" /><strong>还没有已确认记录</strong><p>管理员确认药品或家人操作后，会显示在这里。</p></div>
+      <div v-if="recentEvents.length === 0" class="empty-state member-empty"><AppIcon name="compass" :size="30" /><strong>还没有已确认记录</strong><p>家人确认药品后，会显示在这里。</p></div>
       <ul v-else class="list-plain member-list">
         <li v-for="event in recentEvents" :key="event.id" class="row-card">
-          <strong>{{ eventTypeLabel(event.event_type) }}</strong>
+          <strong>{{ eventTypeLabel(event.event_type, 'member') }}</strong>
           <span>{{ summarizeEventPayload(event) || '已记录' }} · {{ formatDateTime(event.occurred_at) }}</span>
         </li>
       </ul>
@@ -168,12 +168,12 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
   <section v-if="visibleRisks.length" class="card member-risk-card" aria-label="需要留意的情况">
     <div class="card-heading">
       <div>
-        <p class="eyebrow">管理员已确认</p>
+        <p class="eyebrow">家人已确认</p>
         <h3 class="card-title">需要留意的情况</h3>
       </div>
       <span class="member-risk-count">{{ risks?.total }} 条</span>
     </div>
-    <p class="member-risk-intro">这些提醒来自家庭管理员确认过的记录。如果不确定怎么处理，请先问家人或医生。</p>
+    <p class="member-risk-intro">这些提醒来自家人为你确认过的记录。如果不确定怎么处理，请先问家人或医生。</p>
     <ul class="list-plain member-risk-list">
       <li v-for="alert in visibleRisks" :key="alert.key" class="member-risk-row" :class="alert.level">
         <span class="member-risk-level">{{ alert.levelLabel }}</span>

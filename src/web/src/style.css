@@ -3321,6 +3321,13 @@ button:focus-visible, a:focus-visible {
   letter-spacing: 0.5px;
 }
 
+.agent-workflow-actions {
+  align-items: center;
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
 .agent-local-badge {
   align-items: center;
   background: color-mix(in srgb, var(--paper) 76%, transparent);
@@ -3368,6 +3375,17 @@ button:focus-visible, a:focus-visible {
   height: 100%;
   position: relative;
   transition: width 0.7s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* While a request is in flight the rail pulses instead of pretending to know
+   which step is running; real statuses arrive with the response trace. */
+.agent-flow-fill.is-indeterminate {
+  animation: agent-flow-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes agent-flow-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 0.9; }
 }
 
 .agent-flow-runner {
@@ -3457,6 +3475,7 @@ button:focus-visible, a:focus-visible {
 
 @media (prefers-reduced-motion: reduce) {
   .agent-flow-fill { transition: none; }
+  .agent-flow-fill.is-indeterminate { animation: none; opacity: 0.6; }
   .agent-stage,
   .agent-stage.is-running { transition: none; transform: none; }
   .agent-stage.is-running .agent-stage-icon { animation: none; }

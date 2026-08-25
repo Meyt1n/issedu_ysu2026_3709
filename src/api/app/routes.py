@@ -1,8 +1,11 @@
+import json
 import logging
 import secrets
 import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from queue import Queue
+from threading import Thread
 from typing import Any, NoReturn
 
 from ai.vision.candidate_fusion import (
@@ -32,7 +35,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -61,7 +64,7 @@ from app.auth import (
 )
 from app.care_plan import validate_plan_confirmation_window
 from app.config import get_settings
-from app.db import get_session
+from app.db import SessionLocal, get_session
 from app.erasure import (
     ErasureTask,
     find_erasure_task,
@@ -213,9 +216,11 @@ from app.schemas import (
     TrainingConsentRevoke,
     VisionFusionRead,
     VisionQualityRead,
+    VisionTaskClaimRequest,
     VisionTaskCleanupRead,
     VisionTaskCleanupRequest,
     VisionTaskCreate,
+    VisionTaskLeaseRequest,
     VisionTaskRead,
 )
 from app.security import (
@@ -236,10 +241,13 @@ from app.vision_tasks import (
     VISION_MEDIA_TYPES,
     VisionTaskStatus,
     _file_digest,
+    assert_vision_task_lease,
+    claim_vision_tasks,
     cleanup_expired_video_files,
     create_vision_task,
     get_vision_task,
     list_vision_tasks,
+    renew_vision_task_lease,
     retry_vision_task,
     transition_status,
 )
@@ -3209,6 +3217,25 @@ def _build_assistant_context(
     return "\n".join(lines)
 
 
+def _prepare_assistant_messages(
+    session: Session,
+    *,
+    payload: AssistantRequest,
+    actor_id: str,
+    household_id: str | None,
+    member_id: str | None,
+) -> tuple[list[dict[str, Any]], str | None]:
+    messages = list(payload.messages)
+    context = _build_assistant_context(session, actor_id, household_id, member_id)
+    if context:
+        messages = [{"role": "system", "content": context}, *messages]
+    member_display_name = None
+    if context and member_id:
+        member = session.get(Member, member_id)
+        member_display_name = member.display_name if member else None
+    return messages, member_display_name
+
+
 @router.post("/assistant/chat", response_model=AssistantResponse)
 def assistant_chat(
     payload: AssistantRequest,
@@ -3224,17 +3251,13 @@ def assistant_chat(
     falls back to a structured degrade response if the model is unavailable,
     output fails schema validation, or medical boundary checks are triggered.
     """
-    messages = list(payload.messages)
-    context = _build_assistant_context(session, actor_id, household_id, member_id)
-    if context:
-        messages = [{"role": "system", "content": context}, *messages]
-    member_display_name = None
-    if context and member_id:
-        # _build_assistant_context has already checked household ownership and
-        # member binding.  Reuse only the authorized display name for query
-        # redaction; it never enters the model/search response.
-        member = session.get(Member, member_id)
-        member_display_name = member.display_name if member else None
+    messages, member_display_name = _prepare_assistant_messages(
+        session,
+        payload=payload,
+        actor_id=actor_id,
+        household_id=household_id,
+        member_id=member_id,
+    )
     if payload.agent_mode == "multi_agent" and settings.agent_orchestration_enabled:
         result = run_local_multi_agent(
             session,
@@ -3269,6 +3292,92 @@ def assistant_chat(
         )
     session.commit()
     return AssistantResponse(**result)
+
+
+@router.post("/assistant/chat/stream")
+def assistant_chat_stream(
+    payload: AssistantRequest,
+    actor_id: str = Depends(get_actor_id),
+    household_id: str | None = None,
+    member_id: str | None = None,
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> StreamingResponse:
+    """Stream multi-agent orchestration events over Server-Sent Events."""
+    if payload.agent_mode != "multi_agent" or not settings.agent_orchestration_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="STREAM_REQUIRES_MULTI_AGENT",
+        )
+
+    messages, member_display_name = _prepare_assistant_messages(
+        session,
+        payload=payload,
+        actor_id=actor_id,
+        household_id=household_id,
+        member_id=member_id,
+    )
+    event_queue: Queue[tuple[str, dict[str, Any]] | None] = Queue()
+
+    def worker() -> None:
+        worker_session = SessionLocal()
+        try:
+            def on_trace(trace: dict[str, Any]) -> None:
+                event_queue.put(("trace", {"trace": trace}))
+
+            def on_token(token: str) -> None:
+                event_queue.put(("token", {"token": token}))
+
+            def on_external_sources(
+                sources: list[dict[str, str]],
+                network_query: str | None,
+            ) -> None:
+                event_queue.put(("external_sources", {
+                    "external_sources": sources,
+                    "network_query": network_query,
+                }))
+
+            result = run_local_multi_agent(
+                worker_session,
+                messages=messages,
+                actor_id=actor_id,
+                household_id=household_id,
+                member_id=member_id,
+                access_purpose=access_purpose,
+                model=payload.model,
+                max_tokens=payload.max_tokens,
+                temperature=payload.temperature,
+                allow_network_search=payload.allow_network_search,
+                sensitive_values=[member_display_name],
+                on_trace=on_trace,
+                on_synthesis_token=on_token,
+                on_external_sources=on_external_sources,
+            )
+            worker_session.commit()
+            event_queue.put(("done", {"response": result}))
+        except Exception as exc:
+            worker_session.rollback()
+            logger.exception("assistant chat stream failed")
+            event_queue.put(("error", {"message": str(exc)[:240]}))
+        finally:
+            worker_session.close()
+            event_queue.put(None)
+
+    Thread(target=worker, daemon=True).start()
+
+    def generate():
+        while True:
+            item = event_queue.get()
+            if item is None:
+                break
+            kind, data = item
+            yield f"event: {kind}\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ── HCT-204: Vision task API ─────────────────────────────────────────
@@ -3722,6 +3831,10 @@ def submit_vision_evidence_endpoint(
         action="WRITE_EVENTS",
         access_purpose=access_purpose,
     )
+    # HCT-441: once a worker has claimed the task, only that worker may
+    # publish evidence while its lease is still live.  Unclaimed queued
+    # tasks remain compatible with older local adapters.
+    assert_vision_task_lease(task, actor_id)
     if task.status in {
         VisionTaskStatus.SUCCEEDED,
         VisionTaskStatus.FAILED,
@@ -3929,6 +4042,29 @@ def list_my_vision_tasks_endpoint(
     return list(session.scalars(stmt).all())
 
 
+@router.post("/vision-tasks/claim", response_model=list[VisionTaskRead])
+def claim_vision_tasks_endpoint(
+    payload: VisionTaskClaimRequest,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> list[VisionTask]:
+    """Atomically claim this worker's queued tasks with expiring leases.
+
+    The actor header is both the task creator scope and the worker identity;
+    no worker can claim another actor's jobs.  Expired leases are recovered
+    before the next batch is selected, and exhausted jobs become ``timeout``.
+    """
+    tasks = claim_vision_tasks(
+        session,
+        actor_id=actor_id,
+        limit=min(payload.limit, settings.vision_worker_claim_batch_size),
+        lease_seconds=payload.lease_seconds or settings.vision_worker_lease_seconds,
+        max_attempts=settings.vision_worker_max_attempts,
+    )
+    session.commit()
+    return tasks
+
+
 @router.get("/vision-tasks/{task_id}", response_model=VisionTaskRead)
 def get_vision_task_endpoint(
     task_id: str,
@@ -3943,6 +4079,34 @@ def get_vision_task_endpoint(
         action="READ_EVENTS",
         access_purpose=access_purpose,
     )
+
+
+@router.post("/vision-tasks/{task_id}/lease", response_model=VisionTaskRead)
+def renew_vision_task_lease_endpoint(
+    task_id: str,
+    payload: VisionTaskLeaseRequest,
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> VisionTask:
+    """Renew a live worker lease immediately before publishing evidence."""
+    task = _require_vision_task_access(
+        session,
+        task_id,
+        actor_id=actor_id,
+        action="WRITE_EVENTS",
+        access_purpose=access_purpose,
+    )
+    if task.created_by != actor_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="VISION_TASK_NOT_FOUND")
+    renewed = renew_vision_task_lease(
+        session,
+        task,
+        worker_id=actor_id,
+        lease_seconds=payload.lease_seconds or settings.vision_worker_lease_seconds,
+    )
+    session.commit()
+    return renewed
 
 
 @router.get("/households/{household_id}/vision-tasks", response_model=list[VisionTaskRead])

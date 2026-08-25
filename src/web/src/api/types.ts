@@ -686,6 +686,9 @@ export interface AssistantAgentCatalog {
   all_agents_local: boolean
   ollama_local_only: boolean
   web_search_enabled: boolean
+  /** True only when the deployment switch is on and the endpoint passes the allowlist. */
+  web_search_ready?: boolean
+  web_search_provider?: string
   web_search_requires_request_opt_in: boolean
   agents: AssistantAgentCatalogItem[]
 }
