@@ -227,4 +227,43 @@ describe('请求回执追踪与超时区分（MOB-144）', () => {
     await expect(rejectClient.getHealth({ timeoutMs: 20 })).rejects.toMatchObject({ code: 'DEPENDENCY_UNAVAILABLE' })
     expect(requestTraces()[0]).toMatchObject({ outcome: 'unreachable' })
   })
+
+  it('assistantChat 向家庭服务器发送文字消息且不携带音频字段', async () => {
+    let url = ''
+    let body = ''
+    const client = new ApiClient({
+      baseUrl: 'http://192.168.1.8:8000',
+      fetcher: async (input, init) => {
+        url = String(input)
+        body = String(init?.body ?? '')
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          text: async () =>
+            JSON.stringify({
+              answer: '这是受约束的本地解释。',
+              sources: [],
+              confidence: 'low',
+              escalate: false,
+              degraded: true,
+              degrade_reason: 'model_unavailable',
+            }),
+        } as Response
+      },
+    })
+
+    const reply = await client.assistantChat(
+      { messages: [{ role: 'user', content: '最近的用药提醒是什么' }], max_tokens: 256 },
+      'hh-1',
+      'm-1',
+    )
+
+    expect(url).toContain('/api/v1/assistant/chat')
+    expect(url).toContain('household_id=hh-1')
+    expect(url).toContain('member_id=m-1')
+    expect(body).toContain('最近的用药提醒是什么')
+    expect(body).not.toMatch(/audio|microphone|media/i)
+    expect(reply.answer).toContain('受约束')
+  })
 })
