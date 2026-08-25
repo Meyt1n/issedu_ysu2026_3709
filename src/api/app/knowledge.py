@@ -273,8 +273,14 @@ def retrieve(
     if not chunks:
         raise ValueError("EMPTY_INDEX")
 
-    # 3. TF-IDF scoring
-    n_docs = len(accessible_ids)
+    # 3. TF-IDF scoring.  ``df`` counts chunks, so the IDF denominator must
+    # be the chunk count as well.  The previous ``log(n_docs / df)`` mixed
+    # document and chunk units: any term present in more chunks than there
+    # are accessible documents scored negative, so a chunk containing the
+    # query term could fall below the ``score > 0`` filter and retrieval
+    # degraded to NO_RELEVANT_RESULTS although the term exists.  The
+    # smoothed chunk-level form below is always >= 1 for a matching term.
+    n_chunks = len(chunks)
     df: Counter = Counter()
     for ch in chunks:
         df.update(ch.term_vector.keys())
@@ -286,7 +292,7 @@ def retrieve(
             tf = ch.term_vector.get(tok, 0)
             if tf == 0:
                 continue
-            idf = math.log(n_docs / df.get(tok, 1)) + 1.0
+            idf = math.log((1 + n_chunks) / (1 + df.get(tok, 0))) + 1.0
             score += tf * idf
         if score > 0:
             meta = doc_meta.get(ch.document_id, {})

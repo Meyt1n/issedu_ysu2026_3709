@@ -361,11 +361,17 @@ class OllamaClient:
                 last_error = "TIMEOUT"
                 logger.warning("Ollama request timed out (attempt %d)", attempt + 1)
             except httpx.HTTPStatusError as exc:
-                last_error = f"HTTP_{exc.response.status_code}"
+                status_code = exc.response.status_code
+                last_error = f"HTTP_{status_code}"
                 logger.warning(
                     "Ollama HTTP error %s (attempt %d)",
-                    exc.response.status_code, attempt + 1,
+                    status_code, attempt + 1,
                 )
+                # A 4xx (other than 408/429) is deterministic — for example
+                # an unknown model name.  Retrying only delays the structured
+                # degrade response the caller is waiting for.
+                if 400 <= status_code < 500 and status_code not in (408, 429):
+                    break
             except Exception as exc:
                 last_error = str(exc)[:120]
                 logger.warning("Ollama connection error (attempt %d): %s", attempt + 1, exc)
@@ -502,6 +508,11 @@ def classify_question(query: str) -> str:
         "能不能一起吃", "能否一起吃", "可以一起吃", "能不能同服", "能否同服",
         "相互作用", "药物相互作用", "配伍", "停药", "换药", "调整剂量",
         "一次吃多少", "一天吃几", "怎么服用", "吃多少", "同服",
+        # Bare high-risk terms: a dosage / missed-dose / overdose question
+        # must go through member facts + reviewed knowledge; without a
+        # citation the answer degrades to EVIDENCE_REQUIRED instead of
+        # letting the model answer from priors.
+        "剂量", "怎么吃", "漏服", "补服", "过量", "误服",
     )):
         return "MEDICATION_SAFETY"
     if any(term in normalized for term in (
