@@ -28,6 +28,8 @@ from dataclasses import dataclass
 from threading import Event
 from typing import Any
 
+from ai.safety.seasonal_context import seasonal_care_context
+
 from app.config import Settings, get_settings
 from app.db import SessionLocal
 from app.egress_guard import is_web_search_egress_allowed
@@ -449,9 +451,13 @@ def _web_search_agent(
 
 def _compact_external_sources(results: list[dict[str, str]]) -> str:
     if not results:
-        return "无外部搜索结果；不要编造外部来源。"
+        return (
+            "无外部搜索结果；不要编造外部来源，也不要捏造「最近流行某某病毒」。"
+            "仍可用【季节情境】做换季、着凉等生活化共情。"
+        )
     lines = [
         "外部搜索结果仅供补充参考，不是已审核本地证据；不要在 sources 中引用它们，也不要输出网址。"
+        "若摘要提到季节性呼吸道/流感样情况，可用口语转述为「最近外面常见的提醒」，并说明仅供参考。"
     ]
     for idx, item in enumerate(results[:3], 1):
         snippet = (item.get("snippet") or "无摘要")[:80]
@@ -653,12 +659,16 @@ def _synthesis_agent(
     if query_type == "SYMPTOM_MEDICATION":
         routing_hint += (
             "这是症状用药资料问题：以已审核知识卡为主，结合过敏史/疾病史说明；"
-            "家庭药箱不是前提。不下诊断、不开个体处方、不写具体片数。"
+            "家庭药箱不是前提。请结合【季节情境】共情换季/着凉等生活处境，语气亲切有温度；"
+            "若有联网参考，只能把近期季节性呼吸道提醒当补充参考，禁止编造具体病毒名或确诊。"
+            "不下诊断、不开个体处方、不写具体片数。"
+            f"\n{seasonal_care_context()}"
         )
     elif query_type == "MEDICATION_SAFETY":
         routing_hint += (
             "这是用药安全问题，必须以本地已审核知识片段为依据；如果没有知识片段，"
             "明确说明无法判断，不得用外部搜索结果替代。家庭药箱不是唯一依据。"
+            "语气关心但内容克制。"
         )
     synthesis_system = "\n\n".join([
         ASSISTANT_SYSTEM_PROMPT,
