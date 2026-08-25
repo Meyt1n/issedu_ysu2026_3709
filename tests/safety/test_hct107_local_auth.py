@@ -40,7 +40,6 @@ def isolated_auth_database(monkeypatch: pytest.MonkeyPatch):
     session_factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     monkeypatch.setattr(auth_module, "SessionLocal", session_factory)
     auth_module._pin_challenges.clear()
-    auth_module._face_challenges.clear()
     try:
         yield
     finally:
@@ -289,14 +288,19 @@ class TestFaceChallengeIsolation:
         assert exc.value.status_code == 401
 
     def test_outstanding_challenges_per_household_stay_capped(self):
+        from sqlalchemy import func, select
+
+        from app.models import AuthFaceChallenge
+
         for _ in range(auth_module.MAX_FACE_CHALLENGES_PER_HOUSEHOLD * 2):
             auth_module.create_face_challenge("owner-b", "hh-face-cap")
-        stored = [
-            challenge
-            for challenge in auth_module._face_challenges.values()
-            if challenge["household_id"] == "hh-face-cap"
-        ]
-        assert len(stored) <= auth_module.MAX_FACE_CHALLENGES_PER_HOUSEHOLD
+        with auth_module.SessionLocal() as session:
+            stored = session.scalar(
+                select(func.count(AuthFaceChallenge.id)).where(
+                    AuthFaceChallenge.household_id == "hh-face-cap"
+                )
+            )
+        assert stored <= auth_module.MAX_FACE_CHALLENGES_PER_HOUSEHOLD
 
 
 class TestFaceRateLimitDurability:

@@ -106,6 +106,26 @@ class AuthPinChallenge(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class AuthFaceChallenge(Base):
+    """Durable, single-use face-login challenge (HCT-425).
+
+    Only opaque metadata is stored: challenge id, actor/household binding and
+    expiry. No biometric payload ever reaches this table. Family 1:N
+    challenges reuse the row with the family sentinel actor id.
+    """
+
+    __tablename__ = "auth_face_challenge"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    actor_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    household_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class Household(Base):
     __tablename__ = "household"
 

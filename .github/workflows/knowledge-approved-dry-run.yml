@@ -1,12 +1,11 @@
 name: Knowledge approved dry-run
 
+# Automatic PR-triggered runs are disabled to follow the project-owner decision
+# on 2026-08-18 (see AGENTS.md and ci.yml): retained workflows are manual-only
+# and must not act as merge gates. Run this dry-run manually via
+# workflow_dispatch before merging knowledge/ingest changes when needed.
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - "docs/knowledge/approved/**"
-      - "scripts/ingest_local_knowledge.py"
-      - "src/api/app/knowledge.py"
 
 jobs:
   dry-run:

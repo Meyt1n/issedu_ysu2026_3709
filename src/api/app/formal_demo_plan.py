@@ -355,7 +355,10 @@ CLASSROOM_SCENARIOS: list[dict[str, Any]] = [
         "id": "missed-escalation",
         "title": "未确认升级",
         "member_key": "grandma",
-        "summary": "二甲双胍计划漏服后产生 care_escalated 与 caregiver_notified；对照已确认的氨氯地平。",
+        "summary": (
+            "二甲双胍计划漏服后产生 care_escalated 与 caregiver_notified；"
+            "对照已确认的氨氯地平。"
+        ),
         "focus": ["plan_missed", "care_escalated", "authorization"],
     },
 ]

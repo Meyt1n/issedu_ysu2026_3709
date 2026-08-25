@@ -143,9 +143,6 @@ class Settings(BaseSettings):
     # When true, household owners must supply X-Access-Purpose for field-level
     # health reads (step toward post-P0 owner ABAC). Default off for P0 demos.
     owner_requires_access_purpose: bool = False
-    # Process-local face challenges remain a production gap until a durable
-    # challenge store ships; keep the gate explicit.
-    allow_process_local_face_challenges_in_production: bool = False
 
     @field_validator("default_household_time_zone")
     @classmethod
@@ -159,10 +156,10 @@ class Settings(BaseSettings):
     def reject_unsafe_production_configuration(self) -> "Settings":
         """Fail closed for production until remaining demo gaps are closed.
 
-        Bearer sessions and password/PIN rate limits are database-backed
-        (HCT-428). Remaining production blockers are development trust
-        shortcuts, weak signing keys, egress posture, and process-local face
-        challenges.
+        Bearer sessions, password/PIN rate limits and face-login challenges
+        are database-backed (HCT-428, HCT-425 migration 0023), so they work
+        across multiple workers and restarts. Remaining production blockers
+        are development trust shortcuts, weak signing keys and egress posture.
         """
 
         if self.app_env.strip().casefold() not in {"prod", "production"}:
@@ -187,12 +184,6 @@ class Settings(BaseSettings):
             and not self.agent_web_search_allowed_domain_set
         ):
             problems.append("AGENT_WEB_SEARCH_ALLOWED_DOMAINS is required when search is enabled")
-        if not self.allow_process_local_face_challenges_in_production:
-            problems.append(
-                "face login challenges are process-local; "
-                "set ALLOW_PROCESS_LOCAL_FACE_CHALLENGES_IN_PRODUCTION=true only for "
-                "single-node drills, or wait for durable challenge storage"
-            )
         if (
             self.health_news_adapter.strip().casefold() == "enabled"
             and not self.health_news_allowed_domain_set

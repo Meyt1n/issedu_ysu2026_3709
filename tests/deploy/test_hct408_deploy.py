@@ -41,7 +41,7 @@ def _ps_syntax_check(script_path: Path) -> None:
 
 def _docker_compose_config_ok(profile: str) -> bool:
     """Run docker compose config --quiet for a profile, skip if docker unavailable."""
-    compose_path = Path(__file__).resolve().parents[3] / "docker-compose.yml"
+    compose_path = Path(__file__).resolve().parents[2] / "docker-compose.yml"
     if not compose_path.exists():
         return True  # skip gracefully in CI without compose file
 
@@ -63,7 +63,7 @@ def _docker_compose_config_ok(profile: str) -> bool:
 
 def _docker_compose_config_json(profile: str) -> dict:
     """Get docker compose config as JSON for a profile, skip if docker unavailable."""
-    compose_path = Path(__file__).resolve().parents[3] / "docker-compose.yml"
+    compose_path = Path(__file__).resolve().parents[2] / "docker-compose.yml"
     if not compose_path.exists():
         return {}
     result = subprocess.run(
@@ -259,6 +259,62 @@ def test_basic_profile_excludes_ollama():
     assert "db" in services
     assert "api" in services
     assert "web" in services
+
+
+def test_basic_profile_includes_both_background_workers():
+    """HCT-304/HCT-308: standard up must start outbox AND care-plan workers."""
+    config = _docker_compose_config_json("basic")
+    if not config:
+        return
+    services = config.get("services", {})
+    assert "outbox-worker" in services
+    assert "care-plan-worker" in services
+    worker = services["care-plan-worker"]
+    command = " ".join(worker.get("command", []))
+    assert "app.care_plan_worker" in command
+    assert "--loop" in command
+    # 就绪探针与 outbox-worker 同模式：worker 首个成功周期写 ready 文件。
+    assert "--ready-file" in command
+    health_test = " ".join(worker.get("healthcheck", {}).get("test", []))
+    assert "homecare-care-plan-worker.ready" in health_test
+    depends = worker.get("depends_on", {})
+    assert depends.get("api", {}).get("condition") == "service_healthy"
+
+
+def test_compose_file_declares_care_plan_worker_for_all_profiles():
+    """Static check (no docker needed): care-plan-worker ships in basic/enhanced/dev."""
+    compose_path = Path(__file__).resolve().parents[2] / "docker-compose.yml"
+    content = compose_path.read_text(encoding="utf-8")
+    assert "care-plan-worker:" in content
+    worker_block = content.split("care-plan-worker:", 1)[1].split("\n  web:", 1)[0]
+    assert 'profiles: ["basic", "enhanced", "dev"]' in worker_block
+    assert "app.care_plan_worker" in worker_block
+    assert "CARE_PLAN_POLL_SECONDS" in worker_block
+
+
+def test_start_scripts_require_both_workers_in_health_gate():
+    """start.sh/start.ps1 health must fail when a standard worker is missing."""
+    scripts_dir = Path(__file__).resolve().parents[2] / "scripts"
+    sh = (scripts_dir / "start.sh").read_text(encoding="utf-8")
+    ps1 = (scripts_dir / "start.ps1").read_text(encoding="utf-8")
+    for script in (sh, ps1):
+        assert "outbox-worker" in script
+        assert "care-plan-worker" in script
+
+
+def test_api_service_wires_teaching_master_data_fail_closed():
+    """HCT-201: compose passes the approved-versions switch and mounts snapshots.
+
+    The default MUST stay empty (fail-closed): an operator has to generate the
+    teaching snapshot and explicitly approve ``demo-cn-en-v1`` to enable the
+    INTERNAL_TEACHING_DEMO path.  The formal drug set stays UNRELEASED.
+    """
+    compose_path = Path(__file__).resolve().parents[2] / "docker-compose.yml"
+    content = compose_path.read_text(encoding="utf-8")
+    api_block = content.split("\n  api:", 1)[1].split("\n  outbox-worker:", 1)[0]
+    assert "MASTER_DATA_ROOT: /app/data/master-data" in api_block
+    assert "MASTER_DATA_APPROVED_VERSIONS: ${MASTER_DATA_APPROVED_VERSIONS:-}" in api_block
+    assert "./data/master-data:/app/data/master-data:ro" in api_block
 
 
 def test_enhanced_profile_includes_ollama():

@@ -13,13 +13,14 @@ from typing import Any
 
 import bcrypt
 from fastapi import HTTPException, status
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
 from app.models import (
     AuthAccount,
+    AuthFaceChallenge,
     AuthPin,
     AuthPinChallenge,
     AuthRateLimitAttempt,
@@ -43,11 +44,11 @@ _password_hashes: dict[str, str] = {}
 _pin_hashes: dict[tuple[str, str], str] = {}
 _sessions: dict[str, dict[str, Any]] = {}
 _pin_challenges: dict[str, dict[str, Any]] = {}
-# Face login challenges ARE authoritative here but deliberately process-local:
-# they are opaque, single-use and expire after FACE_CHALLENGE_TTL_SECONDS, so
-# nothing biometric or replayable survives a restart.  Face *rate limits* use
-# the durable AuthRateLimitAttempt table like password and PIN logins.
-_face_challenges: dict[str, dict[str, Any]] = {}
+# Face login challenges are stored in the durable ``auth_face_challenge``
+# table (HCT-425): opaque id, actor/household binding and expiry only — no
+# biometric payload.  Persistence keeps challenge→login working across
+# multiple API workers and restarts; face *rate limits* already use the
+# durable AuthRateLimitAttempt table like password and PIN logins.
 MAX_FACE_CHALLENGES_PER_HOUSEHOLD = 32
 MAX_FACE_CHALLENGES_TOTAL = 4096
 
@@ -72,6 +73,7 @@ def _session_scope(session: Session | None) -> Generator[Session, None, None]:
                     AuthSession.__table__,
                     AuthRateLimitAttempt.__table__,
                     AuthPinChallenge.__table__,
+                    AuthFaceChallenge.__table__,
                 ],
             )
     try:
@@ -276,57 +278,102 @@ def authenticate(actor_id: str, password: str, session: Session | None = None) -
         return _create_session(db, actor_id, rotate_existing=True)
 
 
-def create_face_challenge(actor_id: str, household_id: str) -> dict[str, Any]:
-    now = time.time()
-    for challenge_id, challenge in list(_face_challenges.items()):
-        if challenge["expires_at"] < now:
-            _face_challenges.pop(challenge_id, None)
-    # The issue endpoint is unauthenticated, so eviction must stay
-    # household-scoped: flooding one household id cannot evict another
-    # family's still-valid login challenge.
-    household_challenges = [
-        key
-        for key, challenge in _face_challenges.items()
-        if challenge["household_id"] == household_id
-    ]
-    while len(household_challenges) >= MAX_FACE_CHALLENGES_PER_HOUSEHOLD:
-        oldest = min(household_challenges, key=lambda key: _face_challenges[key]["expires_at"])
-        _face_challenges.pop(oldest, None)
-        household_challenges.remove(oldest)
-    if len(_face_challenges) >= MAX_FACE_CHALLENGES_TOTAL:
-        oldest = min(_face_challenges, key=lambda key: _face_challenges[key]["expires_at"])
-        _face_challenges.pop(oldest, None)
-    challenge_id = secrets.token_hex(16)
-    expires_at = now + FACE_CHALLENGE_TTL_SECONDS
-    _face_challenges[challenge_id] = {
-        "actor_id": actor_id,
-        "household_id": household_id,
-        "expires_at": expires_at,
-        "used": False,
-    }
-    return {"challenge_id": challenge_id, "expires_at": expires_at}
+def create_face_challenge(
+    actor_id: str, household_id: str, session: Session | None = None
+) -> dict[str, Any]:
+    """Issue a durable, opaque, single-use face challenge (HCT-425).
+
+    Rows survive API restarts and are visible to every worker sharing the
+    database.  The issue endpoint is unauthenticated, so eviction stays
+    household-scoped: flooding one household id cannot evict another family's
+    still-valid login challenge.
+    """
+    with _session_scope(session) as db:
+        now = _now()
+        db.execute(delete(AuthFaceChallenge).where(AuthFaceChallenge.expires_at < now))
+        household_ids = list(
+            db.scalars(
+                select(AuthFaceChallenge.id)
+                .where(AuthFaceChallenge.household_id == household_id)
+                .order_by(AuthFaceChallenge.expires_at.asc(), AuthFaceChallenge.id.asc())
+            ).all()
+        )
+        if len(household_ids) >= MAX_FACE_CHALLENGES_PER_HOUSEHOLD:
+            overflow = household_ids[: len(household_ids) - MAX_FACE_CHALLENGES_PER_HOUSEHOLD + 1]
+            db.execute(delete(AuthFaceChallenge).where(AuthFaceChallenge.id.in_(overflow)))
+        total = db.scalar(select(func.count(AuthFaceChallenge.id))) or 0
+        if total >= MAX_FACE_CHALLENGES_TOTAL:
+            oldest = db.scalar(
+                select(AuthFaceChallenge.id)
+                .order_by(AuthFaceChallenge.expires_at.asc(), AuthFaceChallenge.id.asc())
+                .limit(1)
+            )
+            if oldest is not None:
+                db.execute(delete(AuthFaceChallenge).where(AuthFaceChallenge.id == oldest))
+        challenge_id = secrets.token_hex(16)
+        expires_at = now + timedelta(seconds=FACE_CHALLENGE_TTL_SECONDS)
+        db.add(
+            AuthFaceChallenge(
+                id=challenge_id,
+                actor_id=actor_id,
+                household_id=household_id,
+                expires_at=expires_at,
+            )
+        )
+        db.flush()
+        return {"challenge_id": challenge_id, "expires_at": expires_at.timestamp()}
 
 
-def consume_face_challenge(challenge_id: str, actor_id: str, household_id: str) -> None:
-    challenge = _face_challenges.get(challenge_id)
-    if (
-        challenge is None
-        or challenge["actor_id"] != actor_id
-        or challenge["household_id"] != household_id
-    ):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="FACE_AUTH_FAILED")
-    if challenge["expires_at"] < time.time() or challenge["used"]:
-        _face_challenges.pop(challenge_id, None)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="FACE_AUTH_FAILED")
-    challenge["used"] = True
+def consume_face_challenge(
+    challenge_id: str, actor_id: str, household_id: str, session: Session | None = None
+) -> None:
+    """Burn a face challenge exactly once, even across concurrent workers.
+
+    The atomic ``used_at IS NULL`` update makes replays lose the race in every
+    process; the burn is committed immediately so a failed login afterwards
+    cannot resurrect the challenge.
+    """
+    with _session_scope(session) as db:
+        challenge = db.get(AuthFaceChallenge, challenge_id)
+        if (
+            challenge is None
+            or challenge.actor_id != actor_id
+            or challenge.household_id != household_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="FACE_AUTH_FAILED"
+            )
+        if _as_utc(challenge.expires_at) < _now() or challenge.used_at is not None:
+            db.execute(delete(AuthFaceChallenge).where(AuthFaceChallenge.id == challenge_id))
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="FACE_AUTH_FAILED"
+            )
+        marked = db.execute(
+            update(AuthFaceChallenge)
+            .where(
+                AuthFaceChallenge.id == challenge_id,
+                AuthFaceChallenge.used_at.is_(None),
+            )
+            .values(used_at=_now())
+        )
+        db.commit()
+        if marked.rowcount != 1:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="FACE_AUTH_FAILED"
+            )
 
 
-def create_family_face_challenge(household_id: str) -> dict[str, Any]:
-    return create_face_challenge(FAMILY_FACE_ACTOR_SENTINEL, household_id)
+def create_family_face_challenge(
+    household_id: str, session: Session | None = None
+) -> dict[str, Any]:
+    return create_face_challenge(FAMILY_FACE_ACTOR_SENTINEL, household_id, session)
 
 
-def consume_family_face_challenge(challenge_id: str, household_id: str) -> None:
-    consume_face_challenge(challenge_id, FAMILY_FACE_ACTOR_SENTINEL, household_id)
+def consume_family_face_challenge(
+    challenge_id: str, household_id: str, session: Session | None = None
+) -> None:
+    consume_face_challenge(challenge_id, FAMILY_FACE_ACTOR_SENTINEL, household_id, session)
 
 
 def family_face_rate_actor() -> str:

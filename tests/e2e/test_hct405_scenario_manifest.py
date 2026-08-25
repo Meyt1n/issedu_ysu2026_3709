@@ -1,4 +1,4 @@
-"""Contract checks for the twelve HCT-405 scenario definitions."""
+"""Contract checks for the HCT-405 scenario manifest definitions."""
 
 from __future__ import annotations
 
@@ -34,15 +34,19 @@ def _manifest() -> dict:
     return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
 
 
-def test_manifest_defines_exactly_twelve_unique_synthetic_scenarios() -> None:
+# 12 个核心场景（HCT-405 基线）+ 3 个双门户/规则闭环/正式登录扩展场景。
+EXPECTED_SCENARIO_COUNT = 15
+
+
+def test_manifest_defines_expected_unique_synthetic_scenarios() -> None:
     manifest = _manifest()
     scenarios = manifest["scenarios"]
 
     assert manifest["schema_version"] == "hct405-scenarios-v1"
     assert manifest["data_policy"] == "synthetic-only"
-    assert len(scenarios) == 12
+    assert len(scenarios) == EXPECTED_SCENARIO_COUNT
     assert [scenario["id"] for scenario in scenarios] == [
-        f"HCT405-{index:02d}" for index in range(1, 13)
+        f"HCT405-{index:02d}" for index in range(1, EXPECTED_SCENARIO_COUNT + 1)
     ]
 
 
