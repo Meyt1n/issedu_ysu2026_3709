@@ -136,6 +136,7 @@ async function installMemberApi(page: Page): Promise<void> {
 test('家庭成员进入前台，只看到自己的照护入口和已确认记录', async ({ page }) => {
   await installMemberApi(page)
   await page.goto('/')
+  await page.getByRole('button', { name: '开发演示' }).click()
   await page.getByLabel('开发身份标识').fill('grandma-account')
   await page.getByRole('button', { name: '进入家庭空间' }).click()
 
@@ -213,6 +214,7 @@ test('识别失败时首页主按钮改为去重拍，快捷入口同步为重�
     })
   })
   await page.goto('/')
+  await page.getByRole('button', { name: '开发演示' }).click()
   await page.getByLabel('开发身份标识').fill('grandma-account')
   await page.getByRole('button', { name: '进入家庭空间' }).click()
   await page.evaluate(() => {
@@ -357,6 +359,7 @@ test('成员拍照提交后可见待确认状态，管理员确认后前台出�
   const state: CaptureFlowState = { taskCreated: false, taskStatus: 'queued', adminConfirmed: false }
   await installCaptureFlowApi(page, state)
   await page.goto('/')
+  await page.getByRole('button', { name: '开发演示' }).click()
   await page.getByLabel('开发身份标识').fill('grandma-account')
   await page.getByRole('button', { name: '进入家庭空间' }).click()
   await expect(page.locator('.app-frame')).toBeVisible()

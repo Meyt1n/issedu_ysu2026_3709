@@ -266,7 +266,7 @@ onMounted(() => {
   <section class="page-hero">
     <div class="card-heading" style="margin-bottom: 0">
       <div>
-        <h2 class="hero-greeting gradient-text">知识文档</h2>
+        <h2 class="hero-greeting">知识文档</h2>
         <p class="hero-sub">
           本地助手只引用这里登记的版本化知识；权限外或未登记的内容不会出现在回答里。
         </p>

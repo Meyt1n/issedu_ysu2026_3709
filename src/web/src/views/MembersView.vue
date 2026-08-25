@@ -89,8 +89,8 @@ const EVENT_TYPE_OPTIONS: EventTypeOption[] = [
       { key: 'diastolic', label: '舒张压（血压时填）', type: 'number', placeholder: '例如 78' },
       { key: 'value', label: '数值（血糖等）', type: 'number', placeholder: '例如 6.2' },
       { key: 'unit', label: '单位', type: 'text', placeholder: 'mmHg 或 mmol/L' },
-      { key: 'meal_context', label: '餐次/情境', type: 'text', placeholder: '空腹 / 早餐前（演示）' },
-      { key: 'note', label: '备注', type: 'text', placeholder: '教学观察值，非诊断' },
+      { key: 'meal_context', label: '餐次/情境', type: 'text', placeholder: '空腹 / 早餐前' },
+      { key: 'note', label: '备注', type: 'text', placeholder: '居家观察记录，非诊断' },
     ],
   },
 ]

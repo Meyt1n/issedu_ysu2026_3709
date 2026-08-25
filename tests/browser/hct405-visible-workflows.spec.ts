@@ -204,7 +204,8 @@ function viewHeading(page: Page) {
 
 async function enterFamilySpace(page: Page): Promise<void> {
   await page.goto('/')
-  await expect(page.getByRole('button', { name: '进入家庭空间' })).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByRole('button', { name: '开发演示' })).toBeVisible({ timeout: 20_000 })
+  await page.getByRole('button', { name: '开发演示' }).click()
   await page.getByLabel('开发身份标识').fill('owner-1')
   await page.getByRole('button', { name: '进入家庭空间' }).click()
   await expect(page.locator('.app-frame')).toBeVisible({ timeout: 20_000 })
@@ -349,6 +350,7 @@ test('本地 API 不可用时不进入家庭空间，也不渲染任何健康摘
   await page.route('**/api/v1/households', route => route.abort('failed'))
   await page.goto('/')
 
+  await page.getByRole('button', { name: '开发演示' }).click()
   await page.getByLabel('开发身份标识').fill('owner-1')
   await page.getByRole('button', { name: '进入家庭空间' }).click()
 
