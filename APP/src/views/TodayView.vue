@@ -410,7 +410,7 @@ onMounted(reload)
       <AppIcon name="mic" :size="22" />
       <span class="link-card-text">
         <strong>语音助手</strong>
-        <span class="meta-line">说「小燕打开」提问；联机后连接电脑后端</span>
+        <span class="meta-line">说「小燕小燕」提问；联机后连接电脑后端</span>
       </span>
       <AppIcon name="chevron-right" :size="18" />
     </RouterLink>

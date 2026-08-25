@@ -113,10 +113,10 @@ describe('assistant voice capability boundary', () => {
     const result = {
       isFinal: true,
       length: 2,
-      0: { transcript: 'xiaoyan dakai', confidence: 0.2 },
-      1: { transcript: '小燕打开', confidence: 0.9 },
+      0: { transcript: 'xiaoyan xiaoyan', confidence: 0.2 },
+      1: { transcript: '小燕小燕', confidence: 0.9 },
     } as unknown as SpeechRecognitionResultLike
-    expect(pickBestAlternative(result)).toBe('小燕打开')
+    expect(pickBestAlternative(result)).toBe('小燕小燕')
   })
 
   it('uses the latest interim slice for low-latency wake probing', () => {
@@ -124,10 +124,10 @@ describe('assistant voice capability boundary', () => {
       resultIndex: 1,
       results: [
         { isFinal: true, length: 1, 0: { transcript: '背景噪音' } },
-        { isFinal: false, length: 1, 0: { transcript: '小燕打开' } },
+        { isFinal: false, length: 1, 0: { transcript: '小燕小燕' } },
       ],
     } as unknown as SpeechRecognitionEventLike
-    expect(latestTranscriptFromEvent(event)).toBe('小燕打开')
+    expect(latestTranscriptFromEvent(event)).toBe('小燕小燕')
   })
 
   it('degrades safely when the browser has no speech APIs', () => {
@@ -137,12 +137,13 @@ describe('assistant voice capability boundary', () => {
   })
 
   it('matches the wake phrase without changing the transcript used in the draft', () => {
-    expect(normalizeVoiceText('小燕，打开！')).toBe('小燕打开')
-    expect(containsWakePhrase('小燕，打开助手')).toBe(true)
-    expect(containsWakePhrase('小严打开')).toBe(true)
-    expect(containsWakePhrase('晓燕，打开一下')).toBe(true)
-    expect(transcriptAfterWakePhrase('小燕，打开，查询最近的用药提醒')).toBe('查询最近的用药提醒')
-    expect(transcriptAfterWakePhrase('小严打开查询最近的用药提醒')).toBe('查询最近的用药提醒')
+    expect(normalizeVoiceText('小燕，小燕！')).toBe('小燕小燕')
+    expect(containsWakePhrase('小燕，小燕')).toBe(true)
+    expect(containsWakePhrase('小严小严')).toBe(true)
+    expect(containsWakePhrase('晓燕晓燕')).toBe(true)
+    expect(containsWakePhrase('小燕啊小燕')).toBe(true)
+    expect(transcriptAfterWakePhrase('小燕小燕，查询最近的用药提醒')).toBe('查询最近的用药提醒')
+    expect(transcriptAfterWakePhrase('小严小严查询最近的用药提醒')).toBe('查询最近的用药提醒')
     expect(transcriptAfterWakePhrase('请帮我查一下')).toBe('')
   })
 

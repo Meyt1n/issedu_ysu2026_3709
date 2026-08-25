@@ -124,7 +124,7 @@ async function loadAgentCatalog(): Promise<void> {
 }
 
 const voiceStatusText = computed(() => {
-  if (voiceMode.value === 'wake') return '正在聆听唤醒词：“小燕打开”'
+  if (voiceMode.value === 'wake') return '正在聆听唤醒词：“小燕小燕”'
   if (voiceMode.value === 'active') return '已唤醒，识别中的文字会实时填入草稿'
   return ''
 })
@@ -964,7 +964,7 @@ onBeforeUnmount(() => {
           :disabled="sending || !speechInputSupported"
           :aria-label="listening ? '停止语音唤醒' : '开启语音唤醒'"
           :aria-pressed="listening"
-          :title="speechInputSupported ? '先点击开启，再说“小燕打开”；识别文字只会实时填入草稿' : '当前浏览器不支持语音输入'"
+          :title="speechInputSupported ? '先点击开启，再说“小燕小燕”；识别文字只会实时填入草稿' : '当前浏览器不支持语音输入'"
           @click="toggleVoiceInput"
         >
           <AppIcon name="microphone" :size="15" />
@@ -1006,7 +1006,7 @@ onBeforeUnmount(() => {
       {{ voiceError }}
     </p>
     <p class="text-faint" style="font-size: 12px; line-height: 1.6; margin: 10px 0 0">
-      先点击“开启唤醒”，再说“小燕打开”开始实时填入草稿；发送前可修改。语音回复由浏览器本地朗读，原始音频不会上传到本地助手 API。
+      先点击“开启唤醒”，再说“小燕小燕”开始实时填入草稿；发送前可修改。语音回复由浏览器本地朗读，原始音频不会上传到本地助手 API。
     </p>
   </section>
 </template>

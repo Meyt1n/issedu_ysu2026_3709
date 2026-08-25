@@ -67,7 +67,7 @@ export function isSpeechInputSupported(): boolean {
 /** 识别会话结束后的快速重启间隔：压低唤醒空窗。 */
 export const VOICE_RESTART_DELAY_MS = 30
 
-export const DEFAULT_WAKE_PHRASE = '小燕打开'
+export const DEFAULT_WAKE_PHRASE = '小燕小燕'
 
 export function createSpeechRecognition(
   lang = 'zh-CN',
@@ -155,7 +155,7 @@ export function latestTranscriptFromEvent(event: SpeechRecognitionEventLike): st
 
 const WAKE_ASR_CORRECTIONS: ReadonlyArray<readonly [RegExp, string]> = [
   [/晓燕|小严|小研|小嫣|小延|小言|小烟/g, '小燕'],
-  [/打开开|打开下|打开一下|打开助手|打开家健镜/g, '打开'],
+  [/小燕啊小燕|小燕呀小燕|小燕呢小燕|嘿小燕小燕|喂小燕小燕/g, '小燕小燕'],
 ]
 
 export function normalizeVoiceText(text: string): string {
