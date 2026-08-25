@@ -18,6 +18,7 @@ export type IconName =
   | 'eye'
   | 'heart'
   | 'pill'
+  | 'mic'
 
 const props = withDefaults(
   defineProps<{
@@ -59,6 +60,7 @@ const PATHS: Record<IconName, string[]> = {
     'M8.7 4.2a5.4 5.4 0 0 1 7.6 0l3.5 3.5a5.4 5.4 0 0 1 0 7.6l-4.5 4.5a5.4 5.4 0 0 1-7.6 0l-3.5-3.5a5.4 5.4 0 0 1 0-7.6z',
     'M6.9 9.6l7.5 7.5',
   ],
+  mic: ['M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z', 'M19 11a7 7 0 0 1-14 0', 'M12 19v3'],
 }
 </script>
 

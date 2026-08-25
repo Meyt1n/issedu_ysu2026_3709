@@ -1,6 +1,8 @@
 import type {
   ApiErrorCode,
   ApiErrorEnvelope,
+  AssistantChatInput,
+  AssistantResponse,
   CapabilityResponse,
   HealthEvent,
   HealthResponse,
@@ -315,6 +317,27 @@ export class ApiClient {
       `/api/v1/vision-tasks/${encodeURIComponent(taskId)}`,
       { method: 'GET' },
       options,
+    )
+  }
+
+  /**
+   * 本地助手聊天：连向「我的」里配置的家庭服务器（例如电脑上的 FastAPI）。
+   * 不上传音频；只发送用户确认后的文字草稿。本地大模型可能较慢，超时放宽到 240s。
+   */
+  assistantChat(
+    input: AssistantChatInput,
+    householdId?: string,
+    memberId?: string,
+    options?: RequestOptions,
+  ): Promise<AssistantResponse> {
+    const params = new URLSearchParams()
+    if (householdId) params.set('household_id', householdId)
+    if (memberId) params.set('member_id', memberId)
+    const query = params.toString()
+    return this.request(
+      `/api/v1/assistant/chat${query ? `?${query}` : ''}`,
+      { method: 'POST', body: JSON.stringify(input) },
+      { timeoutMs: 240_000, ...options },
     )
   }
 }
