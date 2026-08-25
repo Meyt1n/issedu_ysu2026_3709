@@ -25,11 +25,18 @@ FACE_FEATURE_VERSION = "face-template-v2"
 LEGACY_FACE_ALGORITHM_VERSION = "opencv-haar-grayscale-v1"
 LEGACY_FACE_FEATURE_VERSION = "face-template-v1"
 FACE_CONSENT_VERSION = "face-registration-consent-v1"
-FACE_LIVENESS_VERSION = "motion-sequence-v1"
+FACE_LIVENESS_VERSION = "motion-sequence-v2"
 _FEATURE_SIZE = 64
 _LEGACY_FEATURE_SIZE = 32
 FACE_MATCH_THRESHOLD = 0.82
 FAMILY_FACE_MATCH_MARGIN = 0.06
+# motion-sequence-v2: a consecutive pair at or above this similarity is an
+# identical (replayed) frame; every pair of a live capture must show change.
+FACE_LIVENESS_MAX_PAIR_SIMILARITY = 0.9995
+# Frames captured within one short live sequence must stay recognisably the
+# same subject; below this floor the sequence looks spliced from different
+# sources (e.g. a victim's photo mixed with someone else's motion frames).
+FACE_SEQUENCE_CONSISTENCY_FLOOR = 0.55
 _FACE_CASCADE_FILENAME = "haarcascade_frontalface_default.xml"
 
 
@@ -190,7 +197,16 @@ def face_template_similarity(left: bytes, right: bytes) -> float:
 
 
 def check_face_liveness(templates: list[bytes]) -> None:
-    """Require a short motion sequence; identical replayed frames are rejected."""
+    """Require a short one-subject motion sequence (motion-sequence-v2).
+
+    v1 only rejected a sequence in which *no* pair of consecutive frames
+    changed, so ``[still, still, other]`` passed.  v2 requires every
+    consecutive pair to show measurable change (no replayed frame anywhere in
+    the sequence) and to stay recognisably the same subject, which rejects
+    sequences spliced together from different sources.  This remains a
+    deterministic, versioned local OpenCV heuristic, not production-grade
+    anti-spoofing.
+    """
     if len(templates) < 2 or len(templates) > 3:
         raise ValueError("FACE_LIVENESS_FAILED")
     try:
@@ -200,8 +216,21 @@ def check_face_liveness(templates: list[bytes]) -> None:
         ]
     except ValueError as exc:
         raise ValueError("FACE_LIVENESS_FAILED") from exc
-    # A live sequence must contain measurable pose/illumination change.  This
-    # intentionally rejects a repeated still image while keeping the heuristic
-    # deterministic and versioned for this local OpenCV implementation.
-    if all(similarity >= 0.9995 for similarity in similarities):
-        raise ValueError("FACE_LIVENESS_FAILED")
+    for similarity in similarities:
+        if similarity >= FACE_LIVENESS_MAX_PAIR_SIMILARITY:
+            raise ValueError("FACE_LIVENESS_FAILED")
+        if similarity < FACE_SEQUENCE_CONSISTENCY_FLOOR:
+            raise ValueError("FACE_LIVENESS_FAILED")
+
+
+def aggregate_match_scores(scores: list[float]) -> float:
+    """Reduce per-frame similarities to the score used against the threshold.
+
+    Every submitted frame must independently match the stored template, so the
+    aggregate is the *minimum*.  Taking the best frame (``max``) would let an
+    attacker pass by injecting a single photo of the victim among otherwise
+    unrelated motion frames.
+    """
+    if not scores:
+        raise ValueError("FACE_TEMPLATE_INVALID")
+    return min(scores)

@@ -83,6 +83,7 @@ from app.face_credentials import (
     FACE_MATCH_THRESHOLD,
     FAMILY_FACE_MATCH_MARGIN,
     LEGACY_FACE_ALGORITHM_VERSION,
+    aggregate_match_scores,
     check_face_liveness,
     decrypt_template,
     encrypt_template,
@@ -1712,7 +1713,7 @@ async def auth_face_login(
 ) -> dict[str, Any]:
     """Match an in-memory motion sequence and issue the normal Bearer session."""
     try:
-        rate_key = check_face_rate_limit(household_id, actor_id)
+        rate_key = check_face_rate_limit(household_id, actor_id, session)
     except HTTPException:
         _record_authentication_audit(
             session,
@@ -1725,7 +1726,7 @@ async def auth_face_login(
         raise
 
     def failed(reason: str = "FACE_AUTH_FAILED") -> NoReturn:
-        record_face_failure(rate_key)
+        record_face_failure(rate_key, session)
         _record_authentication_audit(
             session,
             household_id=household_id,
@@ -1806,10 +1807,13 @@ async def auth_face_login(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="FACE_AUTH_UNAVAILABLE",
             ) from exc
-        best_similarity = max(
-            face_template_similarity(template, stored_template) for template in templates
+        # Every frame of the motion sequence must independently match the
+        # stored template; a single injected photo of the account holder among
+        # unrelated motion frames must not be enough to log in.
+        match_score = aggregate_match_scores(
+            [face_template_similarity(template, stored_template) for template in templates]
         )
-        if best_similarity < FACE_MATCH_THRESHOLD:
+        if match_score < FACE_MATCH_THRESHOLD:
             failed()
     except HTTPException:
         raise
@@ -1833,7 +1837,7 @@ async def auth_face_login(
             frame_bytes[index] = b""
         templates.clear()
 
-    clear_face_failures(rate_key)
+    clear_face_failures(rate_key, session)
     _record_authentication_audit(
         session,
         household_id=household_id,
@@ -1859,7 +1863,7 @@ async def auth_family_face_login(
     """Identify one member inside the already bound household (1:N)."""
     rate_actor = family_face_rate_actor()
     try:
-        rate_key = check_face_rate_limit(household_id, rate_actor)
+        rate_key = check_face_rate_limit(household_id, rate_actor, session)
     except HTTPException:
         _record_authentication_audit(
             session,
@@ -1872,7 +1876,7 @@ async def auth_family_face_login(
         raise
 
     def failed(reason: str = "FACE_AUTH_FAILED") -> NoReturn:
-        record_face_failure(rate_key)
+        record_face_failure(rate_key, session)
         _record_authentication_audit(
             session,
             household_id=household_id,
@@ -1955,8 +1959,12 @@ async def auth_family_face_login(
             try:
                 stored_template = decrypt_template(credential.encrypted_template)
                 templates = templates_by_algorithm[credential.algorithm_version]
-                score = max(
-                    face_template_similarity(template, stored_template) for template in templates
+                # Same rule as 1:1 login: all frames must match one member.
+                score = aggregate_match_scores(
+                    [
+                        face_template_similarity(template, stored_template)
+                        for template in templates
+                    ]
                 )
             except (HTTPException, ValueError, KeyError):
                 decrypt_failures += 1
@@ -2000,7 +2008,7 @@ async def auth_family_face_login(
             templates.clear()
         templates_by_algorithm.clear()
 
-    clear_face_failures(rate_key)
+    clear_face_failures(rate_key, session)
     _record_authentication_audit(
         session,
         household_id=household_id,
@@ -2200,6 +2208,19 @@ async def register_face_credential(
     if active is not None and not replace_existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="FACE_CREDENTIAL_EXISTS")
 
+    # Verify the PIN/password/step-up confirmation before touching any
+    # biometric pixels: without a valid second factor the endpoint must not
+    # act as a face-quality/liveness oracle or burn CPU on frame processing.
+    _confirm_face_registration(
+        actor_id=actor_id,
+        household_id=household.id,
+        session_token=session_token,
+        confirmation_method=confirmation_method,
+        confirmation_code=confirmation_code,
+        confirmation_challenge_id=confirmation_challenge_id,
+        session=session,
+    )
+
     # ``file`` remains accepted for one release so old local clients do not
     # break. The web UI always sends a 2–3 frame dynamic sequence.
     uploads = list(frames)
@@ -2277,21 +2298,15 @@ async def register_face_credential(
             detail="FACE_FRAME_INVALID",
         )
 
-    _confirm_face_registration(
-        actor_id=actor_id,
-        household_id=household.id,
-        session_token=session_token,
-        confirmation_method=confirmation_method,
-        confirmation_code=confirmation_code,
-        confirmation_challenge_id=confirmation_challenge_id,
-        session=session,
-    )
     now = datetime.now(UTC)
     previous_version = active.credential_version if active is not None else 0
     if active is not None:
         active.status = "REVOKED"
         active.revoked_at = now
         active.encrypted_template = b""
+        # Rebinding replaces the trusted template, so household-scoped
+        # sessions issued under the previous credential stop working now.
+        revoke_household_sessions(household.id, {target}, session)
         session.flush()
 
     credential = FaceCredential(
@@ -2358,6 +2373,10 @@ def revoke_face_credential(
         credential.status = "DELETED"
         credential.revoked_at = datetime.now(UTC)
         credential.encrypted_template = b""
+        # HCT-426: revoking the credential must also cut live access that was
+        # obtained with it, so the account's household-scoped sessions
+        # (face/PIN issued) become invalid immediately.
+        revoke_household_sessions(household.id, {credential.actor_id}, session)
         session.add(
             AccessAudit(
                 household_id=household.id,

@@ -1,13 +1,14 @@
 """
 HCT-107: Local auth tests — password, rate limiting, sessions, PIN challenges.
 HCT-427: step-up challenges carry no secret and session revalidation is explicit.
+HCT-425: face challenges stay household-isolated and face lockouts are durable.
 """
 
 import time
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -24,7 +25,7 @@ from app.auth import (
     verify_password,
     verify_pin_challenge,
 )
-from app.models import Base
+from app.models import AuthRateLimitAttempt, Base
 
 
 @pytest.fixture(autouse=True)
@@ -40,7 +41,6 @@ def isolated_auth_database(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(auth_module, "SessionLocal", session_factory)
     auth_module._pin_challenges.clear()
     auth_module._face_challenges.clear()
-    auth_module._face_failed_attempts.clear()
     try:
         yield
     finally:
@@ -272,3 +272,50 @@ class TestStepUpChallenge:
         assert exc.value.status_code == 401
         with pytest.raises(HTTPException):
             validate_session(token)
+
+
+class TestFaceChallengeIsolation:
+    def test_flooding_one_household_cannot_evict_another(self):
+        victim = auth_module.create_face_challenge("owner-a", "hh-face-victim")
+        for _ in range(auth_module.MAX_FACE_CHALLENGES_PER_HOUSEHOLD * 3):
+            auth_module.create_face_challenge("attacker", "hh-face-attacker")
+
+        # The victim household's challenge stays consumable exactly once.
+        auth_module.consume_face_challenge(victim["challenge_id"], "owner-a", "hh-face-victim")
+        with pytest.raises(HTTPException) as exc:
+            auth_module.consume_face_challenge(
+                victim["challenge_id"], "owner-a", "hh-face-victim"
+            )
+        assert exc.value.status_code == 401
+
+    def test_outstanding_challenges_per_household_stay_capped(self):
+        for _ in range(auth_module.MAX_FACE_CHALLENGES_PER_HOUSEHOLD * 2):
+            auth_module.create_face_challenge("owner-b", "hh-face-cap")
+        stored = [
+            challenge
+            for challenge in auth_module._face_challenges.values()
+            if challenge["household_id"] == "hh-face-cap"
+        ]
+        assert len(stored) <= auth_module.MAX_FACE_CHALLENGES_PER_HOUSEHOLD
+
+
+class TestFaceRateLimitDurability:
+    def test_face_failures_are_stored_in_the_shared_table(self):
+        rate_key = auth_module.check_face_rate_limit("hh-face-rate", "grandpa")
+        for _ in range(5):
+            auth_module.record_face_failure(rate_key)
+
+        with pytest.raises(HTTPException) as exc:
+            auth_module.check_face_rate_limit("hh-face-rate", "grandpa")
+        assert exc.value.status_code == 429
+
+        with auth_module._session_scope(None) as db:
+            stored = db.scalar(
+                select(func.count(AuthRateLimitAttempt.id)).where(
+                    AuthRateLimitAttempt.rate_key == rate_key
+                )
+            )
+        assert stored == 5
+
+        auth_module.clear_face_failures(rate_key)
+        assert auth_module.check_face_rate_limit("hh-face-rate", "grandpa") == rate_key
