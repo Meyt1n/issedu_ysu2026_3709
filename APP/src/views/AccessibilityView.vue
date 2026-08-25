@@ -6,6 +6,7 @@ import AppIcon from '@/components/AppIcon.vue'
 import SwitchRow from '@/components/SwitchRow.vue'
 import { createSpeaker } from '@/composables/useSpeech'
 import {
+  AUTO_SEND_PRESETS,
   inspectChineseVoicePacks,
   loadVoicePreferences,
   saveVoicePreferences,
@@ -48,6 +49,11 @@ const silencePresetId = computed(() => {
   return match?.id ?? 'custom'
 })
 
+const autoSendPresetId = computed(() => {
+  const match = AUTO_SEND_PRESETS.find(preset => preset.delayMs === voicePrefs.value.autoSendDelayMs)
+  return match?.id ?? 'custom'
+})
+
 function applySilencePreset(presetId: string): void {
   const preset = SILENCE_PRESETS.find(item => item.id === presetId)
   if (!preset) return
@@ -55,6 +61,12 @@ function applySilencePreset(presetId: string): void {
     silenceMs: preset.silenceMs,
     continuationSilenceMs: preset.continuationSilenceMs,
   })
+}
+
+function applyAutoSendPreset(presetId: string): void {
+  const preset = AUTO_SEND_PRESETS.find(item => item.id === presetId)
+  if (!preset) return
+  voicePrefs.value = saveVoicePreferences({ autoSendDelayMs: preset.delayMs })
 }
 
 function toggleVoicePref<K extends keyof VoicePreferences>(key: K, value: VoicePreferences[K]): void {
@@ -215,9 +227,17 @@ async function checkVoicePacks(): Promise<void> {
           </option>
         </select>
       </label>
+      <label class="pref-row">
+        <span>说完后自动发送</span>
+        <select :value="autoSendPresetId" @change="applyAutoSendPreset(($event.target as HTMLSelectElement).value)">
+          <option v-for="preset in AUTO_SEND_PRESETS" :key="preset.id" :value="preset.id">
+            {{ preset.label }}
+          </option>
+        </select>
+      </label>
       <SwitchRow
-        title="听写确认音"
-        description="口述结束后轻量播报「好的，请确认后发送」（可关闭）"
+        title="听写提示音"
+        description="口述结束开始倒计时时轻量播报提示（可关闭）"
         :model-value="voicePrefs.confirmSound"
         @update:model-value="value => toggleVoicePref('confirmSound', value)"
       />
@@ -229,7 +249,7 @@ async function checkVoicePacks(): Promise<void> {
       />
       <SwitchRow
         title="听写后语音指令"
-        description="听写结束后聆听白名单指令：发送吧（需两遍确认）、取消、上一条再说一遍、停止朗读、重说"
+        description="听写结束后聆听白名单指令：取消、继续说、发送吧（立即发送）、上一条再说一遍、停止朗读、重说"
         :model-value="voicePrefs.voiceCommands"
         @update:model-value="value => toggleVoicePref('voiceCommands', value)"
       />

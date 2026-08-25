@@ -18,6 +18,8 @@ export interface VoicePreferences {
   wakePhrase: string
   /** 听写结束后是否聆听白名单语音指令（发送/重读等）。 */
   voiceCommands: boolean
+  /** 听写结束后无新输入，等待多久自动发送（毫秒）。 */
+  autoSendDelayMs: number
 }
 
 export const DEFAULT_VOICE_PREFERENCES: VoicePreferences = {
@@ -27,7 +29,15 @@ export const DEFAULT_VOICE_PREFERENCES: VoicePreferences = {
   doubleWake: true,
   wakePhrase: DEFAULT_WAKE_PHRASE,
   voiceCommands: true,
+  autoSendDelayMs: 3000,
 }
+
+export const AUTO_SEND_PRESETS = [
+  { id: 'off', label: '不自动发送', delayMs: 0 },
+  { id: 'short', label: '约 2 秒后发送', delayMs: 2000 },
+  { id: 'standard', label: '约 3 秒后发送', delayMs: 3000 },
+  { id: 'long', label: '约 5 秒后发送', delayMs: 5000 },
+] as const
 
 export const SILENCE_PRESETS = [
   { id: 'short', label: '偏短（约 1.6 秒）', silenceMs: 1600, continuationSilenceMs: 2400 },
@@ -69,6 +79,12 @@ export function loadVoicePreferences(): VoicePreferences {
       doubleWake: raw.doubleWake !== false,
       wakePhrase: normalizeWakePhrase(raw.wakePhrase),
       voiceCommands: raw.voiceCommands !== false,
+      autoSendDelayMs:
+        typeof raw.autoSendDelayMs === 'number'
+        && raw.autoSendDelayMs >= 0
+        && raw.autoSendDelayMs <= 10_000
+          ? raw.autoSendDelayMs
+          : DEFAULT_VOICE_PREFERENCES.autoSendDelayMs,
     }
   } catch {
     return { ...DEFAULT_VOICE_PREFERENCES }

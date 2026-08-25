@@ -12,8 +12,9 @@ import {
 } from '../assistant/chatSession'
 import { normalizeSuggestedQuestions } from '../assistant/followUp'
 import {
+  AUTO_SEND_PRESETS,
+  createAutoSendScheduler,
   createDictationController,
-  createSendConfirmGate,
   getSpeakingIndex,
   getSpeakingSegments,
   inspectChineseVoicePacks,
@@ -140,19 +141,23 @@ const silencePresetId = computed(() => {
   return match?.id ?? 'custom'
 })
 
-const sendConfirmGate = createSendConfirmGate({
-  onPrompt: () => {
-    voiceSendHint.value = '请再说一遍「发送吧」以确认发送'
-    if (loadVoicePreferences().confirmSound) speakText('请再说一遍发送吧，确认发送')
+const sendConfirmGate = createAutoSendScheduler({
+  onArmed: (delayMs) => {
+    const sec = Math.round(delayMs / 1000)
+    voiceSendHint.value = `无新输入，约 ${sec} 秒后自动发送；可说「取消」或「继续说」`
+    if (loadVoicePreferences().confirmSound) speakText(`${sec} 秒后发送，可说取消`)
   },
-  onConfirmed: () => {
+  onTick: (remainMs) => {
+    if (remainMs <= 0) return
+    const sec = Math.max(1, Math.ceil(remainMs / 1000))
+    voiceSendHint.value = `无新输入，${sec} 秒后自动发送；可说「取消」「继续说」，或说「发送吧」立即发送`
+  },
+  onAutoSend: (content) => {
     voiceSendHint.value = ''
+    if (content.trim() && !sending.value) void send(content)
   },
   onCancelled: () => {
-    voiceSendHint.value = '已取消语音发送'
-  },
-  onExpired: () => {
-    voiceSendHint.value = '确认已超时，请再说「发送吧」或点发送'
+    voiceSendHint.value = '已取消自动发送'
   },
 })
 
@@ -163,6 +168,14 @@ function applySilencePreset(presetId: string): void {
     silenceMs: preset.silenceMs,
     continuationSilenceMs: preset.continuationSilenceMs,
   })
+}
+
+function applyAutoSendPreset(presetId: string): void {
+  const preset = AUTO_SEND_PRESETS.find(item => item.id === presetId)
+  if (!preset) return
+  voicePrefs.value = saveVoicePreferences({ autoSendDelayMs: preset.delayMs })
+  sendConfirmGate.reset()
+  voiceSendHint.value = ''
 }
 
 function toggleVoicePref<K extends keyof VoicePreferences>(key: K, value: VoicePreferences[K]): void {
@@ -200,17 +213,24 @@ function repeatLastAnswer(): void {
   toggleSpeech(index, last.content)
 }
 
+function armAutoSend(draftText?: string): void {
+  const delay = loadVoicePreferences().autoSendDelayMs
+  if (!delay || delay <= 0) {
+    voiceSendHint.value = '已听完，请确认后点发送；也可说「发送吧」立即发送'
+    return
+  }
+  sendConfirmGate.start(draftText ?? draft.value, delay)
+}
+
 function handleVoiceCommand(command: VoiceCommandId): void {
   if (command === 'confirm_send') {
     if (!draft.value.trim() || sending.value) {
       voiceError.value = '没有可发送的草稿。'
       return
     }
-    const result = sendConfirmGate.handleSendIntent()
-    if (result === 'confirmed') {
-      voiceSendHint.value = ''
-      void send()
-    }
+    sendConfirmGate.reset()
+    voiceSendHint.value = ''
+    void send()
     return
   }
   if (command === 'cancel_send') {
@@ -218,6 +238,7 @@ function handleVoiceCommand(command: VoiceCommandId): void {
     return
   }
   if (command === 'repeat_answer') {
+    sendConfirmGate.cancel()
     repeatLastAnswer()
     return
   }
@@ -233,6 +254,7 @@ function handleVoiceCommand(command: VoiceCommandId): void {
     return
   }
   if (command === 'resume_dictation') {
+    sendConfirmGate.cancel()
     ensureDictation().resumeDictation()
   }
 }
@@ -259,14 +281,18 @@ function onDraftFocus(): void {
   if (voiceMode.value === 'active' || voiceMode.value === 'wake') {
     ensureDictation().pause()
   }
+  // 手动改字时取消自动发送，避免改到一半被发出。
+  sendConfirmGate.cancel()
 }
 
 function editDraftLine(): void {
+  sendConfirmGate.cancel()
   ensureDictation().pause()
   void nextTick(() => draftInput.value?.focus())
 }
 
 function redoVoiceDraft(): void {
+  sendConfirmGate.reset()
   ensureDictation().redoDictation()
 }
 
@@ -313,16 +339,12 @@ function ensureDictation(): DictationController {
     onNeedGesture: () => {
       needMicGesture.value = true
     },
-    onUtteranceComplete: () => {
+    onUtteranceComplete: (utteranceDraft) => {
       needMicGesture.value = false
-      sendConfirmGate.reset()
-      voiceSendHint.value = ''
       void nextTick(() => {
         sendButton.value?.focus()
       })
-      if (loadVoicePreferences().confirmSound) {
-        speakText('好的，请确认后发送')
-      }
+      armAutoSend(utteranceDraft || draft.value)
     },
     onCommand: (command) => {
       handleVoiceCommand(command)
@@ -365,11 +387,15 @@ async function bootstrapVoice(): Promise<void> {
 const voiceStatusText = computed(() => {
   if (voiceMode.value === 'wake') return `正在聆听唤醒词：“${wakePhrase.value}”`
   if (voiceMode.value === 'active') return '已唤醒，识别中的文字会实时填入草稿'
-  if (voiceMode.value === 'ready') return '已听完，请确认草稿后发送'
-  if (voiceMode.value === 'command') {
-    return voiceSendHint.value || '可说白名单指令：发送吧（需两遍）、取消、上一条再说一遍、停止朗读、重说'
+  if (voiceMode.value === 'ready' || voiceMode.value === 'command') {
+    return voiceSendHint.value || '说完后会倒计时自动发送；可说取消、继续说，或发送吧立即发送'
   }
   return needMicGesture.value ? '点按下方按钮一次以开启麦克风聆听' : ''
+})
+
+const autoSendPresetId = computed(() => {
+  const match = AUTO_SEND_PRESETS.find(preset => preset.delayMs === voicePrefs.value.autoSendDelayMs)
+  return match?.id ?? 'custom'
 })
 
 const voiceButtonLabel = computed(() => {
@@ -1284,8 +1310,9 @@ onBeforeUnmount(() => {
       {{ voiceError }}
     </p>
     <p class="text-faint" style="font-size: 12px; line-height: 1.6; margin: 10px 0 0">
-      先点击开启唤醒，再说「{{ wakePhrase }}」开始实时填入草稿；发送前可修改。
-      听写结束后可说白名单指令（发送需说两遍「发送吧」确认）。语音回复由浏览器本地朗读，原始音频不会上传到本地助手 API。
+      先点击开启唤醒，再说「{{ wakePhrase }}」开始实时填入草稿。
+      说完并静音后会倒计时自动发送（可在下方偏好改时长或关闭）；等待时可说「取消」「继续说」，或说「发送吧」立即发送。
+      语音回复由浏览器本地朗读，原始音频不会上传到本地助手 API。
     </p>
 
     <section class="voice-prefs-panel card-sub" aria-label="语音偏好与自检">
@@ -1320,12 +1347,20 @@ onBeforeUnmount(() => {
         </select>
       </label>
       <label class="voice-pref-row">
+        <span>说完后自动发送</span>
+        <select :value="autoSendPresetId" @change="applyAutoSendPreset(($event.target as HTMLSelectElement).value)">
+          <option v-for="preset in AUTO_SEND_PRESETS" :key="preset.id" :value="preset.id">
+            {{ preset.label }}
+          </option>
+        </select>
+      </label>
+      <label class="voice-pref-row">
         <input
           type="checkbox"
           :checked="voicePrefs.confirmSound"
           @change="toggleVoicePref('confirmSound', ($event.target as HTMLInputElement).checked)"
         />
-        <span>听写结束后轻量确认音</span>
+        <span>听写结束后轻量提示音</span>
       </label>
       <label class="voice-pref-row">
         <input

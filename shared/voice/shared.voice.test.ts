@@ -23,7 +23,7 @@ import {
   validateWakePhrase,
   WAKE_PHRASE_PRESETS,
 } from './wakePhrase'
-import { createSendConfirmGate, matchVoiceCommand } from './commands'
+import { createAutoSendScheduler, matchVoiceCommand } from './commands'
 
 describe('shared voice recognition', () => {
   it('uses 小燕小燕 as the default wake phrase', () => {
@@ -308,18 +308,27 @@ describe('wake phrase and voice commands', () => {
     expect(matchVoiceCommand('今天天气怎么样')).toBe(null)
   })
 
-  it('createSendConfirmGate prompts then confirms on second intent', () => {
-    const prompts: string[] = []
-    const confirmed: string[] = []
-    const gate = createSendConfirmGate({
-      onPrompt: () => prompts.push('prompt'),
-      onConfirmed: () => confirmed.push('confirmed'),
+  it('createAutoSendScheduler sends after quiet delay and can cancel', () => {
+    vi.useFakeTimers()
+    const sent: string[] = []
+    const ticks: number[] = []
+    const gate = createAutoSendScheduler({
+      delayMs: 3000,
+      onTick: (ms) => ticks.push(ms),
+      onAutoSend: (draft) => sent.push(draft),
     })
-    expect(gate.handleSendIntent()).toBe('prompt')
-    expect(prompts).toEqual(['prompt'])
-    expect(confirmed).toEqual([])
-    expect(gate.handleSendIntent()).toBe('confirmed')
-    expect(confirmed).toEqual(['confirmed'])
+    expect(gate.start('查询用药提醒')).toBe(true)
+    expect(gate.isPending()).toBe(true)
+    vi.advanceTimersByTime(2990)
+    expect(sent).toEqual([])
+    vi.advanceTimersByTime(20)
+    expect(sent).toEqual(['查询用药提醒'])
     expect(gate.isPending()).toBe(false)
+
+    gate.start('第二句')
+    gate.cancel()
+    vi.advanceTimersByTime(5000)
+    expect(sent).toEqual(['查询用药提醒'])
+    vi.useRealTimers()
   })
 })
