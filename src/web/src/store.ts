@@ -162,7 +162,7 @@ export function formatError(cause: unknown): string {
     }
     if (cause.status === 422) {
       if (cause.message === 'FACE_FRAME_LOW_QUALITY') {
-        return '人脸图片质量不足：请使用至少 640×480 的清晰正面照片，保证光线均匀、仅有一张人脸且不要裁切脸部。'
+        return '摄像头画面太小或过暗过亮：请确认摄像头分辨率不低于 480×360，避免全黑画面或强逆光，然后重新采集。'
       }
       if (cause.message === 'FACE_TOO_SMALL') return '人脸在画面中太小，请靠近摄像头，让整张脸约占画面六分之一以上。'
       if (cause.message === 'FACE_TOO_LARGE') return '人脸在画面中过大或贴边，请稍退后，保证整张脸完整入画。'

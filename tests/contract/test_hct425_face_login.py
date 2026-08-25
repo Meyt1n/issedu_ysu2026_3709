@@ -1,12 +1,66 @@
 from datetime import UTC, datetime
 
-from ai.vision import quality_gate
+import cv2
+import numpy as np
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app import routes
 from app.face_credentials import encrypt_template
 from app.models import FaceCredential
+
+
+def _webcam_selfie_jpeg(width: int = 960, height: int = 540, *, seed: int = 7) -> bytes:
+    """Guided-capture style frame: one person in front of a plain wall.
+
+    Low edge density on purpose — the exact kind of valid frame the
+    medicine-carton OCR gate used to reject before HCT-424 gave face frames
+    their own gate.  These frames must flow through the *real* gate.
+    """
+    rng = np.random.default_rng(seed)
+    frame = np.full((height, width, 3), 160.0, dtype=np.float32)
+    frame += rng.normal(0.0, 2.0, frame.shape).astype(np.float32)
+    center_x, center_y = width // 2, int(height * 0.45)
+    short = min(width, height)
+    cv2.ellipse(
+        frame,
+        (center_x, height),
+        (int(width * 0.30), int(height * 0.45)),
+        0, 180, 360, (70, 60, 55), -1,
+    )
+    axes = (int(short * 0.20), int(short * 0.28))
+    cv2.ellipse(frame, (center_x, center_y), axes, 0, 0, 360, (150, 170, 205), -1)
+    eye_y = center_y - axes[1] // 5
+    for dx in (-axes[0] // 2, axes[0] // 2):
+        cv2.circle(frame, (center_x + dx, eye_y), 6, (30, 30, 30), -1)
+    cv2.ellipse(frame, (center_x, center_y + axes[1] // 2), (20, 8), 0, 0, 180, (80, 80, 140), 2)
+    ok, encoded = cv2.imencode(
+        ".jpg",
+        np.clip(frame, 0, 255).astype(np.uint8),
+        [cv2.IMWRITE_JPEG_QUALITY, 90],
+    )
+    assert ok
+    return encoded.tobytes()
+
+
+def _webcam_frames(
+    prefix: str,
+    count: int = 3,
+    *,
+    width: int = 960,
+    height: int = 540,
+) -> list[tuple[str, tuple[str, bytes, str]]]:
+    return [
+        (
+            "frames",
+            (
+                f"{prefix}-{index}.jpg",
+                _webcam_selfie_jpeg(width, height, seed=index),
+                "image/jpeg",
+            ),
+        )
+        for index in range(1, count + 1)
+    ]
 
 
 def test_face_challenge_is_opaque_and_single_use(client: TestClient) -> None:
@@ -116,12 +170,6 @@ def test_dynamic_face_registration_can_be_used_for_local_login(
     ).json()
 
     template = b"\x00\x00\x80\x3f" * 128
-    monkeypatch.setattr(quality_gate, "decode_image", lambda _data: object())
-    monkeypatch.setattr(
-        quality_gate,
-        "assess_image",
-        lambda *_args, **_kwargs: {"allow_downstream": True},
-    )
     monkeypatch.setattr(
         routes,
         "extract_face_template",
@@ -135,10 +183,9 @@ def test_dynamic_face_registration_can_be_used_for_local_login(
     )
     monkeypatch.setattr(routes, "check_face_liveness", lambda *_args, **_kwargs: None)
 
-    files = [
-        ("frames", (f"frame-{index}.jpg", b"\xff\xd8\xffdemo", "image/jpeg"))
-        for index in range(1, 4)
-    ]
+    # Regression HCT-424: plain-background webcam frames must pass the real
+    # face frame gate (the old carton OCR gate rejected them as low quality).
+    files = _webcam_frames("frame")
     registered = client.post(
         f"/api/v1/households/{household}/face-credentials",
         headers={"Authorization": f"Bearer {owner_token}"},
@@ -227,12 +274,6 @@ def test_family_face_login_identifies_the_best_member_inside_bound_household(
     )
     db_session.commit()
 
-    monkeypatch.setattr(quality_gate, "decode_image", lambda _data: object())
-    monkeypatch.setattr(
-        quality_gate,
-        "assess_image",
-        lambda *_args, **_kwargs: {"allow_downstream": True},
-    )
     monkeypatch.setattr(
         routes,
         "extract_face_template",
@@ -244,10 +285,7 @@ def test_family_face_login_identifies_the_best_member_inside_bound_household(
         json={"household_id": household},
     )
     assert challenge.status_code == 200, challenge.text
-    files = [
-        ("frames", (f"family-frame-{index}.jpg", b"\xff\xd8\xffdemo", "image/jpeg"))
-        for index in range(1, 4)
-    ]
+    files = _webcam_frames("family-frame")
     logged_in = client.post(
         "/api/v1/auth/family-face-login",
         data={
@@ -298,12 +336,6 @@ def test_face_login_rejects_a_single_injected_matching_frame(
     )
     db_session.commit()
 
-    monkeypatch.setattr(quality_gate, "decode_image", lambda _data: object())
-    monkeypatch.setattr(
-        quality_gate,
-        "assess_image",
-        lambda *_args, **_kwargs: {"allow_downstream": True},
-    )
     # First frame is a stolen photo of the account holder; the remaining
     # frames belong to the attacker and provide the motion for liveness.
     extracted = iter([victim_template, attacker_template, attacker_template])
@@ -317,10 +349,7 @@ def test_face_login_rejects_a_single_injected_matching_frame(
         "/api/v1/auth/face-challenge",
         json={"household_id": household, "actor_id": member["actor_id"]},
     )
-    files = [
-        ("frames", (f"inject-frame-{index}.jpg", b"\xff\xd8\xffdemo", "image/jpeg"))
-        for index in range(1, 4)
-    ]
+    files = _webcam_frames("inject-frame")
     rejected = client.post(
         "/api/v1/auth/face-login",
         data={
@@ -358,12 +387,6 @@ def test_deleting_a_face_credential_revokes_household_sessions(
     ).json()
 
     template = b"\x00\x00\x80\x3f" * 128
-    monkeypatch.setattr(quality_gate, "decode_image", lambda _data: object())
-    monkeypatch.setattr(
-        quality_gate,
-        "assess_image",
-        lambda *_args, **_kwargs: {"allow_downstream": True},
-    )
     monkeypatch.setattr(
         routes,
         "extract_face_template",
@@ -377,10 +400,7 @@ def test_deleting_a_face_credential_revokes_household_sessions(
     )
     monkeypatch.setattr(routes, "check_face_liveness", lambda *_args, **_kwargs: None)
 
-    files = [
-        ("frames", (f"revoke-frame-{index}.jpg", b"\xff\xd8\xffdemo", "image/jpeg"))
-        for index in range(1, 4)
-    ]
+    files = _webcam_frames("revoke-frame")
     credential = client.post(
         f"/api/v1/households/{household}/face-credentials",
         headers={"Authorization": f"Bearer {owner_token}"},
@@ -471,6 +491,46 @@ def test_face_registration_verifies_confirmation_before_processing_frames(
     assert rejected.json()["detail"] == "CONFIRMATION_FAILED"
 
 
+def test_face_registration_still_rejects_truly_low_quality_frames(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    """The face gate keeps rejecting tiny frames as FACE_FRAME_LOW_QUALITY."""
+    owner = "hct424-lowq-owner"
+    password = "hct424-lowq-owner-pass"
+    client.post("/api/v1/auth/register", json={"actor_id": owner, "password": password})
+    owner_token = client.post(
+        "/api/v1/auth/login",
+        json={"actor_id": owner, "password": password},
+    ).json()["session_token"]
+    household = client.post(
+        "/api/v1/households",
+        headers={"Authorization": f"Bearer {owner_token}"},
+        json={"name": "低质量帧拒绝"},
+    ).json()["id"]
+
+    # Extraction must never be reached when the frame gate rejects first.
+    monkeypatch.setattr(
+        routes,
+        "extract_face_template",
+        lambda _data, **_kwargs: (_ for _ in ()).throw(AssertionError("gate must reject first")),
+    )
+
+    rejected = client.post(
+        f"/api/v1/households/{household}/face-credentials",
+        headers={"Authorization": f"Bearer {owner_token}"},
+        data={
+            "consent": "true",
+            "confirmation_method": "password",
+            "confirmation_code": password,
+        },
+        files=_webcam_frames("tiny-frame", width=320, height=240),
+    )
+
+    assert rejected.status_code == 422, rejected.text
+    assert rejected.json()["detail"] == "FACE_FRAME_LOW_QUALITY"
+
+
 def test_family_face_login_rejects_an_ambiguous_member_match(
     client: TestClient,
     db_session: Session,
@@ -515,12 +575,6 @@ def test_family_face_login_rejects_an_ambiguous_member_match(
     )
     db_session.commit()
 
-    monkeypatch.setattr(quality_gate, "decode_image", lambda _data: object())
-    monkeypatch.setattr(
-        quality_gate,
-        "assess_image",
-        lambda *_args, **_kwargs: {"allow_downstream": True},
-    )
     monkeypatch.setattr(
         routes,
         "extract_face_template",
@@ -531,10 +585,7 @@ def test_family_face_login_rejects_an_ambiguous_member_match(
         "/api/v1/auth/family-face-challenge",
         json={"household_id": household},
     )
-    files = [
-        ("frames", (f"ambiguous-frame-{index}.jpg", b"\xff\xd8\xffdemo", "image/jpeg"))
-        for index in range(1, 4)
-    ]
+    files = _webcam_frames("ambiguous-frame")
     rejected = client.post(
         "/api/v1/auth/family-face-login",
         data={
