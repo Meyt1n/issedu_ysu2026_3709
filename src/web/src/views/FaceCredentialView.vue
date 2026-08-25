@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 
 import { apiClient } from '../api/client'
 import type { FaceCredential } from '../api/types'
@@ -29,6 +29,10 @@ const replaceExisting = ref(false)
 const loading = ref(false)
 const saving = ref(false)
 const error = ref('')
+const registrationSuccess = ref('')
+const highlightCredentialId = ref('')
+const credentialListEl = ref<HTMLElement | null>(null)
+const successBannerEl = ref<HTMLElement | null>(null)
 const pinDraft = ref('')
 const pinConfirmation = ref('')
 const pinSaving = ref(false)
@@ -71,7 +75,8 @@ function beginRebind(credential: FaceCredential): void {
   replaceExisting.value = true
   selectedFrames.value = []
   error.value = ''
-  pushToast('info', '已选中该账号并勾选重新绑定：请完成动态采集后提交，以升级到 SFace 多角度凭证。')
+  registrationSuccess.value = ''
+  pushToast('info', '已选中该账号并勾选重新绑定：请完成动态采集后提交。')
 }
 
 function bindCurrentHouseholdToDevice(): void {
@@ -107,6 +112,11 @@ function resetForm(): void {
   consent.value = false
   replaceExisting.value = false
   error.value = ''
+}
+
+function clearRegistrationOutcome(): void {
+  registrationSuccess.value = ''
+  highlightCredentialId.value = ''
 }
 
 function resetPinForm(): void {
@@ -167,6 +177,8 @@ async function loadCredentials(): Promise<boolean> {
 function onFramesCaptured(frames: File[]): void {
   selectedFrames.value = frames
   error.value = ''
+  registrationSuccess.value = ''
+  pushToast('success', '三张照片已拍好。请填写 PIN（或密码），勾选同意后点下方“完成注册”。')
 }
 
 async function bindMemberAccount(): Promise<void> {
@@ -196,28 +208,49 @@ async function registerCredential(): Promise<void> {
   const householdId = session.selectedHouseholdId
   if (registrationBlockReason.value) {
     error.value = registrationBlockReason.value
+    registrationSuccess.value = ''
+    pushToast('error', registrationBlockReason.value)
     return
   }
   saving.value = true
   error.value = ''
+  registrationSuccess.value = ''
+  const targetActorId = selectedActorId.value
+  const wasRebind = replaceExisting.value
   try {
     await apiClient.registerFaceCredential(
       householdId,
       selectedFrames.value,
       {
         consent: true,
-        targetActorId: selectedActorId.value,
-        replaceExisting: replaceExisting.value,
+        targetActorId,
+        replaceExisting: wasRebind,
         confirmationMethod: confirmationMethod.value,
         confirmationCode: confirmationCode.value,
       },
       requestOptions.value,
     )
-    pushToast('success', replaceExisting.value ? '人脸凭证已重新绑定。' : '人脸凭证已注册。')
+    const actorLabel = actorOptions.value.find(option => option.id === targetActorId)?.label ?? targetActorId
+    registrationSuccess.value = wasRebind
+      ? `重新绑定成功：${actorLabel} 的人脸已更新。家人可在欢迎页刷脸进入。`
+      : `录入成功：${actorLabel} 的人脸凭证已保存。家人可在欢迎页刷脸进入。`
+    pushToast('success', registrationSuccess.value)
     resetForm()
+    selectedActorId.value = targetActorId
     await loadCredentials()
+    const latest = visibleCredentials.value.find(
+      credential => credential.actor_id === targetActorId && credential.status === 'ACTIVE',
+    )
+    highlightCredentialId.value = latest?.id ?? ''
+    await nextTick()
+    successBannerEl.value?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    window.setTimeout(() => {
+      credentialListEl.value?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }, 450)
   } catch (cause) {
     error.value = formatError(cause)
+    registrationSuccess.value = ''
+    pushToast('error', error.value)
   } finally {
     saving.value = false
   }
@@ -250,6 +283,7 @@ async function deleteCredential(credential: FaceCredential): Promise<void> {
 }
 
 watch(() => session.selectedHouseholdId, () => {
+  clearRegistrationOutcome()
   resetForm()
   resetPinForm()
   void loadCredentials()
@@ -270,12 +304,22 @@ onMounted(() => {
       <div>
         <p class="eyebrow">家庭账号安全</p>
         <h1>人脸凭证注册</h1>
-        <p class="page-subtitle">为家庭成员采集三帧动态画面；后端完成活体检查，只保存加密特征，不保存视频原片。</p>
+        <p class="page-subtitle">为家人采集三张动态画面；系统只保存加密特征，不保存照片原片。注册成功后页面上方会明确提示。</p>
       </div>
       <button type="button" class="btn btn-ghost" :disabled="loading" @click="loadCredentials"><AppIcon name="refresh" :size="15" /> 刷新</button>
     </div>
 
     <p v-if="!session.isOwnerView" class="notice warn" role="alert"><AppIcon name="shield" :size="16" /> 只有家庭管理员可以管理人脸凭证。</p>
+    <p
+      v-if="registrationSuccess"
+      ref="successBannerEl"
+      class="notice ok face-register-success"
+      role="status"
+      aria-live="polite"
+    >
+      <AppIcon name="check" :size="16" /> {{ registrationSuccess }}
+      <button type="button" class="btn btn-ghost btn-small" @click="clearRegistrationOutcome">知道了</button>
+    </p>
     <p v-if="error" class="notice error" role="alert"><AppIcon name="alert" :size="16" /> {{ error }}</p>
 
     <div v-if="session.isOwnerView" class="grid-main-side">
@@ -313,13 +357,19 @@ onMounted(() => {
             :show-fallback="false"
             @captured="onFramesCaptured"
           />
-          <p v-if="selectedFrames.length > 0" class="notice ok" role="status"><AppIcon name="check" :size="16" /> 已准备 {{ selectedFrames.length }} 帧动态画面，点击注册后才会提交到本地 API。</p>
+          <p v-if="selectedFrames.length > 0" class="notice ok" role="status">
+            <AppIcon name="check" :size="16" />
+            三张照片已拍好。请确认下方 PIN（或密码）与同意项，再点「完成注册」。
+          </p>
           <fieldset><legend>二次确认方式</legend><label class="check-row"><input v-model="confirmationMethod" type="radio" value="pin" /> 家庭 PIN</label><label class="check-row"><input v-model="confirmationMethod" type="radio" value="password" /> 账号密码</label></fieldset>
           <label class="field">{{ confirmationMethod === 'pin' ? '六位 PIN' : '账号密码' }}<input v-model="confirmationCode" type="password" :inputmode="confirmationMethod === 'pin' ? 'numeric' : 'text'" autocomplete="off" required /></label>
           <label class="check-row"><input v-model="replaceExisting" type="checkbox" /> 已有凭证时重新绑定</label>
           <label class="check-row"><input v-model="consent" type="checkbox" required /> 我已获得本人明确同意，允许为所选家庭账号注册人脸凭证。</label>
           <p v-if="registrationBlockReason" class="notice warn" role="status"><AppIcon name="info" :size="16" /> {{ registrationBlockReason }}</p>
-          <button type="submit" class="btn btn-primary" :disabled="!canRegisterCredential"><AppIcon name="shield" :size="15" /> {{ saving ? '正在校验动态画面…' : '注册动态人脸凭证' }}</button>
+          <button type="submit" class="btn btn-primary" :disabled="!canRegisterCredential">
+            <AppIcon name="shield" :size="15" />
+            {{ saving ? '正在保存…' : '完成注册' }}
+          </button>
         </form>
       </section>
 
@@ -335,16 +385,21 @@ onMounted(() => {
         </form>
       </section>
 
-      <section class="card">
+      <section ref="credentialListEl" class="card face-credential-list-anchor">
         <div class="card-heading"><div><p class="eyebrow">凭证清单</p><h3 class="card-title">当前家庭的注册记录</h3></div></div>
         <p v-if="legacyCredentials.length > 0" class="notice warn" role="status">
           <AppIcon name="info" :size="16" />
-          有 {{ legacyCredentials.length }} 条灰度旧版凭证（v1/v2）。它们仍可登录，但成员区分较弱；建议重新绑定以升级到本地 SFace 多角度嵌入。
+          有 {{ legacyCredentials.length }} 条旧版凭证仍可登录，但成员区分较弱；建议重新绑定以提升识别效果。
         </p>
         <div v-if="loading" class="inline-loading">正在读取凭证状态</div>
         <div v-else-if="visibleCredentials.length === 0" class="empty-state"><AppIcon class="empty-art" name="shield" :size="38" /><strong>暂无人脸凭证</strong><p>注册成功后这里只显示版本和状态，不显示模板或原始图片。</p></div>
         <ul v-else class="list-plain">
-          <li v-for="credential in visibleCredentials" :key="credential.id" class="row-card">
+          <li
+            v-for="credential in visibleCredentials"
+            :key="credential.id"
+            class="row-card"
+            :class="{ 'is-just-registered': credential.id === highlightCredentialId }"
+          >
             <div>
               <span class="row-title">{{ actorOptions.find(option => option.id === credential.actor_id)?.label ?? credential.actor_id }}</span>
               <p class="row-meta">版本 {{ credential.credential_version }} · {{ credential.algorithm_version }} · 模板 {{ credential.template_count ?? 1 }} · {{ formatDateTime(credential.created_at) }}</p>
