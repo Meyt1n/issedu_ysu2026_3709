@@ -14,6 +14,7 @@ import {
 } from '../store'
 import { eventTypeLabel, formatDateTime, summarizeEventPayload } from '../ui/labels'
 import { memberRiskLevelLabel, memberRiskMessage } from '../ui/memberRisk'
+import { useMemberVisionTracking } from '../ui/useMemberVisionTracking'
 
 const plans = ref<PlanWorkbenchResponse | null>(null)
 const events = ref<HealthEvent[]>([])
@@ -21,6 +22,15 @@ const risks = ref<RiskListResponse | null>(null)
 const loading = ref(false)
 const loadError = ref('')
 let removeHealthRefreshListener: (() => void) | null = null
+
+const {
+  awaitingConfirmationTasks,
+  confirmedTaskIds,
+  hasActiveTasks,
+  taskStatusLabel,
+  taskStatusHint,
+  refreshTracking,
+} = useMemberVisionTracking()
 
 const memberName = computed(() => selectedMember.value?.display_name ?? '家人')
 const nextPlans = computed(() => (plans.value?.plans ?? []).slice(0, 3))
@@ -63,7 +73,10 @@ async function loadHome(): Promise<void> {
 watch(() => [session.selectedHouseholdId, session.selectedMemberId], () => void loadHome())
 onMounted(() => {
   void loadHome()
-  removeHealthRefreshListener = onHealthDataRefresh(() => void loadHome())
+  removeHealthRefreshListener = onHealthDataRefresh(() => {
+    void loadHome()
+    void refreshTracking()
+  })
 })
 onBeforeUnmount(() => removeHealthRefreshListener?.())
 </script>
@@ -79,6 +92,36 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
     <AppIcon name="info" :size="16" />
     暂时没有读取到最新记录，拍照录药仍然可以使用。
   </p>
+
+  <section v-if="awaitingConfirmationTasks.length" class="card member-pending-card" aria-label="等待家人确认的照片">
+    <div class="card-heading">
+      <div>
+        <p class="eyebrow">等待确认</p>
+        <h3 class="card-title">等待家人确认的照片</h3>
+      </div>
+      <span v-if="hasActiveTasks" class="pill gold">识别中</span>
+      <span v-else class="member-pending-count">{{ awaitingConfirmationTasks.length }} 张</span>
+    </div>
+    <p class="member-pending-intro">这些照片已交给家庭管理员核对，确认后会出现在「我的记录」里。</p>
+    <ul class="list-plain member-status-list">
+      <li v-for="task in awaitingConfirmationTasks" :key="task.id" class="member-status-row">
+        <span
+          class="member-status-icon"
+          :class="confirmedTaskIds.has(task.id) ? 'confirmed' : task.status === 'failed' || task.status === 'timeout' ? 'failed' : 'pending'"
+        >
+          <AppIcon
+            :name="confirmedTaskIds.has(task.id) ? 'check' : task.status === 'failed' || task.status === 'timeout' ? 'alert' : 'scan'"
+            :size="17"
+          />
+        </span>
+        <span><strong>{{ taskStatusLabel(task) }}</strong><small>{{ taskStatusHint(task) }}</small></span>
+      </li>
+    </ul>
+    <button type="button" class="btn btn-ghost btn-small member-pending-link" @click="setView('member-capture')">
+      <AppIcon name="scan" :size="15" />
+      查看拍照进度
+    </button>
+  </section>
 
   <section class="member-quick-grid" aria-label="常用功能">
     <button type="button" class="member-action-card member-action-primary" @click="setView('member-capture')">

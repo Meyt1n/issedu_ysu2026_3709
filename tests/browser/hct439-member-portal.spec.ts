@@ -159,6 +159,9 @@ test('家庭成员进入前台，只看到自己的照护入口和已确认记�
   await page.evaluate(() => {
     localStorage.setItem('hct-vision-tasks:grandma-account', JSON.stringify(['member-task-1']))
   })
+  await page.locator('aside.sidebar').getByRole('button', { name: '我的家庭', exact: true }).click()
+  await expect(page.getByRole('heading', { name: '等待家人确认的照片' })).toBeVisible()
+  await expect(page.getByText('正在识别', { exact: true })).toBeVisible()
   await page.locator('aside.sidebar').getByRole('button', { name: '拍照录药', exact: true }).click()
   await expect(page.getByRole('heading', { name: '把药盒拍清楚就可以了' })).toBeVisible()
   await expect(page.getByText('正在识别', { exact: true })).toBeVisible()
@@ -321,6 +324,11 @@ test('成员拍照提交后可见待确认状态，管理员确认后前台出�
   // 本机识别完成 → 等待家人确认（轮询自动刷新）。
   state.taskStatus = 'succeeded'
   await expect(page.getByText('已提交，等待家人确认')).toBeVisible({ timeout: 15_000 })
+
+  // 首页固定块同步展示待确认照片，无需进入拍照页。
+  await page.locator('aside.sidebar').getByRole('button', { name: '我的家庭', exact: true }).click()
+  await expect(page.getByRole('heading', { name: '等待家人确认的照片' })).toBeVisible()
+  await expect(page.getByText('已提交，等待家人确认')).toBeVisible()
 
   // 模拟管理员在后台确认：时间线出现带 vision_task_id 证据的已确认事件。
   state.adminConfirmed = true

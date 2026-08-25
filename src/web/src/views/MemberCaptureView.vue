@@ -1,78 +1,26 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { ref } from 'vue'
 
-import { apiClient } from '../api/client'
-import type { HealthEvent, VisionTask } from '../api/types'
+import type { VisionTask } from '../api/types'
 import AppIcon from '../components/AppIcon.vue'
 import {
   pushToast,
   rememberVisionTask,
-  rememberedVisionTasks,
-  requestOptions,
   session,
 } from '../store'
-import {
-  isMemberTaskActive,
-  memberVisionStatusHint,
-  memberVisionStatusLabel,
-} from '../ui/memberStatus'
+import { useMemberVisionTracking } from '../ui/useMemberVisionTracking'
 import VisionQualityPanel from '../vision/VisionQualityPanel.vue'
 
 const submittedTask = ref<VisionTask | null>(null)
-const trackedTasks = ref<VisionTask[]>([])
-const confirmedTaskIds = ref<Set<string>>(new Set())
-let pollTimer: ReturnType<typeof setInterval> | null = null
 
-const hasActiveTasks = computed(() => trackedTasks.value.some(task => isMemberTaskActive(task.status)))
-
-// 状态映射集中在 ui/memberStatus.ts，配套单测保证内部状态码不会透出到成员前台。
-function taskStatusLabel(task: VisionTask): string {
-  return memberVisionStatusLabel(task.status, confirmedTaskIds.value.has(task.id))
-}
-
-function taskStatusHint(task: VisionTask): string {
-  return memberVisionStatusHint(task.status, confirmedTaskIds.value.has(task.id))
-}
-
-function visionTaskIdFromEvent(event: HealthEvent): string | null {
-  const value = event.evidence?.vision_task_id
-  return typeof value === 'string' ? value : null
-}
-
-async function refreshTracking(): Promise<void> {
-  const serverTasks = session.selectedHouseholdId && session.selectedMemberId
-    ? await apiClient.listMemberVisionTasks(
-        session.selectedHouseholdId,
-        session.selectedMemberId,
-        requestOptions.value,
-      ).catch(() => [] as VisionTask[])
-    : []
-  const ids = [...new Set([
-    ...serverTasks.map(task => task.id),
-    ...rememberedVisionTasks(),
-  ])].slice(0, 5)
-  if (!ids.length) {
-    trackedTasks.value = []
-    confirmedTaskIds.value = new Set()
-    return
-  }
-  const taskResults = await Promise.allSettled(
-    ids.map(id => apiClient.getVisionTask(id, requestOptions.value)),
-  )
-  trackedTasks.value = taskResults
-    .filter((result): result is PromiseFulfilledResult<VisionTask> => result.status === 'fulfilled')
-    .map(result => result.value)
-
-  if (!session.selectedHouseholdId || !session.selectedMemberId) return
-  const timeline = await apiClient.listMemberTimeline(
-    session.selectedHouseholdId,
-    session.selectedMemberId,
-    requestOptions.value,
-  ).catch(() => [] as HealthEvent[])
-  confirmedTaskIds.value = new Set(
-    timeline.map(visionTaskIdFromEvent).filter((id): id is string => Boolean(id)),
-  )
-}
+const {
+  trackedTasks,
+  confirmedTaskIds,
+  hasActiveTasks,
+  taskStatusLabel,
+  taskStatusHint,
+  refreshTracking,
+} = useMemberVisionTracking()
 
 function onTaskCreated(task: VisionTask): void {
   rememberVisionTask(task.id)
@@ -80,17 +28,6 @@ function onTaskCreated(task: VisionTask): void {
   void refreshTracking()
   pushToast('success', '照片已提交，等家庭管理员确认后才会记入家庭记录。')
 }
-
-onMounted(() => {
-  void refreshTracking()
-  pollTimer = setInterval(() => {
-    if (hasActiveTasks.value) void refreshTracking()
-  }, 5000)
-})
-
-onBeforeUnmount(() => {
-  if (pollTimer) clearInterval(pollTimer)
-})
 </script>
 
 <template>
