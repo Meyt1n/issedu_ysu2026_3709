@@ -43,3 +43,37 @@ def seasonal_care_context(*, when: datetime | None = None) -> str:
         "回答时语气温暖具体：关心保暖、休息与是否有过敏史；结合知识卡说明常见资料，"
         "不把季节性不适写成诊断，也不编造流行疫情细节。"
     )
+
+
+def seasonal_care_hint(*, when: datetime | None = None) -> str:
+    """Return a short, user-facing seasonal care sentence.
+
+    Unlike :func:`seasonal_care_context` (which is written as model
+    instructions), this text can be shown to a family member directly.
+    It stays at the lifestyle level: no diagnosis, no drug names, no
+    outbreak claims.
+    """
+    moment = when or datetime.now(UTC)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    month = moment.astimezone().month
+
+    if month in (3, 4, 5):
+        return (
+            "眼下正值换季，早晚温差大，容易着凉或觉得鼻塞咳嗽；"
+            "可以先注意增减衣物、保持通风和充分休息。"
+        )
+    if month in (6, 7, 8):
+        return (
+            "夏天空调房和室外温差大，容易觉得鼻塞或有点「热伤风」；"
+            "可以先避免冷风直吹、适当补水休息，观察是否缓解。"
+        )
+    if month in (9, 10, 11):
+        return (
+            "秋冬换季空气干燥、温差加大，咽痒咳嗽和感冒样不适更常见；"
+            "可以先注意保暖加湿、规律作息，观察症状变化。"
+        )
+    return (
+        "冬天室内外温差大，容易受凉出现感冒样不适；"
+        "可以先注意保暖休息、适当通风，观察症状变化。"
+    )

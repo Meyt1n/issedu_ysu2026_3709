@@ -11,7 +11,6 @@ from pathlib import Path
 
 from ingest_local_knowledge import ingest_manifest
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_PATH = REPO_ROOT / "docs" / "demo" / "本地RAG知识清单.json"
 GOLD_PATH = REPO_ROOT / "docs" / "demo" / "本地RAG检索金标集.json"
@@ -33,7 +32,7 @@ def test_gold_set_top_hit_and_anti_cross(db_session) -> None:
         actor_id="demo-admin",
         index_version=gold["index_version"],
     )
-    assert result["index"]["document_count"] == 22
+    assert result["index"]["document_count"] == 23
 
     for case in gold["cases"]:
         hits = retrieve(
