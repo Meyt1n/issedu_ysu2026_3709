@@ -5,6 +5,7 @@ import {
   unavailableWebSearchAvailability,
   webSearchAvailabilityFromCatalog,
   webSearchDisabledLabel,
+  webSearchModeBadge,
   webSearchSkipDetail,
 } from './webSearchAvailability'
 
@@ -107,5 +108,40 @@ describe('webSearchSkipDetail', () => {
 
   it('does not disable the toggle when the catalog is unreachable', () => {
     expect(unavailableWebSearchAvailability().available).toBeNull()
+  })
+})
+
+describe('webSearchModeBadge', () => {
+  it('labels a ready fixture deployment as offline teaching mode', () => {
+    const state = webSearchAvailabilityFromCatalog(
+      catalog({
+        web_search_enabled: true,
+        web_search_ready: true,
+        web_search_provider: 'fixture',
+        web_search_offline_fixture: true,
+      }),
+    )
+    expect(webSearchModeBadge(state)).toBe('教学夹具 · 不出网')
+  })
+
+  it('labels a ready real provider as allowlisted real egress', () => {
+    const state = webSearchAvailabilityFromCatalog(
+      catalog({
+        web_search_enabled: true,
+        web_search_ready: true,
+        web_search_provider: 'duckduckgo_html',
+        web_search_offline_fixture: false,
+      }),
+    )
+    expect(webSearchModeBadge(state)).toBe('真实联网 · 白名单出口')
+    expect(state.provider).toBe('duckduckgo_html')
+  })
+
+  it('shows no badge when search is unavailable or unknown', () => {
+    expect(webSearchModeBadge(unavailableWebSearchAvailability())).toBeNull()
+    const disabled = webSearchAvailabilityFromCatalog(
+      catalog({ web_search_enabled: false, web_search_ready: false }),
+    )
+    expect(webSearchModeBadge(disabled)).toBeNull()
   })
 })

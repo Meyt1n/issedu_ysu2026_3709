@@ -135,7 +135,25 @@ def test_web_search_requires_request_opt_in() -> None:
 
     assert results == []
     assert trace["status"] == "skipped"
+    assert trace["reason_code"] == "NOT_OPTED_IN"
     assert trace["network_used"] is False
+    assert safe_query is None
+
+
+def test_web_search_opt_in_with_disabled_deployment_is_blocked_with_reason() -> None:
+    """Opting in without the deployment switch must say why it was blocked,
+    not silently skip the node."""
+    results, trace, safe_query = _web_search_agent(
+        "最近有什么流行性感冒吗",
+        sensitive_values=[],
+        allow_network_search=True,
+        settings=Settings(agent_web_search_enabled=False),
+    )
+
+    assert results == []
+    assert trace["status"] == "blocked"
+    assert trace["reason_code"] == "DEPLOYMENT_DISABLED"
+    assert "未在当前部署启用" in trace["summary"]
     assert safe_query is None
 
 
@@ -358,9 +376,12 @@ def test_plan_routes_agents_by_question_type() -> None:
     plan = plan_agent_execution("RULE_EVIDENCE", household_id=None, member_id=None)
     assert plan["knowledge"].run is True
 
-    # Urgent questions never wait for an external search.
-    plan = plan_agent_execution("URGENT", household_id="h", member_id="m")
+    # Urgent questions never wait for an external search, even when opted in.
+    plan = plan_agent_execution(
+        "URGENT", household_id="h", member_id="m", allow_network_search=True
+    )
     assert plan["web_search"].run is False
+    assert plan["web_search"].reason_code == "URGENT_LOCAL_FIRST"
 
 
 def test_greeting_fast_path_never_touches_model_or_tools(monkeypatch) -> None:
@@ -500,14 +521,217 @@ def test_web_search_no_results_keeps_trace_clear(monkeypatch, body: str) -> None
     assert safe_query is not None
 
 
-def test_general_plan_retrieves_knowledge_but_skips_web_search() -> None:
-    """HCT-450: GENERAL teaching questions may use the reviewed local library
-    as optional enrichment; external search stays opt-out by default."""
+def test_general_plan_runs_knowledge_and_honours_search_opt_in() -> None:
+    """HCT-430/HCT-450: GENERAL teaching questions retrieve the reviewed local
+    library; external search stays off until the user opts in (double gate
+    still lives in the web-search agent)."""
     plan = plan_agent_execution("GENERAL", household_id="h", member_id="m")
     assert plan["knowledge"].run is True
-    assert plan["web_search"].run is False
     assert plan["database"].run is True
     assert plan["rules"].run is False
+    # Not opted in: skipped with a machine-readable cause.
+    assert plan["web_search"].run is False
+    assert plan["web_search"].reason_code == "NOT_OPTED_IN"
+
+    opted_in = plan_agent_execution(
+        "GENERAL", household_id="h", member_id="m", allow_network_search=True
+    )
+    assert opted_in["web_search"].run is True
+    # Opt-in also applies without a selected member (e.g.「你能联网搜索吗」).
+    no_member = plan_agent_execution(
+        "GENERAL", household_id=None, member_id=None, allow_network_search=True
+    )
+    assert no_member["web_search"].run is True
+    assert no_member["knowledge"].run is True
+
+
+def _completed_trace(agent_id: str, role: str, source_count: int = 0) -> dict:
+    return {
+        "agent_id": agent_id, "role": role, "status": "completed",
+        "local": True, "network_used": False, "duration_ms": 1,
+        "summary": "", "source_count": source_count,
+    }
+
+
+def test_general_opt_in_with_fixture_completes_web_search(monkeypatch) -> None:
+    """Opt-in + fixture deployment: the web_search node must be completed with
+    offline teaching references, and the synthesis prompt must state that the
+    node ran instead of letting the model claim it cannot reach the network."""
+    from app.search_providers import clear_search_cache
+
+    clear_search_cache()
+    fixture_settings = Settings(
+        agent_web_search_enabled=True,
+        agent_web_search_provider="fixture",
+        agent_web_search_cache_ttl_seconds=0,
+        agent_retrieval_cache_ttl_seconds=0,
+    )
+    monkeypatch.setattr("app.local_agents.get_settings", lambda: fixture_settings)
+
+    def fake_knowledge(session, **kwargs):
+        return {"results": []}, _completed_trace("knowledge", "本地资料检索")
+
+    captured: dict[str, object] = {}
+
+    def fake_synthesis(**kwargs):
+        captured["network_status_note"] = kwargs.get("network_status_note")
+        captured["external_sources"] = kwargs.get("external_sources")
+        return {
+            "answer": "ok", "sources": [], "citations": [],
+            "suggested_questions": [], "confidence": "high", "escalate": False,
+            "degraded": False, "degrade_reason": None, "route": None,
+            "model": kwargs.get("model"), "query_type": kwargs.get("query_type"),
+            "risk_notice": None,
+            "_trace": _completed_trace("synthesis", "回答生成"),
+        }
+
+    monkeypatch.setattr("app.local_agents._knowledge_agent", fake_knowledge)
+    monkeypatch.setattr("app.local_agents._synthesis_agent", fake_synthesis)
+
+    result = run_local_multi_agent(
+        None,
+        messages=[{"role": "user", "content": "最近有什么流行性感冒吗"}],
+        actor_id="actor",
+        allow_network_search=True,
+    )
+
+    statuses = {trace["agent_id"]: trace["status"] for trace in result["agent_trace"]}
+    assert statuses["web_search"] == "completed"
+    assert statuses["knowledge"] == "completed"
+    web = next(t for t in result["agent_trace"] if t["agent_id"] == "web_search")
+    assert web["network_used"] is False
+    assert "教学夹具" in web["summary"]
+    assert result["network_used"] is False
+    assert result["external_sources"], "fixture references must reach the response"
+    assert all(item["source"] == "teaching_fixture" for item in result["external_sources"])
+    note = str(captured["network_status_note"])
+    assert "已执行" in note
+    assert "教学夹具" in note
+
+
+def test_general_opt_in_with_disabled_deployment_blocks_with_reason(monkeypatch) -> None:
+    """Opt-in while the deployment switch is off: the node must be blocked with
+    DEPLOYMENT_DISABLED, never silently skipped."""
+    disabled_settings = Settings(
+        agent_web_search_enabled=False,
+        agent_retrieval_cache_ttl_seconds=0,
+    )
+    monkeypatch.setattr("app.local_agents.get_settings", lambda: disabled_settings)
+
+    def fake_knowledge(session, **kwargs):
+        return {"results": []}, _completed_trace("knowledge", "本地资料检索")
+
+    captured: dict[str, object] = {}
+
+    def fake_synthesis(**kwargs):
+        captured["network_status_note"] = kwargs.get("network_status_note")
+        return {
+            "answer": "ok", "sources": [], "citations": [],
+            "suggested_questions": [], "confidence": "high", "escalate": False,
+            "degraded": False, "degrade_reason": None, "route": None,
+            "model": kwargs.get("model"), "query_type": kwargs.get("query_type"),
+            "risk_notice": None,
+            "_trace": _completed_trace("synthesis", "回答生成"),
+        }
+
+    monkeypatch.setattr("app.local_agents._knowledge_agent", fake_knowledge)
+    monkeypatch.setattr("app.local_agents._synthesis_agent", fake_synthesis)
+
+    result = run_local_multi_agent(
+        None,
+        messages=[{"role": "user", "content": "你能够联网搜索吗"}],
+        actor_id="actor",
+        allow_network_search=True,
+    )
+
+    web = next(t for t in result["agent_trace"] if t["agent_id"] == "web_search")
+    assert web["status"] == "blocked"
+    assert web["reason_code"] == "DEPLOYMENT_DISABLED"
+    assert result["network_used"] is False
+    note = str(captured["network_status_note"])
+    assert "部署" in note
+
+
+def test_general_without_opt_in_keeps_web_search_skipped(monkeypatch) -> None:
+    """No opt-in: the node stays skipped and the synthesis prompt explains the
+    honest state (capability exists, this request did not enable it)."""
+    settings = Settings(
+        agent_web_search_enabled=True,
+        agent_web_search_provider="fixture",
+        agent_retrieval_cache_ttl_seconds=0,
+    )
+    monkeypatch.setattr("app.local_agents.get_settings", lambda: settings)
+
+    def fake_knowledge(session, **kwargs):
+        return {"results": []}, _completed_trace("knowledge", "本地资料检索")
+
+    captured: dict[str, object] = {}
+
+    def fake_synthesis(**kwargs):
+        captured["network_status_note"] = kwargs.get("network_status_note")
+        return {
+            "answer": "ok", "sources": [], "citations": [],
+            "suggested_questions": [], "confidence": "high", "escalate": False,
+            "degraded": False, "degrade_reason": None, "route": None,
+            "model": kwargs.get("model"), "query_type": kwargs.get("query_type"),
+            "risk_notice": None,
+            "_trace": _completed_trace("synthesis", "回答生成"),
+        }
+
+    monkeypatch.setattr("app.local_agents._knowledge_agent", fake_knowledge)
+    monkeypatch.setattr("app.local_agents._synthesis_agent", fake_synthesis)
+
+    result = run_local_multi_agent(
+        None,
+        messages=[{"role": "user", "content": "最近有什么流行性感冒吗"}],
+        actor_id="actor",
+        allow_network_search=False,
+    )
+
+    web = next(t for t in result["agent_trace"] if t["agent_id"] == "web_search")
+    assert web["status"] == "skipped"
+    assert web["reason_code"] == "NOT_OPTED_IN"
+    note = str(captured["network_status_note"])
+    assert "未勾选" in note
+    assert "不要说自己完全不能联网" in note
+
+
+def test_synthesis_degrade_mentions_retrieved_evidence(monkeypatch) -> None:
+    """A schema failure must not hide references that were actually found."""
+    from app.local_agents import _synthesis_agent
+
+    class BrokenModel:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def chat_stream(self, **kwargs):
+            # Placeholder-label drafts fail _parse_assistant_output validation.
+            yield '{"answer":"hello","sources":[],"confidence":"high","escalate":false}'
+
+    monkeypatch.setattr("app.local_agents.OllamaClient", BrokenModel)
+    monkeypatch.setattr("app.local_agents.is_loopback_ollama_url", lambda url: True)
+
+    result = _synthesis_agent(
+        messages=[{"role": "user", "content": "最近有什么流行性感冒吗"}],
+        query_type="GENERAL",
+        database={},
+        knowledge={"results": []},
+        external_sources=[{
+            "title": "教学夹具：家庭照护公开科普检索导航",
+            "url": "https://fixture.invalid/care-navigation",
+            "snippet": "演示",
+            "domain": "fixture.invalid",
+            "source": "teaching_fixture",
+        }],
+        model="local-model",
+        max_tokens=64,
+        temperature=0.1,
+        settings=Settings(),
+    )
+
+    assert result["degraded"] is True
+    assert result["degrade_reason"] == "SCHEMA_VALIDATION_FAILED"
+    assert "1 条外部参考" in result["answer"]
 
 
 def test_medication_safety_short_circuits_without_knowledge(monkeypatch) -> None:
