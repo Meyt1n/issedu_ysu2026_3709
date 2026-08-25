@@ -55,7 +55,14 @@ def run_offline_checks() -> list[dict[str, Any]]:
         assert not is_loopback_ollama_url("https://ollama.example.com")
         plan = plan_agent_execution("GENERAL", household_id=None, member_id=None)
         assert plan["database"].run is False
-        assert plan["knowledge"].run is False
+        # GENERAL now tries local knowledge; web search follows the opt-in.
+        assert plan["knowledge"].run is True
+        assert plan["web_search"].run is False
+        assert plan["web_search"].reason_code == "NOT_OPTED_IN"
+        opted_in = plan_agent_execution(
+            "GENERAL", household_id=None, member_id=None, allow_network_search=True
+        )
+        assert opted_in["web_search"].run is True
         results.append(
             _ok("offline.classifier_and_plan", "greeting/GENERAL/MEDICATION_SAFETY/URGENT + plan")
         )

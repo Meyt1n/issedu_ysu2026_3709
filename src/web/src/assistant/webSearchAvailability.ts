@@ -10,6 +10,8 @@ export interface WebSearchAvailability {
   available: boolean | null
   /** True when the deployment serves offline teaching fixtures (no egress). */
   fixture: boolean
+  /** Configured provider id (fixture / duckduckgo_html / searxng). */
+  provider: string | null
   reason: string | null
   hint: string | null
 }
@@ -20,13 +22,24 @@ export function webSearchAvailabilityFromCatalog(
   return {
     available: catalog.web_search_ready ?? catalog.web_search_enabled,
     fixture: catalog.web_search_offline_fixture === true,
+    provider: catalog.web_search_provider ?? null,
     reason: catalog.web_search_unavailable_reason ?? null,
     hint: catalog.web_search_enable_hint ?? null,
   }
 }
 
 export function unavailableWebSearchAvailability(): WebSearchAvailability {
-  return { available: null, fixture: false, reason: null, hint: null }
+  return { available: null, fixture: false, provider: null, reason: null, hint: null }
+}
+
+/**
+ * Badge describing the active search mode next to the opt-in checkbox, so
+ * users can tell a teaching-fixture demo apart from real allowlisted egress.
+ */
+export function webSearchModeBadge(state: WebSearchAvailability): string | null {
+  if (state.available !== true) return null
+  if (state.fixture) return '教学夹具 · 不出网'
+  return '真实联网 · 白名单出口'
 }
 
 /** Copy for the disabled checkbox, keyed on the machine-readable reason. */

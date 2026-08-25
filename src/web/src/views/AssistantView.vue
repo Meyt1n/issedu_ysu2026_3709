@@ -17,6 +17,7 @@ import {
   sessionEntryToStored,
   type StoredChatEntry,
 } from '../assistant/chatSession'
+import { buildAssistantChatInput } from '../assistant/chatPayload'
 import { normalizeSuggestedQuestions } from '../assistant/followUp'
 import {
   confidenceLabel,
@@ -29,6 +30,7 @@ import {
   unavailableWebSearchAvailability,
   webSearchAvailabilityFromCatalog,
   webSearchDisabledLabel,
+  webSearchModeBadge,
   webSearchSkipDetail,
 } from '../assistant/webSearchAvailability'
 import {
@@ -120,6 +122,7 @@ const webSearchAvailable = ref<boolean | null>(null)
 const webSearchReason = ref<string | null>(null)
 const webSearchHint = ref<string | null>(null)
 const webSearchFixture = ref(false)
+const webSearchProvider = ref<string | null>(null)
 const showWebSearchHelp = ref(false)
 const workflowTrace = ref<AssistantAgentTrace[]>([])
 const selectedAgentId = ref<string | null>(null)
@@ -786,11 +789,13 @@ async function loadAgentCatalog(): Promise<void> {
   webSearchReason.value = state.reason
   webSearchHint.value = state.hint
   webSearchFixture.value = state.fixture
+  webSearchProvider.value = state.provider
 }
 
 const webSearchState = computed(() => ({
   available: webSearchAvailable.value,
   fixture: webSearchFixture.value,
+  provider: webSearchProvider.value,
   reason: webSearchReason.value,
   hint: webSearchHint.value,
 }))
@@ -798,6 +803,8 @@ const webSearchState = computed(() => ({
 // Reason-specific copy so users understand why the toggle is disabled and how
 // a deployment operator can enable it (docs/本地部署与Demo操作指南.md §5).
 const webSearchDisabledText = computed(() => webSearchDisabledLabel(webSearchState.value))
+// 「教学夹具 · 不出网」vs「真实联网 · 白名单出口」badge beside the checkbox.
+const webSearchBadge = computed(() => webSearchModeBadge(webSearchState.value))
 
 function onVisibilityChange(): void {
   if (document.visibilityState === 'hidden') stopVoiceInput()
@@ -941,16 +948,12 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
     if (!alreadyStreamed) streamReveal(entry)
   }
 
-  const chatInput = {
-    messages: history.value
-      .slice(0, -1)
-      .map(entry => ({ role: entry.role, content: entry.content })),
-    max_tokens: 1024,
-    agent_mode: 'multi_agent' as const,
-    allow_network_search: allowNetworkSearch.value,
-    query_type_override: queryTypeOverride,
-    assistant_session_id: assistantSessionId.value || undefined,
-  }
+  const chatInput = buildAssistantChatInput({
+    history: history.value.slice(0, -1),
+    allowNetworkSearch: allowNetworkSearch.value,
+    queryTypeOverride,
+    assistantSessionId: assistantSessionId.value,
+  })
 
   let streamCancelled = false
   try {
@@ -1476,7 +1479,7 @@ onBeforeUnmount(() => {
       <span>
         <strong>
           补充联网参考
-          <span v-if="webSearchFixture && webSearchAvailable" class="pill sage" style="margin-left: 6px">教学夹具 · 不出网</span>
+          <span v-if="webSearchBadge" class="pill sage" style="margin-left: 6px">{{ webSearchBadge }}</span>
         </strong>
         <small v-if="webSearchAvailable === false">
           {{ webSearchDisabledText }}
@@ -1484,7 +1487,12 @@ onBeforeUnmount(() => {
             {{ showWebSearchHelp ? '收起启用方法' : '如何启用？' }}
           </button>
         </small>
-        <small v-else-if="webSearchFixture">开启后由本机教学夹具提供演示用外部参考样式，不会发起任何网络请求；夹具内容不构成医疗证据。</small>
+        <small v-else-if="webSearchFixture">
+          开启后由本机教学夹具提供演示用外部参考样式，不会发起任何网络请求；夹具内容不构成医疗证据。
+          <button type="button" class="link-inline" @click="showWebSearchHelp = !showWebSearchHelp">
+            {{ showWebSearchHelp ? '收起切换方法' : '如何切到真实联网？' }}
+          </button>
+        </small>
         <small v-else>开启后仅将脱敏后的问题发送到可信搜索服务以补充公开参考；家庭成员、健康记录与图片始终保留在本机。</small>
       </span>
     </label>
@@ -1497,6 +1505,17 @@ AGENT_WEB_SEARCH_PROVIDER=fixture
 # AGENT_WEB_SEARCH_PROVIDER=duckduckgo_html
 # AGENT_WEB_SEARCH_ALLOWED_DOMAINS=html.duckduckgo.com</code></pre>
       <p style="margin: 6px 0 0">修改 .env 并重启 API 后刷新本页；每次提问仍需勾选本选项，外部结果只作为「非本地审核证据」参考。</p>
+    </div>
+    <div v-if="showWebSearchHelp && webSearchAvailable && webSearchFixture" class="notice info web-search-help" role="note">
+      <p style="margin: 0 0 6px">
+        当前为教学夹具演示（不出网）。若本机允许访问搜索站点，部署负责人可在 .env 切换到真实联网 provider 并重启 API：
+      </p>
+      <pre class="mono web-search-help-env"><code>AGENT_WEB_SEARCH_ENABLED=true
+AGENT_WEB_SEARCH_PROVIDER=duckduckgo_html
+AGENT_WEB_SEARCH_URL=https://html.duckduckgo.com/html/
+AGENT_WEB_SEARCH_ALLOWED_DOMAINS=html.duckduckgo.com
+# 自建 SearXNG：AGENT_WEB_SEARCH_PROVIDER=searxng 并把 URL/白名单换成你的实例</code></pre>
+      <p style="margin: 6px 0 0">切换后本徽标会变为「真实联网 · 白名单出口」；只发送脱敏后的问题，外部结果仍只是「非本地审核证据」参考。</p>
     </div>
     <div
       v-if="needMicGesture && !listening"
