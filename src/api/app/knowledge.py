@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from sqlalchemy import JSON, Column, DateTime, Integer, String, Text, func, select
 from sqlalchemy.orm import Session
 
-from app.knowledge_synonyms import expand_query_tokens
+from app.knowledge_synonyms import expand_query_tokens, matched_synonym_labels
 from app.models import Base, new_id
 
 logger = logging.getLogger(__name__)
@@ -354,6 +354,20 @@ def retrieve(
             score = (1.0 - _VECTOR_SCORE_WEIGHT) * score + _VECTOR_SCORE_WEIGHT * (
                 score * (0.5 + 0.5 * cosine)
             )
+            doc_terms = set((ch.term_vector or {}).keys())
+            direct_hits = sorted(
+                token for token in original_unique if token in doc_terms
+            )[:8]
+            synonym_hits = matched_synonym_labels(original_q_tokens, doc_terms)[:6]
+            reason_parts = []
+            if direct_hits:
+                reason_parts.append("关键词:" + ",".join(direct_hits))
+            if synonym_hits:
+                reason_parts.append("同义词:" + ";".join(synonym_hits))
+            if coverage:
+                reason_parts.append(f"覆盖度:{coverage:.2f}")
+            if cosine:
+                reason_parts.append(f"向量相似:{cosine:.2f}")
             meta = doc_meta.get(ch.document_id, {})
             scored.append({
                 "chunk_id": ch.id,
@@ -364,6 +378,9 @@ def retrieve(
                 "text": ch.text,
                 "locator": ch.locator,
                 "score": round(score, 4),
+                "match_reason": " | ".join(reason_parts) or "term-overlap",
+                "matched_terms": direct_hits,
+                "matched_synonyms": synonym_hits,
             })
 
     scored.sort(key=lambda r: r["score"], reverse=True)

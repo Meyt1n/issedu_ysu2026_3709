@@ -9,6 +9,7 @@ import type { Household } from '../api/types'
  */
 const DEMO_PREFIX = /^(demo-|test-)/i
 const DEMO_NAME_MARKERS = ['本地演示', '教学演示']
+const SHOW_DEMO_STORAGE_KEY = 'hct:show-demo-households'
 
 export type DataEnvironment = 'DEMO' | 'LOCAL'
 
@@ -23,11 +24,28 @@ export function householdEnvironment(
   return isDemoHousehold(household) ? 'DEMO' : 'LOCAL'
 }
 
+export function getShowDemoHouseholds(): boolean {
+  try {
+    return localStorage.getItem(SHOW_DEMO_STORAGE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+export function setShowDemoHouseholds(show: boolean): void {
+  try {
+    localStorage.setItem(SHOW_DEMO_STORAGE_KEY, show ? '1' : '0')
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
 /**
  * 成员前台默认只展示 LOCAL 家庭；当成员名下只有演示家庭时保留原列表，
- * 避免演示账号进入空门户。管理员后台永远看到全部家庭。
+ * 避免演示账号进入空门户。管理员可强制显示演示家庭。
  */
 export function memberVisibleHouseholds(households: Household[]): Household[] {
+  if (getShowDemoHouseholds()) return households
   const locals = households.filter(household => !isDemoHousehold(household))
   return locals.length > 0 ? locals : households
 }

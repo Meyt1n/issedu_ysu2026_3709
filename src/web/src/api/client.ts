@@ -1178,6 +1178,16 @@ export class ApiClient {
       options,
     )
   }
+
+  seedFormalDemoHealth(options?: RequestOptions): Promise<Record<string, unknown>> {
+    return this.request('/api/v1/demo/formal-health-seed', { method: 'POST' }, options)
+  }
+
+  listClassroomScenarios(
+    options?: RequestOptions,
+  ): Promise<{ scenarios: Array<Record<string, unknown>>; disclaimer?: string }> {
+    return this.request('/api/v1/demo/classroom-scenarios', undefined, options)
+  }
 }
 
 export const apiClient = new ApiClient()

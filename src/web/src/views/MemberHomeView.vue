@@ -37,6 +37,15 @@ const nextPlans = computed(() => (plans.value?.plans ?? []).slice(0, 3))
 const recentEvents = computed(() =>
   events.value.filter(event => event.confirmation_status === 'CONFIRMED').slice(-3).reverse(),
 )
+const recentMetrics = computed(() =>
+  events.value
+    .filter(
+      event =>
+        event.confirmation_status === 'CONFIRMED' && event.event_type === 'metric_recorded',
+    )
+    .slice(-4)
+    .reverse(),
+)
 const visibleRisks = computed(() =>
   (risks.value?.alerts ?? []).slice(0, 4).map(alert => ({
     key: alert.risk_fingerprint || `${alert.rule_id}:${alert.message}`,
@@ -45,6 +54,17 @@ const visibleRisks = computed(() =>
     message: memberRiskMessage(alert),
   })),
 )
+
+function metricSummary(event: HealthEvent): string {
+  const payload = event.payload ?? {}
+  if (payload.metric === 'blood_pressure') {
+    return `血压 ${payload.systolic ?? '—'}/${payload.diastolic ?? '—'} ${payload.unit ?? 'mmHg'}`
+  }
+  if (payload.metric === 'blood_glucose') {
+    return `血糖 ${payload.value ?? '—'} ${payload.unit ?? 'mmol/L'}${payload.meal_context ? ` · ${payload.meal_context}` : ''}`
+  }
+  return summarizeEventPayload(event)
+}
 
 async function loadHome(): Promise<void> {
   const householdId = session.selectedHouseholdId
@@ -163,6 +183,22 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
         </li>
       </ul>
     </article>
+  </section>
+
+  <section v-if="recentMetrics.length" class="card" aria-label="最近指标观察">
+    <div class="card-heading">
+      <div>
+        <p class="eyebrow">居家观察</p>
+        <h3 class="card-title">最近指标</h3>
+      </div>
+    </div>
+    <p class="member-risk-intro">以下为已确认的教学观察值，仅供记录展示，不能当作诊断结论。</p>
+    <ul class="list-plain member-list">
+      <li v-for="event in recentMetrics" :key="event.id" class="row-card">
+        <strong>{{ metricSummary(event) }}</strong>
+        <span>{{ formatDateTime(String(event.payload?.measured_at || event.occurred_at)) }}</span>
+      </li>
+    </ul>
   </section>
 
   <section v-if="visibleRisks.length" class="card member-risk-card" aria-label="需要留意的情况">

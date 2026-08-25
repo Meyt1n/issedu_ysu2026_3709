@@ -241,8 +241,11 @@ onMounted(() => void loadKnowledge())
           <div v-else class="section-stack" style="gap: 9px; margin-top: 14px">
             <div v-for="(hit, index) in retrieval.results" :key="index" class="chunk-hit">
               <span class="text-soft" style="font-size: 12px">
-                《{{ hit.document_title ?? '未命名文档' }}》
+                《{{ hit.document_title ?? hit.title ?? '未命名文档' }}》
                 <span v-if="hit.score != null" class="hit-score"> · 相关度 {{ Number(hit.score).toFixed(3) }}</span>
+              </span>
+              <span v-if="hit.match_reason" class="text-faint" style="font-size: 12px; display: block">
+                为何命中：{{ hit.match_reason }}
               </span>
               <span style="font-size: 13.5px; line-height: 1.65">{{ hit.text }}</span>
             </div>

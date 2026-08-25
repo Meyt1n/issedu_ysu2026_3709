@@ -80,6 +80,19 @@ const EVENT_TYPE_OPTIONS: EventTypeOption[] = [
     label: '照护备注',
     fields: [{ key: 'text', label: '备注内容', type: 'text', required: true, placeholder: '例如 今天散步三十分钟' }],
   },
+  {
+    value: 'metric_recorded',
+    label: '指标观察记录',
+    fields: [
+      { key: 'metric', label: '指标类型', type: 'text', required: true, placeholder: 'blood_pressure 或 blood_glucose' },
+      { key: 'systolic', label: '收缩压（血压时填）', type: 'number', placeholder: '例如 128' },
+      { key: 'diastolic', label: '舒张压（血压时填）', type: 'number', placeholder: '例如 78' },
+      { key: 'value', label: '数值（血糖等）', type: 'number', placeholder: '例如 6.2' },
+      { key: 'unit', label: '单位', type: 'text', placeholder: 'mmHg 或 mmol/L' },
+      { key: 'meal_context', label: '餐次/情境', type: 'text', placeholder: '空腹 / 早餐前（演示）' },
+      { key: 'note', label: '备注', type: 'text', placeholder: '教学观察值，非诊断' },
+    ],
+  },
 ]
 
 const timeline = ref<HealthEvent[]>([])

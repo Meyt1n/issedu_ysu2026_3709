@@ -521,6 +521,12 @@ def _synthesis_agent(
             "这是用药安全问题，必须以本地已审核知识片段为依据；如果没有知识片段，"
             "明确说明无法判断，不得用外部搜索结果替代。"
         )
+    if query_type in {"FAMILY_RECORD", "MEDICATION_RECORD", "RULE_EVIDENCE", "MEDICATION_SAFETY"}:
+        routing_hint += (
+            "若 database_agent 同时提供病史、药品、过敏或规则命中，请按"
+            "「病史 → 已确认药品 → 过敏/规则冲突 → 下一步由谁确认」的顺序叙述，"
+            "不得自行补充未返回的事实，不得给出剂量或诊断结论。"
+        )
     synthesis_system = "\n\n".join([
         ASSISTANT_SYSTEM_PROMPT,
         routing_hint,

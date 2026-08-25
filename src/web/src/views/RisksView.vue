@@ -15,6 +15,7 @@ import {
   selectMember,
   selectedMember,
   session,
+  setView,
 } from '../store'
 import { confirmationLabel, eventTypeLabel, formatDateTime } from '../ui/labels'
 
@@ -72,6 +73,17 @@ function acknowledgementHint(alert: RiskAlert): string {
   if (status === 'conflict') return '规则版本或风险指纹已变化，请刷新后重新查看。'
   if (status === 'error') return '服务端没有确认这次回写，请稍后重试。'
   return '服务端会记录操作者、时间、规则版本和风险指纹。'
+}
+
+function jumpToSourceEvent(source: { id?: string }): void {
+  if (!source?.id) return
+  try {
+    sessionStorage.setItem('hct:focus-event-id', source.id)
+  } catch {
+    /* ignore */
+  }
+  setView('members')
+  pushToast('已打开成员档案；请在时间线中定位来源事件', 'info')
 }
 
 async function loadRisks(): Promise<void> {
@@ -295,6 +307,9 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
             <li v-for="source in riskDetails[alert.rule_id]?.source_events ?? []" :key="source.id" class="evidence-item">
               <strong>{{ eventTypeLabel(source.event_type) }}</strong>
               <span>{{ confirmationLabel(source.confirmation_status) }} · {{ formatDateTime(source.created_at) }}</span>
+              <button type="button" class="btn btn-ghost btn-small" @click="jumpToSourceEvent(source)">
+                查看源事件
+              </button>
             </li>
           </ul>
         </div>

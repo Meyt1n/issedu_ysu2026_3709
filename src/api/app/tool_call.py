@@ -502,6 +502,7 @@ def classify_question(query: str) -> str:
         "能不能一起吃", "能否一起吃", "可以一起吃", "能不能同服", "能否同服",
         "相互作用", "药物相互作用", "配伍", "停药", "换药", "调整剂量",
         "一次吃多少", "一天吃几", "怎么服用", "吃多少", "同服",
+        "开个处方", "开处方", "帮我开药", "调整一下剂量", "剂量",
     )):
         return "MEDICATION_SAFETY"
     if any(term in normalized for term in (

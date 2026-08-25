@@ -30,6 +30,7 @@ export type ViewName =
   | 'knowledge'
   | 'modellab'
   | 'face-credentials'
+  | 'demo-lab'
 
 export type PortalName = 'member' | 'admin'
 

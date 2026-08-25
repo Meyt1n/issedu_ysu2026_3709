@@ -2980,6 +2980,44 @@ def get_knowledge_document(
     return doc
 
 
+@router.post("/demo/formal-health-seed")
+def seed_formal_demo_health_endpoint(
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> dict:
+    """Idempotently seed synthetic classroom health facts for demo-parent households.
+
+    Restricted to demo-/test- actors so production-looking accounts cannot trigger
+    teaching fixtures by accident.
+    """
+    from app.formal_demo_plan import FORMAL_OWNER_ACTOR_ID
+    from app.formal_demo_seed import apply_formal_demo_seed
+
+    if not (
+        actor_id == FORMAL_OWNER_ACTOR_ID
+        or actor_id.startswith("demo-")
+        or actor_id.startswith("test-")
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="DEMO_SEED_FORBIDDEN",
+        )
+    return apply_formal_demo_seed(session, actor_id=actor_id)
+
+
+@router.get("/demo/classroom-scenarios")
+def list_classroom_scenarios(
+    actor_id: str = Depends(get_actor_id),
+) -> dict:
+    from app.formal_demo_plan import CLASSROOM_SCENARIOS
+
+    return {
+        "scenarios": CLASSROOM_SCENARIOS,
+        "disclaimer": "课堂剧本仅描述演示路径，不写入真实健康数据。",
+        "actor_id": actor_id,
+    }
+
+
 @router.post(
     "/knowledge/retrieve",
     response_model=KnowledgeRetrieveResponse,
