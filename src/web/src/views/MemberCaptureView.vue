@@ -26,7 +26,7 @@ function onTaskCreated(task: VisionTask): void {
   rememberVisionTask(task.id)
   submittedTask.value = task
   void refreshTracking()
-  pushToast('success', '照片已提交，等家庭管理员确认后才会记入家庭记录。')
+  pushToast('success', '照片已交给家人，确认后才会记进家庭本子。')
 }
 </script>
 
@@ -34,12 +34,12 @@ function onTaskCreated(task: VisionTask): void {
   <section class="page-hero member-portal-hero">
     <p class="eyebrow">拍照录药</p>
     <h2 class="hero-greeting">把药盒拍清楚就可以了</h2>
-    <p class="hero-sub">你只需要拍照并提交，药品名称和用法由家庭管理员检查后再保存。</p>
+    <p class="hero-sub">你只需要拍照并提交，药名和用法由家人检查后再保存。</p>
   </section>
 
   <p class="notice ok member-confirmation-note" role="status">
     <AppIcon name="lock" :size="16" />
-    你提交的是待确认照片，不会直接写进健康记录。
+    你提交的是待确认照片，不会直接写进家庭本子。
   </p>
 
   <VisionQualityPanel
@@ -52,13 +52,13 @@ function onTaskCreated(task: VisionTask): void {
 
   <section v-if="submittedTask" class="card member-next-step">
     <AppIcon name="check" :size="22" />
-    <div><strong>接下来由家庭管理员确认</strong><p>确认后，你可以在“我的记录”里看到结果。</p></div>
+    <div><strong>接下来由家人确认</strong><p>确认后，你可以在「我的记录」里看到结果。</p></div>
   </section>
 
   <section v-if="trackedTasks.length" class="card member-capture-status">
     <div class="card-heading">
       <div><p class="eyebrow">照片进度</p><h3 class="card-title">最近提交</h3></div>
-      <span v-if="hasActiveTasks" class="pill gold">处理中</span>
+      <span v-if="hasActiveTasks" class="pill gold">正在看照片</span>
     </div>
     <ul class="list-plain member-status-list">
       <li v-for="task in trackedTasks" :key="task.id" class="member-status-row">

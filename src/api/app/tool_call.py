@@ -376,6 +376,44 @@ class OllamaClient:
         logger.error("Ollama failed after %d attempts: %s", MAX_RETRIES + 1, last_error)
         raise RuntimeError(f"OLLAMA_UNAVAILABLE: {last_error}")
 
+    def chat_stream(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        temperature: float = 0.3,
+        max_tokens: int = 512,
+        timeout: float | None = None,
+    ):
+        """Stream chat completion chunks from Ollama."""
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+            "think": False,
+            "options": {
+                "temperature": temperature,
+                "num_predict": max_tokens,
+            },
+        }
+        if tools:
+            payload["tools"] = tools
+
+        with httpx.Client(timeout=timeout or REQUEST_TIMEOUT, trust_env=False) as client:
+            with client.stream("POST", f"{self.base_url}/api/chat", json=payload) as resp:
+                resp.raise_for_status()
+                for line in resp.iter_lines():
+                    if not line:
+                        continue
+                    data = json.loads(line)
+                    content = (data.get("message") or {}).get("content") or ""
+                    if content:
+                        yield content
+                    if data.get("done"):
+                        break
+        self._available = True
+
 
 # ── Medical safety check ───────────────────────────────────────────────
 

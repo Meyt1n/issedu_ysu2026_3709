@@ -133,7 +133,7 @@ test('授权照护者进入成员前台且看不到后台入口；撤回后失�
   const grant = await grantResponse.json()
 
   await enterDevIdentity(page, scope.caregiverId)
-  await expect(page.getByText('家庭成员前台', { exact: true })).toBeVisible()
+  await expect(page.getByText('家庭成员', { exact: true })).toBeVisible()
   await expect(navItem(page, '授权管理')).toHaveCount(0)
   await expect(page.getByText(scope.memberName)).toBeVisible()
 
@@ -171,13 +171,13 @@ test('绑定成员账号进入成员前台；已确认事件只出现在成员�
   expect(eventResponse.status(), 'owner confirmed event must persist').toBe(201)
 
   await enterDevIdentity(page, scope.memberActorId)
-  await expect(page.getByText('家庭成员前台', { exact: true })).toBeVisible()
+  await expect(page.getByText('家庭成员', { exact: true })).toBeVisible()
   await expect(navItem(page, '人工复核')).toHaveCount(0)
 
   await navItem(page, '我的记录').click()
   await expect(page.getByRole('heading', { name: `${scope.memberName}的健康记录` })).toBeVisible()
   await expect(page.getByText('药品：合成布洛芬')).toBeVisible()
-  await expect(page.getByText('这里只展示家庭管理员确认过的内容')).toBeVisible()
+  await expect(page.getByText('这里只展示家人确认过的内容')).toBeVisible()
 })
 
 test('管理员确认过敏与药品后，成员前台显示需要留意的情况', async ({ page, request }) => {

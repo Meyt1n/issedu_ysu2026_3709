@@ -6,6 +6,8 @@ import type {
   ApiErrorEnvelope,
   AssistantChatInput,
   AssistantAgentCatalog,
+  AssistantAgentTrace,
+  AssistantExternalSource,
   AssistantResponse,
   AssistantTool,
   Authorization,
@@ -866,6 +868,102 @@ export class ApiClient {
       { method: 'POST', body: JSON.stringify(input) },
       { timeoutMs: 240_000, ...options },
     )
+  }
+
+  async assistantChatStream(
+    input: AssistantChatInput,
+    handlers: {
+      onTrace?: (trace: AssistantAgentTrace) => void
+      onToken?: (token: string) => void
+      onExternalSources?: (sources: AssistantExternalSource[], networkQuery?: string | null) => void
+    },
+    householdId?: string,
+    memberId?: string,
+    options: RequestOptions = {},
+  ): Promise<AssistantResponse> {
+    const params = new URLSearchParams()
+    if (householdId) params.set('household_id', householdId)
+    if (memberId) params.set('member_id', memberId)
+    const query = params.toString()
+    const headers = new Headers({ Accept: 'text/event-stream', 'Content-Type': 'application/json' })
+    if (options.sessionToken) headers.set('Authorization', `Bearer ${options.sessionToken}`)
+    else if (options.actorId) headers.set('X-Actor-Id', options.actorId)
+    if (options.accessPurpose) headers.set('X-Access-Purpose', options.accessPurpose)
+
+    const timeoutMs = options.timeoutMs ?? 240_000
+    const timeoutSignal = AbortSignal.timeout(timeoutMs)
+    const signal = options.signal
+      ? AbortSignal.any([options.signal, timeoutSignal])
+      : timeoutSignal
+
+    const response = await this.fetcher(
+      `${this.baseUrl}/api/v1/assistant/chat/stream${query ? `?${query}` : ''}`,
+      { method: 'POST', headers, body: JSON.stringify(input), signal },
+    )
+    if (!response.ok) {
+      const text = await response.text()
+      let body: unknown = null
+      try {
+        body = JSON.parse(text)
+      } catch {
+        body = { detail: text }
+      }
+      throw parseErrorBody(body, response.status, response.headers.get('x-request-id'))
+    }
+
+    const reader = response.body?.getReader()
+    if (!reader) {
+      throw new ApiClientError('Streaming response unavailable', {
+        status: 0,
+        code: 'DEPENDENCY_UNAVAILABLE',
+      })
+    }
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let finalResponse: AssistantResponse | null = null
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const chunks = buffer.split('\n\n')
+      buffer = chunks.pop() ?? ''
+      for (const chunk of chunks) {
+        if (!chunk.trim()) continue
+        let eventName = 'message'
+        let dataLine = ''
+        for (const line of chunk.split('\n')) {
+          if (line.startsWith('event:')) eventName = line.slice(6).trim()
+          if (line.startsWith('data:')) dataLine = line.slice(5).trim()
+        }
+        if (!dataLine) continue
+        const payload = JSON.parse(dataLine) as Record<string, unknown>
+        if (eventName === 'trace') handlers.onTrace?.(payload.trace as AssistantAgentTrace)
+        if (eventName === 'token') handlers.onToken?.(String(payload.token ?? ''))
+        if (eventName === 'external_sources') {
+          handlers.onExternalSources?.(
+            (payload.external_sources as AssistantExternalSource[]) ?? [],
+            (payload.network_query as string | null | undefined) ?? null,
+          )
+        }
+        if (eventName === 'done') finalResponse = payload.response as AssistantResponse
+        if (eventName === 'error') {
+          throw new ApiClientError(String(payload.message ?? 'Stream failed'), {
+            status: 0,
+            code: 'DEPENDENCY_UNAVAILABLE',
+          })
+        }
+      }
+    }
+
+    if (!finalResponse) {
+      throw new ApiClientError('Assistant stream ended without a response', {
+        status: 0,
+        code: 'DEPENDENCY_UNAVAILABLE',
+      })
+    }
+    return finalResponse
   }
 
   listAssistantTools(options?: RequestOptions): Promise<{ tools: AssistantTool[]; count: number }> {

@@ -27,6 +27,12 @@ export const router = createRouter({
     },
     // 求助页只用本机联系人，断网或未登录时仍必须可用。
     { path: '/help', name: 'help', component: () => import('@/views/HelpView.vue'), meta: { title: '紧急求助' } },
+    {
+      path: '/assistant',
+      name: 'assistant',
+      component: () => import('@/views/AssistantView.vue'),
+      meta: { title: '语音助手', requiresLiveAuth: true },
+    },
     { path: '/login', name: 'login', component: () => import('@/views/LoginView.vue'), meta: { title: '登录' } },
     { path: '/me', name: 'me', component: () => import('@/views/MeView.vue'), meta: { title: '我的' } },
     {

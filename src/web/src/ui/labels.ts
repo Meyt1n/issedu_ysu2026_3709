@@ -18,8 +18,10 @@ export const EVENT_TYPE_LABELS: Record<string, string> = {
   COMPENSATION: '补偿更正',
 }
 
-export function eventTypeLabel(eventType: string): string {
-  return EVENT_TYPE_LABELS[eventType] ?? eventType
+export function eventTypeLabel(eventType: string, audience: 'member' | 'admin' = 'admin'): string {
+  const label = EVENT_TYPE_LABELS[eventType]
+  if (label) return label
+  return audience === 'member' ? '一条家庭记录' : eventType
 }
 
 export const EVENT_TYPE_TONE: Record<string, string> = {

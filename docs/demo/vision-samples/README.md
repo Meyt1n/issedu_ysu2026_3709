@@ -53,7 +53,7 @@ $env:HCT_VISION_DEVICE = "cpu"
 
 ## 方式一（推荐）：常驻 worker，浏览器直接可用
 
-网页「视觉扫描」只做质量门控、上传与建任务；识别由 worker 轮询接单。
+网页「视觉扫描」只做质量门控、上传与建任务；识别由 worker 原子领取带租约的任务。
 
 1. 打开页面，用一个 **你自己的 Actor ID** 进入（例如 `demo-parent`）。
 2. 创建一个家庭和成员，记住这个 Actor ID。
@@ -73,7 +73,7 @@ uv run python scripts/vision_worker.py `
 ```
 
 4. 在「视觉扫描」上传 `docs/demo/vision-samples/demo-box-cn.jpg`（先过质量门控再创建任务）。
-5. 等待 worker 日志出现接单；PaddleOCR 单张大约 15–35 秒。
+5. 等待 worker 日志出现接单；worker 会先调用 `POST /vision-tasks/claim`，推理结束前续租，PaddleOCR 单张大约 15–35 秒。
 6. 「人工复核」出现候选后确认或修正；时间线 / 图谱 / 规则随之更新。
 
 API 若改了端口，把 `--api` 改成你的地址，不要照抄他人的 `8001`。
@@ -105,7 +105,8 @@ uv run python scripts/run_local_adapter.py `
 
 | 现象 | 原因 |
 |---|---|
-| 任务一直排队 | 未起 worker，或 `--actors` 与页面 Actor ID 不一致 |
+| 任务一直排队 | 未起 worker，或 `--actors` 与页面 Actor ID 不一致；可检查 worker 是否成功调用 claim 接口 |
+| 任务反复处理中后变为 timeout | worker 多次崩溃或租约连续过期；确认本地模型环境后在页面点击重试 |
 | `ADAPTER_RECEIPT_INVALID` | worker 与 API 的签名密钥不一致 |
 | `NO_AUTHORISED_DOCUMENTS` / 复核空白 | 未批准 `demo-cn-en-v1`，或未选成员 |
 | `QUALITY_GATE_REQUIRED` | 未先做质量检查，或凭证过期（API 重启后旧凭证失效） |

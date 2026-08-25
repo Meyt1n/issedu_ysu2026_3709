@@ -17,7 +17,10 @@ class HealthResponse(BaseModel):
 
 
 class AuthCredentials(BaseModel):
-    actor_id: str = Field(min_length=1, max_length=120)
+    # The same actor-id charset used for member account binding: rejecting
+    # whitespace/control characters at registration keeps log lines and audit
+    # rows injection-free and every registered account bindable to a member.
+    actor_id: str = Field(min_length=1, max_length=120, pattern=ACTOR_ID_PATTERN)
     password: str = Field(min_length=8, max_length=256)
 
 
@@ -595,6 +598,9 @@ class VisionTaskRead(BaseModel):
     input_digest: str | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    lease_owner: str | None = None
+    lease_expires_at: datetime | None = None
+    attempt_count: int = Field(default=0, ge=0)
     created_by: str
     created_at: datetime
 
@@ -618,6 +624,19 @@ class VisionTaskRead(BaseModel):
             "next_action": actions.get(self.error_code, "请刷新任务状态并联系项目维护者。"),
         }
         return self
+
+
+class VisionTaskClaimRequest(BaseModel):
+    """Bounded worker claim request; the actor header identifies the worker."""
+
+    limit: int = Field(default=10, ge=1, le=100)
+    lease_seconds: int | None = Field(default=None, ge=30, le=86_400)
+
+
+class VisionTaskLeaseRequest(BaseModel):
+    """Optional lease extension for a long-running local inference."""
+
+    lease_seconds: int | None = Field(default=None, ge=30, le=86_400)
 
 
 class VisionTaskCleanupRequest(BaseModel):

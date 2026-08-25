@@ -1,7 +1,7 @@
 """Fix face credential tombstone uniqueness on MySQL.
 
-Revision ID: 0020_hct425_face_credential_mysql_index
-Revises: 0019_hct404_release_evidence
+Revision ID: 0021_hct425_face_credential_mysql_index
+Revises: 0020_hct441_vision_task_leases
 
 Migration 0016 recreated ``uq_face_credential_active_account`` as a partial
 unique index limited to ``status = 'ACTIVE'`` via ``sqlite_where`` /
@@ -18,8 +18,8 @@ from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = "0020_hct425_face_credential_mysql_index"
-down_revision: str | None = "0019_hct404_release_evidence"
+revision: str = "0021_hct425_face_credential_mysql_index"
+down_revision: str | None = "0020_hct441_vision_task_leases"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

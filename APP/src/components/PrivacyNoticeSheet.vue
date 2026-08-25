@@ -68,6 +68,7 @@ function speakNotice(): void {
 }
 .privacy-card {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
   gap: 12px;
   width: min(560px, 100%);
   max-height: min(86vh, 720px);
@@ -85,7 +86,7 @@ function speakNotice(): void {
   background: var(--c-calm-soft); color: var(--c-calm-deep);
 }
 .privacy-head h2 { font-size: 1.15rem; }
-.privacy-body { overflow-y: auto; display: grid; gap: 12px; padding-right: 4px; }
+.privacy-body { min-height: 0; overflow-y: auto; display: grid; gap: 12px; padding-right: 4px; }
 .privacy-body h3 { font-size: 0.98rem; color: var(--c-brand-deep); }
 .privacy-body p { line-height: 1.65; font-size: 0.92rem; }
 .privacy-actions { display: flex; gap: 10px; flex-wrap: wrap; }

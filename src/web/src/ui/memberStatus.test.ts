@@ -25,35 +25,35 @@ const INTERNAL_CODES = [
 ]
 
 describe('成员前台状态文案映射（HCT-439 阶段二）', () => {
-  it('把排队/处理中的任务映射为“正在识别”', () => {
-    expect(memberVisionStatusLabel('queued')).toBe('正在识别')
-    expect(memberVisionStatusLabel('running')).toBe('正在识别')
+  it('把排队/处理中的任务映射为生活化“正在看照片”', () => {
+    expect(memberVisionStatusLabel('queued')).toBe('正在看照片')
+    expect(memberVisionStatusLabel('running')).toBe('正在看照片')
     expect(isMemberTaskActive('queued')).toBe(true)
     expect(isMemberTaskActive('running')).toBe(true)
     expect(isMemberTaskActive('succeeded')).toBe(false)
   })
 
-  it('识别完成后提示等待家人确认，而不是暴露 succeeded', () => {
-    expect(memberVisionStatusLabel('succeeded')).toBe('已提交，等待家人确认')
-    expect(memberVisionStatusLabel('REVIEW_REQUIRED')).toBe('已提交，等待家人确认')
+  it('处理完成后提示等待家人确认，而不是暴露 succeeded', () => {
+    expect(memberVisionStatusLabel('succeeded')).toBe('已交给家人，等待确认')
+    expect(memberVisionStatusLabel('REVIEW_REQUIRED')).toBe('已交给家人，等待确认')
     expect(memberVisionStatusHint('succeeded')).toContain('我的记录')
   })
 
   it('冲突与未知状态映射为生活化提示', () => {
-    expect(memberVisionStatusLabel('CONFLICT')).toBe('信息不一致，等待管理员核对')
-    expect(memberVisionStatusLabel('UNKNOWN')).toBe('暂时没有找到可靠药品信息')
-    expect(memberVisionStatusHint('CONFLICT')).toContain('核对')
-    expect(memberVisionStatusHint('UNKNOWN')).toContain('重新拍摄')
+    expect(memberVisionStatusLabel('CONFLICT')).toBe('信息和药盒不太一样，等家人核对')
+    expect(memberVisionStatusLabel('UNKNOWN')).toBe('暂时认不出药名，等家人帮忙')
+    expect(memberVisionStatusHint('CONFLICT')).toContain('对照')
+    expect(memberVisionStatusHint('UNKNOWN')).toContain('重新拍')
   })
 
-  it('管理员确认后的照片显示“已确认”，覆盖任务自身状态', () => {
-    expect(memberVisionStatusLabel('succeeded', true)).toBe('已确认')
-    expect(memberVisionStatusHint('succeeded', true)).toContain('已进入家庭记录')
+  it('家人确认后的照片显示“家人已确认”，覆盖任务自身状态', () => {
+    expect(memberVisionStatusLabel('succeeded', true)).toBe('家人已确认')
+    expect(memberVisionStatusHint('succeeded', true)).toContain('家庭本子')
   })
 
   it('失败与超时提示重拍，不出现英文错误码', () => {
     for (const status of ['failed', 'timeout']) {
-      expect(memberVisionStatusLabel(status)).toBe('识别失败，请重新拍照')
+      expect(memberVisionStatusLabel(status)).toBe('没看清楚，请重新拍一张')
       expect(memberVisionStatusHint(status)).toContain('再拍一次')
     }
   })

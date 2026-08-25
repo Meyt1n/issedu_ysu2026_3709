@@ -163,3 +163,37 @@ export interface RequestOptions {
   /** 请求超时毫秒数；0 表示不启用内部超时。默认 15s（MOB-144 区分超时与不可达）。 */
   timeoutMs?: number
 }
+
+/** 本地助手聊天请求（与主仓库 AssistantChatInput 对齐的最小子集）。 */
+export interface AssistantChatInput {
+  messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>
+  model?: string
+  temperature?: number
+  max_tokens?: number
+  agent_mode?: 'single' | 'multi_agent'
+  allow_network_search?: boolean
+}
+
+export interface AssistantCitation {
+  document_id: string
+  version: string
+  chunk_id: string
+  document_title?: string | null
+  text?: string | null
+  locator?: string | null
+}
+
+export interface AssistantResponse {
+  answer: string
+  sources: string[]
+  citations?: AssistantCitation[]
+  suggested_questions?: string[]
+  confidence: string
+  escalate: boolean
+  degraded: boolean
+  degrade_reason: string | null
+  model?: string | null
+  route?: string | null
+  query_type?: string | null
+  risk_notice?: string | null
+}
