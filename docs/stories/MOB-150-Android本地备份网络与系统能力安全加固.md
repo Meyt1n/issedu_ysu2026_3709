@@ -43,6 +43,12 @@ Android 静态网络配置无法表达“任意 RFC1918/ULA 地址可明文、�
 - 当前应用数据为虚构演示数据；卸载后重新安装 Debug APK，首次安装时间重置且重新出现首启隐私告知，没有恢复旧登录/联系人/服务器设置的证据；
 - `npm run audit:android-security`、`npm run check`、`npm run test`（30 个文件 / 246 个测试）、`npm run build`、`npm run android:sync:debug`、Gradle Debug/Release 合并清单和 Debug/Release 构建均通过；
 
+### 2026-08-25 真机重连复核
+
+- 设备仍为荣耀 AAP-AN00，Android 16/API 36；用户 0 为机主、用户 128 为分身应用，`com.homecaretwin.companion` 仅安装在用户 0；
+- 在当前云备份 transport 下重新执行 `bmgr backupnow com.homecaretwin.companion`：包级结果为 `Backup is not allowed`，随后命令整体返回 `Backup finished with result: Success`；这表示备份调度命令完成，但应用没有被允许导出备份数据；
+- 当前真机通知权限为 `granted=true`，本次未清除数据、未安装证书、未切换系统用户，未影响手机已有应用数据；受控 HTTPS 端点仍未在本机运行，不能把公网 HTTPS 当作项目联调证据。
+
 ### 2026-08-25 Android 模拟器补充复核
 
 - 设备：Android 15 / API 35 模拟器 `emulator-5554`；仅使用虚构演示数据；
