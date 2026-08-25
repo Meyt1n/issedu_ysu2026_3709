@@ -125,7 +125,7 @@ def test_dynamic_face_registration_can_be_used_for_local_login(
     monkeypatch.setattr(
         routes,
         "extract_face_template",
-        lambda _data: (
+        lambda _data, **_kwargs: (
             template,
             {
                 "algorithm_version": "opencv-yunet-sface-v3",
@@ -133,7 +133,7 @@ def test_dynamic_face_registration_can_be_used_for_local_login(
             },
         ),
     )
-    monkeypatch.setattr(routes, "check_face_liveness", lambda _templates: None)
+    monkeypatch.setattr(routes, "check_face_liveness", lambda *_args, **_kwargs: None)
 
     files = [
         ("frames", (f"frame-{index}.jpg", b"\xff\xd8\xffdemo", "image/jpeg"))
@@ -233,8 +233,11 @@ def test_family_face_login_identifies_the_best_member_inside_bound_household(
         "assess_image",
         lambda *_args, **_kwargs: {"allow_downstream": True},
     )
-    monkeypatch.setattr(routes, "extract_face_template", lambda _data: (positive_template, {}))
-    monkeypatch.setattr(routes, "check_face_liveness", lambda _templates: None)
+    monkeypatch.setattr(
+        routes,
+        "extract_face_template",
+        lambda _data, **_kwargs: (positive_template, {}))
+    monkeypatch.setattr(routes, "check_face_liveness", lambda *_args, **_kwargs: None)
 
     challenge = client.post(
         "/api/v1/auth/family-face-challenge",
@@ -304,8 +307,11 @@ def test_face_login_rejects_a_single_injected_matching_frame(
     # First frame is a stolen photo of the account holder; the remaining
     # frames belong to the attacker and provide the motion for liveness.
     extracted = iter([victim_template, attacker_template, attacker_template])
-    monkeypatch.setattr(routes, "extract_face_template", lambda _data: (next(extracted), {}))
-    monkeypatch.setattr(routes, "check_face_liveness", lambda _templates: None)
+    monkeypatch.setattr(
+        routes,
+        "extract_face_template",
+        lambda _data, **_kwargs: (next(extracted), {}))
+    monkeypatch.setattr(routes, "check_face_liveness", lambda *_args, **_kwargs: None)
 
     challenge = client.post(
         "/api/v1/auth/face-challenge",
@@ -361,7 +367,7 @@ def test_deleting_a_face_credential_revokes_household_sessions(
     monkeypatch.setattr(
         routes,
         "extract_face_template",
-        lambda _data: (
+        lambda _data, **_kwargs: (
             template,
             {
                 "algorithm_version": "opencv-yunet-sface-v3",
@@ -369,7 +375,7 @@ def test_deleting_a_face_credential_revokes_household_sessions(
             },
         ),
     )
-    monkeypatch.setattr(routes, "check_face_liveness", lambda _templates: None)
+    monkeypatch.setattr(routes, "check_face_liveness", lambda *_args, **_kwargs: None)
 
     files = [
         ("frames", (f"revoke-frame-{index}.jpg", b"\xff\xd8\xffdemo", "image/jpeg"))
@@ -515,8 +521,11 @@ def test_family_face_login_rejects_an_ambiguous_member_match(
         "assess_image",
         lambda *_args, **_kwargs: {"allow_downstream": True},
     )
-    monkeypatch.setattr(routes, "extract_face_template", lambda _data: (template, {}))
-    monkeypatch.setattr(routes, "check_face_liveness", lambda _templates: None)
+    monkeypatch.setattr(
+        routes,
+        "extract_face_template",
+        lambda _data, **_kwargs: (template, {}))
+    monkeypatch.setattr(routes, "check_face_liveness", lambda *_args, **_kwargs: None)
 
     challenge = client.post(
         "/api/v1/auth/family-face-challenge",

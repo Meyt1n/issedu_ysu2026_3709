@@ -84,6 +84,43 @@ def test_aggregate_match_scores_requires_every_frame_to_match() -> None:
         aggregate_match_scores([])
 
 
+def test_pack_and_unpack_multi_angle_gallery() -> None:
+    from app.face_credentials import (
+        pack_face_templates,
+        score_probe_against_gallery,
+        unpack_face_templates,
+    )
+
+    # Force SFace-sized payloads for the multi-template packer.
+    a128 = b"\x00\x00\x80\x3f" * 128
+    b128 = b"\x00\x00\x80\xbf" * 128
+    packed = pack_face_templates([a128, b128])
+    gallery = unpack_face_templates(packed)
+    assert len(gallery) == 2
+    assert unpack_face_templates(a128) == [a128]
+    assert score_probe_against_gallery(a128, gallery) == pytest.approx(1.0)
+
+
+def test_normalize_face_failure_reason_buckets() -> None:
+    from app.face_credentials import normalize_face_failure_reason
+
+    assert normalize_face_failure_reason("FACE_TOO_SMALL") == "FRAME_QUALITY_INVALID"
+    assert normalize_face_failure_reason("FACE_LIVENESS_FAILED") == "LIVENESS_FAILED"
+    assert normalize_face_failure_reason("NO_MATCH") == "NO_MATCH"
+    assert normalize_face_failure_reason("LOCKED:30") == "FACE_AUTH_FAILED"
+
+
+def test_pose_liveness_requires_yaw_span() -> None:
+    frames = [
+        _pattern_template(),
+        _pattern_template(flip_count=205),
+        _pattern_template(flip_count=410),
+    ]
+    check_face_liveness(frames, yaws=[-0.2, 0.0, 0.25])
+    with pytest.raises(ValueError, match="FACE_LIVENESS_FAILED"):
+        check_face_liveness(frames, yaws=[0.0, 0.01, -0.01])
+
+
 def test_match_threshold_for_uses_sface_gate_on_v3() -> None:
     from app.face_credentials import (
         FACE_ALGORITHM_VERSION,
@@ -135,9 +172,9 @@ def test_sface_embeddings_separate_different_people(tmp_path, monkeypatch) -> No
     _sface_recognizer.cache_clear()
     ensure_face_models()
 
-    left = extract_face_template(obama.read_bytes())[0]
-    same = extract_face_template(obama2.read_bytes())[0]
-    other = extract_face_template(biden.read_bytes())[0]
+    left = extract_face_template(obama.read_bytes(), enforce_geometry=False)[0]
+    same = extract_face_template(obama2.read_bytes(), enforce_geometry=False)[0]
+    other = extract_face_template(biden.read_bytes(), enforce_geometry=False)[0]
 
     assert len(left) == 128 * 4
     assert face_template_similarity(left, same) >= FACE_MATCH_THRESHOLD_SFACE

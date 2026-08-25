@@ -83,6 +83,7 @@ from app.event_service import (
 )
 from app.face_credentials import (
     FACE_CONSENT_VERSION,
+    FACE_FEATURE_VERSION_MULTI,
     LEGACY_FACE_ALGORITHM_VERSION,
     V2_FACE_ALGORITHM_VERSION,
     aggregate_match_scores,
@@ -92,10 +93,15 @@ from app.face_credentials import (
     extract_face_template,
     extract_legacy_face_template,
     extract_v2_face_template,
-    face_template_similarity,
+    face_models_ready,
     family_match_margin_for,
+    is_legacy_face_algorithm,
     match_threshold_for,
+    normalize_face_failure_reason,
+    pack_face_templates,
     ranking_margin,
+    score_probe_against_gallery,
+    unpack_face_templates,
 )
 from app.file_upload import (
     compute_hash,
@@ -163,6 +169,7 @@ from app.schemas import (
     ExportManifestCreate,
     ExportManifestInvalidate,
     ExportManifestRead,
+    FaceAuthFailureSummaryRead,
     FaceChallengeRead,
     FaceChallengeRequest,
     FaceCredentialRead,
@@ -424,6 +431,10 @@ def capabilities() -> CapabilityResponse:
         available.append("vision-task-video")
     else:
         unavailable.append("vision-task-video")
+    if face_models_ready():
+        available.append("face-recognition-local")
+    else:
+        unavailable.append("face-recognition-local")
     return CapabilityResponse(phase="P0-foundation", available=available, unavailable=unavailable)
 
 
@@ -1797,7 +1808,7 @@ async def auth_face_login(
             actor_id=actor_id,
             method="FACE",
             outcome="FAILED",
-            reason=reason,
+            reason=normalize_face_failure_reason(reason),
         )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="FACE_AUTH_FAILED")
 
@@ -1820,6 +1831,7 @@ async def auth_face_login(
 
     frame_bytes: list[bytes] = []
     templates: list[bytes] = []
+    yaws: list[float] = []
     try:
         if len(frames) < 2 or len(frames) > 3:
             failed("FRAME_COUNT_INVALID")
@@ -1844,16 +1856,22 @@ async def auth_face_login(
             if not quality["allow_downstream"]:
                 failed("FRAME_QUALITY_INVALID")
             extractor = _face_extractor_for_algorithm(credential.algorithm_version)
-            template, _ = extractor(data)
+            if credential.algorithm_version.startswith("opencv-yunet-sface"):
+                template, frame_meta = extractor(data)
+                yaws.append(float(frame_meta.get("yaw", 0.0)))
+            else:
+                template, _ = extractor(data)
             templates.append(template)
         try:
-            check_face_liveness(templates)
+            pose_yaws = yaws if settings.face_require_pose_liveness and yaws else None
+            check_face_liveness(templates, pose_yaws)
         except ValueError as exc:
             if str(exc) == "FACE_LIVENESS_FAILED":
                 failed("LIVENESS_FAILED")
             failed("FACE_MATCH_FAILED")
         try:
             stored_template = decrypt_template(credential.encrypted_template)
+            gallery = unpack_face_templates(stored_template)
         except HTTPException as exc:
             _record_authentication_audit(
                 session,
@@ -1867,11 +1885,12 @@ async def auth_face_login(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="FACE_AUTH_UNAVAILABLE",
             ) from exc
-        # Every frame of the motion sequence must independently match the
-        # stored template; a single injected photo of the account holder among
-        # unrelated motion frames must not be enough to log in.
+        except ValueError:
+            failed("FACE_MATCH_FAILED")
+        # Every frame must match the enrolled gallery (best angle per frame),
+        # then take the minimum across frames so one stolen photo cannot pass.
         match_score = aggregate_match_scores(
-            [face_template_similarity(template, stored_template) for template in templates]
+            [score_probe_against_gallery(template, gallery) for template in templates]
         )
         if match_score < match_threshold_for(credential.algorithm_version):
             failed()
@@ -1943,7 +1962,7 @@ async def auth_family_face_login(
             actor_id=rate_actor,
             method="FACE",
             outcome="FAILED",
-            reason=reason,
+            reason=normalize_face_failure_reason(reason),
         )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="FACE_AUTH_FAILED")
 
@@ -1971,6 +1990,7 @@ async def auth_family_face_login(
 
     frame_bytes: list[bytes] = []
     templates_by_algorithm: dict[str, list[bytes]] = {}
+    yaws_by_algorithm: dict[str, list[float]] = {}
     try:
         if len(frames) < 2 or len(frames) > 3:
             failed("FRAME_COUNT_INVALID")
@@ -2000,27 +2020,33 @@ async def auth_family_face_login(
         # algorithm version and keep all raw frames in memory only.
         for algorithm_version in {credential.algorithm_version for credential in credentials}:
             extractor = _face_extractor_for_algorithm(algorithm_version)
-            extracted = [extractor(data)[0] for data in frame_bytes]
+            extracted: list[bytes] = []
+            yaws: list[float] = []
+            for data in frame_bytes:
+                template, frame_meta = extractor(data)
+                extracted.append(template)
+                if algorithm_version.startswith("opencv-yunet-sface"):
+                    yaws.append(float(frame_meta.get("yaw", 0.0)))
             try:
-                check_face_liveness(extracted)
+                pose_yaws = yaws if settings.face_require_pose_liveness and yaws else None
+                check_face_liveness(extracted, pose_yaws)
             except ValueError as exc:
                 if str(exc) == "FACE_LIVENESS_FAILED":
                     failed("LIVENESS_FAILED")
                 failed("FACE_MATCH_FAILED")
             templates_by_algorithm[algorithm_version] = extracted
+            yaws_by_algorithm[algorithm_version] = yaws
 
         candidates: list[tuple[float, float, str, str]] = []
         decrypt_failures = 0
         for credential in credentials:
             try:
                 stored_template = decrypt_template(credential.encrypted_template)
+                gallery = unpack_face_templates(stored_template)
                 templates = templates_by_algorithm[credential.algorithm_version]
-                # Same rule as 1:1 login: all frames must match one member.
+                # Same rule as 1:1 login: all frames must match one member gallery.
                 score = aggregate_match_scores(
-                    [
-                        face_template_similarity(template, stored_template)
-                        for template in templates
-                    ]
+                    [score_probe_against_gallery(template, gallery) for template in templates]
                 )
             except (HTTPException, ValueError, KeyError):
                 decrypt_failures += 1
@@ -2209,6 +2235,26 @@ def _confirm_face_registration(
     verify_reauthentication(actor_id, household_id, confirmation_method, confirmation_code, session)
 
 
+def _face_credential_read(credential: FaceCredential) -> FaceCredentialRead:
+    template_count = 3 if "multi" in (credential.feature_version or "") else 1
+    return FaceCredentialRead(
+        id=credential.id,
+        household_id=credential.household_id,
+        actor_id=credential.actor_id,
+        algorithm_version=credential.algorithm_version,
+        feature_version=credential.feature_version,
+        credential_version=credential.credential_version,
+        consent_version=credential.consent_version,
+        status=credential.status,  # type: ignore[arg-type]
+        created_by=credential.created_by,
+        consented_at=credential.consented_at,
+        revoked_at=credential.revoked_at,
+        created_at=credential.created_at,
+        upgrade_recommended=is_legacy_face_algorithm(credential.algorithm_version),
+        template_count=template_count,
+    )
+
+
 @router.get(
     "/households/{household_id}/face-credentials",
     response_model=list[FaceCredentialRead],
@@ -2217,9 +2263,9 @@ def list_face_credentials(
     household_id: str,
     actor_id: str = Depends(get_actor_id),
     session: Session = Depends(get_session),
-) -> list[FaceCredential]:
+) -> list[FaceCredentialRead]:
     require_household_owner(session, household_id, actor_id)
-    return list(
+    rows = list(
         session.scalars(
             select(FaceCredential)
             .where(
@@ -2229,6 +2275,41 @@ def list_face_credentials(
             .order_by(FaceCredential.created_at.desc())
         ).all()
     )
+    return [_face_credential_read(row) for row in rows]
+
+
+@router.get(
+    "/households/{household_id}/auth-audit/face-summary",
+    response_model=FaceAuthFailureSummaryRead,
+)
+def face_auth_failure_summary(
+    household_id: str,
+    days: int = 7,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> FaceAuthFailureSummaryRead:
+    """Owner-only desensitized FACE failure buckets (no scores/templates/images)."""
+    require_household_owner(session, household_id, actor_id)
+    window_days = max(1, min(int(days), 30))
+    since = datetime.now(UTC) - timedelta(days=window_days)
+    rows = session.scalars(
+        select(AccessAudit).where(
+            AccessAudit.household_id == household_id,
+            AccessAudit.operation == "AUTHENTICATION",
+            AccessAudit.action == "FACE_LOGIN",
+            AccessAudit.outcome == "FAILED",
+            AccessAudit.created_at >= since,
+        )
+    ).all()
+    totals: dict[str, int] = {}
+    by_day: dict[str, dict[str, int]] = {}
+    for row in rows:
+        bucket = normalize_face_failure_reason(row.reason or "FACE_AUTH_FAILED")
+        totals[bucket] = totals.get(bucket, 0) + 1
+        day_key = row.created_at.astimezone(UTC).date().isoformat()
+        day_bucket = by_day.setdefault(day_key, {})
+        day_bucket[bucket] = day_bucket.get(bucket, 0) + 1
+    return FaceAuthFailureSummaryRead(days=window_days, totals=totals, by_day=by_day)
 
 
 @router.post(
@@ -2298,7 +2379,9 @@ async def register_face_credential(
             detail="FACE_LIVENESS_FAILED",
         )
     templates: list[bytes] = []
+    yaws: list[float] = []
     metadata: dict[str, Any] | None = None
+    packed_template = b""
     try:
         from ai.vision.quality_gate import assess_image, decode_image
 
@@ -2322,28 +2405,26 @@ async def register_face_credential(
             )
             if not quality["allow_downstream"]:
                 raise ValueError("FACE_FRAME_LOW_QUALITY")
-            template, frame_metadata = extract_face_template(image_bytes)
+            # Geometry gates (face size/pose/blur) run inside extract_face_template.
+            template, frame_metadata = extract_face_template(image_bytes, enforce_geometry=True)
             templates.append(template)
+            yaws.append(float(frame_metadata.get("yaw", 0.0)))
             metadata = frame_metadata
             image_bytes = b""
         try:
-            check_face_liveness(templates)
+            pose_yaws = yaws if settings.face_require_pose_liveness else None
+            check_face_liveness(templates, pose_yaws)
         except ValueError as exc:
             raise ValueError("FACE_LIVENESS_FAILED") from exc
-        # Store the sequence's most representative frame, not a potentially
-        # extreme turn. This keeps the encrypted schema compact and stable.
-        representative_index = max(
-            range(len(templates)),
-            key=lambda index: (
-                sum(
-                    face_template_similarity(templates[index], other)
-                    for other in templates
-                    if other is not templates[index]
-                )
-                / max(1, len(templates) - 1)
-            ),
-        )
-        template = templates[representative_index]
+        # Keep every angle in an encrypted multi-template gallery so login can
+        # tolerate mild head turns without lowering the match threshold.
+        packed_template = pack_face_templates(templates)
+        if metadata is not None and len(templates) > 1:
+            metadata = {
+                **metadata,
+                "feature_version": FACE_FEATURE_VERSION_MULTI,
+                "template_count": len(templates),
+            }
     except RuntimeError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2357,8 +2438,9 @@ async def register_face_credential(
     finally:
         # Drop all decoded registration frames before touching the database.
         templates.clear()
+        yaws.clear()
 
-    if metadata is None:
+    if metadata is None or not packed_template:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="FACE_FRAME_INVALID",
@@ -2378,7 +2460,7 @@ async def register_face_credential(
     credential = FaceCredential(
         household_id=household.id,
         actor_id=target,
-        encrypted_template=encrypt_template(template),
+        encrypted_template=encrypt_template(packed_template),
         algorithm_version=metadata["algorithm_version"],
         feature_version=metadata["feature_version"],
         credential_version=previous_version + 1,
@@ -2413,7 +2495,7 @@ async def register_face_credential(
         credential.id,
         credential.credential_version,
     )
-    return credential
+    return _face_credential_read(credential)
 
 
 @router.delete(
@@ -2425,7 +2507,7 @@ def revoke_face_credential(
     credential_id: str,
     actor_id: str = Depends(get_actor_id),
     session: Session = Depends(get_session),
-) -> FaceCredential:
+) -> FaceCredentialRead:
     household = require_household_owner(session, household_id, actor_id)
     credential = session.scalar(
         select(FaceCredential).where(
@@ -2460,7 +2542,7 @@ def revoke_face_credential(
         )
         session.commit()
         session.refresh(credential)
-    return credential
+    return _face_credential_read(credential)
 
 
 # ── HCT-301: Event timeline & projection ───────────────────────────

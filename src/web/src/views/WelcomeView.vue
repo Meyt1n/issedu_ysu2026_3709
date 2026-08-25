@@ -79,6 +79,9 @@ const faceBindingReady = computed(() => householdId.value.trim().length > 0)
 const faceHouseholdLabel = computed(
   () => boundFaceHouseholdName.value || '当前绑定家庭（仅在本机使用）',
 )
+const faceModelsReady = computed(
+  () => session.capabilities?.available?.includes('face-recognition-local') ?? false,
+)
 const canConnect = computed(
   () => actorId.value.trim().length > 0 && accessPurposeValid.value && !connecting.value,
 )
@@ -392,10 +395,16 @@ async function submitCreate(): Promise<void> {
           </label>
           <FaceVideoCapture
             v-if="credentialMode === 'face'"
-            :disabled="connecting || !faceBindingReady || !accessPurposeValid"
+            :disabled="connecting || !faceBindingReady || !accessPurposeValid || !faceModelsReady"
             @captured="onFaceCaptured"
             @fallback="usePinFallback"
           />
+          <p v-if="credentialMode === 'face' && !faceModelsReady" class="notice warn" role="status">
+            <AppIcon name="info" :size="16" />
+            本地人脸模型尚未就绪（YuNet/SFace）。请管理员先运行
+            <code>uv run python scripts/ensure_face_models.py</code>
+            并重启 API；当前请改用 PIN 或账号密码登录。
+          </p>
           <label v-if="authMode === 'development'" class="field">
             访问用途代码
             <input

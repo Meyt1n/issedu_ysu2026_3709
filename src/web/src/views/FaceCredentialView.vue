@@ -62,6 +62,17 @@ const boundFaceHouseholdLabel = computed(() => {
 })
 
 const unboundMembers = computed(() => session.members.filter(member => !member.actor_id))
+const legacyCredentials = computed(() =>
+  visibleCredentials.value.filter(credential => credential.status === 'ACTIVE' && credential.upgrade_recommended),
+)
+
+function beginRebind(credential: FaceCredential): void {
+  selectedActorId.value = credential.actor_id
+  replaceExisting.value = true
+  selectedFrames.value = []
+  error.value = ''
+  pushToast('info', '已选中该账号并勾选重新绑定：请完成动态采集后提交，以升级到 SFace 多角度凭证。')
+}
 
 function bindCurrentHouseholdToDevice(): void {
   const householdId = session.selectedHouseholdId
@@ -325,12 +336,32 @@ onMounted(() => {
 
       <section class="card">
         <div class="card-heading"><div><p class="eyebrow">凭证清单</p><h3 class="card-title">当前家庭的注册记录</h3></div></div>
+        <p v-if="legacyCredentials.length > 0" class="notice warn" role="status">
+          <AppIcon name="info" :size="16" />
+          有 {{ legacyCredentials.length }} 条灰度旧版凭证（v1/v2）。它们仍可登录，但成员区分较弱；建议重新绑定以升级到本地 SFace 多角度嵌入。
+        </p>
         <div v-if="loading" class="inline-loading">正在读取凭证状态</div>
         <div v-else-if="visibleCredentials.length === 0" class="empty-state"><AppIcon class="empty-art" name="shield" :size="38" /><strong>暂无人脸凭证</strong><p>注册成功后这里只显示版本和状态，不显示模板或原始图片。</p></div>
         <ul v-else class="list-plain">
           <li v-for="credential in visibleCredentials" :key="credential.id" class="row-card">
-            <div><span class="row-title">{{ actorOptions.find(option => option.id === credential.actor_id)?.label ?? credential.actor_id }}</span><p class="row-meta">版本 {{ credential.credential_version }} · {{ credential.algorithm_version }} · {{ formatDateTime(credential.created_at) }}</p></div>
-            <div class="heading-actions"><span class="pill" :class="credential.status === 'ACTIVE' ? 'pine' : 'plain'">{{ credential.status }}</span><button v-if="credential.status === 'ACTIVE'" type="button" class="btn btn-danger btn-small" :disabled="saving" @click="deleteCredential(credential)"><AppIcon name="trash" :size="14" /> 删除</button></div>
+            <div>
+              <span class="row-title">{{ actorOptions.find(option => option.id === credential.actor_id)?.label ?? credential.actor_id }}</span>
+              <p class="row-meta">版本 {{ credential.credential_version }} · {{ credential.algorithm_version }} · 模板 {{ credential.template_count ?? 1 }} · {{ formatDateTime(credential.created_at) }}</p>
+              <p v-if="credential.upgrade_recommended && credential.status === 'ACTIVE'" class="row-meta">建议重新绑定以提升家庭内识别精度。</p>
+            </div>
+            <div class="heading-actions">
+              <span class="pill" :class="credential.status === 'ACTIVE' ? 'pine' : 'plain'">{{ credential.status }}</span>
+              <button
+                v-if="credential.status === 'ACTIVE' && credential.upgrade_recommended"
+                type="button"
+                class="btn btn-ghost btn-small"
+                :disabled="saving"
+                @click="beginRebind(credential)"
+              >
+                重新绑定
+              </button>
+              <button v-if="credential.status === 'ACTIVE'" type="button" class="btn btn-danger btn-small" :disabled="saving" @click="deleteCredential(credential)"><AppIcon name="trash" :size="14" /> 删除</button>
+            </div>
           </li>
         </ul>
       </section>
