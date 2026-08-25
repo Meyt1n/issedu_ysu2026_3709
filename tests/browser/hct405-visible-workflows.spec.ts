@@ -118,10 +118,47 @@ async function installSyntheticApi(page: Page): Promise<void> {
       return respond({ phase: 'local', available: ['api'], unavailable: ['ollama'] })
     }
     if (request.method() === 'GET' && path.endsWith('/risks')) {
-      return respond({ member_id: member.id, alerts: [], total: 0, severe_count: 0, warning_count: 0 })
+      return respond({
+        member_id: member.id,
+        alerts: [{
+          rule_id: 'heat_hydration',
+          level: 'WARNING',
+          message: '请留意今日补水与室内通风，不确定时先问家人。',
+          source_event_ids: ['event-1'],
+          created_at: '2026-08-20T02:00:00Z',
+          rule_version: 'demo-rules-v1',
+          risk_fingerprint: 'a'.repeat(64),
+          acknowledgement: null,
+        }],
+        total: 1,
+        severe_count: 0,
+        warning_count: 1,
+        ruleset_version: 'demo-rules-v1',
+        non_severe_budget: 10,
+      })
     }
-    if (request.method() === 'GET' && (path.endsWith('/plans') || path.endsWith('/tasks') || path.endsWith('/review-tasks'))) {
+    if (request.method() === 'GET' && (path.endsWith('/plans') || path.endsWith('/tasks'))) {
       return respond([])
+    }
+    if (request.method() === 'GET' && path.endsWith('/review-tasks')) {
+      return respond([{
+        id: 'review-1',
+        vision_task_id: 'vision-1',
+        household_id: household.id,
+        member_id: member.id,
+        status: 'PENDING_REVIEW',
+        fusion_status: 'MATCHED',
+        candidates: [{ drug_name: '合成候选药品', confidence: 0.88, evidence: ['OCR'] }],
+        selected_candidate: null,
+        manual_payload: null,
+        model_version: 'demo-v1',
+        rule_version: 'fusion-v1',
+        version: 1,
+        confirmed_by: null,
+        confirmed_at: null,
+        created_at: '2026-08-20T01:00:00Z',
+        updated_at: '2026-08-20T01:00:00Z',
+      }])
     }
     if (request.method() === 'GET' && path.startsWith('/api/v1/weather/')) {
       return respond({
@@ -298,6 +335,14 @@ test('家庭大屏使用脱敏聚合接口而非成员逐项汇总', async ({ pa
   await summary
   await expect(page.getByRole('heading', { name: '家庭大屏', level: 1 })).toBeVisible()
   await expect(page.getByText('累计 5 条已确认事实')).toBeVisible()
+  await expect(page.getByText('今日环境提醒')).toBeVisible()
+  await expect(page.getByText('近期用药提醒')).toBeVisible()
+  await expect(page.getByText('合成药品')).toBeVisible()
+  await expect(page.getByText('合成候选药品')).toBeVisible()
+  await expect(page.locator('.bs-panel').filter({ hasText: '今日环境提醒' })).toContainText('高温提醒')
+  await expect(page.locator('.bs-panel').filter({ hasText: '需要留意的风险' })).toContainText('请留意今日补水')
+  await expect(page.locator('.bigscreen')).toContainText('仅候选，未入档')
+  await expect(page.locator('.bigscreen')).not.toContainText(/payload|购药入口|立即购买/)
 })
 
 test('本地 API 不可用时不进入家庭空间，也不渲染任何健康摘要', async ({ page }) => {
