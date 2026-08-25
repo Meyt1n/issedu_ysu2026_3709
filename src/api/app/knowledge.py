@@ -14,9 +14,14 @@ from datetime import UTC, datetime
 from sqlalchemy import JSON, Column, DateTime, Integer, String, Text, func, select
 from sqlalchemy.orm import Session
 
+from app.knowledge_synonyms import expand_query_tokens
 from app.models import Base, new_id
 
 logger = logging.getLogger(__name__)
+
+# Blend classic TF-IDF with a lightweight local cosine over bag-of-terms
+# vectors.  No external embedding model is required; both signals stay on-box.
+_VECTOR_SCORE_WEIGHT = 0.35
 
 
 # ── ORM models (use shared Base) ─────────────────────────────────────
@@ -268,6 +273,11 @@ def retrieve(
         # Stopword-only or single-character noise degrades exactly like an
         # empty query instead of scanning the index for nothing.
         raise ValueError("EMPTY_QUERY")
+    original_q_tokens = list(dict.fromkeys(q_tokens))
+    # Colloquial aliases ("expiry" / "回收") expand before scoring so teaching
+    # cards remain findable without cloud embeddings.  Coverage is still
+    # measured on the original query terms so expansions cannot dilute rank.
+    q_tokens = expand_query_tokens(q_tokens)
 
     # 1. Permission pre-filter: load active docs, check scope
     now = datetime.now(UTC)
@@ -305,7 +315,7 @@ def retrieve(
     if not chunks:
         raise ValueError("EMPTY_INDEX")
 
-    # 3. Scoring: smoothed chunk-level TF-IDF with query-coverage weighting.
+    # 3. Scoring: smoothed chunk-level TF-IDF + lightweight local cosine.
     #    * IDF is computed against the chunk collection (df counts chunks), so
     #      a term present in every chunk keeps a small positive weight instead
     #      of turning negative and hiding matching chunks.
@@ -313,26 +323,37 @@ def retrieve(
     #      drown out a chunk that actually covers the question.
     #    * Coverage weighting prefers chunks matching more distinct query
     #      terms, which keeps multi-document teaching content well ranked.
+    #    * Cosine over bag-of-terms vectors is a local "light vector" signal
+    #      (no external embedding download) blended at _VECTOR_SCORE_WEIGHT.
     n_chunks = len(chunks)
     df: Counter = Counter()
     for ch in chunks:
         df.update(ch.term_vector.keys())
 
     unique_q_tokens = set(q_tokens)
+    original_unique = set(original_q_tokens)
+    q_tf = Counter(q_tokens)
     scored = []
     for ch in chunks:
         score = 0.0
         matched_tokens = 0
+        matched_original = 0
         for tok in unique_q_tokens:
             tf = ch.term_vector.get(tok, 0)
             if tf == 0:
                 continue
             matched_tokens += 1
+            if tok in original_unique:
+                matched_original += 1
             idf = math.log((1 + n_chunks) / (1 + df[tok])) + 1.0
             score += (1.0 + math.log(tf)) * idf
         if matched_tokens:
-            coverage = matched_tokens / len(unique_q_tokens)
+            coverage = matched_original / len(original_unique)
             score *= 0.5 + 0.5 * coverage
+            cosine = _cosine_bag_of_terms(q_tf, ch.term_vector or {})
+            score = (1.0 - _VECTOR_SCORE_WEIGHT) * score + _VECTOR_SCORE_WEIGHT * (
+                score * (0.5 + 0.5 * cosine)
+            )
             meta = doc_meta.get(ch.document_id, {})
             scored.append({
                 "chunk_id": ch.id,
@@ -349,6 +370,24 @@ def retrieve(
     if not scored:
         raise ValueError("NO_RELEVANT_RESULTS")
     return scored[:top_k]
+
+
+def _cosine_bag_of_terms(query_tf: Counter, doc_tf: dict) -> float:
+    """Cosine similarity between two bag-of-terms maps (local light vector)."""
+    if not query_tf or not doc_tf:
+        return 0.0
+    dot = 0.0
+    for term, q_weight in query_tf.items():
+        d_weight = doc_tf.get(term)
+        if d_weight:
+            dot += float(q_weight) * float(d_weight)
+    if dot <= 0.0:
+        return 0.0
+    q_norm = math.sqrt(sum(weight * weight for weight in query_tf.values()))
+    d_norm = math.sqrt(sum(float(weight) * float(weight) for weight in doc_tf.values()))
+    if q_norm <= 0.0 or d_norm <= 0.0:
+        return 0.0
+    return dot / (q_norm * d_norm)
 
 
 # ── Audit logging ─────────────────────────────────────────────────────

@@ -124,7 +124,7 @@ def test_repo_demo_manifest_ingests_and_topics_are_retrievable(db_session) -> No
         manifest_path=manifest_path,
         source_root=manifest_path.parent,
         actor_id="demo-admin",
-        index_version="demo-cn-en-v3",
+        index_version="demo-cn-en-v4",
     )
 
     assert result["index"]["document_count"] == 22

@@ -24,8 +24,10 @@
 ## 当前可运行入口
 
 - `scripts/ingest_local_knowledge.py`：从批准 JSON 清单校验并入库，只接受清单指定的 UTF-8 `.md`/`.txt`。
-- `docs/demo/本地RAG知识清单.json`：22 张合成教学演示知识卡（用药安全、存放处置、过敏授权、指标记录、紧急联络、包装复核，以及提醒升级、字段授权、事件追加、规则证据分区、本地隐私、拒答升级、时间窗预算、跌倒观察、外出备药、医嘱确认、删除撤权、天气行动卡、药箱盘点、语音边界、指标趋势、视觉门控等）。
-- `docs/demo/本地RAG入库与运行.md`：dry-run、正式入库和 API 检索命令（当前索引版本 `demo-cn-en-v3`）。
+- `docs/demo/本地RAG知识清单.json`：22 张合成教学演示知识卡（均含 FAQ；主题覆盖用药安全、存放处置、过敏授权、指标、紧急联络、包装复核、提醒升级、字段授权、事件追加、规则证据分区、本地隐私、拒答、时间窗预算、跌倒观察、外出备药、医嘱确认、删除撤权、天气行动卡、药箱盘点、语音边界、指标趋势、视觉门控）。
+- `docs/demo/本地RAG检索金标集.json`：问句→应命中文档金标（含同义词用例与防串题约束）。
+- `docs/demo/本地RAG入库与运行.md`：dry-run / 正式入库 / 同义词与轻量向量说明（索引版本 `demo-cn-en-v4`）。
+- `docs/knowledge/approved/`：正式批准知识接入路径与脱敏说明书摘要样例（与 demo 分离）。
 
 ## 2026-08-25 增量（知识库扩充与检索质量修复）
 
@@ -33,12 +35,17 @@
 - 分块改为 Markdown 章节感知：按标题切分（超长章节回退为带重叠的字符窗口），`locator` 携带 `section:<章节名>` 前缀，对齐 07-AI与RAG设计规范「保留章节标签」的要求。
 - 空白/纯停用词查询在检索入口提前返回 `EMPTY_QUERY` 结构化降级。
 - `local_agents._knowledge_agent` 的 trace 区分「检索完成但无命中」（`NO_RELEVANT_RESULTS`，`completed`）与真实阻断（`NO_AUTHORISED_DOCUMENTS`/`EMPTY_INDEX`/越权，`blocked`）；权限前置过滤、引用校验与用药安全短路逻辑均未弱化。
-- 知识库从 1 份扩充到 22 份合成教学卡（含 v2/v3 增量），清单逐项登记 source/license/version/permission_scope/content_sha256；`tests/unit/test_local_knowledge_ingest.py::test_repo_demo_manifest_ingests_and_topics_are_retrievable` 固定清单可入库、哈希一致且各主题查询各自命中对应文档。
+- 知识库扩充为 22 份合成教学卡；清单逐项登记 source/license/version/permission_scope/content_sha256。
+- **深度：** 每张卡补充 FAQ 式问答块（仍禁剂量/诊断/导流），文档版本统一推进到 `demo-cn-en-v4`。
+- **检索：** 本地同义词/别名扩展（`knowledge_synonyms.py`）+ 词袋余弦轻量向量混入 TF-IDF；无云端 embedding。
+- **评测：** `本地RAG检索金标集.json` + `test_hct401_knowledge_gold.py` 固定 top-1 命中与防串题。
+- **正式知识：** `docs/knowledge/approved/` 提供脱敏说明书摘要接入路径与 example 清单，禁止 PDF 直接进入 `docs/demo`。
 
 ## 测试证据
 
 - `tests/unit/test_hct401_knowledge.py`（含 IDF 负权重回归、覆盖度排序、章节分块定位三项新增用例）
 - `tests/unit/test_local_knowledge_ingest.py`（含仓库清单入库与主题检索断言）
+- `tests/unit/test_hct401_knowledge_gold.py`（金标集、同义词扩展、正式知识 example 哈希）
 - `tests/unit/test_hct430_local_agents.py`（知识 agent 无命中/越权 trace 状态）
 - `tests/e2e/test_hct405_failure_degradation.py`
 - `tests/e2e/test_hct405_deletion_propagation.py`
