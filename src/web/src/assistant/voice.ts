@@ -70,26 +70,100 @@ export function createSpeechRecognition(
   recognition.lang = lang
   recognition.continuous = options.continuous ?? false
   recognition.interimResults = options.interimResults ?? true
-  recognition.maxAlternatives = options.maxAlternatives ?? 1
+  // 多候选便于挑选更稳的中文结果，降低同音误识。
+  recognition.maxAlternatives = options.maxAlternatives ?? 3
   return recognition
+}
+
+/** 识别会话结束后的快速重启间隔：压低唤醒空窗，同时避免浏览器连启报错。 */
+export const VOICE_RESTART_DELAY_MS = 30
+
+function alternativeConfidence(alternative: SpeechRecognitionAlternativeLike): number {
+  const confidence = (alternative as { confidence?: number }).confidence
+  return typeof confidence === 'number' && Number.isFinite(confidence) ? confidence : -1
+}
+
+function chineseDensity(text: string): number {
+  const chars = [...text]
+  if (chars.length === 0) return 0
+  const chinese = chars.filter(char => /[\u4e00-\u9fff]/.test(char)).length
+  return chinese / chars.length
+}
+
+/** 在单个识别结果的多个候选中选更稳的一条：置信度优先，其次中文密度。 */
+export function pickBestAlternative(result: SpeechRecognitionResultLike): string {
+  let best = ''
+  let bestConfidence = -2
+  let bestDensity = -1
+  for (let index = 0; index < result.length; index += 1) {
+    const transcript = result[index]?.transcript?.trim() ?? ''
+    if (!transcript) continue
+    const confidence = alternativeConfidence(result[index]!)
+    const density = chineseDensity(transcript)
+    if (
+      confidence > bestConfidence ||
+      (confidence === bestConfidence && density > bestDensity) ||
+      (confidence === bestConfidence && density === bestDensity && transcript.length > best.length)
+    ) {
+      best = transcript
+      bestConfidence = confidence
+      bestDensity = density
+    }
+  }
+  return best
+}
+
+function joinTranscriptParts(parts: string[]): string {
+  if (parts.length === 0) return ''
+  let combined = parts[0]!
+  for (let index = 1; index < parts.length; index += 1) {
+    const next = parts[index]!
+    const left = combined.slice(-1)
+    const right = next.slice(0, 1)
+    // 中文片段之间不加空格，减少草稿里无意义空隙。
+    const needSpace = !/[\u4e00-\u9fff]/.test(left) || !/[\u4e00-\u9fff]/.test(right)
+    combined += needSpace ? ` ${next}` : next
+  }
+  return combined
 }
 
 /** Combine the current recognition result list into the input draft text. */
 export function transcriptFromEvent(event: SpeechRecognitionEventLike): string {
   const parts: string[] = []
   for (let index = 0; index < event.results.length; index += 1) {
-    const transcript = event.results[index]?.[0]?.transcript
-    if (typeof transcript === 'string' && transcript.trim()) parts.push(transcript.trim())
+    const transcript = pickBestAlternative(event.results[index]!)
+    if (transcript) parts.push(transcript)
   }
-  return parts.join(' ')
+  return joinTranscriptParts(parts)
 }
+
+/**
+ * 只取 resultIndex 起的最新片段：唤醒判定优先看最近 interim，
+ * 避免整段历史缓冲拖慢“小燕打开”切换。
+ */
+export function latestTranscriptFromEvent(event: SpeechRecognitionEventLike): string {
+  const parts: string[] = []
+  const start = Math.max(0, Math.min(event.resultIndex, event.results.length))
+  for (let index = start; index < event.results.length; index += 1) {
+    const transcript = pickBestAlternative(event.results[index]!)
+    if (transcript) parts.push(transcript)
+  }
+  return joinTranscriptParts(parts) || transcriptFromEvent(event)
+}
+
+/** ASR 常见同音/近音纠偏，仅用于唤醒匹配，不改写入草稿的原文。 */
+const WAKE_ASR_CORRECTIONS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/晓燕|小严|小研|小嫣|小延|小言|小烟/g, '小燕'],
+  [/打开开|打开下|打开一下|打开助手|打开家健镜/g, '打开'],
+]
 
 /** Normalize only for wake-phrase matching; the original transcript stays untouched. */
 export function normalizeVoiceText(text: string): string {
-  return text
-    .normalize('NFKC')
-    .toLocaleLowerCase()
-    .replace(/[\s，。！？；：、,.!?;:'"“”‘’（）()[\]{}<>《》]/g, '')
+  let normalized = text.normalize('NFKC').toLocaleLowerCase()
+  for (const [pattern, replacement] of WAKE_ASR_CORRECTIONS) {
+    normalized = normalized.replace(pattern, replacement)
+  }
+  return normalized.replace(/[\s，。！？；：、,.!?;:'"“”‘’（）()[\]{}<>《》]/g, '')
 }
 
 function wakePhrasePattern(phrase: string): RegExp | null {
@@ -101,22 +175,37 @@ function wakePhrasePattern(phrase: string): RegExp | null {
   return new RegExp(chars, 'iu')
 }
 
-/** Match "小燕打开" while tolerating punctuation inserted by browser ASR. */
+/** Match "小燕打开" while tolerating punctuation and common ASR near-homophones. */
 export function containsWakePhrase(text: string, phrase = '小燕打开'): boolean {
   const pattern = wakePhrasePattern(phrase)
-  return Boolean(pattern?.test(text))
+  if (!pattern) return false
+  if (pattern.test(text)) return true
+  // 归一化后再匹配一次，覆盖“小严打开 / 晓燕，打开助手”等误识。
+  return pattern.test(normalizeVoiceText(text))
 }
 
 /** Remove the wake phrase and return the spoken content that follows it. */
 export function transcriptAfterWakePhrase(text: string, phrase = '小燕打开'): string {
   const pattern = wakePhrasePattern(phrase)
   if (!pattern) return text.trim()
-  const match = pattern.exec(text)
-  if (!match || match.index === undefined) return ''
-  return text
-    .slice(match.index + match[0].length)
-    .replace(/^[\s，。！？；：、,.!?;:'"“”‘’（）()[\]{}<>《》]+/, '')
-    .trim()
+  const direct = pattern.exec(text)
+  if (direct && direct.index !== undefined) {
+    return text
+      .slice(direct.index + direct[0].length)
+      .replace(/^[\s，。！？；：、,.!?;:'"“”‘’（）()[\]{}<>《》]+/, '')
+      .trim()
+  }
+
+  // 原文未直接命中时，按归一化位置估算后缀长度，尽量保留用户后续提问。
+  const normalized = normalizeVoiceText(text)
+  const normalizedPattern = wakePhrasePattern(normalizeVoiceText(phrase))
+  const normalizedMatch = normalizedPattern?.exec(normalized)
+  if (!normalizedMatch || normalizedMatch.index === undefined) return ''
+  const trailingNormalized = normalized.slice(normalizedMatch.index + normalizedMatch[0].length)
+  if (!trailingNormalized) return ''
+  const rawCompact = text.replace(/[\s，。！？；：、,.!?;:'"“”‘’（）()[\]{}<>《》]/g, '')
+  const trailingRaw = rawCompact.slice(Math.max(0, rawCompact.length - trailingNormalized.length))
+  return trailingRaw.trim()
 }
 
 export function isSpeechOutputSupported(): boolean {
@@ -139,8 +228,8 @@ export interface SpeechSynthesisLike {
   removeEventListener?: (type: 'voiceschanged', listener: () => void) => void
 }
 
-/** 适老可读的默认播报参数：语速略慢，音高与音量保持自然。 */
-export const SPEECH_DEFAULTS = { rate: 0.95, pitch: 1, volume: 1 } as const
+/** 适老且更自然的默认播报参数：略慢语速、轻微抬高音高，避免发闷机械感。 */
+export const SPEECH_DEFAULTS = { rate: 0.92, pitch: 1.05, volume: 1 } as const
 
 /**
  * 长文本按句切分：规避部分浏览器长 utterance 中途静音的问题，
@@ -193,25 +282,32 @@ export function prepareSpeechText(text: string): string {
     .trim()
 }
 
-const NATURAL_VOICE_PATTERN = /natural|neural|premium|enhanced|xiaoxiao|xiaoyi|yunxi|yunjian|yunyang|tingting|ting-ting|meijia|mei-jia|晓|云|婷/i
-const ROBOTIC_VOICE_PATTERN = /espeak|eloquence|compact|novelty|whisper/i
+const NATURAL_VOICE_PATTERN =
+  /natural|neural|premium|enhanced|online|xiaoxiao|xiaoyi|yunxi|yunjian|yunyang|yunxia|xiaochen|xiaomo|xiaoxuan|tingting|ting-ting|meijia|mei-jia|晓晓|晓伊|云希|云健|云扬|云夏|婷婷/i
+const ROBOTIC_VOICE_PATTERN = /espeak|eloquence|compact|novelty|whisper|robot|mono/i
+const PLAIN_LOCAL_VOICE_PATTERN =
+  /microsoft huihui|microsoft yaoyao|microsoft kangkang|\bhuihui\b|\byaoyao\b|\bkangkang\b|chinese \(simplified\)|chinese, simplified/i
 
 function chineseVoiceScore(voice: SpeechVoiceLike): number {
   const lang = voice.lang.toLowerCase().replace('_', '-')
   if (!lang.startsWith('zh')) return -1
   let score = lang.startsWith('zh-cn') || lang === 'zh' ? 100 : 50
-  // 本地语音优先：合成不出网，符合“健康数据默认不出网”的产品承诺。
-  if (voice.localService) score += 40
-  if (NATURAL_VOICE_PATTERN.test(voice.name)) score += 25
-  if (ROBOTIC_VOICE_PATTERN.test(voice.name)) score -= 60
+  const name = voice.name
+  // 自然度优先于“是否本地”：用户明确要求更自然音色；同档时仍偏好本地。
+  if (NATURAL_VOICE_PATTERN.test(name)) score += 70
+  if (voice.localService) score += 15
+  if (PLAIN_LOCAL_VOICE_PATTERN.test(name) && !NATURAL_VOICE_PATTERN.test(name)) {
+    score -= 25
+  }
+  if (ROBOTIC_VOICE_PATTERN.test(name)) score -= 60
   if (voice.default) score += 5
   return score
 }
 
 /**
  * 在浏览器已加载的语音里挑一条更自然的中文音色：
- * 普通话 zh-CN 优先，其次其他中文；本地语音优先于联网语音；
- * “Natural/晓晓/婷婷”等高质量命名加分，明显机械的引擎降权。
+ * 普通话 zh-CN 优先；Natural/Neural/晓晓等高质量命名优先于普通本地音色；
+ * 同档时本地语音加分；明显机械的引擎降权。
  * 没有任何中文语音时返回 null，由调用方退回 lang 兜底。
  */
 export function pickPreferredChineseVoice<T extends SpeechVoiceLike>(voices: readonly T[]): T | null {
@@ -235,8 +331,8 @@ function getVoicesSafe(synth: SpeechSynthesisLike): SpeechVoiceLike[] {
   }
 }
 
-/** voices 延迟加载时等待一次 voiceschanged，超时后返回当前列表（可能为空）。 */
-export function waitForVoices(synth: SpeechSynthesisLike, timeoutMs = 1500): Promise<SpeechVoiceLike[]> {
+  // 提前预热语音列表，缩短首次朗读等待；超时从 1.5s 收紧到 800ms。
+export function waitForVoices(synth: SpeechSynthesisLike, timeoutMs = 800): Promise<SpeechVoiceLike[]> {
   const immediate = getVoicesSafe(synth)
   if (immediate.length > 0 || typeof synth.addEventListener !== 'function') {
     return Promise.resolve(immediate)

@@ -69,8 +69,8 @@ describe('语音播报 composable', () => {
     expect(synth.spoken.length).toBe(1)
     expect(synth.spoken[0]!.text).toBe('今天有两项照护任务')
     expect(synth.spoken[0]!.lang).toBe('zh-CN')
-    expect(synth.spoken[0]!.rate).toBeCloseTo(0.95)
-    expect(synth.spoken[0]!.pitch).toBeCloseTo(1)
+    expect(synth.spoken[0]!.rate).toBeCloseTo(0.92)
+    expect(synth.spoken[0]!.pitch).toBeCloseTo(1.05)
     expect(synth.spoken[0]!.volume).toBeCloseTo(1)
   })
 
@@ -145,10 +145,10 @@ describe('语音播报 composable', () => {
 })
 
 describe('中文音色优选', () => {
-  it('本地 zh-CN 优先于联网语音', () => {
-    const local = fakeVoice({ name: 'Microsoft Huihui' })
-    const remote = fakeVoice({ name: 'Google 普通话（中国大陆）', localService: false })
-    expect(pickChineseVoice([remote, local])).toBe(local)
+  it('自然音色优先于普通本地默认音色', () => {
+    const localPlain = fakeVoice({ name: 'Microsoft Huihui' })
+    const remoteNatural = fakeVoice({ name: 'Microsoft Xiaoxiao Online (Natural)', localService: false })
+    expect(pickChineseVoice([localPlain, remoteNatural])).toBe(remoteNatural)
   })
 
   it('高质量命名加分、机械引擎降权', () => {

@@ -17,8 +17,8 @@ export interface Speaker {
   supported: boolean
 }
 
-/** 适老可读的播报参数：语速略慢（与无障碍说明一致），音高音量保持自然。 */
-export const SPEECH_DEFAULTS = { rate: 0.95, pitch: 1, volume: 1 } as const
+/** 适老且更自然的播报参数：略慢语速、轻微抬高音高，减轻机械感。 */
+export const SPEECH_DEFAULTS = { rate: 0.92, pitch: 1.05, volume: 1 } as const
 
 /** 当前正在播报的文本（空串表示未在播报），供全局指示条使用。 */
 const speakingText = ref('')
@@ -48,24 +48,30 @@ function hasChineseVoice(voices: SpeechSynthesisVoice[]): boolean {
 }
 
 const NATURAL_VOICE_PATTERN =
-  /natural|neural|premium|enhanced|xiaoxiao|xiaoyi|yunxi|yunjian|yunyang|tingting|ting-ting|meijia|mei-jia|晓|云|婷/i
-const ROBOTIC_VOICE_PATTERN = /espeak|eloquence|compact|novelty|whisper/i
+  /natural|neural|premium|enhanced|online|xiaoxiao|xiaoyi|yunxi|yunjian|yunyang|yunxia|xiaochen|xiaomo|xiaoxuan|tingting|ting-ting|meijia|mei-jia|晓晓|晓伊|云希|云健|云扬|云夏|婷婷/i
+const ROBOTIC_VOICE_PATTERN = /espeak|eloquence|compact|novelty|whisper|robot|mono/i
+const PLAIN_LOCAL_VOICE_PATTERN =
+  /microsoft huihui|microsoft yaoyao|microsoft kangkang|\bhuihui\b|\byaoyao\b|\bkangkang\b|chinese \(simplified\)|chinese, simplified/i
 
 function chineseVoiceScore(voice: SpeechSynthesisVoice): number {
   const lang = voice.lang.toLowerCase().replace('_', '-')
   if (!lang.startsWith('zh')) return -1
   let score = lang.startsWith('zh-cn') || lang === 'zh' ? 100 : 50
-  // 本地语音优先：合成不出网，符合“健康数据默认不出网”的产品承诺。
-  if (voice.localService) score += 40
-  if (NATURAL_VOICE_PATTERN.test(voice.name)) score += 25
-  if (ROBOTIC_VOICE_PATTERN.test(voice.name)) score -= 60
+  const name = voice.name
+  // 自然度优先：同档时再偏好本地音色。
+  if (NATURAL_VOICE_PATTERN.test(name)) score += 70
+  if (voice.localService) score += 15
+  if (PLAIN_LOCAL_VOICE_PATTERN.test(name) && !NATURAL_VOICE_PATTERN.test(name)) {
+    score -= 25
+  }
+  if (ROBOTIC_VOICE_PATTERN.test(name)) score -= 60
   if (voice.default) score += 5
   return score
 }
 
 /**
- * 挑选更自然的中文音色：普通话 zh-CN 优先，其次其他中文；
- * 本地语音优先于联网语音；高质量命名加分、机械引擎降权。
+ * 挑选更自然的中文音色：普通话 zh-CN 优先；
+ * Natural/Neural/晓晓等高质量命名优先于普通本地音色；同档时本地加分。
  * 没有中文语音时返回 null，由调用方退回 lang='zh-CN' 兜底。
  */
 export function pickChineseVoice(voices: readonly SpeechSynthesisVoice[]): SpeechSynthesisVoice | null {
@@ -128,7 +134,7 @@ function getVoicesSafe(synth: SpeechLike): SpeechSynthesisVoice[] {
 }
 
 /** voices 延迟加载时等待一次 voiceschanged，超时后返回当前列表（可能为空）。 */
-function waitForVoices(synth: SpeechLike, timeoutMs = 1200): Promise<SpeechSynthesisVoice[]> {
+function waitForVoices(synth: SpeechLike, timeoutMs = 800): Promise<SpeechSynthesisVoice[]> {
   const immediate = getVoicesSafe(synth)
   if (immediate.length > 0 || typeof synth.addEventListener !== 'function') {
     return Promise.resolve(immediate)

@@ -5,7 +5,9 @@ import {
   createSpeechRecognition,
   isSpeechInputSupported,
   isSpeechOutputSupported,
+  latestTranscriptFromEvent,
   normalizeVoiceText,
+  pickBestAlternative,
   pickPreferredChineseVoice,
   prepareSpeechText,
   speakText,
@@ -15,6 +17,7 @@ import {
   transcriptFromEvent,
   waitForVoices,
   type SpeechRecognitionEventLike,
+  type SpeechRecognitionResultLike,
   type SpeechSynthesisLike,
   type SpeechVoiceLike,
 } from './voice'
@@ -94,7 +97,7 @@ afterEach(() => {
 })
 
 describe('assistant voice capability boundary', () => {
-  it('combines browser recognition result fragments', () => {
+  it('combines browser recognition result fragments without chinese spaces', () => {
     const event = {
       resultIndex: 0,
       results: [
@@ -103,7 +106,28 @@ describe('assistant voice capability boundary', () => {
       ],
     } as unknown as SpeechRecognitionEventLike
 
-    expect(transcriptFromEvent(event)).toBe('最近的用药 提醒是什么')
+    expect(transcriptFromEvent(event)).toBe('最近的用药提醒是什么')
+  })
+
+  it('picks the higher-confidence chinese alternative for accuracy', () => {
+    const result = {
+      isFinal: true,
+      length: 2,
+      0: { transcript: 'xiaoyan dakai', confidence: 0.2 },
+      1: { transcript: '小燕打开', confidence: 0.9 },
+    } as unknown as SpeechRecognitionResultLike
+    expect(pickBestAlternative(result)).toBe('小燕打开')
+  })
+
+  it('uses the latest interim slice for low-latency wake probing', () => {
+    const event = {
+      resultIndex: 1,
+      results: [
+        { isFinal: true, length: 1, 0: { transcript: '背景噪音' } },
+        { isFinal: false, length: 1, 0: { transcript: '小燕打开' } },
+      ],
+    } as unknown as SpeechRecognitionEventLike
+    expect(latestTranscriptFromEvent(event)).toBe('小燕打开')
   })
 
   it('degrades safely when the browser has no speech APIs', () => {
@@ -115,11 +139,14 @@ describe('assistant voice capability boundary', () => {
   it('matches the wake phrase without changing the transcript used in the draft', () => {
     expect(normalizeVoiceText('小燕，打开！')).toBe('小燕打开')
     expect(containsWakePhrase('小燕，打开助手')).toBe(true)
+    expect(containsWakePhrase('小严打开')).toBe(true)
+    expect(containsWakePhrase('晓燕，打开一下')).toBe(true)
     expect(transcriptAfterWakePhrase('小燕，打开，查询最近的用药提醒')).toBe('查询最近的用药提醒')
+    expect(transcriptAfterWakePhrase('小严打开查询最近的用药提醒')).toBe('查询最近的用药提醒')
     expect(transcriptAfterWakePhrase('请帮我查一下')).toBe('')
   })
 
-  it('configures continuous interim recognition for the wake mode', () => {
+  it('configures continuous interim recognition with multi-alternative accuracy', () => {
     class FakeRecognition {
       lang = ''
       continuous = false
@@ -138,19 +165,18 @@ describe('assistant voice capability boundary', () => {
     const recognition = createSpeechRecognition('zh-CN', {
       continuous: true,
       interimResults: true,
-      maxAlternatives: 1,
     })
     expect(recognition?.continuous).toBe(true)
     expect(recognition?.interimResults).toBe(true)
-    expect(recognition?.maxAlternatives).toBe(1)
+    expect(recognition?.maxAlternatives).toBe(3)
   })
 })
 
 describe('chinese voice preference', () => {
-  it('prefers local zh-CN voices over remote ones', () => {
-    const local = voice({ name: 'Microsoft Huihui', localService: true })
-    const remote = voice({ name: 'Google 普通话（中国大陆）', localService: false })
-    expect(pickPreferredChineseVoice([remote, local])).toBe(local)
+  it('prefers natural remote voices over plain local robotic defaults', () => {
+    const localPlain = voice({ name: 'Microsoft Huihui', localService: true })
+    const remoteNatural = voice({ name: 'Microsoft Xiaoxiao Online (Natural)', localService: false })
+    expect(pickPreferredChineseVoice([localPlain, remoteNatural])).toBe(remoteNatural)
   })
 
   it('prefers higher quality natural voices among local zh-CN voices', () => {
@@ -243,8 +269,8 @@ describe('speakText output pipeline', () => {
     const utterance = synth.spoken[0]!
     expect(utterance.voice?.name).toBe('Microsoft Xiaoxiao (Natural)')
     expect(utterance.lang).toBe('zh-CN')
-    expect(utterance.rate).toBeCloseTo(0.95)
-    expect(utterance.pitch).toBeCloseTo(1)
+    expect(utterance.rate).toBeCloseTo(0.92)
+    expect(utterance.pitch).toBeCloseTo(1.05)
     expect(utterance.volume).toBeCloseTo(1)
   })
 
