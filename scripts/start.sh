@@ -54,6 +54,13 @@ case "$target" in
       echo "没有找到 Compose 服务，请先执行 ./scripts/start.sh up（默认 profile=basic）。" >&2
       exit 1
     fi
+    running_services="$(docker compose --profile "$compose_profile" ps --all --format '{{.Service}}')"
+    for required in db api web outbox-worker care-plan-worker; do
+      if ! grep -qx "$required" <<<"$running_services"; then
+        echo "Compose 服务 $required 不存在，请重新执行 ./scripts/start.sh up。" >&2
+        exit 1
+      fi
+    done
     api_url="$(docker compose --profile "$compose_profile" port api 8000)"
     web_url="$(docker compose --profile "$compose_profile" port web 80)"
     [[ -n "$api_url" && -n "$web_url" ]] || { echo "无法定位 API/Web 宿主端口。" >&2; exit 1; }

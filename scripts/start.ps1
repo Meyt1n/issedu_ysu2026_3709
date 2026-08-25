@@ -40,7 +40,7 @@ function Get-ComposeServiceStatus {
     if ($rows.Count -eq 0) {
         throw "没有找到 Compose 服务，请先执行 scripts/start.ps1 up（默认 profile=basic）。"
     }
-    foreach ($service in @("db", "api", "web")) {
+    foreach ($service in @("db", "api", "web", "outbox-worker", "care-plan-worker")) {
         if ($service -notin $rows.Service) {
             throw "Compose 服务 $service 不存在，请重新执行 scripts/start.ps1 up。"
         }

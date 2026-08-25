@@ -12,7 +12,7 @@
 
 以下路径是 HCT-101 的基础档复现入口（工程骨架）。要复刻视觉识别与本地助手闭环，请改用功能分支 `feature/hct-local-model-adapter`，并阅读根目录 README 的「复刻本机视觉与助手闭环」。
 
-`up` 默认使用 Compose profile `basic`，构建 API/Web/outbox worker，等待 MySQL、API、worker 和 Web 的健康检查，并在 API 容器启动时执行 Alembic 迁移；`down` 默认不删除 `mysql_data` 卷。所有业务服务都声明了 profile，**不指定 `basic`/`enhanced`/`dev` 时 Compose 不会启动任何容器**；启动脚本已默认补上 `--profile basic`。
+`up` 默认使用 Compose profile `basic`，构建 API/Web/outbox worker/care-plan worker，等待 MySQL、API、两个 worker 和 Web 的健康检查，并在 API 容器启动时执行 Alembic 迁移；`down` 默认不删除 `mysql_data` 卷。所有业务服务都声明了 profile，**不指定 `basic`/`enhanced`/`dev` 时 Compose 不会启动任何容器**；启动脚本已默认补上 `--profile basic`。
 
 Windows PowerShell：
 
@@ -41,7 +41,7 @@ chmod +x scripts/start.sh
 ./scripts/start.sh down
 ```
 
-`health` 会同时检查 Compose 中 API、outbox worker、Web、MySQL 的容器健康状态，并访问 API 与 Web 的 `/health`。默认浏览器入口为 `http://localhost:8080`，API 健康检查为 `http://localhost:8000/health`，OpenAPI 为 `http://localhost:8000/docs`。端口被占用时，在 `.env` 中修改 `API_PORT`、`WEB_PORT` 或 `MYSQL_PORT`，再重新执行 `up`。
+`health` 会同时检查 Compose 中 API、outbox worker、care-plan worker、Web、MySQL 的容器健康状态，并访问 API 与 Web 的 `/health`。默认浏览器入口为 `http://localhost:8080`，API 健康检查为 `http://localhost:8000/health`，OpenAPI 为 `http://localhost:8000/docs`。端口被占用时，在 `.env` 中修改 `API_PORT`、`WEB_PORT` 或 `MYSQL_PORT`，再重新执行 `up`。
 
 增强档（额外启动 Ollama 容器）在启动前设置 `$env:COMPOSE_PROFILE='enhanced'`（Bash：`export COMPOSE_PROFILE=enhanced`）。容器内仍需自行拉取或创建模型；未配置 `OLLAMA_MODEL` 时助手保持结构化降级。
 
@@ -108,13 +108,15 @@ scripts/start.ps1 api
 
 | 档位 | 服务 | 适用环境 |
 |---|---|---|
-| 基础档 | Vue、FastAPI、outbox worker、MySQL、规则、轻量 OCR | 低配置电脑；断网仍可管理档案、任务和历史证据；网络出口默认拒绝 |
+| 基础档 | Vue、FastAPI、outbox worker、care-plan worker、MySQL、规则、轻量 OCR | 低配置电脑；断网仍可管理档案、任务和历史证据；网络出口默认拒绝 |
 | 增强档 | 基础档 + FAISS/Qdrant + Ollama 量化模型 | 建议 16 GB 以上内存；Compose profile `enhanced` 会多起 Ollama 容器，业务助手仍取决于本机是否已登记模型 |
 | 研发档 | 增强档 + 数据标注、训练、评测和模型登记 | GPU 工作站或短时云 GPU；不得在家庭端自动训练 |
 
 MySQL、Ollama、向量检索和文件服务默认仅监听本机/容器网络，不暴露公网。
 
 outbox worker 默认每 2 秒处理最多 100 条消息，5 分钟前的 `PROCESSING` 锁视为中断并自动恢复；可通过 `.env` 的 `OUTBOX_POLL_SECONDS`、`OUTBOX_BATCH_SIZE` 和 `OUTBOX_STALE_SECONDS` 调整。维护者可在 OpenAPI 使用家庭 Owner 身份查询 `/api/v1/households/{id}/outbox` 或手工触发 `/outbox/dispatch`。停止 worker 不删除消息；恢复前不得手工修改健康事件。
+
+care-plan worker（HCT-304/HCT-308）默认每 30 秒对显式授权的用药计划执行一次疗程结束、漏服升级和照护者通知评估，可通过 `.env` 的 `CARE_PLAN_POLL_SECONDS` 调整；worker 首个成功周期会写入就绪文件供容器探针使用。它只依据已确认的计划与授权数据产生 `care_escalated`/`caregiver_notified` 事件，不做任何医疗判断；失败时策略与 outbox worker 一致——单个 worker 不健康不会拖垮其它服务，`restart: unless-stopped` 会自动重启。本地进程调试可运行 `uv run python -m app.care_plan_worker --loop`（在 `src/api` 的 PYTHONPATH 下）。
 
 ## 3. HCT-003 资源探针
 

@@ -261,6 +261,47 @@ def test_basic_profile_excludes_ollama():
     assert "web" in services
 
 
+def test_basic_profile_includes_both_background_workers():
+    """HCT-304/HCT-308: standard up must start outbox AND care-plan workers."""
+    config = _docker_compose_config_json("basic")
+    if not config:
+        return
+    services = config.get("services", {})
+    assert "outbox-worker" in services
+    assert "care-plan-worker" in services
+    worker = services["care-plan-worker"]
+    command = " ".join(worker.get("command", []))
+    assert "app.care_plan_worker" in command
+    assert "--loop" in command
+    # 就绪探针与 outbox-worker 同模式：worker 首个成功周期写 ready 文件。
+    assert "--ready-file" in command
+    health_test = " ".join(worker.get("healthcheck", {}).get("test", []))
+    assert "homecare-care-plan-worker.ready" in health_test
+    depends = worker.get("depends_on", {})
+    assert depends.get("api", {}).get("condition") == "service_healthy"
+
+
+def test_compose_file_declares_care_plan_worker_for_all_profiles():
+    """Static check (no docker needed): care-plan-worker ships in basic/enhanced/dev."""
+    compose_path = Path(__file__).resolve().parents[2] / "docker-compose.yml"
+    content = compose_path.read_text(encoding="utf-8")
+    assert "care-plan-worker:" in content
+    worker_block = content.split("care-plan-worker:", 1)[1].split("\n  web:", 1)[0]
+    assert 'profiles: ["basic", "enhanced", "dev"]' in worker_block
+    assert "app.care_plan_worker" in worker_block
+    assert "CARE_PLAN_POLL_SECONDS" in worker_block
+
+
+def test_start_scripts_require_both_workers_in_health_gate():
+    """start.sh/start.ps1 health must fail when a standard worker is missing."""
+    scripts_dir = Path(__file__).resolve().parents[2] / "scripts"
+    sh = (scripts_dir / "start.sh").read_text(encoding="utf-8")
+    ps1 = (scripts_dir / "start.ps1").read_text(encoding="utf-8")
+    for script in (sh, ps1):
+        assert "outbox-worker" in script
+        assert "care-plan-worker" in script
+
+
 def test_enhanced_profile_includes_ollama():
     """enhanced profile includes ollama service."""
     config = _docker_compose_config_json("enhanced")

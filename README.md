@@ -22,7 +22,7 @@
 
 ### 路径 A：Docker Compose 基础档（推荐干净机器）
 
-基础档启动 MySQL、FastAPI、outbox worker 和 Nginx 托管的 Vue 前端。Ollama 默认不启动，助手接口返回结构化降级，档案/事件/规则仍可用。
+基础档启动 MySQL、FastAPI、outbox worker、care-plan worker（HCT-308 漏服升级/照护通知）和 Nginx 托管的 Vue 前端。Ollama 默认不启动，助手接口返回结构化降级，档案/事件/规则仍可用。
 
 ```powershell
 git clone https://github.com/Meyt1n/issedu_ysu2026_3709.git

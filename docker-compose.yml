@@ -76,6 +76,32 @@ services:
       retries: 20
       start_period: 5s
 
+  care-plan-worker:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    restart: unless-stopped
+    profiles: ["basic", "enhanced", "dev"]
+    command:
+      [
+        "uv", "run", "--no-sync", "python", "-m", "app.care_plan_worker",
+        "--loop", "--ready-file", "/tmp/homecare-care-plan-worker.ready",
+      ]
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      DATABASE_URL: mysql+pymysql://${MYSQL_USER:-homecare}:${MYSQL_PASSWORD:-change-me}@db:3306/${MYSQL_DATABASE:-homecare}?charset=utf8mb4
+      PYTHONPATH: /app/src/api:/app/src
+      CARE_PLAN_POLL_SECONDS: ${CARE_PLAN_POLL_SECONDS:-30}
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/homecare-care-plan-worker.ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
   web:
     build:
       context: .
