@@ -115,6 +115,10 @@ from app.file_upload import (
     validate_size,
 )
 from app.knowledge import KnowledgeDocument, RetrievalQuery
+from app.knowledge_audit_pagination import (
+    decode_knowledge_audit_cursor,
+    encode_knowledge_audit_cursor,
+)
 from app.local_agents import OrchestrationCancelled, get_agent_catalog, run_local_multi_agent
 from app.models import (
     AccessAudit,
@@ -188,6 +192,7 @@ from app.schemas import (
     HouseholdUpdate,
     KnowledgeDocumentCreate,
     KnowledgeDocumentRead,
+    KnowledgeQueryAuditPageRead,
     KnowledgeQueryAuditRead,
     KnowledgeRetrieveRequest,
     KnowledgeRetrieveResponse,
@@ -3296,6 +3301,90 @@ def list_knowledge_query_audit(
         )
         for entry in entries
     ]
+
+
+@router.get("/knowledge/query-audit/page", response_model=KnowledgeQueryAuditPageRead)
+def page_knowledge_query_audit(
+    household_id: str | None = Query(default=None, min_length=1, max_length=36),
+    member_id: str | None = Query(default=None, min_length=1, max_length=36),
+    cursor: str | None = Query(default=None, min_length=1),
+    limit: int = Query(default=50, ge=1, le=100),
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> KnowledgeQueryAuditPageRead:
+    """Page privacy-safe query audits without exposing raw query contents."""
+    decoded_cursor = None
+    if cursor is not None:
+        try:
+            decoded_cursor = decode_knowledge_audit_cursor(
+                cursor, secret=settings.cursor_signing_key
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
+        if (
+            decoded_cursor.actor_id != actor_id
+            or decoded_cursor.household_id != household_id
+            or decoded_cursor.member_id != member_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="KNOWLEDGE_AUDIT_CURSOR_INVALID",
+            )
+
+    query = select(RetrievalQuery).where(RetrievalQuery.actor_id == actor_id)
+    if household_id is not None:
+        query = query.where(RetrievalQuery.household_id == household_id)
+    if member_id is not None:
+        query = query.where(RetrievalQuery.member_id == member_id)
+    if decoded_cursor is not None:
+        query = query.where(
+            (RetrievalQuery.created_at < decoded_cursor.created_at)
+            | (
+                (RetrievalQuery.created_at == decoded_cursor.created_at)
+                & (RetrievalQuery.id < decoded_cursor.audit_id)
+            )
+        )
+
+    rows = list(
+        session.scalars(
+            query.order_by(RetrievalQuery.created_at.desc(), RetrievalQuery.id.desc()).limit(
+                limit + 1
+            )
+        ).all()
+    )
+    has_more = len(rows) > limit
+    items = rows[:limit]
+    next_cursor = None
+    if has_more and items:
+        last = items[-1]
+        next_cursor = encode_knowledge_audit_cursor(
+            actor_id=actor_id,
+            household_id=household_id,
+            member_id=member_id,
+            created_at=last.created_at,
+            audit_id=last.id,
+            secret=settings.cursor_signing_key,
+        )
+    return KnowledgeQueryAuditPageRead(
+        items=[
+            KnowledgeQueryAuditRead(
+                id=entry.id,
+                query_digest=entry.query_digest,
+                query_length=entry.query_length,
+                household_id=entry.household_id,
+                member_id=entry.member_id,
+                returned_count=entry.returned_count,
+                top_chunk_count=len(entry.top_chunk_ids or []),
+                created_at=entry.created_at,
+            )
+            for entry in items
+        ],
+        next_cursor=next_cursor,
+        has_more=has_more,
+    )
 
 
 @router.delete("/knowledge/documents/{doc_id}")
