@@ -1,8 +1,11 @@
+import json
 import logging
 import secrets
 import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from queue import Queue
+from threading import Thread
 from typing import Any, NoReturn
 
 from ai.vision.candidate_fusion import (
@@ -32,7 +35,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -61,7 +64,7 @@ from app.auth import (
 )
 from app.care_plan import validate_plan_confirmation_window
 from app.config import get_settings
-from app.db import get_session
+from app.db import SessionLocal, get_session
 from app.erasure import (
     ErasureTask,
     find_erasure_task,
@@ -3166,6 +3169,25 @@ def _build_assistant_context(
     return "\n".join(lines)
 
 
+def _prepare_assistant_messages(
+    session: Session,
+    *,
+    payload: AssistantRequest,
+    actor_id: str,
+    household_id: str | None,
+    member_id: str | None,
+) -> tuple[list[dict[str, Any]], str | None]:
+    messages = list(payload.messages)
+    context = _build_assistant_context(session, actor_id, household_id, member_id)
+    if context:
+        messages = [{"role": "system", "content": context}, *messages]
+    member_display_name = None
+    if context and member_id:
+        member = session.get(Member, member_id)
+        member_display_name = member.display_name if member else None
+    return messages, member_display_name
+
+
 @router.post("/assistant/chat", response_model=AssistantResponse)
 def assistant_chat(
     payload: AssistantRequest,
@@ -3181,17 +3203,13 @@ def assistant_chat(
     falls back to a structured degrade response if the model is unavailable,
     output fails schema validation, or medical boundary checks are triggered.
     """
-    messages = list(payload.messages)
-    context = _build_assistant_context(session, actor_id, household_id, member_id)
-    if context:
-        messages = [{"role": "system", "content": context}, *messages]
-    member_display_name = None
-    if context and member_id:
-        # _build_assistant_context has already checked household ownership and
-        # member binding.  Reuse only the authorized display name for query
-        # redaction; it never enters the model/search response.
-        member = session.get(Member, member_id)
-        member_display_name = member.display_name if member else None
+    messages, member_display_name = _prepare_assistant_messages(
+        session,
+        payload=payload,
+        actor_id=actor_id,
+        household_id=household_id,
+        member_id=member_id,
+    )
     if payload.agent_mode == "multi_agent" and settings.agent_orchestration_enabled:
         result = run_local_multi_agent(
             session,
@@ -3226,6 +3244,92 @@ def assistant_chat(
         )
     session.commit()
     return AssistantResponse(**result)
+
+
+@router.post("/assistant/chat/stream")
+def assistant_chat_stream(
+    payload: AssistantRequest,
+    actor_id: str = Depends(get_actor_id),
+    household_id: str | None = None,
+    member_id: str | None = None,
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> StreamingResponse:
+    """Stream multi-agent orchestration events over Server-Sent Events."""
+    if payload.agent_mode != "multi_agent" or not settings.agent_orchestration_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="STREAM_REQUIRES_MULTI_AGENT",
+        )
+
+    messages, member_display_name = _prepare_assistant_messages(
+        session,
+        payload=payload,
+        actor_id=actor_id,
+        household_id=household_id,
+        member_id=member_id,
+    )
+    event_queue: Queue[tuple[str, dict[str, Any]] | None] = Queue()
+
+    def worker() -> None:
+        worker_session = SessionLocal()
+        try:
+            def on_trace(trace: dict[str, Any]) -> None:
+                event_queue.put(("trace", {"trace": trace}))
+
+            def on_token(token: str) -> None:
+                event_queue.put(("token", {"token": token}))
+
+            def on_external_sources(
+                sources: list[dict[str, str]],
+                network_query: str | None,
+            ) -> None:
+                event_queue.put(("external_sources", {
+                    "external_sources": sources,
+                    "network_query": network_query,
+                }))
+
+            result = run_local_multi_agent(
+                worker_session,
+                messages=messages,
+                actor_id=actor_id,
+                household_id=household_id,
+                member_id=member_id,
+                access_purpose=access_purpose,
+                model=payload.model,
+                max_tokens=payload.max_tokens,
+                temperature=payload.temperature,
+                allow_network_search=payload.allow_network_search,
+                sensitive_values=[member_display_name],
+                on_trace=on_trace,
+                on_synthesis_token=on_token,
+                on_external_sources=on_external_sources,
+            )
+            worker_session.commit()
+            event_queue.put(("done", {"response": result}))
+        except Exception as exc:
+            worker_session.rollback()
+            logger.exception("assistant chat stream failed")
+            event_queue.put(("error", {"message": str(exc)[:240]}))
+        finally:
+            worker_session.close()
+            event_queue.put(None)
+
+    Thread(target=worker, daemon=True).start()
+
+    def generate():
+        while True:
+            item = event_queue.get()
+            if item is None:
+                break
+            kind, data = item
+            yield f"event: {kind}\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ── HCT-204: Vision task API ─────────────────────────────────────────
