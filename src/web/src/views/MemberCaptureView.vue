@@ -11,6 +11,11 @@ import {
   requestOptions,
   session,
 } from '../store'
+import {
+  isMemberTaskActive,
+  memberVisionStatusHint,
+  memberVisionStatusLabel,
+} from '../ui/memberStatus'
 import VisionQualityPanel from '../vision/VisionQualityPanel.vue'
 
 const submittedTask = ref<VisionTask | null>(null)
@@ -18,24 +23,15 @@ const trackedTasks = ref<VisionTask[]>([])
 const confirmedTaskIds = ref<Set<string>>(new Set())
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
-const hasActiveTasks = computed(() => trackedTasks.value.some(task => (
-  task.status === 'queued' || task.status === 'running'
-)))
+const hasActiveTasks = computed(() => trackedTasks.value.some(task => isMemberTaskActive(task.status)))
 
+// 状态映射集中在 ui/memberStatus.ts，配套单测保证内部状态码不会透出到成员前台。
 function taskStatusLabel(task: VisionTask): string {
-  if (confirmedTaskIds.value.has(task.id)) return '已确认'
-  if (task.status === 'queued' || task.status === 'running') return '正在识别'
-  if (task.status === 'succeeded') return '已提交，等待家人确认'
-  if (task.status === 'cancelled') return '已取消'
-  return '识别失败，请重新拍照'
+  return memberVisionStatusLabel(task.status, confirmedTaskIds.value.has(task.id))
 }
 
 function taskStatusHint(task: VisionTask): string {
-  if (confirmedTaskIds.value.has(task.id)) return '家庭管理员已确认，药品信息已进入家庭记录。'
-  if (task.status === 'queued' || task.status === 'running') return '照片正在本机处理中，请稍等。'
-  if (task.status === 'succeeded') return '管理员确认后，你就能在“我的记录”里看到它。'
-  if (task.status === 'cancelled') return '这张照片没有进入家庭记录，可以重新拍摄。'
-  return '请换一个光线好、文字清楚的角度再拍一次。'
+  return memberVisionStatusHint(task.status, confirmedTaskIds.value.has(task.id))
 }
 
 function visionTaskIdFromEvent(event: HealthEvent): string | null {

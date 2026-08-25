@@ -8,6 +8,8 @@ import SkeletonList from './components/SkeletonList.vue'
 import {
   dismissToast,
   MEMBER_VIEWS,
+  onHealthDataRefresh,
+  refreshPendingReviewCount,
   selectHousehold,
   selectedMember,
   session,
@@ -15,6 +17,8 @@ import {
   signOut,
   type ViewName,
 } from './store'
+import { householdOptionLabel, memberVisibleHouseholds } from './ui/demoData'
+import { SHOW_ADVANCED_LAB } from './ui/featureFlags'
 import { installRipple, vMagnet } from './ui/motion'
 import { THEMES, applyTheme, currentTheme, type ThemeId } from './ui/themes'
 // 欢迎页是首屏必经路径，保持同步加载；十二个业务视图按需拆包，
@@ -36,6 +40,7 @@ const VIEW_LOADERS = {
   'member-capture': () => import('./views/MemberCaptureView.vue'),
   'member-plans': () => import('./views/MemberPlansView.vue'),
   'member-records': () => import('./views/MemberRecordsView.vue'),
+  'member-help': () => import('./views/MemberHelpView.vue'),
   members: () => import('./views/MembersView.vue'),
   plans: () => import('./views/PlansView.vue'),
   scan: () => import('./views/ScanView.vue'),
@@ -67,12 +72,16 @@ const MemberHomeView = lazyView(VIEW_LOADERS['member-home'])
 const MemberCaptureView = lazyView(VIEW_LOADERS['member-capture'])
 const MemberPlansView = lazyView(VIEW_LOADERS['member-plans'])
 const MemberRecordsView = lazyView(VIEW_LOADERS['member-records'])
+const MemberHelpView = lazyView(VIEW_LOADERS['member-help'])
 
+// 管理员后台固定五组导航（HCT-439 阶段三）：
+// 日常照护 / 证据录入 / 安全与洞察 / 权限与凭证 / 家庭与研发。
 const NAV_ITEMS: Array<{ view: ViewName; label: string; icon: string; group: string }> = [
   { view: 'member-home', label: '我的家庭', icon: 'home', group: '我的照护' },
   { view: 'member-capture', label: '拍照录药', icon: 'scan', group: '我的照护' },
   { view: 'member-plans', label: '服药提醒', icon: 'plan', group: '我的照护' },
   { view: 'member-records', label: '我的记录', icon: 'compass', group: '我的照护' },
+  { view: 'member-help', label: '使用帮助', icon: 'info', group: '我的照护' },
   { view: 'overview', label: '家庭总览', icon: 'home', group: '日常照护' },
   { view: 'members', label: '成员档案', icon: 'members', group: '日常照护' },
   { view: 'plans', label: '健康计划', icon: 'plan', group: '日常照护' },
@@ -81,11 +90,11 @@ const NAV_ITEMS: Array<{ view: ViewName; label: string; icon: string; group: str
   { view: 'risks', label: '用药安全', icon: 'shield', group: '安全与洞察' },
   { view: 'graph', label: '健康图谱', icon: 'compass', group: '安全与洞察' },
   { view: 'assistant', label: '本地助手', icon: 'assistant', group: '安全与洞察' },
+  { view: 'authorizations', label: '授权管理', icon: 'key', group: '权限与凭证' },
+  { view: 'face-credentials', label: '人脸凭证', icon: 'shield', group: '权限与凭证' },
   { view: 'bigscreen', label: '家庭大屏', icon: 'sun', group: '家庭与研发' },
-  { view: 'authorizations', label: '授权管理', icon: 'key', group: '家庭与研发' },
   { view: 'knowledge', label: '知识文档', icon: 'leaf', group: '家庭与研发' },
   { view: 'modellab', label: '模型实验室', icon: 'sparkle', group: '家庭与研发' },
-  { view: 'face-credentials', label: '人脸凭证', icon: 'shield', group: '家庭与研发' },
 ]
 
 const VIEW_COMPONENTS: Record<ViewName, unknown> = {
@@ -93,6 +102,7 @@ const VIEW_COMPONENTS: Record<ViewName, unknown> = {
   'member-capture': MemberCaptureView,
   'member-plans': MemberPlansView,
   'member-records': MemberRecordsView,
+  'member-help': MemberHelpView,
   overview: OverviewView,
   members: MembersView,
   plans: PlansView,
@@ -108,11 +118,13 @@ const VIEW_COMPONENTS: Record<ViewName, unknown> = {
   'face-credentials': FaceCredentialView,
 }
 
-const visibleNavItems = computed(() =>
-  session.portal === 'member'
-    ? NAV_ITEMS.filter(item => MEMBER_VIEWS.includes(item.view))
-    : NAV_ITEMS.filter(item => !MEMBER_VIEWS.includes(item.view)),
-)
+const visibleNavItems = computed(() => {
+  const portalItems =
+    session.portal === 'member'
+      ? NAV_ITEMS.filter(item => MEMBER_VIEWS.includes(item.view))
+      : NAV_ITEMS.filter(item => !MEMBER_VIEWS.includes(item.view))
+  return SHOW_ADVANCED_LAB ? portalItems : portalItems.filter(item => item.view !== 'modellab')
+})
 
 const navGroups = computed(() => {
   const groups: Array<{ name: string; items: typeof NAV_ITEMS }> = []
@@ -132,6 +144,19 @@ const currentMemberLabel = computed(() => selectedMember.value?.display_name ?? 
 const currentHouseholdLabel = computed(
   () => session.households.find(item => item.id === session.selectedHouseholdId)?.name ?? '家庭空间',
 )
+
+// 成员前台默认只列出 LOCAL 家庭（HCT-439 阶段五）；
+// 管理员后台看到全部家庭，演示家庭带显式标识。
+const householdOptions = computed(() => {
+  const households =
+    session.portal === 'member'
+      ? memberVisibleHouseholds([...session.households])
+      : [...session.households]
+  return households.map(household => ({
+    id: household.id,
+    label: session.portal === 'admin' ? householdOptionLabel(household) : household.name,
+  }))
+})
 
 const currentComponent = computed(() => VIEW_COMPONENTS[session.currentView])
 
@@ -210,9 +235,13 @@ async function onHouseholdChange(event: Event): Promise<void> {
 const glowEl = ref<HTMLElement | null>(null)
 let glowFrame = 0
 let glowHandler: ((event: PointerEvent) => void) | null = null
+let removeHealthRefreshListener: (() => void) | null = null
 
 onMounted(() => {
   installRipple()
+  removeHealthRefreshListener = onHealthDataRefresh(() => {
+    if (session.portal === 'admin') void refreshPendingReviewCount()
+  })
 
   const motionOk =
     globalThis.matchMedia?.('(hover: hover)').matches &&
@@ -232,6 +261,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  removeHealthRefreshListener?.()
   if (glowHandler) window.removeEventListener('pointermove', glowHandler)
   cancelAnimationFrame(glowFrame)
 })
@@ -271,6 +301,13 @@ onBeforeUnmount(() => {
             >
               <AppIcon :name="item.icon" :size="19" />
               <span class="nav-label">{{ item.label }}</span>
+              <span
+                v-if="item.view === 'review' && session.pendingReviewCount > 0"
+                class="nav-badge"
+                :title="`${session.pendingReviewCount} 条待复核`"
+              >
+                {{ session.pendingReviewCount > 9 ? '9+' : session.pendingReviewCount }}
+              </span>
             </button>
           </li>
         </ul>
@@ -320,15 +357,15 @@ onBeforeUnmount(() => {
             <i :class="session.capabilities ? 'on' : 'off'" />
             {{ session.capabilities ? '本地在线' : '状态未知' }}
           </span>
-          <label v-if="session.households.length > 0" class="context-select">
+          <label v-if="householdOptions.length > 0" class="context-select">
             家庭
             <select
               :value="session.selectedHouseholdId"
               :disabled="session.loadingScope"
               @change="onHouseholdChange"
             >
-              <option v-for="household in session.households" :key="household.id" :value="household.id">
-                {{ household.name }}
+              <option v-for="household in householdOptions" :key="household.id" :value="household.id">
+                {{ household.label }}
               </option>
             </select>
           </label>

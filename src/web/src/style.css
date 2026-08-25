@@ -373,6 +373,24 @@ button:focus-visible, a:focus-visible {
 
 .nav-item .app-icon { flex: 0 0 auto; opacity: 0.9; }
 
+.nav-badge {
+  background: var(--rose);
+  border-radius: 99px;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  margin-left: auto;
+  min-width: 18px;
+  padding: 3px 6px;
+  text-align: center;
+}
+
+.nav-item.active .nav-badge {
+  background: color-mix(in srgb, var(--rose) 88%, #fff 12%);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+
 .sidebar-foot {
   border-top: 1px solid rgba(244, 237, 221, 0.14);
   display: grid;
@@ -4566,4 +4584,16 @@ button:focus-visible, a:focus-visible {
   .member-plan-row { align-items: start; grid-template-columns: 1fr auto; }
   .member-plan-row small { grid-column: 1 / -1; }
 }
+
+.member-help-card { display: grid; gap: 14px; margin-bottom: 16px; }
+.member-help-steps {
+  color: var(--ink-soft);
+  display: grid;
+  gap: 8px;
+  line-height: 1.65;
+  margin: 0;
+  padding-left: 1.2rem;
+}
+.member-help-text { color: var(--ink-soft); line-height: 1.65; margin: 0; }
+.member-help-emergency { border-left: 4px solid var(--rose); }
 

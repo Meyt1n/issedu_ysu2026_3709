@@ -174,6 +174,24 @@ async function enterFamilySpace(page: Page): Promise<void> {
   await expect(navItem(page, '授权管理')).toBeVisible()
 }
 
+test('管理员后台保持五组导航，研发入口在开发构建可见', async ({ page }) => {
+  await installSyntheticApi(page)
+  await enterFamilySpace(page)
+
+  // HCT-439 阶段三：日常照护 / 证据录入 / 安全与洞察 / 权限与凭证 / 家庭与研发。
+  await expect(page.locator('aside.sidebar .nav-group-label')).toHaveText([
+    '日常照护',
+    '证据录入',
+    '安全与洞察',
+    '权限与凭证',
+    '家庭与研发',
+  ])
+  // 开发构建（vite dev）下模型实验室可见；生产构建默认隐藏由
+  // VITE_SHOW_ADVANCED_LAB 控制，见 src/web/src/ui/featureFlags.ts。
+  await expect(navItem(page, '模型实验室')).toBeVisible()
+  await expect(navItem(page, '人脸凭证')).toBeVisible()
+})
+
 test('家庭总览显著展示简洁的环境行动卡', async ({ page }) => {
   await installSyntheticApi(page)
   await enterFamilySpace(page)

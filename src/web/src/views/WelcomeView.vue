@@ -18,6 +18,7 @@ import {
   pushToast,
   session,
 } from '../store'
+import { SHOW_DEV_LOGIN } from '../ui/featureFlags'
 import { THEMES, applyTheme, currentTheme } from '../ui/themes'
 
 const artRx = ref('0deg')
@@ -43,7 +44,9 @@ const householdId = ref(initialBoundFaceHouseholdId)
 const boundFaceHouseholdName = ref(getBoundFaceHouseholdName())
 const pin = ref('')
 const faceFrames = ref<File[]>([])
-const showDevelopmentEntry = import.meta.env.DEV
+// 开发演示入口默认只在开发环境出现；本地教学 Compose 构建通过
+// VITE_SHOW_DEV_LOGIN=true 显式保留（与后端 ALLOW_DEV_ACTOR_HEADER 对齐）。
+const showDevelopmentEntry = SHOW_DEV_LOGIN
 const authMode = ref<'development' | 'session'>(showDevelopmentEntry ? session.authMode : 'session')
 const credentialMode = ref<'password' | 'pin' | 'face'>(
   initialBoundFaceHouseholdId ? 'face' : 'password',

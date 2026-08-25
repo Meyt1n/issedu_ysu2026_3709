@@ -2,6 +2,7 @@ import { computed, reactive, readonly } from 'vue'
 
 import { ApiClientError, apiClient } from './api/client'
 import { clearChatSessionsForActor } from './assistant/chatSession'
+import { SHOW_ADVANCED_LAB } from './ui/featureFlags'
 import type {
   AuthSession,
   CapabilityResponse,
@@ -15,6 +16,7 @@ export type ViewName =
   | 'member-capture'
   | 'member-plans'
   | 'member-records'
+  | 'member-help'
   | 'overview'
   | 'members'
   | 'scan'
@@ -36,6 +38,7 @@ export const MEMBER_VIEWS: readonly ViewName[] = [
   'member-capture',
   'member-plans',
   'member-records',
+  'member-help',
 ]
 
 export type SessionStatus = 'signed-out' | 'loading' | 'ready' | 'empty' | 'error'
@@ -71,6 +74,7 @@ interface SessionState {
   isOwnerView: boolean
   capabilities: CapabilityResponse | null
   loadingScope: boolean
+  pendingReviewCount: number
   toasts: Toast[]
 }
 
@@ -91,6 +95,7 @@ const state = reactive<SessionState>({
   isOwnerView: false,
   capabilities: null,
   loadingScope: false,
+  pendingReviewCount: 0,
   toasts: [],
 })
 
@@ -189,6 +194,11 @@ export function setView(view: ViewName): void {
     state.currentView = 'overview'
     return
   }
+  // 研发入口在生产构建默认隐藏（HCT-439 阶段三），直接访问回落到总览。
+  if (view === 'modellab' && !SHOW_ADVANCED_LAB) {
+    state.currentView = 'overview'
+    return
+  }
   state.currentView = view
 }
 
@@ -235,6 +245,7 @@ function clearSessionContext(): void {
   state.members = []
   state.selectedMemberId = ''
   state.isOwnerView = false
+  state.pendingReviewCount = 0
   state.capabilities = null
 }
 
@@ -578,6 +589,12 @@ export async function loadHouseholdScope(): Promise<void> {
     } catch {
       state.capabilities = null
     }
+
+    if (state.portal === 'admin') {
+      await refreshPendingReviewCount()
+    } else {
+      state.pendingReviewCount = 0
+    }
   } catch (cause) {
     state.members = []
     if (!sessionIsSignedOut()) state.error = formatError(cause)
@@ -593,6 +610,24 @@ export async function refreshMembers(): Promise<void> {
   if (!state.members.some(member => member.id === state.selectedMemberId)) {
     state.selectedMemberId = state.members[0]?.id ?? ''
   }
+  if (state.portal === 'admin') await refreshPendingReviewCount()
+}
+
+export async function refreshPendingReviewCount(): Promise<void> {
+  const householdId = state.selectedHouseholdId
+  if (!householdId || state.portal !== 'admin' || state.members.length === 0) {
+    state.pendingReviewCount = 0
+    return
+  }
+  const results = await Promise.allSettled(
+    state.members.map(member =>
+      apiClient.listReviewTasks(householdId, member.id, requestOptions.value),
+    ),
+  )
+  state.pendingReviewCount = results.reduce((total, result) => {
+    if (result.status !== 'fulfilled') return total
+    return total + result.value.filter(task => task.status === 'PENDING_REVIEW').length
+  }, 0)
 }
 
 const VISION_TASK_STORAGE = 'hct-vision-tasks'
