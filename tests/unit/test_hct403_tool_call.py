@@ -242,6 +242,50 @@ class TestOllamaClient:
                 messages=[{"role": "user", "content": "hello"}],
             )
 
+    def test_chat_does_not_retry_deterministic_client_error(self, monkeypatch):
+        """A 404 (e.g. unknown model name) must fail fast, not retry."""
+        import httpx
+
+        calls = {"count": 0}
+
+        def not_found(_self, url, **_kwargs):
+            calls["count"] += 1
+            request = httpx.Request("POST", url)
+            return httpx.Response(404, request=request, json={"error": "model not found"})
+
+        monkeypatch.setattr("app.tool_call.httpx.Client.post", not_found)
+        monkeypatch.setattr("app.tool_call.time.sleep", lambda _seconds: None)
+        client = OllamaClient()
+        with pytest.raises(RuntimeError, match="OLLAMA_UNAVAILABLE: HTTP_404"):
+            client.chat(
+                model="no-such-model",
+                messages=[{"role": "user", "content": "hello"}],
+            )
+        assert calls["count"] == 1
+
+    def test_chat_still_retries_server_errors(self, monkeypatch):
+        """5xx may be transient; the existing retry budget still applies."""
+        import httpx
+
+        from app.tool_call import MAX_RETRIES
+
+        calls = {"count": 0}
+
+        def server_error(_self, url, **_kwargs):
+            calls["count"] += 1
+            request = httpx.Request("POST", url)
+            return httpx.Response(503, request=request, json={"error": "loading"})
+
+        monkeypatch.setattr("app.tool_call.httpx.Client.post", server_error)
+        monkeypatch.setattr("app.tool_call.time.sleep", lambda _seconds: None)
+        client = OllamaClient()
+        with pytest.raises(RuntimeError, match="OLLAMA_UNAVAILABLE: HTTP_503"):
+            client.chat(
+                model="llama3.2:3b",
+                messages=[{"role": "user", "content": "hello"}],
+            )
+        assert calls["count"] == MAX_RETRIES + 1
+
 
 # ── run_assistant integration ────────────────────────────────────────
 
@@ -660,6 +704,26 @@ def test_member_tools_require_caregiver_purpose(db_session: Session) -> None:
 
 def test_question_classifier_marks_medication_safety() -> None:
     assert classify_question("阿莫西林能不能和刚才扫描的布洛芬一起吃？") == "MEDICATION_SAFETY"
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "这个药的剂量是多少？",
+        "阿莫西林应该怎么吃？",
+        "我今天漏服了一次降压药，需要补服吗？",
+        "老人误服了两粒药怎么办？",
+        "吃过量了会怎么样？",
+    ],
+)
+def test_question_classifier_marks_bare_dosage_terms_as_medication_safety(query) -> None:
+    """Dosage / missed-dose / overdose questions must require reviewed knowledge.
+
+    Without this route, a bare "剂量" question fell through to GENERAL and
+    the citation requirement (EVIDENCE_REQUIRED without reviewed knowledge)
+    did not apply.
+    """
+    assert classify_question(query) == "MEDICATION_SAFETY"
 
 
 def test_medication_safety_requires_reviewed_knowledge_and_exposes_risk_notice(

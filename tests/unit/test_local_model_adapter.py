@@ -160,6 +160,24 @@ def test_llm_drops_hallucinated_values_and_unknown_ids() -> None:
     assert extractor.extract_fields(_tokens(), _barcodes()) == []
 
 
+def test_llm_drops_value_spliced_across_evidence_items() -> None:
+    """The verbatim rule is per evidence item, not a joined haystack.
+
+    "演示药甲片 0.25g×24片" only exists when two separate OCR tokens are
+    concatenated with a space; no single cited evidence contains it, so the
+    local anti-hallucination guard must drop the proposal.
+    """
+    fields = {
+        "drug_name": {
+            "raw_value": "演示药甲片 0.25g×24片",
+            "source_region_ids": ["ocr-1-name", "ocr-1-spec"],
+            "confidence": 0.95,
+        },
+    }
+    extractor = QwenLoraFieldExtractor(generate_fn=lambda system, user: _llm_output(fields))
+    assert extractor.extract_fields(_tokens(), _barcodes()) == []
+
+
 def test_llm_bad_output_returns_empty() -> None:
     extractor = QwenLoraFieldExtractor(generate_fn=lambda system, user: "抱歉，我不能这样做。")
     assert extractor.extract_fields(_tokens(), _barcodes()) == []

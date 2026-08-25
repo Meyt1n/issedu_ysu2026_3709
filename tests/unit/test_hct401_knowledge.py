@@ -212,6 +212,26 @@ class TestRetrieval:
         with pytest.raises(ValueError, match="NO_RELEVANT_RESULTS"):
             retrieve(db_session, query="天气温度", actor_id="u1")
 
+    def test_common_term_across_many_chunks_still_retrieved(self, db_session):
+        """Regression: chunk-level df must not turn IDF negative.
+
+        One document is chunked into several pieces that all contain the
+        same term.  With the old ``log(n_docs / df)`` formula, df (chunks)
+        exceeded n_docs (documents) and the matching chunks scored
+        negative, so retrieval wrongly degraded to NO_RELEVANT_RESULTS.
+        """
+        section = "阿莫西林 注意事项 说明。" + "填充内容 " * 120
+        _make_doc(db_session, content=section * 4)
+        db_session.commit()
+
+        chunk_count = db_session.query(KnowledgeChunk).count()
+        assert chunk_count >= 3  # the term must appear in more chunks than docs
+
+        results = retrieve(db_session, query="阿莫西林", actor_id="u1", top_k=5)
+        assert len(results) > 0
+        assert all(r["score"] > 0 for r in results)
+        assert "阿莫西林" in results[0]["text"]
+
 # ── Index snapshot ─────────────────────────────────────────────────────
 class TestIndexSnapshot:
     def test_create_snapshot(self, db_session):

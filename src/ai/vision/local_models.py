@@ -367,7 +367,6 @@ class QwenLoraFieldExtractor:
 
         known_values = {token.id: token.raw_value for token in ocr_tokens}
         known_values.update({barcode.id: barcode.raw_value for barcode in barcodes})
-        haystack = " ".join(known_values.values())
 
         proposals: list[FieldProposal] = []
         for raw_name, item in parsed["fields"].items():
@@ -387,7 +386,12 @@ class QwenLoraFieldExtractor:
                     "LLM_PROPOSAL_DROPPED field=%s reason=no-known-evidence-id", field_name
                 )
                 continue
-            if value not in haystack:
+            # Verbatim rule: the value must be a literal substring of one of
+            # the evidence items it cites.  Checking a space-joined haystack
+            # of *all* evidence would let a value spliced across two tokens
+            # pass the local guard (the server-side pipeline would still
+            # reject it, but the documented local guarantee must hold here).
+            if not any(value in known_values[evidence_id] for evidence_id in evidence_ids):
                 logger.warning(
                     "LLM_PROPOSAL_DROPPED field=%s reason=value-not-in-evidence", field_name
                 )

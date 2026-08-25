@@ -469,6 +469,15 @@ def confirm_review(
     """
     if selected_candidate is None and len(task.candidates or []) == 1:
         selected_candidate = task.candidates[0]
+    if not selected_candidate:
+        # Defence in depth: the HTTP route already requires a candidate, but
+        # no caller may ever write a ``medication_confirmed`` health event
+        # with an empty payload (e.g. confirming an UNKNOWN result without
+        # choosing or correcting a candidate).
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="REVIEW_CANDIDATE_REQUIRED",
+        )
     updated, _ = _claim_transition(
         session,
         task,

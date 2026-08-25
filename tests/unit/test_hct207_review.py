@@ -137,6 +137,41 @@ class TestReviewLifecycle:
 
         assert updated.status == ReviewStatus.SKIPPED
 
+    def test_confirm_without_candidate_is_rejected(self, session):
+        """No caller may write a confirmed event with an empty payload.
+
+        An UNKNOWN result carries zero candidates; with multiple candidates
+        the caller must choose one.  Both situations previously produced a
+        ``medication_confirmed`` event with payload ``{}`` when this library
+        function was called directly (the HTTP route had its own guard).
+        """
+        # ``_make_task`` swaps a falsy candidate list for its default, so an
+        # UNKNOWN task with truly zero candidates is created directly.
+        no_candidates = create_review_task(
+            session,
+            vision_task_id=str(uuid.uuid4()),
+            household_id=str(uuid.uuid4()),
+            member_id=str(uuid.uuid4()),
+            candidates=[],
+            fusion_status=FusionStatus.UNKNOWN,
+        )
+        several = _make_task(
+            session,
+            candidates=[
+                {"drug_name": "阿莫西林", "confidence": 0.55},
+                {"drug_name": "头孢拉定", "confidence": 0.52},
+            ],
+            fusion_status=FusionStatus.CONFLICT,
+        )
+        session.commit()
+
+        for task in (no_candidates, several):
+            with pytest.raises(HTTPException) as exc_info:
+                confirm_review(session, task, actor_id="actor-1")
+            assert exc_info.value.detail == "REVIEW_CANDIDATE_REQUIRED"
+            session.rollback()
+            assert get_review_task(session, task.id).status == ReviewStatus.PENDING_REVIEW
+
 
 # ── Idempotency tests ──────────────────────────────────────────────────
 
