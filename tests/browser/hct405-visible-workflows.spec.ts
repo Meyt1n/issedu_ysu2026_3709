@@ -271,7 +271,7 @@ test('管理员用模板创建授权，看到交接闭环后撤回', async ({ pa
   await expect(viewHeading(page)).toHaveText('授权管理')
   await expect(page.getByRole('heading', { name: '新建授权' })).toBeVisible()
 
-  // 空状态提供模板直达入口（HCT-448）
+  // 空状态提供模板直达入口（HCT-449）
   const emptyState = page.locator('.auth-empty-state')
   await expect(emptyState.getByText('还没有为照护者创建授权')).toBeVisible()
   await emptyState.getByRole('button', { name: '子女日常照护' }).click()

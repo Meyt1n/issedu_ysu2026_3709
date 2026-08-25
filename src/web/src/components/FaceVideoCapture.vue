@@ -30,6 +30,13 @@ const emit = defineEmits<{
   fallback: []
 }>()
 
+// Server-side face frame gate floor (ensure_face_frame_quality): short side
+// >= 360 and long side >= 480. Frames below that are rejected as
+// FACE_FRAME_LOW_QUALITY, so fail fast with a friendly message instead.
+const MIN_FRAME_SHORT_SIDE = 360
+const MIN_FRAME_LONG_SIDE = 480
+const MAX_FRAME_WIDTH = 960
+
 const video = ref<HTMLVideoElement | null>(null)
 const capturing = ref(false)
 const error = ref('')
@@ -113,9 +120,24 @@ async function capture(): Promise<void> {
     await waitForVideoReady(video.value)
     await wait(400)
 
+    const sourceWidth = video.value.videoWidth
+    const sourceHeight = video.value.videoHeight
+    if (
+      Math.min(sourceWidth, sourceHeight) < MIN_FRAME_SHORT_SIDE
+      || Math.max(sourceWidth, sourceHeight) < MIN_FRAME_LONG_SIDE
+    ) {
+      throw new Error('CAMERA_RESOLUTION_TOO_LOW')
+    }
+
     const canvas = document.createElement('canvas')
-    const width = Math.min(video.value.videoWidth, 960)
-    const height = Math.round(width * (video.value.videoHeight / video.value.videoWidth))
+    // Cap bandwidth at 960 wide, but never let the downscale push the short
+    // side below the server-side face frame floor.
+    let scale = Math.min(1, MAX_FRAME_WIDTH / sourceWidth)
+    if (Math.min(sourceWidth, sourceHeight) * scale < MIN_FRAME_SHORT_SIDE) {
+      scale = Math.min(1, MIN_FRAME_SHORT_SIDE / Math.min(sourceWidth, sourceHeight))
+    }
+    const width = Math.round(sourceWidth * scale)
+    const height = Math.round(sourceHeight * scale)
     canvas.width = width
     canvas.height = height
     const context = canvas.getContext('2d')
@@ -147,9 +169,11 @@ async function capture(): Promise<void> {
       ? '摄像头权限被拒绝。请家人在浏览器地址栏点一下允许摄像头，或改用 PIN/密码登录。'
       : cause instanceof DOMException && cause.name === 'NotFoundError'
         ? '没有找到摄像头。请接好摄像头，或改用 PIN/密码登录。'
-        : props.mode === 'registration'
-          ? '摄像头打不开。请检查权限后重试，也可以让家人帮忙。'
-          : '摄像头打不开或画面不好，请改用 PIN 登录，也可以让家人帮忙。'
+        : cause instanceof Error && cause.message === 'CAMERA_RESOLUTION_TOO_LOW'
+          ? '这个摄像头的画面太小，拍不清人脸。请换一个更清晰的摄像头，或改用 PIN/密码登录。'
+          : props.mode === 'registration'
+            ? '摄像头打不开。请检查权限后重试，也可以让家人帮忙。'
+            : '摄像头打不开或画面不好，请改用 PIN 登录，也可以让家人帮忙。'
     speak(error.value)
     if (props.showFallback) emit('fallback')
   } finally {

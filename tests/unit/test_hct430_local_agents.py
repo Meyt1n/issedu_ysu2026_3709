@@ -45,7 +45,9 @@ def test_knowledge_agent_reports_no_hit_as_completed(db_session) -> None:
     assert "暂无" in trace["summary"]
 
 
-def test_knowledge_agent_reports_permission_denial_as_blocked(db_session) -> None:
+def test_knowledge_agent_reports_empty_library_as_degraded_not_blocked(db_session) -> None:
+    """No accessible reviewed documents is a retrieval gap, not a risk-control
+    interception — the trace must not claim the step was "blocked"."""
     from app.knowledge import add_document
 
     add_document(
@@ -68,6 +70,27 @@ def test_knowledge_agent_reports_permission_denial_as_blocked(db_session) -> Non
     )
 
     assert result.get("error") == "NO_AUTHORISED_DOCUMENTS"
+    assert trace["status"] == "degraded"
+    assert "暂无" in trace["summary"]
+
+
+def test_knowledge_agent_reports_scope_denial_as_blocked(monkeypatch, db_session) -> None:
+    """Real scope/tool failures keep the honest blocked status."""
+    monkeypatch.setattr(
+        "app.local_agents._tool_payload",
+        lambda *args, **kwargs: {"error": "TOOL_SCOPE_DENIED", "results": [], "total": 0},
+    )
+
+    result, trace = _knowledge_agent(
+        db_session,
+        query="阿莫西林 用法",
+        actor_id="u1",
+        household_id=None,
+        member_id=None,
+        access_purpose=None,
+    )
+
+    assert result.get("error") == "TOOL_SCOPE_DENIED"
     assert trace["status"] == "blocked"
 
 
@@ -218,6 +241,99 @@ def test_agent_catalog_reports_web_search_readiness() -> None:
         agent_web_search_url="https://example.com/search",
     ))
     assert misconfigured["web_search_ready"] is False
+
+
+def test_agent_catalog_explains_unavailable_reason_and_enable_hint() -> None:
+    """The catalog must say why search is off and how to turn it on."""
+    disabled = get_agent_catalog(Settings())
+    assert disabled["web_search_unavailable_reason"] == "DEPLOYMENT_DISABLED"
+    assert "AGENT_WEB_SEARCH_ENABLED" in disabled["web_search_enable_hint"]
+    assert disabled["web_search_offline_fixture"] is False
+
+    egress_blocked = get_agent_catalog(Settings(
+        agent_web_search_enabled=True,
+        agent_web_search_allowed_domains="other.example",
+        agent_web_search_url="https://example.com/search",
+    ))
+    assert egress_blocked["web_search_unavailable_reason"] == "EGRESS_BLOCKED"
+    assert "AGENT_WEB_SEARCH_ALLOWED_DOMAINS" in egress_blocked["web_search_enable_hint"]
+
+    ready = get_agent_catalog(Settings(
+        agent_web_search_enabled=True,
+        agent_web_search_allowed_domains="example.com",
+        agent_web_search_url="https://example.com/search",
+    ))
+    assert ready["web_search_ready"] is True
+    assert ready["web_search_unavailable_reason"] == "OPT_IN_REQUIRED"
+
+    fixture = get_agent_catalog(Settings(
+        agent_web_search_enabled=True,
+        agent_web_search_provider="fixture",
+    ))
+    assert fixture["web_search_ready"] is True
+    assert fixture["web_search_offline_fixture"] is True
+    assert fixture["web_search_unavailable_reason"] == "OPT_IN_REQUIRED"
+    assert "教学夹具" in fixture["web_search_enable_hint"]
+
+
+def test_chat_stream_wraps_connection_errors_for_structured_degrade(monkeypatch) -> None:
+    """An unreachable Ollama must degrade, not crash the whole chat request."""
+    import httpx
+    import pytest as _pytest
+
+    from app.tool_call import OllamaClient
+
+    class _RefusingClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def stream(self, *_args, **_kwargs):
+            raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr("app.tool_call.httpx.Client", _RefusingClient)
+    stream = OllamaClient().chat_stream(
+        model="local-model",
+        messages=[{"role": "user", "content": "测试"}],
+    )
+    with _pytest.raises(RuntimeError, match="OLLAMA_UNAVAILABLE"):
+        list(stream)
+
+
+def test_web_search_agent_with_fixture_provider_stays_offline(monkeypatch) -> None:
+    """Dual opt-in with the fixture provider works without any egress."""
+
+    class _NoNetwork:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("fixture provider must never open an HTTP client")
+
+    monkeypatch.setattr("app.search_providers.httpx.Client", _NoNetwork)
+    from app.search_providers import clear_search_cache
+
+    clear_search_cache()
+    results, trace, safe_query = _web_search_agent(
+        "药箱里的药过期了怎么处理",
+        sensitive_values=[],
+        allow_network_search=True,
+        settings=Settings(
+            agent_web_search_enabled=True,
+            agent_web_search_provider="fixture",
+            agent_web_search_cache_ttl_seconds=0,
+        ),
+    )
+
+    assert results, "fixture provider should return teaching references"
+    assert trace["status"] == "completed"
+    assert trace["network_used"] is False
+    assert "教学夹具" in trace["summary"]
+    assert safe_query is not None
+    assert all(item["source"] == "teaching_fixture" for item in results)
+    assert all(item["domain"] == "fixture.invalid" for item in results)
 
 
 def test_plan_routes_agents_by_question_type() -> None:
@@ -426,9 +542,66 @@ def test_medication_safety_short_circuits_without_knowledge(monkeypatch) -> None
 
     assert result["degraded"] is True
     assert result["degrade_reason"] == "EVIDENCE_REQUIRED"
+    assert result["escalate"] is True
     synthesis = next(trace for trace in result["agent_trace"] if trace["agent_id"] == "synthesis")
     assert synthesis["status"] == "degraded"
     assert "跳过模型" in synthesis["summary"]
+
+
+def test_symptom_medication_without_knowledge_gets_friendly_fallback(monkeypatch) -> None:
+    """HCT-448: an empty teaching library on a symptom-material question must
+    not raise the EVIDENCE_REQUIRED + escalate "beyond system boundary" wall.
+
+    The deterministic fallback keeps the hard limits (no model call, no
+    fabricated drug evidence) but stays a normal, friendly teaching turn.
+    """
+    class _ForbiddenOllama:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("no model may be called for the fallback")
+
+    monkeypatch.setattr("app.local_agents.OllamaClient", _ForbiddenOllama)
+
+    def fake_database(session, **kwargs):
+        return {"get_member_state": {"sources": []}}, {
+            "agent_id": "database", "role": "健康档案核对", "status": "completed",
+            "local": True, "network_used": False, "duration_ms": 1,
+            "summary": "", "source_count": 0,
+        }
+
+    def fake_knowledge(session, **kwargs):
+        return {"error": "NO_AUTHORISED_DOCUMENTS", "results": [], "total": 0}, {
+            "agent_id": "knowledge", "role": "本地资料检索", "status": "degraded",
+            "local": True, "network_used": False, "duration_ms": 1,
+            "summary": "本机暂无当前可用的已审核知识卡", "source_count": 0,
+        }
+
+    monkeypatch.setattr("app.local_agents._database_agent", fake_database)
+    monkeypatch.setattr("app.local_agents._knowledge_agent", fake_knowledge)
+
+    result = run_local_multi_agent(
+        None,
+        messages=[{
+            "role": "user",
+            "content": "夏天吹空调后有点鼻塞，一般可以了解哪些用药资料？",
+        }],
+        actor_id="actor",
+        household_id="household",
+        member_id="member",
+    )
+
+    assert result["query_type"] == "SYMPTOM_MEDICATION"
+    assert result["degraded"] is True
+    assert result["degrade_reason"] == "KNOWLEDGE_UNAVAILABLE"
+    assert result["escalate"] is False
+    assert "暂时没有" in result["answer"]
+    assert "医生或药师" in result["answer"]
+    # The friendly fallback must not read like the harsh evidence wall.
+    assert "缺少可核验的本地知识引用" not in result["answer"]
+    assert result["suggested_questions"], "friendly fallback keeps follow-ups"
+    statuses = {trace["agent_id"]: trace["status"] for trace in result["agent_trace"]}
+    assert statuses["knowledge"] == "degraded"
+    synthesis = next(trace for trace in result["agent_trace"] if trace["agent_id"] == "synthesis")
+    assert "一般照护提示" in synthesis["summary"]
 
 
 def test_compact_local_evidence_keeps_query_relevant_fields() -> None:

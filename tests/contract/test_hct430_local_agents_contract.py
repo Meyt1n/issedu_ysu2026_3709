@@ -51,6 +51,26 @@ def test_agent_catalog_exposes_search_provider(client: TestClient) -> None:
     assert response.json()["web_search_provider"] == "duckduckgo_html"
 
 
+def test_agent_catalog_explains_search_availability(client: TestClient) -> None:
+    """Clients must be able to say why search is unavailable and how to enable it."""
+    response = client.get(
+        "/api/v1/assistant/agents",
+        headers={"X-Actor-Id": "hct430-contract-owner"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["web_search_unavailable_reason"] in {
+        "DEPLOYMENT_DISABLED",
+        "EGRESS_BLOCKED",
+        "OPT_IN_REQUIRED",
+    }
+    if not body["web_search_enabled"]:
+        assert body["web_search_unavailable_reason"] == "DEPLOYMENT_DISABLED"
+    assert isinstance(body["web_search_enable_hint"], str)
+    assert body["web_search_enable_hint"]
+    assert isinstance(body["web_search_offline_fixture"], bool)
+
+
 def test_assistant_stream_requires_multi_agent(client: TestClient) -> None:
     response = client.post(
         "/api/v1/assistant/chat/stream",

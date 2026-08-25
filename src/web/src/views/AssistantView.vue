@@ -19,6 +19,12 @@ import {
 } from '../assistant/chatSession'
 import { normalizeSuggestedQuestions } from '../assistant/followUp'
 import {
+  unavailableWebSearchAvailability,
+  webSearchAvailabilityFromCatalog,
+  webSearchDisabledLabel,
+  webSearchSkipDetail,
+} from '../assistant/webSearchAvailability'
+import {
   AUTO_SEND_PRESETS,
   createAutoSendScheduler,
   createDictationController,
@@ -104,6 +110,10 @@ const sendError = ref('')
 const voiceError = ref('')
 const allowNetworkSearch = ref(false)
 const webSearchAvailable = ref<boolean | null>(null)
+const webSearchReason = ref<string | null>(null)
+const webSearchHint = ref<string | null>(null)
+const webSearchFixture = ref(false)
+const showWebSearchHelp = ref(false)
 const workflowTrace = ref<AssistantAgentTrace[]>([])
 const selectedAgentId = ref<string | null>(null)
 const workflowExpanded = ref(false)
@@ -541,7 +551,7 @@ function agentStatusDetail(stage: AgentStage): string {
   const trace = traceForAgent(stage.id)
   if (trace?.summary) return trace.summary
   if (agentStatus(stage) === 'skipped' && stage.network) {
-    return webSearchAvailable.value === false ? '当前部署未启用联网参考' : '本次请求未开启联网搜索'
+    return webSearchSkipDetail(webSearchState.value)
   }
   return stage.description
 }
@@ -696,7 +706,7 @@ function degradeReasonLabel(reason?: string | null): string {
     REQUEST_FAILED: '本地 API 请求失败',
     MODEL_UNAVAILABLE: '本地模型不可用',
     OLLAMA_UNAVAILABLE: '本地模型服务不可用',
-    KNOWLEDGE_UNAVAILABLE: '本地知识库不可用',
+    KNOWLEDGE_UNAVAILABLE: '本机暂无已审核的相关知识卡',
     NO_AUTHORISED_DOCUMENTS: '当前范围没有可用知识文档',
     EVIDENCE_REQUIRED: '没有足够的本地证据',
     CITATION_NOT_FOUND: '引用未通过服务端校验',
@@ -707,6 +717,12 @@ function degradeReasonLabel(reason?: string | null): string {
     MEDICAL_BOUNDARY_VIOLATION: '回答触及医疗边界，已被安全拦截',
   }
   return labels[reason ?? ''] ?? reason ?? '受控降级'
+}
+
+// Knowledge-gap degrades are a friendly teaching fallback, not a safety
+// interception; they get a soft note instead of the warning banner.
+function isKnowledgeGapDegrade(entry: ChatEntry): boolean {
+  return entry.degraded === true && entry.degradeReason === 'KNOWLEDGE_UNAVAILABLE'
 }
 
 function evidenceSummary(entry: ChatEntry): string {
@@ -764,13 +780,29 @@ watch(
 )
 
 async function loadAgentCatalog(): Promise<void> {
+  let state = unavailableWebSearchAvailability()
   try {
     const catalog = await apiClient.listAssistantAgents(requestOptions.value)
-    webSearchAvailable.value = catalog.web_search_ready ?? catalog.web_search_enabled
+    state = webSearchAvailabilityFromCatalog(catalog)
   } catch {
-    webSearchAvailable.value = null
+    state = unavailableWebSearchAvailability()
   }
+  webSearchAvailable.value = state.available
+  webSearchReason.value = state.reason
+  webSearchHint.value = state.hint
+  webSearchFixture.value = state.fixture
 }
+
+const webSearchState = computed(() => ({
+  available: webSearchAvailable.value,
+  fixture: webSearchFixture.value,
+  reason: webSearchReason.value,
+  hint: webSearchHint.value,
+}))
+
+// Reason-specific copy so users understand why the toggle is disabled and how
+// a deployment operator can enable it (docs/本地部署与Demo操作指南.md §5).
+const webSearchDisabledText = computed(() => webSearchDisabledLabel(webSearchState.value))
 
 function onVisibilityChange(): void {
   if (document.visibilityState === 'hidden') stopVoiceInput()
@@ -1211,7 +1243,11 @@ onBeforeUnmount(() => {
               <AppIcon name="timeline" :size="12" style="vertical-align: -1px" />
               分流说明：{{ entry.routeExplanation }}
             </span>
-            <span v-if="entry.degraded" style="color: var(--gold)">
+            <span v-if="isKnowledgeGapDegrade(entry)" class="chat-evidence-summary">
+              <AppIcon name="compass" :size="12" style="vertical-align: -1px" />
+              本机暂无已审核的相关知识卡，以上是一般照护提示；具体用药请咨询医生或药师。
+            </span>
+            <span v-else-if="entry.degraded" style="color: var(--gold)">
               ⚠ {{ degradeReasonLabel(entry.degradeReason) }}，以上为受控回复，不含模型生成的医疗判断。
             </span>
             <span v-if="entry.escalate" style="color: var(--rose)">
@@ -1447,11 +1483,30 @@ onBeforeUnmount(() => {
     <label class="agent-network-toggle">
       <input v-model="allowNetworkSearch" type="checkbox" :disabled="sending || webSearchAvailable === false" />
       <span>
-        <strong>补充联网参考</strong>
-        <small v-if="webSearchAvailable === false">联网参考当前未启用，全部分析在本机完成。</small>
+        <strong>
+          补充联网参考
+          <span v-if="webSearchFixture && webSearchAvailable" class="pill sage" style="margin-left: 6px">教学夹具 · 不出网</span>
+        </strong>
+        <small v-if="webSearchAvailable === false">
+          {{ webSearchDisabledText }}
+          <button type="button" class="link-inline" @click="showWebSearchHelp = !showWebSearchHelp">
+            {{ showWebSearchHelp ? '收起启用方法' : '如何启用？' }}
+          </button>
+        </small>
+        <small v-else-if="webSearchFixture">开启后由本机教学夹具提供演示用外部参考样式，不会发起任何网络请求；夹具内容不构成医疗证据。</small>
         <small v-else>开启后仅将脱敏后的问题发送到可信搜索服务以补充公开参考；家庭成员、健康记录与图片始终保留在本机。</small>
       </span>
     </label>
+    <div v-if="showWebSearchHelp && webSearchAvailable === false" class="notice info web-search-help" role="note">
+      <p style="margin: 0 0 6px">{{ webSearchHint ?? '请部署负责人在 .env 中开启联网搜索后重启 API。' }}</p>
+      <pre class="mono web-search-help-env"><code>AGENT_WEB_SEARCH_ENABLED=true
+# 离线课堂演示（不出网）：
+AGENT_WEB_SEARCH_PROVIDER=fixture
+# 真实联网（白名单出口）：
+# AGENT_WEB_SEARCH_PROVIDER=duckduckgo_html
+# AGENT_WEB_SEARCH_ALLOWED_DOMAINS=html.duckduckgo.com</code></pre>
+      <p style="margin: 6px 0 0">修改 .env 并重启 API 后刷新本页；每次提问仍需勾选本选项，外部结果只作为「非本地审核证据」参考。</p>
+    </div>
     <div
       v-if="needMicGesture && !listening"
       class="voice-session-panel wake"
@@ -1628,5 +1683,30 @@ onBeforeUnmount(() => {
   padding-left: 18px;
   font-size: 12px;
   color: var(--ink-soft);
+}
+.link-inline {
+  background: none;
+  border: none;
+  color: var(--pine, #2f6f5e);
+  cursor: pointer;
+  font-size: inherit;
+  padding: 0;
+  text-decoration: underline;
+}
+.web-search-help {
+  font-size: 12.5px;
+  line-height: 1.6;
+  margin-top: 8px;
+}
+.web-search-help-env {
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.55;
+  margin: 0;
+  overflow-x: auto;
+  padding: 8px 10px;
+  user-select: all;
+  white-space: pre;
 }
 </style>

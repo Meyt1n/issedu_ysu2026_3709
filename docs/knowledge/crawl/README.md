@@ -42,8 +42,20 @@ uv run python scripts/crawl_knowledge_sources.py --due-only
 uv run python scripts/crawl_knowledge_sources.py --live --due-only
 ```
 
-- Web：「知识文档」→「知识爬虫 / Staging」
+- Web：「知识文档」→「知识爬虫 / Staging」（含「一键教学闭环：抓取 → 批准 → 晋升」）
 - CI：`.github/workflows/knowledge-crawl-refresh.yml`（每周一 + 手动）
+
+## 谁可以操作
+
+爬虫 API（`/api/v1/knowledge/crawl/*`）仅对知识管理员开放，其余身份返回 403 `KNOWLEDGE_STEWARD_REQUIRED`，Web 页会显示明确的「需要知识管理员身份」引导：
+
+| 身份 | 说明 |
+|---|---|
+| `demo-parent` / `knowledge-steward` | 内置演示 steward |
+| `demo-*` / `test-*` 前缀 | 演示与测试账号 |
+| `KNOWLEDGE_ADMIN_ACTORS` 内账号 | `.env` 中逗号分隔配置，重启 API 后生效 |
+
+API 端 `/knowledge/crawl/run` 强制离线夹具（服务端不出网）；远程刷新只能走 CLI `--live`，且要求 allowlist 中 `enabled: true` 并命中 `policy.allowed_hosts`。**永不 auto_ingest**：晋升后仍须人工执行 `ingest_local_knowledge.py --dry-run` 预检查再正式入库。
 
 ## 状态机
 

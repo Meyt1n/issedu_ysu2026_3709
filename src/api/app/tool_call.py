@@ -32,7 +32,7 @@ from ai.safety.lexicon import (
     TEACHING_REMINDER,
     medical_boundary_hits,
 )
-from ai.safety.seasonal_context import seasonal_care_context
+from ai.safety.seasonal_context import seasonal_care_context, seasonal_care_hint
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlalchemy.orm import Session
 
@@ -484,24 +484,32 @@ class OllamaClient:
         if tools:
             payload["tools"] = tools
 
-        with httpx.Client(timeout=timeout or REQUEST_TIMEOUT, trust_env=False) as client:
-            with client.stream("POST", f"{self.base_url}/api/chat", json=payload) as resp:
-                resp.raise_for_status()
-                if cancel_check is not None and cancel_check():
-                    resp.close()
-                    raise RuntimeError("OLLAMA_CANCELLED")
-                for line in resp.iter_lines():
+        try:
+            with httpx.Client(timeout=timeout or REQUEST_TIMEOUT, trust_env=False) as client:
+                with client.stream("POST", f"{self.base_url}/api/chat", json=payload) as resp:
+                    resp.raise_for_status()
                     if cancel_check is not None and cancel_check():
                         resp.close()
                         raise RuntimeError("OLLAMA_CANCELLED")
-                    if not line:
-                        continue
-                    data = json.loads(line)
-                    content = (data.get("message") or {}).get("content") or ""
-                    if content:
-                        yield content
-                    if data.get("done"):
-                        break
+                    for line in resp.iter_lines():
+                        if cancel_check is not None and cancel_check():
+                            resp.close()
+                            raise RuntimeError("OLLAMA_CANCELLED")
+                        if not line:
+                            continue
+                        data = json.loads(line)
+                        content = (data.get("message") or {}).get("content") or ""
+                        if content:
+                            yield content
+                        if data.get("done"):
+                            break
+        except httpx.HTTPError as exc:
+            # Parity with ``chat``: a down or refusing Ollama must surface as
+            # the structured MODEL_UNAVAILABLE degrade in the orchestrator,
+            # never as an unhandled 500 that hides successful local/search
+            # steps from the user.
+            logger.warning("Ollama stream unavailable: %s", str(exc)[:160])
+            raise RuntimeError(f"OLLAMA_UNAVAILABLE: {str(exc)[:120]}") from exc
         self._available = True
 
 
@@ -713,6 +721,49 @@ def suggest_follow_up_questions(
 
 # ── Structured degrade ────────────────────────────────────────────────
 
+# Friendly teaching fallback for SYMPTOM_MEDICATION when no reviewed local
+# knowledge card matched.  Unlike EVIDENCE_REQUIRED it never escalates: a
+# "what material can I read about a stuffy nose" question with an empty
+# teaching library is a knowledge gap, not a boundary violation.
+SYMPTOM_KNOWLEDGE_GAP_REASON = "KNOWLEDGE_UNAVAILABLE"
+
+
+def build_symptom_knowledge_gap_answer() -> str:
+    """Compose the deterministic, non-scary empty-library teaching answer.
+
+    The text may use the calendar-based seasonal framing and generic
+    non-drug care habits, but it must never name a concrete drug as if it
+    were reviewed evidence, and it must not decide dosage or suitability.
+    """
+    return (
+        f"{seasonal_care_hint()}"
+        "本机知识库暂时没有已审核的相关知识卡，我不能凭空报出具体药品资料。"
+        "如果想了解对症的常用药说明，建议咨询医生或药师；"
+        "也可以先把经过审核的资料卡加入本机知识库，我就能带着出处慢慢讲给你听。"
+    )
+
+
+def symptom_knowledge_gap_result(
+    messages: list[dict[str, Any]],
+    *,
+    model: str | None,
+    query_type: str = "SYMPTOM_MEDICATION",
+) -> dict[str, Any]:
+    """Build the full friendly degrade payload for a knowledge-gap turn.
+
+    Keeps ``degraded=True`` (nothing was model-generated and no citation
+    exists) but with ``escalate=False`` and safe deterministic follow-ups so
+    an ordinary teaching chat can continue instead of hitting the
+    "beyond system boundary" wall reserved for real boundary violations.
+    """
+    result = degrade_result(
+        build_degrade_response(SYMPTOM_KNOWLEDGE_GAP_REASON),
+        model,
+        query_type=query_type,
+    )
+    result["suggested_questions"] = suggest_follow_up_questions(messages)
+    return result
+
 
 @dataclass
 class DegradedResponse:
@@ -774,6 +825,13 @@ def build_degrade_response(
             degraded=True,
             reason=reason,
         )
+    if reason == SYMPTOM_KNOWLEDGE_GAP_REASON:
+        return DegradedResponse(
+            answer=build_symptom_knowledge_gap_answer(),
+            degraded=True,
+            reason=reason,
+            escalate=False,
+        )
     if reason == "TOOL_SCOPE_DENIED":
         return DegradedResponse(
             answer="助手工具请求超出当前家庭或成员范围，已拒绝执行。",
@@ -791,6 +849,7 @@ _EVIDENCE_DEGRADE_REASONS = {
     "EVIDENCE_REQUIRED",
     "CITATION_NOT_FOUND",
     "NO_AUTHORISED_DOCUMENTS",
+    "KNOWLEDGE_UNAVAILABLE",
 }
 
 
@@ -1724,6 +1783,10 @@ def run_assistant(
     ):
         return degraded("TOOL_SCOPE_DENIED")
     if "NO_AUTHORISED_DOCUMENTS" in tool_errors and not allowed_citations:
+        if query_type == "SYMPTOM_MEDICATION":
+            # Empty / not-yet-seeded teaching library: degrade gently instead
+            # of the hard no-authorised-documents refusal.
+            return symptom_knowledge_gap_result(messages, model=model)
         return degraded("NO_AUTHORISED_DOCUMENTS")
 
     matched_citations = filter_claimed_citations(parsed.sources, allowed_citations)
@@ -1733,10 +1796,16 @@ def run_assistant(
         return degraded("CITATION_NOT_FOUND")
     if allowed_citations and not matched_citations:
         return degraded("EVIDENCE_REQUIRED")
-    # Symptom guidance and high-risk medication questions need reviewed
-    # knowledge citations.  Household formulary / event IDs are optional.
-    if query_type in {"MEDICATION_SAFETY", "SYMPTOM_MEDICATION"} and not matched_citations:
+    # High-risk medication-safety questions (co-administration, stop/switch,
+    # individual dosage) still hard-require reviewed knowledge citations.
+    # Household formulary / event IDs are optional enrichment.
+    if query_type == "MEDICATION_SAFETY" and not matched_citations:
         return degraded("EVIDENCE_REQUIRED")
+    # Symptom "what material can I read" questions with zero retrievable
+    # knowledge get the friendly teaching fallback instead: the model answer
+    # is discarded (no fabricated evidence) but the chat is not escalated.
+    if query_type == "SYMPTOM_MEDICATION" and not matched_citations:
+        return symptom_knowledge_gap_result(messages, model=model)
     if any(token not in allowed_fact_sources for token in unknown_sources):
         return degraded("CITATION_NOT_FOUND")
 

@@ -91,7 +91,7 @@ test('管理员创建并撤回授权，审计链与服务端状态一致', async
   await page.getByRole('button', { name: '创建授权' }).click()
   await expect(page.getByText('授权已创建，默认遵循最小权限原则。')).toBeVisible()
 
-  // HCT-448：创建成功后出现交接闭环（对方账号 + 登录用途代码 + 到期时间）
+  // HCT-449：创建成功后出现交接闭环（对方账号 + 登录用途代码 + 到期时间）
   const successPanel = page.locator('.auth-success-panel')
   await expect(successPanel.getByText('授权已生效，接下来交给对方')).toBeVisible()
   await expect(successPanel.getByLabel('授权交接说明')).toHaveValue(new RegExp(scope.caregiverId))
