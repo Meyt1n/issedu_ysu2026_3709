@@ -104,6 +104,30 @@ def _response(url: str, status_code: int, text: str) -> httpx.Response:
     )
 
 
+def _redirected_response(
+    *,
+    source_url: str,
+    final_url: str,
+    text: str,
+    history_urls: list[str] | None = None,
+) -> httpx.Response:
+    history = [
+        httpx.Response(
+            302,
+            request=httpx.Request("GET", history_url),
+            headers={"location": final_url},
+        )
+        for history_url in history_urls or [source_url]
+    ]
+    return httpx.Response(
+        200,
+        request=httpx.Request("GET", final_url),
+        text=text,
+        headers={"content-type": "application/rss+xml"},
+        history=history,
+    )
+
+
 @pytest.fixture(autouse=True)
 def _reset_state() -> Iterator[None]:
     reset_health_news_state()
@@ -239,6 +263,78 @@ async def test_remote_ok_then_fresh_cache(
     )
     assert second["cache_status"] == "fresh"
     assert client.calls == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("final_url", "history_urls"),
+    [
+        ("https://evil.example/news.xml", None),
+        ("https://www.who.int/news.xml", ["https://evil.example/redirect"]),
+    ],
+)
+async def test_redirect_chain_leaving_allowlist_is_blocked_without_caching(
+    enabled_news: object,
+    monkeypatch: pytest.MonkeyPatch,
+    final_url: str,
+    history_urls: list[str] | None,
+) -> None:
+    source_url = "https://www.who.int/rss-feeds/news-english.xml"
+    client = SequenceClient(
+        [
+            _redirected_response(
+                source_url=source_url,
+                final_url=final_url,
+                history_urls=history_urls,
+                text=SAMPLE_RSS,
+            )
+        ]
+    )
+    monkeypatch.setattr(
+        health_news_adapter.httpx,
+        "AsyncClient",
+        lambda **_kwargs: client,
+    )
+
+    result = await health_news_adapter.fetch_health_news(
+        when=datetime(2026, 8, 25, tzinfo=ZoneInfo("Asia/Shanghai")),
+    )
+
+    assert result["status"] == "egress_blocked"
+    assert result["cache_status"] == "none"
+    assert all(item["source"] == "seasonal_calendar" for item in result["items"])
+    assert health_news_adapter._cache is None
+
+
+@pytest.mark.anyio
+async def test_allowlisted_redirect_is_parsed_and_cached(
+    enabled_news: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_url = "https://www.who.int/rss-feeds/news-english.xml"
+    final_url = "https://www.who.int/news.xml"
+    client = SequenceClient(
+        [
+            _redirected_response(
+                source_url=source_url,
+                final_url=final_url,
+                text=SAMPLE_RSS,
+            )
+        ]
+    )
+    monkeypatch.setattr(
+        health_news_adapter.httpx,
+        "AsyncClient",
+        lambda **_kwargs: client,
+    )
+
+    result = await health_news_adapter.fetch_health_news(
+        when=datetime(2026, 8, 25, tzinfo=ZoneInfo("Asia/Shanghai")),
+    )
+
+    assert result["status"] == "ok"
+    assert any(item["source"] == "remote_whitelist" for item in result["items"])
+    assert health_news_adapter._cache is not None
 
 
 @pytest.mark.anyio

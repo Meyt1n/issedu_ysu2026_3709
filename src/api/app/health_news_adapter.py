@@ -50,6 +50,10 @@ StatusLiteral = Literal[
 ]
 CacheLiteral = Literal["none", "miss", "fresh", "stale"]
 
+
+class HealthNewsEgressBlockedError(ValueError):
+    """Raised when a source response leaves the configured HTTPS allowlist."""
+
 # Commercial / clinical funnel phrases never belong on teaching home cards.
 _BLOCKED_TITLE_RE = re.compile(
     r"(购药|买药|开药|在线问诊|挂号|义诊广告|优惠券|秒杀|佣金)",
@@ -485,6 +489,19 @@ async def _http_get(url: str, *, timeout: float) -> httpx.Response:
     raise last_error
 
 
+def _validate_response_chain(
+    response: httpx.Response,
+    *,
+    allowed_hosts: set[str],
+) -> None:
+    """Reject every URL observed while following a source redirect chain."""
+    for hop in (*response.history, response):
+        url = str(hop.url)
+        if not _host_allowed(url, allowed_hosts) or not is_health_news_egress_allowed(url):
+            logger.warning("health_news: redirect left allowlist url=%s", url)
+            raise HealthNewsEgressBlockedError("health_news_redirect_blocked")
+
+
 def _filter_drafts_by_egress(
     drafts: list[RemoteNewsDraft],
     *,
@@ -512,6 +529,7 @@ async def _fetch_source(
         source.list_url,
         timeout=settings.health_news_timeout_seconds,
     )
+    _validate_response_chain(response, allowed_hosts=allowed_hosts)
     body = response.text
     content_type = (response.headers.get("content-type") or "").lower()
     if source.kind == "rss" or "xml" in content_type or body.lstrip().startswith("<?xml"):
@@ -629,6 +647,8 @@ async def fetch_health_news(*, when: datetime | None = None) -> dict[str, Any]:
                     errors.append(f"{source.id}:rate_limited")
                 else:
                     errors.append(f"{source.id}:http_{code}")
+            except HealthNewsEgressBlockedError:
+                errors.append(f"{source.id}:egress_blocked")
             except ValueError:
                 errors.append(f"{source.id}:invalid_response")
             except Exception as exc:  # noqa: BLE001
@@ -675,6 +695,8 @@ async def fetch_health_news(*, when: datetime | None = None) -> dict[str, Any]:
                 reason = "rate_limited"
             elif any("invalid_response" in err for err in errors):
                 reason = "invalid_response"
+            elif any("egress_blocked" in err for err in errors):
+                reason = "egress_blocked"
             return _local_response(
                 status="stale",
                 season=season,
@@ -691,6 +713,8 @@ async def fetch_health_news(*, when: datetime | None = None) -> dict[str, Any]:
             status = "timeout"
         elif any("invalid_response" in err for err in errors):
             status = "invalid_response"
+        elif any("egress_blocked" in err for err in errors):
+            status = "egress_blocked"
         return _local_response(
             status=status,
             season=season,
