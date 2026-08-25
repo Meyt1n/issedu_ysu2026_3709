@@ -416,6 +416,84 @@ onMounted(() => {
           </div>
         </template>
       </section>
+
+      <section class="card">
+        <div class="card-heading">
+          <div>
+            <p class="eyebrow">受控刷新</p>
+            <h3 class="card-title">知识爬虫 / Staging</h3>
+          </div>
+          <div v-if="!crawlForbidden" style="display: flex; gap: 8px; flex-wrap: wrap">
+            <button type="button" class="btn btn-ghost btn-small" :disabled="crawlBusy" @click="runCrawl(true)">
+              <AppIcon name="refresh" :size="15" />
+              {{ crawlBusy ? '刷新中' : `到期刷新${dueCount ? ` (${dueCount})` : ''}` }}
+            </button>
+            <button type="button" class="btn btn-ghost btn-small" :disabled="crawlBusy" @click="runCrawl(false)">
+              全量抓取
+            </button>
+          </div>
+        </div>
+        <div v-if="crawlForbidden" class="notice warn" role="status">
+          <strong>需要知识管理员身份</strong>
+          <p style="margin: 6px 0 0; line-height: 1.65">
+            演示环境可在欢迎页切换为 <span class="mono">demo-parent</span> 等演示账号；
+            正式部署由负责人把账号加入 <span class="mono">KNOWLEDGE_ADMIN_ACTORS</span> 后重启 API。
+          </p>
+        </div>
+        <template v-else>
+          <p class="card-note" style="margin-top: 0">
+            只抓白名单来源并写入 staging 草稿，<strong>不会自动入库</strong>；批准晋升后仍需人工 dry-run 才入库。
+          </p>
+          <p v-if="crawlLoadError" class="card-note" style="margin: 0 0 8px">
+            爬虫状态暂时不可用，可稍后刷新。
+          </p>
+          <p v-if="crawlStatus" class="row-meta" style="margin: 0 0 8px">
+            白名单 {{ crawlStatus.source_count ?? 0 }} 源 · 到期 {{ dueCount }} · staging {{ stagingItems.length }} ·
+            已批准待晋升 {{ stagingApprovedCount }} · auto_ingest 关闭
+          </p>
+          <p v-if="crawlReport" class="notice info" role="status">{{ crawlReport }}</p>
+          <pre v-if="ingestHint" class="mono ingest-hint-block"><code>{{ ingestHint }}</code></pre>
+          <div v-if="stagingItems.length === 0" class="empty-state">
+            <strong>暂无 staging 草稿</strong>
+            <p>点击「全量抓取」或「到期刷新」生成本地夹具草稿，或用「一键教学闭环」演示完整流程。</p>
+          </div>
+          <ul v-else class="list-plain" style="gap: 8px">
+            <li v-for="item in stagingItems" :key="String(item.source_id)" class="row-card" style="padding: 11px 14px">
+              <strong>{{ item.title }}</strong>
+              <span class="row-meta">
+                {{ item.status }} · {{ item.unchanged ? '未变更' : '有更新' }} ·
+                {{ String(item.content_sha256 || '').slice(0, 12) }}…
+              </span>
+              <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap">
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-small"
+                  :disabled="crawlBusy || item.status === 'approved' || item.status === 'promoted'"
+                  @click="approveStaging(String(item.source_id))"
+                >
+                  批准
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-small"
+                  :disabled="crawlBusy || item.status === 'rejected' || item.status === 'promoted'"
+                  @click="rejectStaging(String(item.source_id))"
+                >
+                  拒绝
+                </button>
+              </div>
+            </li>
+          </ul>
+          <div style="display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap">
+            <button type="button" class="btn btn-clay btn-small" :disabled="crawlBusy || stagingApprovedCount === 0" @click="promoteStaging">
+              晋升已批准草稿（{{ stagingApprovedCount }}）
+            </button>
+            <button type="button" class="btn btn-ghost btn-small" :disabled="crawlBusy" @click="runTeachingLoop">
+              {{ crawlBusy ? '执行中' : '一键教学闭环：抓取 → 批准 → 晋升' }}
+            </button>
+          </div>
+        </template>
+      </section>
     </div>
 
     <div class="section-stack" style="align-self: start">
@@ -537,90 +615,6 @@ onMounted(() => {
       <section class="card">
         <div class="card-heading">
           <div>
-            <p class="eyebrow">受控刷新</p>
-            <h3 class="card-title">知识爬虫 / Staging</h3>
-          </div>
-          <div v-if="!crawlForbidden" style="display: flex; gap: 8px; flex-wrap: wrap">
-            <button type="button" class="btn btn-ghost btn-small" :disabled="crawlBusy" @click="runCrawl(true)">
-              <AppIcon name="refresh" :size="15" />
-              {{ crawlBusy ? '刷新中' : `到期刷新${dueCount ? ` (${dueCount})` : ''}` }}
-            </button>
-            <button type="button" class="btn btn-ghost btn-small" :disabled="crawlBusy" @click="runCrawl(false)">
-              全量抓取
-            </button>
-          </div>
-        </div>
-        <div v-if="crawlForbidden" class="notice warn" role="status">
-          <strong>需要知识管理员身份</strong>
-          <p style="margin: 6px 0 0; line-height: 1.65">
-            知识爬虫与草稿审核仅对知识管理员开放，当前身份无权查看或操作。
-            演示环境请在欢迎页把身份切换为 <span class="mono">demo-parent</span>、
-            <span class="mono">knowledge-steward</span> 或任意 <span class="mono">demo-</span> 开头的演示账号；
-            正式部署由负责人把账号加入 .env 的 <span class="mono">KNOWLEDGE_ADMIN_ACTORS</span> 后重启 API。
-          </p>
-        </div>
-        <template v-else>
-          <p class="card-note" style="margin-top: 0">
-            只抓 allowlist 来源（默认仅本地夹具，远程需 CLI <span class="mono">--live</span>），写入 staging 草稿；
-            <strong>不会自动入库</strong>。批准后晋升到 approved/incoming，再 dry-run 入库。
-          </p>
-          <p v-if="crawlLoadError" class="card-note" style="margin: 0 0 8px">
-            爬虫状态暂时不可用，可稍后刷新。
-          </p>
-          <p v-if="crawlStatus" class="row-meta" style="margin: 0 0 8px">
-            白名单 {{ crawlStatus.source_count ?? 0 }} 源 · 到期 {{ dueCount }} · staging {{ stagingItems.length }} ·
-            已批准待晋升 {{ stagingApprovedCount }} · auto_ingest 关闭
-          </p>
-          <p v-if="crawlReport" class="notice info" role="status">{{ crawlReport }}</p>
-          <pre v-if="ingestHint" class="mono ingest-hint-block"><code>{{ ingestHint }}</code></pre>
-          <div v-if="stagingItems.length === 0" class="empty-state">
-            <strong>暂无 staging 草稿</strong>
-            <p>点击「全量抓取」或「到期刷新」生成本地夹具草稿，或用下方「一键教学闭环」演示完整流程。</p>
-          </div>
-          <ul v-else class="list-plain" style="gap: 8px">
-            <li v-for="item in stagingItems" :key="String(item.source_id)" class="row-card" style="padding: 11px 14px">
-              <strong>{{ item.title }}</strong>
-              <span class="row-meta">
-                {{ item.status }} · {{ item.unchanged ? '未变更' : '有更新' }} ·
-                {{ String(item.content_sha256 || '').slice(0, 12) }}…
-              </span>
-              <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap">
-                <button
-                  type="button"
-                  class="btn btn-ghost btn-small"
-                  :disabled="crawlBusy || item.status === 'approved' || item.status === 'promoted'"
-                  @click="approveStaging(String(item.source_id))"
-                >
-                  批准
-                </button>
-                <button
-                  type="button"
-                  class="btn btn-ghost btn-small"
-                  :disabled="crawlBusy || item.status === 'rejected' || item.status === 'promoted'"
-                  @click="rejectStaging(String(item.source_id))"
-                >
-                  拒绝
-                </button>
-              </div>
-            </li>
-          </ul>
-          <div style="display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap">
-            <button type="button" class="btn btn-clay btn-small" :disabled="crawlBusy || stagingApprovedCount === 0" @click="promoteStaging">
-              晋升已批准草稿（{{ stagingApprovedCount }}）
-            </button>
-            <button type="button" class="btn btn-ghost btn-small" :disabled="crawlBusy" @click="runTeachingLoop">
-              {{ crawlBusy ? '执行中' : '一键教学闭环：抓取 → 批准 → 晋升' }}
-            </button>
-          </div>
-          <p class="text-faint" style="font-size: 12px; line-height: 1.6; margin: 10px 0 0">
-            教学闭环只处理本地夹具草稿；晋升后仍须人工执行 dry-run 才能进入正式检索索引，永不 auto_ingest。
-          </p>
-        </template>
-      </section>
-
-      <section class="card">
-        <div class="card-heading">
-          <div>
             <p class="eyebrow">助手能力</p>
             <h3 class="card-title">已批准的工具</h3>
           </div>
@@ -633,7 +627,7 @@ onMounted(() => {
           </li>
         </ul>
         <p class="text-faint" style="font-size: 12px; line-height: 1.6; margin: 10px 0 0">
-          助手只能调用这份白名单里的工具，且每次回答都要带出处；无证据时拒答。
+          助手只能调用白名单工具，回答必须带出处；无证据时拒答。
         </p>
       </section>
     </div>
