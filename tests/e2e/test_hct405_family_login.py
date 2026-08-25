@@ -122,7 +122,11 @@ def test_owner_pin_login_retains_admin_scope(client: TestClient):
 
     member = client.post(
         f"/api/v1/households/{household_id}/members",
-        json={"display_name": "爷爷", "role": "DEPENDENT", "actor_id": f"grandpa-{uuid4().hex[:6]}"},
+        json={
+            "display_name": "爷爷",
+            "role": "DEPENDENT",
+            "actor_id": f"grandpa-{uuid4().hex[:6]}",
+        },
         headers=session_headers,
     ).json()
 

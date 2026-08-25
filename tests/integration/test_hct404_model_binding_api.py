@@ -33,6 +33,7 @@ class TestActivateBindingAPI:
         resp2 = client.post(
             f"/api/v1/model-version-bindings/{binding_id}/activate",
             json={"approved_by": "bob"},
+            headers={"X-Actor-Id": "alice"},
         )
         assert resp2.status_code == 200
         assert resp2.json()["release_status"] == "active"
@@ -48,6 +49,7 @@ class TestActivateBindingAPI:
         resp2 = client.post(
             f"/api/v1/model-version-bindings/{binding_id}/activate",
             json={"approved_by": "bob"},
+            headers={"X-Actor-Id": "alice"},
         )
         assert resp2.status_code == 422
 
@@ -66,6 +68,7 @@ class TestActivateBindingAPI:
         resp2 = client.post(
             f"/api/v1/model-version-bindings/{binding_id}/activate",
             json={"approved_by": "bob"},
+            headers={"X-Actor-Id": "alice"},
         )
         assert resp2.status_code == 422
         assert resp2.json()["detail"] == "HCT404_FORMAL_RELEASE_REQUIRED"
@@ -80,7 +83,7 @@ class TestActivateBindingAPI:
         }, headers={"X-Actor-Id": "alice"})
         b1_id = r1.json()["id"]
         client.post(f"/api/v1/model-version-bindings/{b1_id}/activate",
-                    json={"approved_by": "bob"})
+                    json={"approved_by": "bob"}, headers={"X-Actor-Id": "alice"})
 
         # Second binding
         r2 = client.post("/api/v1/model-version-bindings", json={
@@ -91,14 +94,14 @@ class TestActivateBindingAPI:
         }, headers={"X-Actor-Id": "alice"})
         b2_id = r2.json()["id"]
         client.post(f"/api/v1/model-version-bindings/{b2_id}/activate",
-                    json={"approved_by": "charlie"})
+                    json={"approved_by": "charlie"}, headers={"X-Actor-Id": "alice"})
 
         # b1 should now be inactive
-        r3 = client.get(f"/api/v1/model-version-bindings/{b1_id}")
+        r3 = client.get(f"/api/v1/model-version-bindings/{b1_id}", headers={"X-Actor-Id": "alice"})
         assert r3.json()["release_status"] == "inactive"
 
         # b2 should be active
-        r4 = client.get(f"/api/v1/model-version-bindings/{b2_id}")
+        r4 = client.get(f"/api/v1/model-version-bindings/{b2_id}", headers={"X-Actor-Id": "alice"})
         assert r4.json()["release_status"] == "active"
 
 
@@ -112,10 +115,10 @@ class TestRollbackBindingAPI:
         }, headers={"X-Actor-Id": "alice"})
         b_id = r1.json()["id"]
         client.post(f"/api/v1/model-version-bindings/{b_id}/activate",
-                    json={"approved_by": "bob"})
+                    json={"approved_by": "bob"}, headers={"X-Actor-Id": "alice"})
 
         r2 = client.post(f"/api/v1/model-version-bindings/{b_id}/rollback",
-                         json={"reason": "bug"})
+                         json={"reason": "bug"}, headers={"X-Actor-Id": "alice"})
         assert r2.status_code == 200
         assert r2.json()["release_status"] == "revoked"
 
@@ -160,16 +163,19 @@ class TestRollbackBindingAPI:
         client.post(
             f"/api/v1/model-version-bindings/{binding_id}/activate",
             json={"approved_by": "bob"},
+            headers={"X-Actor-Id": "alice"},
         )
         missing = client.post(
             f"/api/v1/model-version-bindings/{binding_id}/rollback",
             json={"reason": "release drill"},
+            headers={"X-Actor-Id": "alice"},
         )
         assert missing.status_code == 422
         assert missing.json()["detail"] == "HCT404_ROLLBACK_EVIDENCE_REQUIRED"
         rolled_back = client.post(
             f"/api/v1/model-version-bindings/{binding_id}/rollback",
             json={"reason": "release drill", "evidence_hash": hashes["rollback"]},
+            headers={"X-Actor-Id": "alice"},
         )
         assert rolled_back.status_code == 200
         assert rolled_back.json()["rollback_evidence_hash"] == hashes["rollback"]
@@ -184,7 +190,7 @@ class TestRollbackBindingAPI:
         }, headers={"X-Actor-Id": "alice"})
         b1_id = r1.json()["id"]
         client.post(f"/api/v1/model-version-bindings/{b1_id}/activate",
-                    json={"approved_by": "bob"})
+                    json={"approved_by": "bob"}, headers={"X-Actor-Id": "alice"})
 
         # Second binding → activate (deactivates b1)
         r2 = client.post("/api/v1/model-version-bindings", json={
@@ -195,18 +201,18 @@ class TestRollbackBindingAPI:
         }, headers={"X-Actor-Id": "alice"})
         b2_id = r2.json()["id"]
         client.post(f"/api/v1/model-version-bindings/{b2_id}/activate",
-                    json={"approved_by": "charlie"})
+                    json={"approved_by": "charlie"}, headers={"X-Actor-Id": "alice"})
 
         # Rollback b2
         client.post(f"/api/v1/model-version-bindings/{b2_id}/rollback",
-                    json={"reason": "rollback test"})
+                    json={"reason": "rollback test"}, headers={"X-Actor-Id": "alice"})
 
         # b1 should be active again
-        r3 = client.get(f"/api/v1/model-version-bindings/{b1_id}")
+        r3 = client.get(f"/api/v1/model-version-bindings/{b1_id}", headers={"X-Actor-Id": "alice"})
         assert r3.json()["release_status"] == "active"
 
         # b2 should be revoked
-        r4 = client.get(f"/api/v1/model-version-bindings/{b2_id}")
+        r4 = client.get(f"/api/v1/model-version-bindings/{b2_id}", headers={"X-Actor-Id": "alice"})
         assert r4.json()["release_status"] == "revoked"
 
 
@@ -249,7 +255,7 @@ class TestListBindingsAPI:
         )
         db_session.commit()
 
-        resp = client.get("/api/v1/model-version-bindings")
+        resp = client.get("/api/v1/model-version-bindings", headers={"X-Actor-Id": "alice"})
         assert resp.status_code == 200
         assert isinstance(resp.json(), list)
 
@@ -260,7 +266,10 @@ class TestListBindingsAPI:
         )
         db_session.commit()
 
-        resp = client.get("/api/v1/model-version-bindings?model_id=filter-api-v1")
+        resp = client.get(
+            "/api/v1/model-version-bindings?model_id=filter-api-v1",
+            headers={"X-Actor-Id": "alice"},
+        )
         data = resp.json()
         assert all(b["model_id"] == "filter-api-v1" for b in data)
 
@@ -275,7 +284,10 @@ class TestComparisonEndpoint:
         }, headers={"X-Actor-Id": "alice"})
         b_id = r1.json()["id"]
 
-        resp = client.get(f"/api/v1/model-version-bindings/{b_id}/comparison")
+        resp = client.get(
+            f"/api/v1/model-version-bindings/{b_id}/comparison",
+            headers={"X-Actor-Id": "alice"},
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["comparison_report_hash"] == "cmp-hash-xyz"

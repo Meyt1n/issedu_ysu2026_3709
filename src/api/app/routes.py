@@ -96,6 +96,7 @@ from app.face_credentials import (
 from app.file_upload import (
     compute_hash,
     delete_file_tree,
+    file_owner,
     validate_and_store,
     validate_extension,
     validate_filename,
@@ -1573,8 +1574,8 @@ async def upload_file(
     file: UploadFile = File(...),
     actor_id: str = Depends(get_actor_id),
 ) -> dict:
-    """Upload a file with validation, store with random key."""
-    result = await validate_and_store(file)
+    """Upload a file with validation, store with random key bound to the uploader."""
+    result = await validate_and_store(file, owner=actor_id)
     logger.info(
         "FILE_UPLOADED actor=%s key=%s size=%d",
         actor_id,
@@ -1584,20 +1585,55 @@ async def upload_file(
     return result
 
 
+def _actor_can_read_stored_file(
+    session: Session,
+    storage_key: str,
+    actor_id: str,
+    access_purpose: str | None,
+) -> bool:
+    """Allow non-uploaders to read a file only through an authorized vision task.
+
+    Mirrors ``_require_vision_task_access``: the review flow legitimately lets
+    a household owner (or an authorized caregiver) open evidence uploaded by a
+    member, but only when a vision task links the file to their household.
+    """
+    tasks = session.scalars(
+        select(VisionTask).where(VisionTask.file_id == storage_key)
+    ).all()
+    for task in tasks:
+        if not task.member_id:
+            if task.created_by == actor_id:
+                return True
+            continue
+        member = session.get(Member, task.member_id)
+        household = session.get(Household, task.household_id)
+        if member is None or household is None or _is_erased(household, member):
+            continue
+        if has_member_read_access(session, household, member.id, actor_id, access_purpose):
+            return True
+    return False
+
+
 @router.get("/files/{storage_key}")
 def download_file(
     storage_key: str,
     actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
 ) -> FileResponse:
-    """Download a previously uploaded file by storage key."""
+    """Download a stored file: uploader always, others via an authorized vision task."""
     settings = get_settings()
     root = Path(settings.file_root).resolve()
     target = (root / storage_key).resolve()
 
-    if not str(target).startswith(str(root)):
+    if not target.is_relative_to(root) or not target.is_file():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="FILE_NOT_FOUND")
-    if not target.exists():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="FILE_NOT_FOUND")
+
+    owner = file_owner(storage_key)
+    # Legacy files without ownership metadata keep the previous behaviour.
+    if owner is not None and owner != actor_id:
+        if not _actor_can_read_stored_file(session, storage_key, actor_id, access_purpose):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="FILE_NOT_FOUND")
 
     logger.info("FILE_DOWNLOADED actor=%s key=%s", actor_id, storage_key)
     return FileResponse(str(target))
@@ -1608,7 +1644,14 @@ def delete_file(
     storage_key: str,
     actor_id: str = Depends(get_actor_id),
 ) -> dict:
-    """Delete a file and its thumbnails/cache/index entries."""
+    """Delete a file and its thumbnails/cache/index entries.
+
+    Destructive: when ownership metadata exists, only the uploader may delete
+    through the API.  Erasure tasks delete server-side and are not affected.
+    """
+    owner = file_owner(storage_key)
+    if owner is not None and owner != actor_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="FILE_NOT_FOUND")
     deleted = delete_file_tree(storage_key)
     logger.info(
         "FILE_DELETED actor=%s key=%s deleted_paths=%d",
@@ -5296,8 +5339,10 @@ def create_model_binding_endpoint(
 def list_model_bindings_endpoint(
     model_id: str | None = None,
     release_status: str | None = None,
+    actor_id: str = Depends(get_actor_id),
     session: Session = Depends(get_session),
 ) -> list[ModelVersionBindingRead]:
+    del actor_id  # Release-ledger metadata is D1 internal: identity required.
     bindings = _mb.list_bindings(session, model_id=model_id, release_status=release_status)
     return [ModelVersionBindingRead.model_validate(b) for b in bindings]
 
@@ -5308,8 +5353,10 @@ def list_model_bindings_endpoint(
 )
 def get_model_binding_endpoint(
     binding_id: str,
+    actor_id: str = Depends(get_actor_id),
     session: Session = Depends(get_session),
 ) -> ModelVersionBindingRead:
+    del actor_id
     binding = _mb.get_binding(session, binding_id)
     if binding is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="BINDING_NOT_FOUND")
@@ -5323,8 +5370,10 @@ def get_model_binding_endpoint(
 def activate_model_binding_endpoint(
     binding_id: str,
     payload: ModelVersionBindingActivate,
+    actor_id: str = Depends(get_actor_id),
     session: Session = Depends(get_session),
 ) -> ModelVersionBindingRead:
+    """Activate a model release. High-risk governance: identity is mandatory."""
     binding = _mb.get_binding(session, binding_id)
     if binding is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="BINDING_NOT_FOUND")
@@ -5334,6 +5383,12 @@ def activate_model_binding_endpoint(
         _mb_raise_val(str(exc))
     session.commit()
     session.refresh(binding)
+    logger.info(
+        "MODEL_BINDING_ACTIVATE_REQUESTED binding=%s actor=%s approved_by=%s",
+        binding.id,
+        actor_id,
+        payload.approved_by,
+    )
     return ModelVersionBindingRead.model_validate(binding)
 
 
@@ -5344,8 +5399,10 @@ def activate_model_binding_endpoint(
 def rollback_model_binding_endpoint(
     binding_id: str,
     payload: ModelVersionBindingRollback,
+    actor_id: str = Depends(get_actor_id),
     session: Session = Depends(get_session),
 ) -> ModelVersionBindingRead:
+    """Roll back a model release, attributed to the authenticated caller."""
     binding = _mb.get_binding(session, binding_id)
     if binding is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="BINDING_NOT_FOUND")
@@ -5353,7 +5410,7 @@ def rollback_model_binding_endpoint(
         _mb.rollback_binding(
             session,
             binding,
-            actor_id="admin",
+            actor_id=actor_id,
             reason=payload.reason,
             evidence_hash=payload.evidence_hash,
         )
@@ -5367,8 +5424,10 @@ def rollback_model_binding_endpoint(
 @router.get("/model-version-bindings/{binding_id}/comparison", response_model=dict)
 def get_model_binding_comparison_endpoint(
     binding_id: str,
+    actor_id: str = Depends(get_actor_id),
     session: Session = Depends(get_session),
 ) -> dict:
+    del actor_id
     binding = _mb.get_binding(session, binding_id)
     if binding is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="BINDING_NOT_FOUND")

@@ -12,6 +12,11 @@ from app.models import AccessAudit, CareAuthorization, Household, Member
 from app.request_context import current_request_id
 
 PURPOSE_CODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
+# STRIDE S-01 mitigation: the development identity header must carry a
+# well-formed actor id.  This blocks whitespace/control characters and other
+# log-injection material and matches the ACTOR_ID_PATTERN already enforced
+# when binding member accounts.
+ACTOR_ID_CODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
 
 
 def get_actor_id(
@@ -31,8 +36,10 @@ def get_actor_id(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="REAL_AUTH_REQUIRED",
         )
-    if not x_actor_id or len(x_actor_id) > 120:
+    if not x_actor_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="ACTOR_REQUIRED")
+    if not ACTOR_ID_CODE.fullmatch(x_actor_id):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="ACTOR_ID_INVALID")
     return x_actor_id
 
 

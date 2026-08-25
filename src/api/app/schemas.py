@@ -17,7 +17,10 @@ class HealthResponse(BaseModel):
 
 
 class AuthCredentials(BaseModel):
-    actor_id: str = Field(min_length=1, max_length=120)
+    # The same actor-id charset used for member account binding: rejecting
+    # whitespace/control characters at registration keeps log lines and audit
+    # rows injection-free and every registered account bindable to a member.
+    actor_id: str = Field(min_length=1, max_length=120, pattern=ACTOR_ID_PATTERN)
     password: str = Field(min_length=8, max_length=256)
 
 
