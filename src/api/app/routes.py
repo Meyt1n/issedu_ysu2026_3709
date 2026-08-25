@@ -3018,6 +3018,89 @@ def list_classroom_scenarios(
     }
 
 
+def _require_knowledge_steward(actor_id: str) -> None:
+    if not (
+        actor_id.startswith("demo-")
+        or actor_id.startswith("test-")
+        or actor_id in {"knowledge-steward", "demo-parent"}
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="KNOWLEDGE_STEWARD_REQUIRED",
+        )
+
+
+@router.get("/knowledge/crawl/staging")
+def list_knowledge_staging(actor_id: str = Depends(get_actor_id)) -> dict:
+    from app.knowledge_crawl import list_staging
+
+    _require_knowledge_steward(actor_id)
+    items = list_staging()
+    return {
+        "items": items,
+        "total": len(items),
+        "auto_ingest": False,
+        "disclaimer": "staging 仅为草稿，正式检索仍须批准晋升并入库。",
+    }
+
+
+@router.get("/knowledge/crawl/status")
+def knowledge_crawl_status(actor_id: str = Depends(get_actor_id)) -> dict:
+    from app.knowledge_crawl import crawl_ops_status
+
+    _require_knowledge_steward(actor_id)
+    return crawl_ops_status()
+
+
+@router.post("/knowledge/crawl/run")
+def run_knowledge_crawl(
+    actor_id: str = Depends(get_actor_id),
+    due_only: bool = False,
+) -> dict:
+    from app.knowledge_crawl import run_crawl
+
+    _require_knowledge_steward(actor_id)
+    # API 强制离线夹具，避免服务端意外出网；远程刷新只走 CLI/CI --live。
+    return run_crawl(live=False, due_only=due_only)
+
+
+@router.post("/knowledge/crawl/staging/{source_id}/review")
+def review_knowledge_staging(
+    source_id: str,
+    actor_id: str = Depends(get_actor_id),
+    approve: bool = False,
+    reject: bool = False,
+    notes: str = "",
+) -> dict:
+    from app.knowledge_crawl import mark_staging_reviewed
+
+    _require_knowledge_steward(actor_id)
+    try:
+        return mark_staging_reviewed(
+            source_id,
+            reviewer=actor_id,
+            notes=notes,
+            approve=approve,
+            reject=reject,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="STAGING_NOT_FOUND"
+        ) from exc
+
+
+@router.post("/knowledge/crawl/promote")
+def promote_knowledge_staging(actor_id: str = Depends(get_actor_id)) -> dict:
+    from app.knowledge_crawl import promote_approved_staging
+
+    _require_knowledge_steward(actor_id)
+    return promote_approved_staging(actor_id=actor_id)
+
+
 @router.post(
     "/knowledge/retrieve",
     response_model=KnowledgeRetrieveResponse,

@@ -28,6 +28,7 @@
 - `docs/demo/本地RAG检索金标集.json`：问句→应命中文档金标（含同义词用例与防串题约束）。
 - `docs/demo/本地RAG入库与运行.md`：dry-run / 正式入库 / 同义词与轻量向量说明（索引版本 `demo-cn-en-v4`）。
 - `docs/knowledge/approved/`：正式批准知识接入路径与脱敏说明书摘要样例（与 demo 分离）。
+- `docs/knowledge/crawl/`：白名单爬虫、夹具与运营说明；`staging/` → `approved/incoming/` → dry-run 入库（禁止 auto_ingest）。
 
 ## 2026-08-25 增量（知识库扩充与检索质量修复）
 
@@ -40,12 +41,14 @@
 - **检索：** 本地同义词/别名扩展（`knowledge_synonyms.py`）+ 词袋余弦轻量向量混入 TF-IDF；无云端 embedding。
 - **评测：** `本地RAG检索金标集.json` + `test_hct401_knowledge_gold.py` 固定 top-1 命中与防串题。
 - **正式知识：** `docs/knowledge/approved/` 提供脱敏说明书摘要接入路径与 example 清单，禁止 PDF 直接进入 `docs/demo`。
+- **持续更新：** 白名单爬虫按 `refresh_hours` 到期刷新 → staging 审核/拒绝 → 晋升 → dry-run 入库；API/Web/CI 默认仅夹具，远程需 CLI `--live`；`tests/unit/test_knowledge_crawl.py`。
 
 ## 测试证据
 
 - `tests/unit/test_hct401_knowledge.py`（含 IDF 负权重回归、覆盖度排序、章节分块定位三项新增用例）
 - `tests/unit/test_local_knowledge_ingest.py`（含仓库清单入库与主题检索断言）
 - `tests/unit/test_hct401_knowledge_gold.py`（金标集、同义词扩展、正式知识 example 哈希）
+- `tests/unit/test_knowledge_crawl.py`（白名单抓取、到期刷新、域名闸门、审核拒绝、晋升）
 - `tests/unit/test_hct430_local_agents.py`（知识 agent 无命中/越权 trace 状态）
 - `tests/e2e/test_hct405_failure_degradation.py`
 - `tests/e2e/test_hct405_deletion_propagation.py`
