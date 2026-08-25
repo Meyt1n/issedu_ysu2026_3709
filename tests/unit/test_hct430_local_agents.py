@@ -45,7 +45,9 @@ def test_knowledge_agent_reports_no_hit_as_completed(db_session) -> None:
     assert "暂无" in trace["summary"]
 
 
-def test_knowledge_agent_reports_permission_denial_as_blocked(db_session) -> None:
+def test_knowledge_agent_reports_empty_library_as_degraded_not_blocked(db_session) -> None:
+    """No accessible reviewed documents is a retrieval gap, not a risk-control
+    interception — the trace must not claim the step was "blocked"."""
     from app.knowledge import add_document
 
     add_document(
@@ -68,6 +70,27 @@ def test_knowledge_agent_reports_permission_denial_as_blocked(db_session) -> Non
     )
 
     assert result.get("error") == "NO_AUTHORISED_DOCUMENTS"
+    assert trace["status"] == "degraded"
+    assert "暂无" in trace["summary"]
+
+
+def test_knowledge_agent_reports_scope_denial_as_blocked(monkeypatch, db_session) -> None:
+    """Real scope/tool failures keep the honest blocked status."""
+    monkeypatch.setattr(
+        "app.local_agents._tool_payload",
+        lambda *args, **kwargs: {"error": "TOOL_SCOPE_DENIED", "results": [], "total": 0},
+    )
+
+    result, trace = _knowledge_agent(
+        db_session,
+        query="阿莫西林 用法",
+        actor_id="u1",
+        household_id=None,
+        member_id=None,
+        access_purpose=None,
+    )
+
+    assert result.get("error") == "TOOL_SCOPE_DENIED"
     assert trace["status"] == "blocked"
 
 
@@ -519,9 +542,66 @@ def test_medication_safety_short_circuits_without_knowledge(monkeypatch) -> None
 
     assert result["degraded"] is True
     assert result["degrade_reason"] == "EVIDENCE_REQUIRED"
+    assert result["escalate"] is True
     synthesis = next(trace for trace in result["agent_trace"] if trace["agent_id"] == "synthesis")
     assert synthesis["status"] == "degraded"
     assert "跳过模型" in synthesis["summary"]
+
+
+def test_symptom_medication_without_knowledge_gets_friendly_fallback(monkeypatch) -> None:
+    """HCT-448: an empty teaching library on a symptom-material question must
+    not raise the EVIDENCE_REQUIRED + escalate "beyond system boundary" wall.
+
+    The deterministic fallback keeps the hard limits (no model call, no
+    fabricated drug evidence) but stays a normal, friendly teaching turn.
+    """
+    class _ForbiddenOllama:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("no model may be called for the fallback")
+
+    monkeypatch.setattr("app.local_agents.OllamaClient", _ForbiddenOllama)
+
+    def fake_database(session, **kwargs):
+        return {"get_member_state": {"sources": []}}, {
+            "agent_id": "database", "role": "健康档案核对", "status": "completed",
+            "local": True, "network_used": False, "duration_ms": 1,
+            "summary": "", "source_count": 0,
+        }
+
+    def fake_knowledge(session, **kwargs):
+        return {"error": "NO_AUTHORISED_DOCUMENTS", "results": [], "total": 0}, {
+            "agent_id": "knowledge", "role": "本地资料检索", "status": "degraded",
+            "local": True, "network_used": False, "duration_ms": 1,
+            "summary": "本机暂无当前可用的已审核知识卡", "source_count": 0,
+        }
+
+    monkeypatch.setattr("app.local_agents._database_agent", fake_database)
+    monkeypatch.setattr("app.local_agents._knowledge_agent", fake_knowledge)
+
+    result = run_local_multi_agent(
+        None,
+        messages=[{
+            "role": "user",
+            "content": "夏天吹空调后有点鼻塞，一般可以了解哪些用药资料？",
+        }],
+        actor_id="actor",
+        household_id="household",
+        member_id="member",
+    )
+
+    assert result["query_type"] == "SYMPTOM_MEDICATION"
+    assert result["degraded"] is True
+    assert result["degrade_reason"] == "KNOWLEDGE_UNAVAILABLE"
+    assert result["escalate"] is False
+    assert "暂时没有" in result["answer"]
+    assert "医生或药师" in result["answer"]
+    # The friendly fallback must not read like the harsh evidence wall.
+    assert "缺少可核验的本地知识引用" not in result["answer"]
+    assert result["suggested_questions"], "friendly fallback keeps follow-ups"
+    statuses = {trace["agent_id"]: trace["status"] for trace in result["agent_trace"]}
+    assert statuses["knowledge"] == "degraded"
+    synthesis = next(trace for trace in result["agent_trace"] if trace["agent_id"] == "synthesis")
+    assert "一般照护提示" in synthesis["summary"]
 
 
 def test_compact_local_evidence_keeps_query_relevant_fields() -> None:

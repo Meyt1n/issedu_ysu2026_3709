@@ -65,6 +65,7 @@ from app.tool_call import (
     question_type_label,
     risk_notice_for_question,
     suggest_follow_up_questions,
+    symptom_knowledge_gap_result,
     validate_member_tool_scope,
 )
 
@@ -194,6 +195,29 @@ def _medication_safety_short_circuit(
     )
     result["suggested_questions"] = suggest_follow_up_questions(messages, escalate=True)
     result["escalate"] = True
+    return result
+
+
+def _symptom_knowledge_gap_short_circuit(
+    messages: list[dict[str, Any]],
+    *,
+    model: str,
+    query_type: str,
+    started: float,
+) -> dict[str, Any]:
+    """Friendly teaching fallback when a symptom-material question has no
+    reviewed local knowledge.
+
+    Unlike the medication-safety short circuit this never escalates: an empty
+    teaching library on a "what can I read about a stuffy nose" question is a
+    knowledge gap, not a boundary violation.  The deterministic answer keeps
+    the hard limits (no fabricated drug evidence, no dosage decisions).
+    """
+    result = symptom_knowledge_gap_result(messages, model=model, query_type=query_type)
+    result["_trace"] = _trace(
+        "synthesis", _AGENT_ROLES["synthesis"], "degraded", started,
+        "本机暂无已审核的相关知识卡，已返回一般照护提示（未调用模型）",
+    )
     return result
 
 
@@ -623,11 +647,19 @@ def _knowledge_agent(
     )
     result_count = len(result.get("results") or [])
     error = str(result.get("error") or "")
-    # NO_RELEVANT_RESULTS means the search ran and simply found nothing; only
-    # authorisation/index/scope failures are a blocked pipeline step.
+    # NO_RELEVANT_RESULTS means the search ran and simply found nothing.  An
+    # empty / not-yet-seeded library (NO_AUTHORISED_DOCUMENTS, EMPTY_INDEX)
+    # is a retrieval gap recorded as degraded — not a risk-control
+    # interception.  "blocked" is reserved for scope/tool failures.
     if error == "NO_RELEVANT_RESULTS":
         status = "completed"
         summary = "本地资料库暂无与问题直接相关的内容"
+    elif error in {"NO_AUTHORISED_DOCUMENTS", "EMPTY_INDEX"}:
+        status = "degraded"
+        summary = "本机暂无当前可用的已审核知识卡"
+    elif error == "EMPTY_QUERY":
+        status = "completed"
+        summary = "问题内容过短，本地资料检索未能解析出检索词"
     elif error:
         status = "blocked"
         summary = "本地资料检索未完成"
@@ -1038,8 +1070,19 @@ def _synthesis_agent(
         return degraded("CITATION_NOT_FOUND")
     if allowed_citations and not matched_citations:
         return degraded("EVIDENCE_REQUIRED")
-    if query_type in {"MEDICATION_SAFETY", "SYMPTOM_MEDICATION"} and not matched_citations:
+    if query_type == "MEDICATION_SAFETY" and not matched_citations:
         return degraded("EVIDENCE_REQUIRED")
+    if query_type == "SYMPTOM_MEDICATION" and not matched_citations:
+        # No retrievable reviewed knowledge: drop the uncited model draft and
+        # answer with the deterministic friendly teaching fallback instead of
+        # the hard evidence wall reserved for medication-safety decisions.
+        payload = symptom_knowledge_gap_result(messages, model=model, query_type=query_type)
+        payload["_trace"] = _trace(
+            "synthesis", _AGENT_ROLES["synthesis"], "degraded", started,
+            "本机暂无已审核的相关知识卡，已返回一般照护提示",
+        )
+        _emit_answer_tokens(str(payload.get("answer") or ""), on_token)
+        return payload
     if any(token not in allowed_fact_sources for token in unknown_sources):
         return degraded("CITATION_NOT_FOUND")
 
@@ -1411,7 +1454,12 @@ def run_local_multi_agent(
         and plan["knowledge"].run
         and not _knowledge_has_evidence(knowledge)
     ):
-        synthesis = _medication_safety_short_circuit(
+        short_circuit = (
+            _medication_safety_short_circuit
+            if query_type == "MEDICATION_SAFETY"
+            else _symptom_knowledge_gap_short_circuit
+        )
+        synthesis = short_circuit(
             messages,
             model=model_name,
             query_type=query_type,
