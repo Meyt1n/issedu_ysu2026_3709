@@ -1186,7 +1186,7 @@ onBeforeUnmount(() => {
         @focus="onDraftFocus"
         @keydown.enter.exact.prevent="send()"
       />
-      <div v-if="voiceMode === 'ready'" class="voice-ready-actions" role="group" aria-label="口述确认">
+      <div v-if="voiceMode === 'ready' || voiceMode === 'command'" class="voice-ready-actions" role="group" aria-label="口述确认">
         <button ref="sendButton" type="submit" class="btn btn-primary btn-large" :disabled="!canSend">
           发送
         </button>
@@ -1196,8 +1196,12 @@ onBeforeUnmount(() => {
         <button type="button" class="btn btn-ghost" @click="redoVoiceDraft">
           重说
         </button>
+        <button type="button" class="btn btn-ghost btn-small" @click="toggleVoiceInput">
+          {{ voiceButtonLabel }}
+        </button>
       </div>
-      <div v-else class="chat-compose-actions">
+      <p v-if="voiceSendHint" class="text-faint" style="font-size: 13px; margin: 6px 0 0" role="status">{{ voiceSendHint }}</p>
+      <div v-if="voiceMode !== 'ready' && voiceMode !== 'command'" class="chat-compose-actions">
         <button
           type="button"
           class="btn btn-ghost btn-small voice-input-button"
@@ -1205,7 +1209,7 @@ onBeforeUnmount(() => {
           :disabled="sending || !speechInputSupported"
           :aria-label="listening ? '停止语音唤醒' : voiceButtonLabel"
           :aria-pressed="listening"
-          :title="speechInputSupported ? '进入助手页后会自动尝试聆听；首次需点按允许麦克风，再说“小燕小燕”' : '当前浏览器不支持语音输入'"
+          :title="speechInputSupported ? `进入助手页后会自动尝试聆听；首次需点按允许麦克风，再说「${wakePhrase}」` : '当前浏览器不支持语音输入'"
           @click="toggleVoiceInput"
         >
           <AppIcon name="microphone" :size="15" />
@@ -1266,7 +1270,9 @@ onBeforeUnmount(() => {
               ? '等待唤醒'
               : voiceMode === 'ready'
                 ? '已听完'
-                : '已唤醒，正在实时输入'
+                : voiceMode === 'command'
+                  ? '指令聆听'
+                  : '已唤醒，正在实时输入'
           }}
         </strong>
         <span>{{ voiceStatusText }}</span>
