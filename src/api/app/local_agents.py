@@ -23,6 +23,8 @@ import logging
 import re
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
@@ -45,6 +47,7 @@ from app.tool_call import (
     execute_whitelisted_tool,
     filter_claimed_citations,
     is_loopback_ollama_url,
+    question_type_label,
     risk_notice_for_question,
     suggest_follow_up_questions,
 )
@@ -65,6 +68,70 @@ _GREETING_QUERIES = {"你好", "您好", "hello", "hi", "在吗", "你能做什�
 
 def _is_greeting(query: str) -> bool:
     return re.sub(r"\s+", "", str(query or "").casefold()) in _GREETING_QUERIES
+
+
+# User-facing step names; the frontend renders these directly, so they use
+# product wording rather than internal engineering terms.
+_AGENT_ROLES = {
+    "router": "问题识别",
+    "database": "健康档案核对",
+    "knowledge": "本地资料检索",
+    "web_search": "联网参考",
+    "synthesis": "回答生成",
+}
+
+_GREETING_ANSWER = (
+    "你好，我是家庭健康助手。我可以帮你查看已确认的健康记录、"
+    "解释提醒和风险的规则依据，也可以查找已审核的护理资料。"
+    "请告诉我你想了解的内容。"
+)
+
+
+@dataclass(frozen=True)
+class AgentDecision:
+    """Routing decision for one agent in the current request."""
+
+    run: bool
+    skip_reason: str = ""
+
+
+def plan_agent_execution(
+    query_type: str,
+    *,
+    household_id: str | None,
+    member_id: str | None,
+) -> dict[str, AgentDecision]:
+    """Decide which agents this request actually needs.
+
+    The router is a real gate: agents that cannot contribute evidence for the
+    classified question type are skipped instead of being executed in order.
+    Web search still has to pass its own deployment and per-request switches.
+    """
+    member_selected = bool(household_id and member_id)
+
+    database = (
+        AgentDecision(run=True)
+        if member_selected
+        else AgentDecision(run=False, skip_reason="未选择家庭成员，本次未读取健康档案")
+    )
+
+    if query_type == "RULE_EVIDENCE" and member_selected:
+        # Rule explanations cite the deterministic rule records returned by
+        # the database step; retrieving generic documents adds no evidence.
+        knowledge = AgentDecision(
+            run=False, skip_reason="规则依据直接来自本地规则记录，无需检索资料库"
+        )
+    else:
+        knowledge = AgentDecision(run=True)
+
+    if query_type == "URGENT":
+        web_search = AgentDecision(
+            run=False, skip_reason="紧急问题优先本地处置，未发起外部搜索"
+        )
+    else:
+        web_search = AgentDecision(run=True)
+
+    return {"database": database, "knowledge": knowledge, "web_search": web_search}
 
 
 def redact_web_query(query: str, sensitive_values: list[str | None] | None = None) -> str:
@@ -92,6 +159,7 @@ class _DuckDuckGoParser(HTMLParser):
         self._current: dict[str, str] | None = None
         self._capture: str | None = None
         self._buffer: list[str] = []
+        self._pending_title_link = False
 
     @staticmethod
     def _classes(attrs: list[tuple[str, str | None]]) -> set[str]:
@@ -105,21 +173,38 @@ class _DuckDuckGoParser(HTMLParser):
                 self._current[self._capture] = re.sub(r"\s+", " ", value)
         self._buffer = []
 
+    _RESULT_LINK_CLASSES = {"result__a", "result__title", "result-link"}
+    _TITLE_WRAPPER_CLASSES = {"result__title", "result-title"}
+    _SNIPPET_CLASSES = {"result__snippet", "result-snippet", "snippet"}
+
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         classes = self._classes(attrs)
-        if tag == "a" and "result__a" in classes:
-            if self._current and self._current.get("title"):
-                self.results.append(self._current)
+        if tag == "a":
             href = dict(attrs).get("href") or ""
-            self._current = {"title": "", "snippet": "", "url": href}
-            self._capture = "title"
-            self._buffer = []
-        elif self._current and ("result__snippet" in classes or "result-snippet" in classes):
+            # Tolerate markup drift: accept known result-link classes, links
+            # inside a result-title wrapper, and DuckDuckGo redirect links.
+            if (
+                classes & self._RESULT_LINK_CLASSES
+                or self._pending_title_link
+                or "uddg=" in href
+            ):
+                self._pending_title_link = False
+                if self._current and self._current.get("title"):
+                    self.results.append(self._current)
+                self._current = {"title": "", "snippet": "", "url": href}
+                self._capture = "title"
+                self._buffer = []
+                return
+        elif classes & self._TITLE_WRAPPER_CLASSES:
+            self._pending_title_link = True
+        if self._current and classes & self._SNIPPET_CLASSES:
             self._flush_buffer()
             self._capture = "snippet"
             self._buffer = []
 
     def handle_endtag(self, tag: str) -> None:
+        if tag in {"h1", "h2", "h3"}:
+            self._pending_title_link = False
         if self._capture == "title" and tag == "a":
             self._flush_buffer()
             self._capture = None
@@ -154,8 +239,12 @@ def _result_url(raw_url: str) -> str | None:
 
 def parse_search_results(body: str, max_results: int = 5) -> list[dict[str, str]]:
     parser = _DuckDuckGoParser()
-    parser.feed(body)
-    parser.close()
+    try:
+        parser.feed(str(body or ""))
+        parser.close()
+    except Exception:
+        # A malformed page must degrade the search step, never the request.
+        logger.warning("HCT-430 search result page could not be parsed")
     parsed: list[dict[str, str]] = []
     seen: set[str] = set()
     for item in parser.results:
@@ -200,45 +289,54 @@ def _trace(
 
 def get_agent_catalog(settings: Settings | None = None) -> dict[str, Any]:
     settings = settings or get_settings()
+    web_search_ready = False
+    if settings.agent_web_search_enabled:
+        web_search_ready = is_web_search_egress_allowed(
+            settings.agent_web_search_url.strip(), settings
+        )
     return {
         "mode": "multi_agent",
         "all_agents_local": True,
         "ollama_local_only": True,
         "web_search_enabled": settings.agent_web_search_enabled,
+        # True only when the deployment switch is on AND the configured search
+        # endpoint passes the HTTPS/domain allowlist check, so the UI can show
+        # an accurate availability state without probing the network.
+        "web_search_ready": web_search_ready,
         "web_search_requires_request_opt_in": True,
         "agents": [
             {
                 "agent_id": "router",
-                "name": "本地路由智能体",
-                "role": "确定问题类型并编排后续智能体",
+                "name": "问题识别",
+                "role": "识别问题类型并规划需要执行的检索步骤",
                 "local": True,
                 "network": False,
             },
             {
                 "agent_id": "database",
-                "name": "本地数据库智能体",
-                "role": "通过授权只读工具查询家庭成员事实和规则",
+                "name": "健康档案核对",
+                "role": "通过授权只读工具核对成员记录、状态与规则",
                 "local": True,
                 "network": False,
             },
             {
                 "agent_id": "knowledge",
-                "name": "本地知识智能体",
-                "role": "检索已审核的本地知识文档并绑定引用",
+                "name": "本地资料检索",
+                "role": "检索已审核的本地资料并绑定可核验出处",
                 "local": True,
                 "network": False,
             },
             {
                 "agent_id": "web_search",
-                "name": "受控联网搜索智能体",
-                "role": "仅在双重开关打开时发送脱敏查询",
+                "name": "联网参考",
+                "role": "仅在部署与本次请求同时允许时发送脱敏查询",
                 "local": True,
                 "network": True,
             },
             {
                 "agent_id": "synthesis",
-                "name": "本地综合智能体",
-                "role": "使用本机 Ollama 综合已授权证据",
+                "name": "回答生成",
+                "role": "使用本机模型汇总已授权证据并生成回答",
                 "local": True,
                 "network": False,
             },
@@ -279,15 +377,10 @@ def _database_agent(
     access_purpose: str | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     started = time.perf_counter()
-    if query_type == "GENERAL" and _is_greeting(query):
-        return {}, _trace(
-            "database", "数据库查询", "skipped", started,
-            "普通问候不读取家庭数据库",
-        )
     if not household_id or not member_id:
         return {}, _trace(
-            "database", "数据库查询", "skipped", started,
-            "未选择家庭成员，未读取数据库",
+            "database", _AGENT_ROLES["database"], "skipped", started,
+            "未选择家庭成员，本次未读取健康档案",
         )
 
     names: list[str]
@@ -321,9 +414,10 @@ def _database_agent(
             errors.append(str(result["error"]))
 
     return facts, _trace(
-        "database", "数据库查询", "blocked" if "TOOL_SCOPE_DENIED" in errors else "completed",
+        "database", _AGENT_ROLES["database"],
+        "blocked" if "TOOL_SCOPE_DENIED" in errors else "completed",
         started,
-        "已通过授权只读工具读取成员事实和规则" if not errors else "部分数据库工具未执行",
+        "已核对该成员的健康记录与提醒规则" if not errors else "部分健康档案暂时无法读取",
         source_count=sum(len(item.get("sources") or []) for item in facts.values()),
     )
 
@@ -338,11 +432,6 @@ def _knowledge_agent(
     access_purpose: str | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     started = time.perf_counter()
-    if _is_greeting(query):
-        return {}, _trace(
-            "knowledge", "本地知识检索", "skipped", started,
-            "普通问候不检索知识文档",
-        )
     result = _tool_payload(
         session,
         name="retrieve_knowledge",
@@ -357,11 +446,19 @@ def _knowledge_agent(
         member_id=member_id,
         access_purpose=access_purpose,
     )
+    result_count = len(result.get("results") or [])
+    if result.get("error"):
+        summary = "本地资料检索未完成"
+    elif result_count:
+        summary = "已找到相关的本地审核资料"
+    else:
+        summary = "本地资料库暂无直接相关的内容"
     return result, _trace(
-        "knowledge", "本地知识检索", "blocked" if result.get("error") else "completed",
+        "knowledge", _AGENT_ROLES["knowledge"],
+        "blocked" if result.get("error") else "completed",
         started,
-        "已检索授权的本地知识文档" if not result.get("error") else "本地知识检索未返回证据",
-        source_count=len(result.get("results") or []),
+        summary,
+        source_count=result_count,
     )
 
 
@@ -373,33 +470,28 @@ def _web_search_agent(
     settings: Settings,
 ) -> tuple[list[dict[str, str]], dict[str, Any], str | None]:
     started = time.perf_counter()
-    if _is_greeting(query):
-        return [], _trace(
-            "web_search", "受控联网搜索", "skipped", started,
-            "普通问候不发起联网搜索",
-        ), None
     if not allow_network_search:
         return [], _trace(
-            "web_search", "受控联网搜索", "skipped", started,
+            "web_search", _AGENT_ROLES["web_search"], "skipped", started,
             "本次请求未开启联网搜索",
         ), None
     if not settings.agent_web_search_enabled:
         return [], _trace(
-            "web_search", "受控联网搜索", "blocked", started,
-            "部署配置未开启联网搜索",
+            "web_search", _AGENT_ROLES["web_search"], "blocked", started,
+            "联网搜索未在当前部署启用",
         ), None
 
     safe_query = redact_web_query(query, sensitive_values)
     if not safe_query:
         return [], _trace(
-            "web_search", "受控联网搜索", "blocked", started,
-            "脱敏后没有可发送的查询内容",
+            "web_search", _AGENT_ROLES["web_search"], "blocked", started,
+            "脱敏后没有可检索的内容",
         ), None
     endpoint = settings.agent_web_search_url.strip()
     if not is_web_search_egress_allowed(endpoint, settings):
         return [], _trace(
-            "web_search", "受控联网搜索", "blocked", started,
-            "搜索地址未通过 HTTPS/域名白名单校验",
+            "web_search", _AGENT_ROLES["web_search"], "blocked", started,
+            "搜索地址未通过安全校验",
         ), safe_query
 
     params = {
@@ -418,17 +510,19 @@ def _web_search_agent(
             response = client.get(endpoint, params=params)
             response.raise_for_status()
         results = parse_search_results(response.text, settings.agent_web_search_max_results)
+        # An empty result set is a completed search, not a failure: the trace
+        # must make clear that the network call succeeded but found nothing.
         return results, _trace(
-            "web_search", "受控联网搜索", "completed" if results else "degraded", started,
-            "已返回外部参考结果" if results else "搜索服务未返回可用结果",
+            "web_search", _AGENT_ROLES["web_search"], "completed", started,
+            f"已获取 {len(results)} 条外部参考" if results else "搜索完成，未找到合适的外部参考",
             network_used=True,
             source_count=len(results),
         ), safe_query
     except Exception as exc:
         logger.warning("HCT-430 web search failed: %s", str(exc)[:160])
         return [], _trace(
-            "web_search", "受控联网搜索", "degraded", started,
-            "搜索服务暂时不可用，已继续本地流程",
+            "web_search", _AGENT_ROLES["web_search"], "degraded", started,
+            "外部搜索暂时不可用，本地分析不受影响",
             network_used=True,
         ), safe_query
 
@@ -474,8 +568,8 @@ def _synthesis_agent(
     def degraded(reason: str) -> dict[str, Any]:
         payload = degrade_result(build_degrade_response(reason), model, query_type=query_type)
         payload["_trace"] = _trace(
-            "synthesis", "本地综合", "degraded", started,
-            f"本地综合未完成：{reason}",
+            "synthesis", _AGENT_ROLES["synthesis"], "degraded", started,
+            f"回答未通过本地校验（{reason}），已返回受控回复",
         )
         return payload
 
@@ -575,11 +669,34 @@ def _synthesis_agent(
         "route": "EVIDENCE_REQUIRED" if matched_citations else None,
     }
     result["_trace"] = _trace(
-        "synthesis", "本地综合", "completed", started,
-        "已由本机 Ollama 综合本地证据",
+        "synthesis", _AGENT_ROLES["synthesis"], "completed", started,
+        "已在本机汇总证据并生成回答",
         source_count=len(matched_citations) + len(fact_sources),
     )
     return result
+
+
+def _greeting_result(
+    messages: list[dict[str, Any]],
+    *,
+    model: str,
+    query_type: str,
+) -> dict[str, Any]:
+    """Answer a plain greeting locally without model or evidence retrieval."""
+    return {
+        "model": model,
+        "query_type": query_type,
+        "risk_notice": None,
+        "answer": _GREETING_ANSWER,
+        "sources": [],
+        "citations": [],
+        "suggested_questions": suggest_follow_up_questions(messages),
+        "confidence": "high",
+        "escalate": False,
+        "degraded": False,
+        "degrade_reason": None,
+        "route": None,
+    }
 
 
 def run_local_multi_agent(
@@ -596,45 +713,122 @@ def run_local_multi_agent(
     allow_network_search: bool = False,
     sensitive_values: list[str | None] | None = None,
 ) -> dict[str, Any]:
-    """Run the local router -> data/knowledge/web -> local Ollama pipeline."""
+    """Run the local router -> data/knowledge/web -> local Ollama pipeline.
+
+    The router first classifies the question and builds an execution plan;
+    only the agents that can contribute evidence for the classified question
+    actually run.  The gated web search runs concurrently with the local
+    retrieval steps because it never depends on database or knowledge output.
+    """
     settings = get_settings()
     orchestration_id = str(uuid.uuid4())
     query = _latest_user_query(messages)
     query_type = classify_question(query)
+    model_name = model or settings.ollama_model
     traces: list[dict[str, Any]] = []
 
+    def _skipped(agent_id: str, reason: str) -> dict[str, Any]:
+        return _trace(agent_id, _AGENT_ROLES[agent_id], "skipped", time.perf_counter(), reason)
+
+    def _finalize(result: dict[str, Any], *, network_used: bool,
+                  network_query: str | None,
+                  external_sources: list[dict[str, str]]) -> dict[str, Any]:
+        result.update({
+            "orchestration_mode": "multi_agent",
+            "orchestration_id": orchestration_id,
+            "all_agents_local": True,
+            "network_used": network_used,
+            "network_query": network_query,
+            "agent_trace": traces,
+            "external_sources": external_sources,
+        })
+        return result
+
     started = time.perf_counter()
+    if query_type == "GENERAL" and _is_greeting(query):
+        traces.append(_trace(
+            "router", _AGENT_ROLES["router"], "completed", started,
+            "已识别为日常问候，直接回复，无需检索",
+        ))
+        traces.append(_skipped("database", "日常问候无需读取健康档案"))
+        traces.append(_skipped("knowledge", "日常问候无需检索本地资料"))
+        traces.append(_skipped("web_search", "日常问候无需联网参考"))
+        synthesis_started = time.perf_counter()
+        result = _greeting_result(messages, model=model_name, query_type=query_type)
+        traces.append(_trace(
+            "synthesis", _AGENT_ROLES["synthesis"], "completed", synthesis_started,
+            "已直接生成问候回复",
+        ))
+        return _finalize(result, network_used=False, network_query=None, external_sources=[])
+
+    plan = plan_agent_execution(query_type, household_id=household_id, member_id=member_id)
     traces.append(_trace(
-        "router", "本地路由", "completed", started,
-        f"已将问题路由为 {query_type}",
+        "router", _AGENT_ROLES["router"], "completed", started,
+        f"已识别为「{question_type_label(query_type)}」，并按需安排检索步骤",
     ))
 
-    database, database_trace = _database_agent(
-        db_session,
-        query=query,
-        query_type=query_type,
-        actor_id=actor_id,
-        household_id=household_id,
-        member_id=member_id,
-        access_purpose=access_purpose,
-    )
-    traces.append(database_trace)
-    knowledge, knowledge_trace = _knowledge_agent(
-        db_session,
-        query=query,
-        actor_id=actor_id,
-        household_id=household_id,
-        member_id=member_id,
-        access_purpose=access_purpose,
-    )
-    traces.append(knowledge_trace)
-    external_sources, web_trace, network_query = _web_search_agent(
-        query,
-        sensitive_values=[actor_id, household_id, member_id, *(sensitive_values or [])],
-        allow_network_search=allow_network_search,
-        settings=settings,
-    )
-    traces.append(web_trace)
+    # The web search only receives the redacted query, so it can run in
+    # parallel with the local retrieval steps.  The database session stays on
+    # this thread: SQLAlchemy sessions are not thread-safe.
+    web_executor: ThreadPoolExecutor | None = None
+    web_future = None
+    if plan["web_search"].run and allow_network_search:
+        web_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="hct430-web")
+        web_future = web_executor.submit(
+            _web_search_agent,
+            query,
+            sensitive_values=[actor_id, household_id, member_id, *(sensitive_values or [])],
+            allow_network_search=allow_network_search,
+            settings=settings,
+        )
+
+    try:
+        if plan["database"].run:
+            database, database_trace = _database_agent(
+                db_session,
+                query=query,
+                query_type=query_type,
+                actor_id=actor_id,
+                household_id=household_id,
+                member_id=member_id,
+                access_purpose=access_purpose,
+            )
+        else:
+            database, database_trace = {}, _skipped("database", plan["database"].skip_reason)
+        traces.append(database_trace)
+
+        if plan["knowledge"].run:
+            knowledge, knowledge_trace = _knowledge_agent(
+                db_session,
+                query=query,
+                actor_id=actor_id,
+                household_id=household_id,
+                member_id=member_id,
+                access_purpose=access_purpose,
+            )
+        else:
+            knowledge, knowledge_trace = {}, _skipped("knowledge", plan["knowledge"].skip_reason)
+        traces.append(knowledge_trace)
+
+        if web_future is not None:
+            external_sources, web_trace, network_query = web_future.result()
+        elif not plan["web_search"].run:
+            external_sources, web_trace, network_query = (
+                [], _skipped("web_search", plan["web_search"].skip_reason), None,
+            )
+        else:
+            # Not requested for this message: record the skip without
+            # spawning a worker.
+            external_sources, web_trace, network_query = _web_search_agent(
+                query,
+                sensitive_values=[actor_id, household_id, member_id, *(sensitive_values or [])],
+                allow_network_search=allow_network_search,
+                settings=settings,
+            )
+        traces.append(web_trace)
+    finally:
+        if web_executor is not None:
+            web_executor.shutdown(wait=False)
 
     synthesis = _synthesis_agent(
         messages=messages,
@@ -642,7 +836,7 @@ def run_local_multi_agent(
         database=database,
         knowledge=knowledge,
         external_sources=external_sources,
-        model=model or settings.ollama_model,
+        model=model_name,
         max_tokens=max_tokens,
         temperature=temperature,
         settings=settings,
@@ -651,13 +845,9 @@ def run_local_multi_agent(
     if synthesis_trace:
         traces.append(synthesis_trace)
 
-    synthesis.update({
-        "orchestration_mode": "multi_agent",
-        "orchestration_id": orchestration_id,
-        "all_agents_local": True,
-        "network_used": web_trace.get("network_used", False),
-        "network_query": network_query,
-        "agent_trace": traces,
-        "external_sources": external_sources,
-    })
-    return synthesis
+    return _finalize(
+        synthesis,
+        network_used=web_trace.get("network_used", False),
+        network_query=network_query,
+        external_sources=external_sources,
+    )

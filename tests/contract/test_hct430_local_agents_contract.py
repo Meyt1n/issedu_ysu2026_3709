@@ -14,6 +14,11 @@ def test_agent_catalog_exposes_local_only_graph(client: TestClient) -> None:
     assert body["mode"] == "multi_agent"
     assert body["all_agents_local"] is True
     assert body["ollama_local_only"] is True
+    # The catalog must state whether search is actually usable; a disabled
+    # deployment can never report a ready search agent.
+    assert "web_search_ready" in body
+    if not body["web_search_enabled"]:
+        assert body["web_search_ready"] is False
     assert {item["agent_id"] for item in body["agents"]} >= {
         "router",
         "database",

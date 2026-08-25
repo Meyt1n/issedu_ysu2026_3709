@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from app.config import Settings
 from app.egress_guard import is_web_search_egress_allowed
 from app.local_agents import (
@@ -9,7 +11,9 @@ from app.local_agents import (
     _web_search_agent,
     get_agent_catalog,
     parse_search_results,
+    plan_agent_execution,
     redact_web_query,
+    run_local_multi_agent,
 )
 
 
@@ -149,3 +153,185 @@ def test_agent_catalog_declares_all_workers_local() -> None:
     assert catalog["all_agents_local"] is True
     assert catalog["ollama_local_only"] is True
     assert all(item["local"] is True for item in catalog["agents"])
+
+
+def test_agent_catalog_reports_web_search_readiness() -> None:
+    disabled = get_agent_catalog(Settings())
+    assert disabled["web_search_enabled"] is False
+    assert disabled["web_search_ready"] is False
+
+    ready = get_agent_catalog(Settings(
+        agent_web_search_enabled=True,
+        agent_web_search_allowed_domains="example.com",
+        agent_web_search_url="https://example.com/search",
+    ))
+    assert ready["web_search_ready"] is True
+
+    misconfigured = get_agent_catalog(Settings(
+        agent_web_search_enabled=True,
+        agent_web_search_allowed_domains="other.example",
+        agent_web_search_url="https://example.com/search",
+    ))
+    assert misconfigured["web_search_ready"] is False
+
+
+def test_plan_routes_agents_by_question_type() -> None:
+    # Without a selected member the database step never widens its scope.
+    plan = plan_agent_execution("MEDICATION_SAFETY", household_id=None, member_id=None)
+    assert plan["database"].run is False
+    assert plan["knowledge"].run is True
+
+    # Medication safety needs the approved knowledge chunks plus member facts.
+    plan = plan_agent_execution("MEDICATION_SAFETY", household_id="h", member_id="m")
+    assert plan["database"].run is True
+    assert plan["knowledge"].run is True
+
+    # Rule evidence is answered from the deterministic rule records.
+    plan = plan_agent_execution("RULE_EVIDENCE", household_id="h", member_id="m")
+    assert plan["database"].run is True
+    assert plan["knowledge"].run is False
+    # ...unless no member is selected, then generic knowledge still helps.
+    plan = plan_agent_execution("RULE_EVIDENCE", household_id=None, member_id=None)
+    assert plan["knowledge"].run is True
+
+    # Urgent questions never wait for an external search.
+    plan = plan_agent_execution("URGENT", household_id="h", member_id="m")
+    assert plan["web_search"].run is False
+
+
+def test_greeting_fast_path_never_touches_model_or_tools(monkeypatch) -> None:
+    def _forbidden(*args, **kwargs):
+        raise AssertionError("greeting must not call the model or database tools")
+
+    monkeypatch.setattr("app.local_agents.OllamaClient", _forbidden)
+    monkeypatch.setattr("app.local_agents.execute_whitelisted_tool", _forbidden)
+    monkeypatch.setattr("app.local_agents.httpx.Client", _forbidden)
+
+    result = run_local_multi_agent(
+        None,
+        messages=[{"role": "user", "content": "你好"}],
+        actor_id="actor",
+        allow_network_search=True,
+    )
+
+    assert result["degraded"] is False
+    assert result["answer"]
+    assert result["network_used"] is False
+    statuses = {trace["agent_id"]: trace["status"] for trace in result["agent_trace"]}
+    assert statuses["database"] == "skipped"
+    assert statuses["knowledge"] == "skipped"
+    assert statuses["web_search"] == "skipped"
+    assert statuses["synthesis"] == "completed"
+
+
+def test_multi_agent_skips_knowledge_for_rule_evidence(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def fake_database(session, **kwargs):
+        calls.append("database")
+        return {"get_applied_rules": {"sources": ["RULE-1"]}}, {
+            "agent_id": "database", "role": "健康档案核对", "status": "completed",
+            "local": True, "network_used": False, "duration_ms": 1,
+            "summary": "", "source_count": 1,
+        }
+
+    def fake_knowledge(session, **kwargs):
+        raise AssertionError("knowledge must be skipped for rule evidence")
+
+    def fake_synthesis(**kwargs):
+        calls.append("synthesis")
+        return {
+            "answer": "ok", "sources": [], "citations": [],
+            "suggested_questions": [], "confidence": "high", "escalate": False,
+            "degraded": False, "degrade_reason": None, "route": None,
+            "model": kwargs.get("model"), "query_type": kwargs.get("query_type"),
+            "risk_notice": None,
+            "_trace": {
+                "agent_id": "synthesis", "role": "回答生成", "status": "completed",
+                "local": True, "network_used": False, "duration_ms": 1,
+                "summary": "", "source_count": 0,
+            },
+        }
+
+    monkeypatch.setattr("app.local_agents._database_agent", fake_database)
+    monkeypatch.setattr("app.local_agents._knowledge_agent", fake_knowledge)
+    monkeypatch.setattr("app.local_agents._synthesis_agent", fake_synthesis)
+
+    result = run_local_multi_agent(
+        None,
+        messages=[{"role": "user", "content": "这个提醒的规则依据是什么？"}],
+        actor_id="actor",
+        household_id="household",
+        member_id="member",
+    )
+
+    assert calls == ["database", "synthesis"]
+    statuses = {trace["agent_id"]: trace["status"] for trace in result["agent_trace"]}
+    assert statuses["knowledge"] == "skipped"
+    assert statuses["web_search"] == "skipped"
+    assert result["query_type"] == "RULE_EVIDENCE"
+
+
+def test_search_parser_tolerates_markup_drift() -> None:
+    # No result__a class at all: the redirect-link fallback still finds results.
+    drifted = (
+        '<div class="web-result">'
+        '<a href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fa">标题一</a>'
+        '<span class="snippet">摘要一</span>'
+        "</div>"
+        '<h2 class="result__title"><a href="https://example.org/b">标题二</a></h2>'
+    )
+
+    results = parse_search_results(drifted)
+
+    assert [item["url"] for item in results] == [
+        "https://example.com/a",
+        "https://example.org/b",
+    ]
+    assert results[0]["snippet"] == "摘要一"
+
+
+def test_search_parser_handles_empty_or_broken_body() -> None:
+    assert parse_search_results("") == []
+    assert parse_search_results("<html><body>没有结果标记</body></html>") == []
+
+
+@pytest.mark.parametrize("body", ["", "<html><body><p>no results</p></body></html>"])
+def test_web_search_no_results_keeps_trace_clear(monkeypatch, body: str) -> None:
+    class FakeResponse:
+        text = body
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url, params):
+            return FakeResponse()
+
+    monkeypatch.setattr("app.local_agents.httpx.Client", FakeClient)
+    results, trace, safe_query = _web_search_agent(
+        "布洛芬注意事项",
+        sensitive_values=[],
+        allow_network_search=True,
+        settings=Settings(
+            agent_web_search_enabled=True,
+            agent_web_search_allowed_domains="example.com",
+            agent_web_search_url="https://example.com/search",
+        ),
+    )
+
+    assert results == []
+    assert trace["status"] == "completed"
+    assert trace["source_count"] == 0
+    assert trace["network_used"] is True
+    assert "未找到" in trace["summary"]
+    assert safe_query is not None
