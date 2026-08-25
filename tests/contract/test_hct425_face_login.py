@@ -41,25 +41,45 @@ def test_face_failures_are_rate_limited(client: TestClient) -> None:
     files = [("frames", ("frame.jpg", b"\xff\xd8\xff", "image/jpeg"))]
 
     responses = []
-    for _ in range(6):
-        challenge = client.post(
+    for _ in range(5):
+        challenge_response = client.post(
             "/api/v1/auth/face-challenge",
             json={"household_id": household_id, "actor_id": actor_id},
-        ).json()
+        )
+        assert challenge_response.status_code == 200, challenge_response.text
         responses.append(
             client.post(
                 "/api/v1/auth/face-login",
                 data={
                     "household_id": household_id,
                     "actor_id": actor_id,
-                    "challenge_id": challenge["challenge_id"],
+                    "challenge_id": challenge_response.json()["challenge_id"],
                 },
                 files=files,
             )
         )
 
-    assert [response.status_code for response in responses[:5]] == [401] * 5
-    assert responses[5].status_code == 429
+    assert [response.status_code for response in responses] == [401] * 5
+
+    # challenge 签发有独立的匿名限流：第 6 次签发直接 429。
+    throttled_challenge = client.post(
+        "/api/v1/auth/face-challenge",
+        json={"household_id": household_id, "actor_id": actor_id},
+    )
+    assert throttled_challenge.status_code == 429
+    assert throttled_challenge.json()["detail"] == "FACE_CHALLENGE_RATE_LIMITED"
+
+    # 登录失败限流独立生效：即使拿不到新 challenge，第 6 次登录也被锁定。
+    sixth_login = client.post(
+        "/api/v1/auth/face-login",
+        data={
+            "household_id": household_id,
+            "actor_id": actor_id,
+            "challenge_id": "0" * 32,
+        },
+        files=files,
+    )
+    assert sixth_login.status_code == 429
 
 
 def test_member_account_can_discover_household_and_be_bound(client: TestClient) -> None:

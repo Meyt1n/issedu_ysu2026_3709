@@ -9,4 +9,4 @@ _API = _ROOT / "src" / "api"
 if str(_API) not in sys.path:
     sys.path.insert(0, str(_API))
 
-from app.formal_demo_plan import *  # noqa: F401,F403
+from app.formal_demo_plan import *  # noqa: E402,F401,F403

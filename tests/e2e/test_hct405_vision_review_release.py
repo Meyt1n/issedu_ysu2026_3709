@@ -841,6 +841,8 @@ def test_hard_sample_deletion_revokes_consent_and_invalidates_export(
 def test_v2_binding_comparison_and_rollback_restore_previous_release(
     client: TestClient,
 ) -> None:
+    reviewer_headers = {"X-Actor-Id": "independent-reviewer"}
+
     def create_binding(dataset_version: str, report_hash: str) -> str:
         response = client.post(
             "/api/v1/model-version-bindings",
@@ -856,9 +858,18 @@ def test_v2_binding_comparison_and_rollback_restore_previous_release(
         return response.json()["id"]
 
     v1_id = create_binding("synthetic-v1", "report-v1")
-    activated_v1 = client.post(
+    # HCT-404 双人控制：创建者不得自我激活，必须由独立复核人激活。
+    self_activation = client.post(
         f"/api/v1/model-version-bindings/{v1_id}/activate",
         headers=OWNER_HEADERS,
+        json={"approved_by": "e2e-owner"},
+    )
+    assert self_activation.status_code == 422, self_activation.text
+    assert self_activation.json()["detail"] == "RELEASE_DUAL_CONTROL_REQUIRED"
+
+    activated_v1 = client.post(
+        f"/api/v1/model-version-bindings/{v1_id}/activate",
+        headers=reviewer_headers,
         json={"approved_by": "independent-reviewer"},
     )
     assert activated_v1.status_code == 200, activated_v1.text
@@ -874,7 +885,7 @@ def test_v2_binding_comparison_and_rollback_restore_previous_release(
 
     activated_v2 = client.post(
         f"/api/v1/model-version-bindings/{v2_id}/activate",
-        headers=OWNER_HEADERS,
+        headers=reviewer_headers,
         json={"approved_by": "independent-reviewer"},
     )
     assert activated_v2.status_code == 200, activated_v2.text

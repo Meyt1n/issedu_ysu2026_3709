@@ -7,6 +7,7 @@ Maps to acceptance-gate scenario ``vision_scan_to_manual_confirm``.
 
 from __future__ import annotations
 
+import hashlib
 import json
 
 import cv2
@@ -56,17 +57,23 @@ def _install_master_snapshot(tmp_path, monkeypatch) -> None:
         "schema_version": "hct-master-data/v1",
         "version": "portal-master-v1",
         "approval_status": "APPROVED",
-        "entries": [
+        "approval_ref": "test-approval",
+        "revocation_status": "ACTIVE",
+        "records": [
             {
-                "candidate_id": "portal-drug-1",
-                "drug_name": "合成布洛芬缓释胶囊",
+                "record_id": "portal-drug-1",
+                "name_aliases": ["合成布洛芬缓释胶囊"],
                 "specification": "0.3g×20粒",
                 "manufacturer": "合成制药",
             }
         ],
     }
+    canonical = json.dumps(
+        snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    snapshot["sha256"] = hashlib.sha256(canonical).hexdigest()
     path = tmp_path / "portal-master-v1.json"
-    path.write_text(json.dumps(snapshot), encoding="utf-8")
+    path.write_text(json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")
     monkeypatch.setattr("app.routes.settings.master_data_root", str(tmp_path))
 
 
@@ -101,17 +108,14 @@ def _create_member_task(
 
 
 def _signed_payload(task_id: str, input_digest: str, body: dict) -> dict:
-    settings = get_settings()
+    request = EvidencePipelineRequest.model_validate(body)
     receipt = issue_adapter_receipt(
-        EvidencePipelineRequest(
-            task_id=task_id,
-            input_digest=input_digest,
-            adapter_version="portal-adapter-v1",
-            payload=body,
-        ),
-        secret=settings.adapter_signing_secret,
+        task_id,
+        input_digest,
+        request,
+        get_settings().vision_adapter_signing_key,
     )
-    return {"receipt": receipt, "payload": body}
+    return {**body, "adapter_receipt": receipt}
 
 
 def test_member_capture_to_owner_confirm_then_member_timeline(

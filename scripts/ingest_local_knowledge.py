@@ -184,6 +184,7 @@ def ingest_manifest(
         add_document,
         compute_index_checksum,
         create_index_snapshot,
+        normalize_permission_scope,
     )
 
     manifest_path = manifest_path.resolve()
@@ -208,7 +209,17 @@ def ingest_manifest(
             creates.append(item)
             actions.append({"action": "create", "title": item["title"]})
             continue
-        if _document_signature(item) != _document_signature(
+        # ``add_document`` stamps the ingesting actor into empty scopes so they
+        # never become world-readable; replaying the same manifest must compare
+        # against the same normalized form or idempotent re-runs would raise a
+        # false DOCUMENT_VERSION_CONFLICT.
+        normalized_item = {
+            **item,
+            "permission_scope": normalize_permission_scope(
+                item["permission_scope"], created_by=actor
+            ),
+        }
+        if _document_signature(normalized_item) != _document_signature(
             {
                 "title": existing.title,
                 "source": existing.source,
