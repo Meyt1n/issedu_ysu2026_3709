@@ -34,7 +34,8 @@ function navItem(page: Page, label: string) {
 
 async function enterDevIdentity(page: Page, actorId: string): Promise<void> {
   await page.goto('/')
-  await expect(page.getByRole('button', { name: '进入家庭空间' })).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByRole('button', { name: '开发演示' })).toBeVisible({ timeout: 20_000 })
+  await page.getByRole('button', { name: '开发演示' }).click()
   await page.getByLabel('开发身份标识').fill(actorId)
   await page.getByRole('button', { name: '进入家庭空间' }).click()
   await expect(page.locator('.app-frame')).toBeVisible({ timeout: 20_000 })
