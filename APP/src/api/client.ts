@@ -6,6 +6,7 @@ import type {
   AssistantExternalSource,
   AssistantResponse,
   CapabilityResponse,
+  EvidencePreview,
   HealthEvent,
   HealthResponse,
   Household,
@@ -354,6 +355,8 @@ export class ApiClient {
       onToken?: (token: string) => void
       onStatus?: (phase: string) => void
       onExternalSources?: (sources: AssistantExternalSource[], networkQuery?: string | null) => void
+      onEvidencePreview?: (preview: EvidencePreview) => void
+      onCancelled?: () => void
     },
     householdId?: string,
     memberId?: string,
@@ -444,6 +447,9 @@ export class ApiClient {
           if (eventName === 'trace') handlers.onTrace?.(payload.trace as AssistantAgentTrace)
           if (eventName === 'status') handlers.onStatus?.(String(payload.phase ?? ''))
           if (eventName === 'token') handlers.onToken?.(String(payload.token ?? ''))
+          if (eventName === 'evidence_preview') {
+            handlers.onEvidencePreview?.(payload as unknown as EvidencePreview)
+          }
           if (eventName === 'external_sources') {
             handlers.onExternalSources?.(
               (payload.external_sources as AssistantExternalSource[]) ?? [],
@@ -451,10 +457,18 @@ export class ApiClient {
             )
           }
           if (eventName === 'done') finalResponse = payload.response as AssistantResponse
+          if (eventName === 'cancelled') {
+            handlers.onCancelled?.()
+            throw new ApiClientError('ASSISTANT_STREAM_CANCELLED', {
+              status: 0,
+              code: 'CANCELLED',
+            })
+          }
           if (eventName === 'error') {
             const code = String(payload.code ?? '')
             if (code === 'CANCELLED' || String(payload.message ?? '') === 'CANCELLED') {
-              throw new ApiClientError('已取消本次回答', { status: 0, code: 'DEPENDENCY_UNAVAILABLE' })
+              handlers.onCancelled?.()
+              throw new ApiClientError('ASSISTANT_STREAM_CANCELLED', { status: 0, code: 'CANCELLED' })
             }
             throw new ApiClientError(String(payload.message ?? '流式失败'), {
               status: 0,

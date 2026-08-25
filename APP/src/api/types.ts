@@ -172,6 +172,9 @@ export interface AssistantChatInput {
   max_tokens?: number
   agent_mode?: 'single' | 'multi_agent'
   allow_network_search?: boolean
+  query_type_override?: string
+  assistant_session_id?: string
+  clear_session_cache?: boolean
 }
 
 export interface AssistantCitation {
@@ -192,6 +195,7 @@ export interface AssistantAgentTrace {
   duration_ms?: number
   summary?: string
   source_count?: number
+  classifier?: Record<string, unknown>
 }
 
 export interface AssistantExternalSource {
@@ -200,6 +204,15 @@ export interface AssistantExternalSource {
   snippet?: string
   domain?: string
   source?: string
+}
+
+export interface EvidencePreview {
+  query_type: string
+  database_tools: string[]
+  knowledge_titles: string[]
+  knowledge_count: number
+  external_count: number
+  rule_tools: string[]
 }
 
 export interface AssistantResponse {
@@ -222,4 +235,8 @@ export interface AssistantResponse {
   network_query?: string | null
   agent_trace?: AssistantAgentTrace[]
   external_sources?: AssistantExternalSource[]
+  route_explanation?: string | null
+  classifier?: Record<string, unknown> | null
+  evidence_preview?: EvidencePreview | null
+  retrieval_cache_hit?: boolean
 }

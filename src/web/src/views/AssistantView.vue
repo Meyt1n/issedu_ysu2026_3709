@@ -1,11 +1,18 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
-import { apiClient } from '../api/client'
-import type { AssistantAgentTrace, AssistantCitation, AssistantExternalSource } from '../api/types'
+import { ApiClientError, apiClient } from '../api/client'
+import type {
+  AssistantAgentTrace,
+  AssistantCitation,
+  AssistantExternalSource,
+  EvidencePreview,
+} from '../api/types'
 import {
   clearChatSession,
+  getAssistantSessionId,
   loadChatSession,
+  regenerateAssistantSessionId,
   saveChatSession,
   sessionEntryToStored,
   type StoredChatEntry,
@@ -45,6 +52,7 @@ interface ChatEntry {
   escalate?: boolean
   suggestedQuestions?: string[]
   route?: string | null
+  routeExplanation?: string | null
   queryType?: string | null
   riskNotice?: string | null
   orchestrationMode?: 'single' | 'multi_agent' | null
@@ -68,6 +76,7 @@ interface AgentStage {
 const AGENT_STAGES: AgentStage[] = [
   { id: 'router', title: '问题识别', description: '判断问题类型与所需资料', icon: 'compass', network: false },
   { id: 'database', title: '档案核对', description: '读取授权范围内的健康记录', icon: 'timeline', network: false },
+  { id: 'rules', title: '规则核对', description: '核对确定性规则与风险依据', icon: 'alert', network: false },
   { id: 'knowledge', title: '资料检索', description: '匹配已审核的本地资料', icon: 'pill', network: false },
   { id: 'web_search', title: '联网参考', description: '获取脱敏后的公开参考', icon: 'cloud', network: true },
   { id: 'synthesis', title: '回答生成', description: '在本机汇总证据并生成回答', icon: 'assistant', network: false },
@@ -84,6 +93,10 @@ const workflowTrace = ref<AssistantAgentTrace[]>([])
 const selectedAgentId = ref<string | null>(null)
 const workflowExpanded = ref(false)
 const orchestrationPhase = ref<string | null>(null)
+const workflowRouteExplanation = ref<string | null>(null)
+const liveEvidencePreview = ref<EvidencePreview | null>(null)
+const stopStatus = ref('')
+const assistantSessionId = ref('')
 type VoiceMode = 'off' | 'wake' | 'active'
 
 const voiceMode = ref<VoiceMode>('off')
@@ -102,6 +115,7 @@ function formatModelLabel(model?: string | null): string {
 }
 
 let streamTimer: ReturnType<typeof setInterval> | null = null
+let stopStatusTimer: ReturnType<typeof setTimeout> | null = null
 let voiceRestartTimer: ReturnType<typeof setTimeout> | null = null
 let recognition: SpeechRecognitionLike | null = null
 let voiceDraftPrefix = ''
@@ -112,12 +126,44 @@ let voiceFatalError = false
 const speechInputSupported = isSpeechInputSupported()
 const speechOutputSupported = isSpeechOutputSupported()
 let activeSendController: AbortController | null = null
+let userRequestedStop = false
 
-function cancelActiveSend(): void {
+function cancelActiveSend(showStatus = false): void {
   if (activeSendController) {
+    userRequestedStop = showStatus
     activeSendController.abort()
     activeSendController = null
   }
+}
+
+function clearRemoteAssistantSession(sessionId: string): void {
+  if (!sessionId) return
+  void apiClient.clearAssistantSessionCache(sessionId, requestOptions.value).catch(() => {
+    // Rotating the opaque id still isolates future requests if cleanup is unavailable.
+  })
+}
+
+function rotateAssistantSession(): void {
+  clearRemoteAssistantSession(assistantSessionId.value)
+  assistantSessionId.value = regenerateAssistantSessionId(
+    session.actorId,
+    session.selectedHouseholdId,
+    session.selectedMemberId,
+  )
+}
+
+function isAssistantCancellation(cause: unknown): boolean {
+  return cause instanceof ApiClientError
+    && (cause.code === 'CANCELLED' || cause.message.includes('CANCELLED'))
+}
+
+function showStoppedStatus(): void {
+  stopStatus.value = '已停止'
+  if (stopStatusTimer) clearTimeout(stopStatusTimer)
+  stopStatusTimer = setTimeout(() => {
+    stopStatusTimer = null
+    stopStatus.value = ''
+  }, 2400)
 }
 
 async function loadAgentCatalog(): Promise<void> {
@@ -159,7 +205,11 @@ const AGENT_DETAILS: Record<string, { boundary: string; action: string }> = {
   },
   database: {
     boundary: '仅访问当前授权成员的只读记录，无法扩大查询范围。',
-    action: '核对已确认的健康事件、成员状态和提醒规则。',
+    action: '核对已确认的健康事件、成员状态和今日照护计划。',
+  },
+  rules: {
+    boundary: '只读取确定性规则结果；不会由模型生成或改变风险等级。',
+    action: '核对当前成员命中的规则、风险等级与版本化依据。',
   },
   knowledge: {
     boundary: '仅检索本地已审核资料，不访问外部网站。',
@@ -173,6 +223,18 @@ const AGENT_DETAILS: Record<string, { boundary: string; action: string }> = {
     boundary: '仅使用本机模型，健康数据不离开本机。',
     action: '汇总检索到的证据，生成带出处的回答并通过安全校验。',
   },
+}
+
+const EVIDENCE_TOOL_LABELS: Record<string, string> = {
+  get_member_state: '成员状态',
+  get_health_events: '健康事件',
+  get_care_plan_status: '今日照护计划',
+  get_applied_rules: '已应用规则',
+  get_risk_alerts: '风险提醒',
+}
+
+function evidenceToolLabel(tool: string): string {
+  return EVIDENCE_TOOL_LABELS[tool] ?? tool
 }
 
 function traceForAgent(agentId: string): AssistantAgentTrace | undefined {
@@ -194,7 +256,7 @@ function agentStatus(stage: AgentStage): AgentVisualStatus {
 
   const phase = orchestrationPhase.value
   if (phase === 'routing' && stage.id === 'router') return 'running'
-  if (phase === 'retrieving' && (stage.id === 'database' || stage.id === 'knowledge')) return 'running'
+  if (phase === 'retrieving' && ['database', 'rules', 'knowledge'].includes(stage.id)) return 'running'
   if (phase === 'searching' && stage.id === 'web_search') return 'running'
   if ((phase === 'generating' || phase === 'validating') && stage.id === 'synthesis') return 'running'
   return 'pending'
@@ -306,6 +368,10 @@ function isStreaming(entry: ChatEntry): boolean {
 
 function restoreChatSession(entries: StoredChatEntry[]): void {
   history.value = entries.map(entry => ({ ...entry, revealed: entry.content.length }))
+  workflowRouteExplanation.value = [...history.value]
+    .reverse()
+    .find(entry => entry.role === 'assistant' && entry.routeExplanation)
+    ?.routeExplanation ?? null
   scrollToEnd()
 }
 
@@ -320,6 +386,7 @@ function persistChatSession(): void {
 
 function clearConversation(): void {
   cancelActiveSend()
+  rotateAssistantSession()
   stopVoiceInput()
   if (speakingIndex.value !== null) {
     stopSpeaking()
@@ -333,8 +400,15 @@ function clearConversation(): void {
   history.value = []
   workflowTrace.value = []
   orchestrationPhase.value = null
+  workflowRouteExplanation.value = null
+  liveEvidencePreview.value = null
   draft.value = ''
   sendError.value = ''
+  stopStatus.value = ''
+  if (stopStatusTimer) {
+    clearTimeout(stopStatusTimer)
+    stopStatusTimer = null
+  }
   voiceError.value = ''
   sending.value = false
 }
@@ -343,6 +417,16 @@ function useSuggestedQuestion(question: string): void {
   draft.value = question
   sendError.value = ''
   void nextTick(() => draftInput.value?.focus())
+}
+
+function resendAsMedicationSafety(replyIndex: number): void {
+  for (let index = replyIndex - 1; index >= 0; index -= 1) {
+    const entry = history.value[index]
+    if (entry?.role === 'user') {
+      void send(entry.content, 'MEDICATION_SAFETY')
+      return
+    }
+  }
 }
 
 function degradeReasonLabel(reason?: string | null): string {
@@ -388,14 +472,30 @@ function questionTypeLabel(queryType?: string | null): string {
   return labels[queryType ?? ''] ?? '一般健康信息'
 }
 
+let regenerateOnNextValidContext = false
+
 watch(
   () => [session.actorId, session.selectedHouseholdId, session.selectedMemberId] as const,
-  ([actorId, householdId, memberId]) => {
+  ([actorId, householdId, memberId], previous) => {
+    const [previousActorId, , previousMemberId] = previous ?? ['', '', '']
+    const memberChanged = Boolean(previousMemberId && previousMemberId !== memberId)
+    if (memberChanged && previousActorId === actorId) {
+      clearRemoteAssistantSession(assistantSessionId.value)
+      regenerateOnNextValidContext = !memberId
+    }
     cancelActiveSend()
     if (streamTimer) {
       clearInterval(streamTimer)
       streamTimer = null
     }
+    const shouldRegenerate = Boolean(memberId && (memberChanged || regenerateOnNextValidContext))
+    assistantSessionId.value = shouldRegenerate
+      ? regenerateAssistantSessionId(actorId, householdId, memberId)
+      : getAssistantSessionId(actorId, householdId, memberId)
+    if (memberId) regenerateOnNextValidContext = false
+    workflowRouteExplanation.value = null
+    liveEvidencePreview.value = null
+    stopStatus.value = ''
     restoreChatSession(loadChatSession(actorId, householdId, memberId))
   },
   { immediate: true },
@@ -590,7 +690,7 @@ function streamReveal(entry: ChatEntry): void {
   }, 26)
 }
 
-async function send(text?: string): Promise<void> {
+async function send(text?: string, queryTypeOverride?: string): Promise<void> {
   const content = (text ?? draft.value).trim()
   if (!content || sending.value) return
 
@@ -605,8 +705,15 @@ async function send(text?: string): Promise<void> {
   draft.value = ''
   sending.value = true
   sendError.value = ''
+  stopStatus.value = ''
+  if (stopStatusTimer) {
+    clearTimeout(stopStatusTimer)
+    stopStatusTimer = null
+  }
   workflowTrace.value = []
   orchestrationPhase.value = 'routing'
+  workflowRouteExplanation.value = null
+  liveEvidencePreview.value = null
   workflowExpanded.value = true
   scrollToEnd()
 
@@ -633,6 +740,7 @@ async function send(text?: string): Promise<void> {
     entry.escalate = reply.escalate
     entry.suggestedQuestions = normalizeSuggestedQuestions(reply.suggested_questions)
     entry.route = reply.route
+    entry.routeExplanation = reply.route_explanation
     entry.queryType = reply.query_type
     entry.riskNotice = reply.risk_notice
     entry.orchestrationMode = reply.orchestration_mode
@@ -642,6 +750,7 @@ async function send(text?: string): Promise<void> {
     entry.agentTrace = reply.agent_trace
     entry.externalSources = reply.external_sources
     workflowTrace.value = reply.agent_trace ?? []
+    workflowRouteExplanation.value = reply.route_explanation ?? null
     if (reply.model) modelLabel.value = formatModelLabel(reply.model)
     persistChatSession()
     if (!alreadyStreamed) streamReveal(entry)
@@ -654,8 +763,11 @@ async function send(text?: string): Promise<void> {
     max_tokens: 1024,
     agent_mode: 'multi_agent' as const,
     allow_network_search: allowNetworkSearch.value,
+    query_type_override: queryTypeOverride,
+    assistant_session_id: assistantSessionId.value || undefined,
   }
 
+  let streamCancelled = false
   try {
     const reply = await apiClient.assistantChatStream(
       chatInput,
@@ -672,6 +784,13 @@ async function send(text?: string): Promise<void> {
           entry.revealed = entry.content.length
           scrollToEnd()
         },
+        onEvidencePreview: preview => {
+          liveEvidencePreview.value = preview
+          scrollToEnd()
+        },
+        onCancelled: () => {
+          streamCancelled = true
+        },
         onExternalSources: sources => {
           const entry = history.value[entryIndex]
           if (entry) entry.externalSources = sources
@@ -683,8 +802,11 @@ async function send(text?: string): Promise<void> {
     )
     applyReply(reply)
   } catch (cause) {
-    if (controller.signal.aborted) {
-      if (history.value[entryIndex]?.role === 'assistant') history.value.pop()
+    if (controller.signal.aborted || streamCancelled || isAssistantCancellation(cause)) {
+      if (history.value[entryIndex] === streamingEntry) history.value.splice(entryIndex, 1)
+      persistChatSession()
+      if (userRequestedStop) showStoppedStatus()
+      userRequestedStop = false
       return
     }
     // Fall back to the non-streaming endpoint when SSE is unavailable.
@@ -697,8 +819,11 @@ async function send(text?: string): Promise<void> {
       )
       applyReply(reply)
     } catch (fallbackCause) {
-      if (controller.signal.aborted) {
-        if (history.value[entryIndex]?.role === 'assistant') history.value.pop()
+      if (controller.signal.aborted || isAssistantCancellation(fallbackCause)) {
+        if (history.value[entryIndex] === streamingEntry) history.value.splice(entryIndex, 1)
+        persistChatSession()
+        if (userRequestedStop) showStoppedStatus()
+        userRequestedStop = false
         return
       }
       sendError.value = formatError(fallbackCause)
@@ -718,6 +843,7 @@ async function send(text?: string): Promise<void> {
   } finally {
     if (activeSendController === controller) activeSendController = null
     orchestrationPhase.value = null
+    liveEvidencePreview.value = null
     sending.value = false
   }
 }
@@ -730,6 +856,7 @@ function onMemberChange(event: Event): void {
 onBeforeUnmount(() => {
   cancelActiveSend()
   if (streamTimer) clearInterval(streamTimer)
+  if (stopStatusTimer) clearTimeout(stopStatusTimer)
   stopVoiceInput()
   stopSpeaking()
 })
@@ -875,6 +1002,10 @@ onBeforeUnmount(() => {
               </p>
               <p v-else class="text-faint">尚未执行；发送问题后这里会显示实际的处理结果。</p>
             </div>
+            <div v-if="selectedAgent.id === 'router' && workflowRouteExplanation">
+              <span>分流说明</span>
+              <p>{{ workflowRouteExplanation }}</p>
+            </div>
           </div>
         </section>
         <p class="agent-workflow-note">
@@ -908,12 +1039,16 @@ onBeforeUnmount(() => {
           {{ entry.role === 'assistant' ? entry.content.slice(0, entry.revealed) : entry.content
           }}<span v-if="isStreaming(entry)" class="stream-caret" aria-hidden="true" />
           <div
-            v-if="entry.role === 'assistant' && !isStreaming(entry) && (entry.degraded || entry.escalate || entry.riskNotice || entry.queryType || (entry.sources?.length ?? 0) > 0 || entry.confidence || (entry.agentTrace?.length ?? 0) > 0 || (entry.externalSources?.length ?? 0) > 0)"
+            v-if="entry.role === 'assistant' && !isStreaming(entry) && (entry.degraded || entry.escalate || entry.riskNotice || entry.queryType || entry.routeExplanation || (entry.sources?.length ?? 0) > 0 || entry.confidence || (entry.agentTrace?.length ?? 0) > 0 || (entry.externalSources?.length ?? 0) > 0)"
             class="chat-sources"
           >
             <span v-if="entry.queryType" class="chat-evidence-summary">
               <AppIcon name="compass" :size="12" style="vertical-align: -1px" />
               问题类型：{{ questionTypeLabel(entry.queryType) }}
+            </span>
+            <span v-if="entry.routeExplanation" class="chat-route-explanation">
+              <AppIcon name="timeline" :size="12" style="vertical-align: -1px" />
+              分流说明：{{ entry.routeExplanation }}
             </span>
             <span v-if="entry.degraded" style="color: var(--gold)">
               ⚠ {{ degradeReasonLabel(entry.degradeReason) }}，以上为受控回复，不含模型生成的医疗判断。
@@ -992,6 +1127,20 @@ onBeforeUnmount(() => {
               {{ question }}
             </button>
           </div>
+          <div
+            v-if="entry.role === 'assistant' && !isStreaming(entry) && entry.content"
+            class="chat-follow-ups"
+            aria-label="用药安全复核"
+          >
+            <button
+              type="button"
+              class="btn btn-ghost btn-small chat-follow-up"
+              :disabled="sending"
+              @click="resendAsMedicationSafety(index)"
+            >
+              按用药安全再查一次
+            </button>
+          </div>
           <div v-if="entry.role === 'assistant' && !isStreaming(entry) && speechOutputSupported" class="chat-voice-actions">
             <button
               type="button"
@@ -1007,6 +1156,37 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
+      <section
+        v-if="sending && liveEvidencePreview"
+        class="assistant-evidence-preview"
+        role="status"
+        aria-live="polite"
+        aria-label="本轮证据预览"
+      >
+        <div class="assistant-evidence-preview-heading">
+          <span><AppIcon name="review" :size="15" />已找到可核对的依据</span>
+          <small>仅显示资料名称和数量，不含健康正文</small>
+        </div>
+        <p>问题类型：{{ questionTypeLabel(liveEvidencePreview.query_type) }}</p>
+        <div class="assistant-evidence-preview-groups">
+          <span v-if="liveEvidencePreview.database_tools.length">
+            档案：{{ liveEvidencePreview.database_tools.map(evidenceToolLabel).join('、') }}
+          </span>
+          <span v-if="liveEvidencePreview.rule_tools.length">
+            规则：{{ liveEvidencePreview.rule_tools.map(evidenceToolLabel).join('、') }}
+          </span>
+          <span>
+            本地资料：{{ liveEvidencePreview.knowledge_count }} 条
+            <template v-if="liveEvidencePreview.knowledge_titles.length">
+              （{{ liveEvidencePreview.knowledge_titles.join('、') }}）
+            </template>
+          </span>
+          <span v-if="liveEvidencePreview.external_count">
+            外部参考：{{ liveEvidencePreview.external_count }} 条（非本地审核证据）
+          </span>
+        </div>
+      </section>
+
       <div v-if="sending && !(history[history.length - 1]?.role === 'assistant' && (history[history.length - 1]?.content.length ?? 0) > 0)" class="chat-bubble-row assistant">
         <span class="chat-avatar thinking" aria-hidden="true">
           <AppIcon name="assistant" :size="16" />
@@ -1021,6 +1201,9 @@ onBeforeUnmount(() => {
     <p v-if="sendError" class="notice error" role="alert" style="margin-top: 14px">
       <AppIcon name="alert" :size="16" />
       {{ sendError }}
+    </p>
+    <p v-if="stopStatus" class="notice info" role="status" aria-live="polite" style="margin-top: 14px">
+      {{ stopStatus }}
     </p>
 
     <form class="chat-compose" @submit.prevent="send()">
@@ -1050,7 +1233,7 @@ onBeforeUnmount(() => {
           type="button"
           class="btn btn-ghost"
           aria-label="停止生成本次回答"
-          @click="cancelActiveSend"
+          @click="cancelActiveSend(true)"
         >
           停止
         </button>

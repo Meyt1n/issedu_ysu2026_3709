@@ -11,6 +11,7 @@ export interface StoredChatEntry {
   escalate?: boolean
   suggestedQuestions?: string[]
   route?: string | null
+  routeExplanation?: string | null
   queryType?: string | null
   riskNotice?: string | null
 }
@@ -18,9 +19,19 @@ export interface StoredChatEntry {
 const MAX_ENTRIES = 24
 const MAX_CONTENT_LENGTH = 16_000
 const SESSION_PREFIX = 'hct-assistant-session:v1:'
+const ASSISTANT_ID_PREFIX = 'hct-assistant-id:v1:'
 
 function storageKey(actorId: string, householdId: string, memberId: string): string {
   return `${SESSION_PREFIX}${encodeURIComponent(actorId)}:${encodeURIComponent(householdId)}:${encodeURIComponent(memberId)}`
+}
+
+function assistantIdStorageKey(actorId: string, householdId: string, memberId: string): string {
+  return `${ASSISTANT_ID_PREFIX}${encodeURIComponent(actorId)}:${encodeURIComponent(householdId)}:${encodeURIComponent(memberId)}`
+}
+
+function createAssistantSessionId(): string {
+  return globalThis.crypto?.randomUUID?.()
+    ?? `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 18)}`
 }
 
 function storage(): Storage | null {
@@ -80,16 +91,50 @@ export function clearChatSession(actorId: string, householdId: string, memberId:
   }
 }
 
+export function getAssistantSessionId(actorId: string, householdId: string, memberId: string): string {
+  if (!actorId || !householdId || !memberId) return ''
+  const target = storage()
+  if (!target) return createAssistantSessionId()
+  const key = assistantIdStorageKey(actorId, householdId, memberId)
+  try {
+    const existing = target.getItem(key)
+    if (existing) return existing
+    const created = createAssistantSessionId()
+    target.setItem(key, created)
+    return created
+  } catch {
+    return createAssistantSessionId()
+  }
+}
+
+export function regenerateAssistantSessionId(
+  actorId: string,
+  householdId: string,
+  memberId: string,
+): string {
+  if (!actorId || !householdId || !memberId) return ''
+  const created = createAssistantSessionId()
+  try {
+    storage()?.setItem(assistantIdStorageKey(actorId, householdId, memberId), created)
+  } catch {
+    // The opaque in-memory id still isolates this render if storage is blocked.
+  }
+  return created
+}
+
 export function clearChatSessionsForActor(actorId: string): void {
   if (!actorId) return
   const target = storage()
   if (!target) return
-  const prefix = `${SESSION_PREFIX}${encodeURIComponent(actorId)}:`
+  const prefixes = [
+    `${SESSION_PREFIX}${encodeURIComponent(actorId)}:`,
+    `${ASSISTANT_ID_PREFIX}${encodeURIComponent(actorId)}:`,
+  ]
   try {
     const keys: string[] = []
     for (let index = 0; index < target.length; index += 1) {
       const key = target.key(index)
-      if (key?.startsWith(prefix)) keys.push(key)
+      if (key && prefixes.some(prefix => key.startsWith(prefix))) keys.push(key)
     }
     for (const key of keys) target.removeItem(key)
   } catch {
@@ -108,6 +153,7 @@ export function sessionEntryToStored(entry: {
   escalate?: boolean
   suggestedQuestions?: string[]
   route?: string | null
+  routeExplanation?: string | null
   queryType?: string | null
   riskNotice?: string | null
 }): StoredChatEntry {
@@ -122,6 +168,7 @@ export function sessionEntryToStored(entry: {
     escalate: entry.escalate,
     suggestedQuestions: entry.suggestedQuestions,
     route: entry.route,
+    routeExplanation: entry.routeExplanation,
     queryType: entry.queryType,
     riskNotice: entry.riskNotice,
   }

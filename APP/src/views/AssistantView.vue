@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import AppIcon from '@/components/AppIcon.vue'
 import { ApiClientError } from '@/api/client'
-import type { AssistantResponse } from '@/api/types'
+import type { AssistantResponse, EvidencePreview } from '@/api/types'
 import { createLiveApiClient } from '@/data'
 import { createSpeaker, useSpeech } from '@/composables/useSpeech'
 import {
@@ -59,6 +59,15 @@ const speakingIndex = ref<number | null>(null)
 const chatEnd = ref<HTMLElement | null>(null)
 const orchestrationPhase = ref<string | null>(null)
 const allowNetworkSearch = ref(false)
+const liveEvidencePreview = ref<EvidencePreview | null>(null)
+const cancelStatus = ref('')
+
+function createAssistantSessionId(): string {
+  return globalThis.crypto?.randomUUID?.()
+    ?? `app-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 18)}`
+}
+
+const assistantSessionId = ref(createAssistantSessionId())
 
 const speechInputSupported = isSpeechInputSupported()
 const listening = computed(() => voiceMode.value !== 'off')
@@ -92,6 +101,40 @@ function cancelActiveSend(): void {
     activeSendController = null
   }
 }
+
+function isAssistantCancellation(cause: unknown): boolean {
+  return cause instanceof ApiClientError
+    && (cause.code === 'CANCELLED' || cause.message.includes('CANCELLED'))
+}
+
+const evidencePreviewText = computed(() => {
+  const preview = liveEvidencePreview.value
+  if (!preview) return ''
+  const parts = [
+    `档案 ${preview.database_tools.length} 项`,
+    `规则 ${preview.rule_tools.length} 项`,
+    `本地资料 ${preview.knowledge_count} 条`,
+  ]
+  if (preview.external_count) parts.push(`外部参考 ${preview.external_count} 条`)
+  return `已找到可核对依据：${parts.join(' · ')}。预览不含健康正文。`
+})
+
+watch(
+  () => [
+    session.dataMode,
+    session.serverBaseUrl,
+    session.actorId,
+    session.currentHouseholdId,
+    session.currentMemberId,
+  ],
+  (_current, previous) => {
+    if (!previous) return
+    cancelActiveSend()
+    assistantSessionId.value = createAssistantSessionId()
+    liveEvidencePreview.value = null
+    cancelStatus.value = ''
+  },
+)
 
 function scrollToEnd(): void {
   void nextTick(() => chatEnd.value?.scrollIntoView({ block: 'end', behavior: 'smooth' }))
@@ -264,6 +307,16 @@ function applySuggested(question: string): void {
   stopVoiceInput()
 }
 
+function resendAsMedicationSafety(replyIndex: number): void {
+  for (let index = replyIndex - 1; index >= 0; index -= 1) {
+    const entry = history.value[index]
+    if (entry?.role === 'user') {
+      void send(entry.content, 'MEDICATION_SAFETY')
+      return
+    }
+  }
+}
+
 function summarizeAgentTrace(reply: AssistantResponse): string | undefined {
   const traces = reply.agent_trace ?? []
   if (!traces.length) return undefined
@@ -302,7 +355,7 @@ function pushAssistantReply(reply: AssistantResponse): void {
   }
 }
 
-async function send(text?: string): Promise<void> {
+async function send(text?: string, queryTypeOverride?: string): Promise<void> {
   const content = (text ?? draft.value).trim()
   if (!content || sending.value) return
 
@@ -316,6 +369,8 @@ async function send(text?: string): Promise<void> {
   draft.value = ''
   sending.value = true
   sendError.value = ''
+  cancelStatus.value = ''
+  liveEvidencePreview.value = null
   orchestrationPhase.value = 'routing'
   scrollToEnd()
 
@@ -368,6 +423,8 @@ async function send(text?: string): Promise<void> {
     max_tokens: 1024,
     agent_mode: 'multi_agent' as const,
     allow_network_search: allowNetworkSearch.value,
+    query_type_override: queryTypeOverride,
+    assistant_session_id: assistantSessionId.value,
   }
   const householdId = session.currentHouseholdId || undefined
   const memberId = session.currentMemberId || undefined
@@ -375,6 +432,7 @@ async function send(text?: string): Promise<void> {
 
   let streamingAnswer = ''
   let streamStarted = false
+  let streamCancelled = false
 
   try {
     try {
@@ -390,6 +448,13 @@ async function send(text?: string): Promise<void> {
             streamingAnswer += token
             orchestrationPhase.value = 'generating'
           },
+          onEvidencePreview: (preview) => {
+            liveEvidencePreview.value = preview
+            scrollToEnd()
+          },
+          onCancelled: () => {
+            streamCancelled = true
+          },
         },
         householdId,
         memberId,
@@ -397,13 +462,8 @@ async function send(text?: string): Promise<void> {
       )
       pushAssistantReply(reply)
     } catch (streamError) {
-      if (controller.signal.aborted) {
-        history.value.push({
-          role: 'assistant',
-          content: '已停止本次回答。',
-          degraded: true,
-          degradeReason: 'cancelled',
-        })
+      if (controller.signal.aborted || streamCancelled || isAssistantCancellation(streamError)) {
+        cancelStatus.value = '已停止'
         return
       }
       if (streamStarted && streamingAnswer.trim()) {
@@ -421,13 +481,8 @@ async function send(text?: string): Promise<void> {
       pushAssistantReply(reply)
     }
   } catch (cause) {
-    if (controller.signal.aborted) {
-      history.value.push({
-        role: 'assistant',
-        content: '已停止本次回答。',
-        degraded: true,
-        degradeReason: 'cancelled',
-      })
+    if (controller.signal.aborted || isAssistantCancellation(cause)) {
+      cancelStatus.value = '已停止'
     } else {
       const message =
         cause instanceof ApiClientError
@@ -447,6 +502,7 @@ async function send(text?: string): Promise<void> {
     if (activeSendController === controller) activeSendController = null
     sending.value = false
     orchestrationPhase.value = null
+    liveEvidencePreview.value = null
   }
 }
 
@@ -461,9 +517,12 @@ function clearChat(): void {
   speech.stop()
   speakingIndex.value = null
   history.value = []
+  assistantSessionId.value = createAssistantSessionId()
   draft.value = ''
   sendError.value = ''
   voiceError.value = ''
+  cancelStatus.value = ''
+  liveEvidencePreview.value = null
   orchestrationPhase.value = null
 }
 
@@ -532,6 +591,14 @@ onBeforeUnmount(() => {
           >
             {{ speakingIndex === index ? '停止朗读' : '朗读回答' }}
           </button>
+          <button
+            type="button"
+            class="btn btn-secondary"
+            :disabled="sending"
+            @click="resendAsMedicationSafety(index)"
+          >
+            按用药安全再查一次
+          </button>
         </div>
         <div v-if="entry.suggestedQuestions?.length" class="suggestions">
           <button
@@ -548,7 +615,11 @@ onBeforeUnmount(() => {
       <div ref="chatEnd" />
     </section>
 
+    <p v-if="sending && evidencePreviewText" class="evidence-preview-line" role="status" aria-live="polite">
+      {{ evidencePreviewText }}
+    </p>
     <p v-if="sending" class="thinking-line" role="status" aria-live="polite">{{ thinkingText }}</p>
+    <p v-if="cancelStatus" class="meta-line" role="status" aria-live="polite">{{ cancelStatus }}</p>
     <p v-if="sendError" class="error-line" role="alert">{{ sendError }}</p>
     <p v-if="voiceError" class="error-line" role="status">{{ voiceError }}</p>
     <p v-if="voicePreview" class="voice-preview" role="status">{{ voicePreview }}</p>
@@ -715,5 +786,13 @@ onBeforeUnmount(() => {
   margin: 0;
   color: var(--accent);
   font-weight: 600;
+}
+.evidence-preview-line {
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  border-radius: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 0;
+  padding: 10px 12px;
 }
 </style>

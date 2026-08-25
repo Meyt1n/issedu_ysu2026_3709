@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 
-import { apiClient } from '../api/client'
+import { ApiClientError, apiClient } from '../api/client'
 import type {
   AssistantTool,
   KnowledgeDocument,
   KnowledgeRetrieveResponse,
+  WebSearchOpsSnapshot,
 } from '../api/types'
 import AppIcon from '../components/AppIcon.vue'
 import {
@@ -34,6 +35,10 @@ const retrieving = ref(false)
 const retrieveQuery = ref('')
 const snapshotVersion = ref('')
 const snapshotResult = ref('')
+const webSearchOps = ref<WebSearchOpsSnapshot | null>(null)
+const webSearchOpsLoading = ref(false)
+const webSearchOpsForbidden = ref(false)
+const webSearchOpsError = ref(false)
 
 const docDraft = reactive({
   title: '',
@@ -63,6 +68,28 @@ async function loadKnowledge(): Promise<void> {
   } finally {
     loading.value = false
   }
+}
+
+async function loadWebSearchOps(): Promise<void> {
+  webSearchOpsLoading.value = true
+  webSearchOpsForbidden.value = false
+  webSearchOpsError.value = false
+  try {
+    webSearchOps.value = await apiClient.getAssistantWebSearchOps(requestOptions.value)
+  } catch (cause) {
+    webSearchOps.value = null
+    if (cause instanceof ApiClientError && cause.status === 403) {
+      webSearchOpsForbidden.value = true
+    } else {
+      webSearchOpsError.value = true
+    }
+  } finally {
+    webSearchOpsLoading.value = false
+  }
+}
+
+function formatHitRate(value: number): string {
+  return `${(Math.max(0, Math.min(1, value)) * 100).toFixed(1)}%`
 }
 
 async function createDocument(): Promise<void> {
@@ -145,7 +172,10 @@ async function createSnapshot(): Promise<void> {
     busy.value = false
   }
 }
-onMounted(() => void loadKnowledge())
+onMounted(() => {
+  void loadKnowledge()
+  void loadWebSearchOps()
+})
 </script>
 
 <template>
@@ -252,6 +282,63 @@ onMounted(() => void loadKnowledge())
     </div>
 
     <div class="section-stack" style="align-self: start">
+      <section class="card">
+        <div class="card-heading">
+          <div>
+            <p class="eyebrow">只读运维</p>
+            <h3 class="card-title">联网搜索运行状态</h3>
+          </div>
+          <button
+            type="button"
+            class="btn btn-ghost btn-small"
+            :disabled="webSearchOpsLoading"
+            @click="loadWebSearchOps"
+          >
+            <AppIcon name="refresh" :size="14" />
+            刷新
+          </button>
+        </div>
+        <div v-if="webSearchOpsLoading" class="inline-loading" role="status">
+          <span class="loading-dots"><span /><span /><span /></span>
+          正在读取运行指标
+        </div>
+        <p v-else-if="webSearchOpsForbidden" class="text-faint" style="margin: 0">
+          当前账号无权查看运维指标
+        </p>
+        <p v-else-if="webSearchOpsError" class="card-note" style="margin: 0">
+          运行指标暂时不可用，可稍后刷新。
+        </p>
+        <template v-else-if="webSearchOps">
+          <div class="ops-status-line">
+            <span class="pill" :class="webSearchOps.web_search_ready ? 'sage' : 'gold'">
+              {{ webSearchOps.web_search_ready ? '已就绪' : '未就绪' }}
+            </span>
+            <span>Provider：<span class="mono">{{ webSearchOps.web_search_provider }}</span></span>
+          </div>
+          <dl class="ops-metrics">
+            <div>
+              <dt>缓存命中率</dt>
+              <dd>{{ formatHitRate(webSearchOps.cache_hit_rate) }}</dd>
+            </div>
+            <div>
+              <dt>限速次数</dt>
+              <dd>{{ webSearchOps.rate_limited_hits }}</dd>
+            </div>
+            <div>
+              <dt>缓存条目</dt>
+              <dd>{{ webSearchOps.cache_entries }}</dd>
+            </div>
+            <div>
+              <dt>实际搜索</dt>
+              <dd>{{ webSearchOps.searches }}</dd>
+            </div>
+          </dl>
+          <p class="text-faint" style="font-size: 12px; line-height: 1.55; margin: 10px 0 0">
+            指标不包含搜索正文、成员资料或健康记录。
+          </p>
+        </template>
+      </section>
+
       <section class="card">
         <div class="card-heading">
           <div>
