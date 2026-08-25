@@ -139,7 +139,12 @@ export function formatError(cause: unknown): string {
     if (cause.code === 'REQUEST_TIMEOUT') {
       return '本地服务响应超时：请求可能仍在后台处理。请稍候点“刷新”确认结果，再决定是否重试。'
     }
-    if (cause.code === 'DEPENDENCY_UNAVAILABLE') return '本地 API 服务不可用，本次没有改变任何数据。'
+    if (cause.code === 'DEPENDENCY_UNAVAILABLE') {
+      return (
+        '本地 API 服务不可用，本次没有改变任何数据。' +
+        '请确认 API 已在 8000 端口运行（本地进程 scripts/start api，或 Docker Compose 的 api 服务处于 healthy）后重试。'
+      )
+    }
     if (cause.status === 401) {
       if (cause.message === 'SESSION_REQUIRED' || cause.message === 'AUTH_REQUIRED') {
         return '此操作需要正式账号会话，请切换到“正式账号登录”后重试。'

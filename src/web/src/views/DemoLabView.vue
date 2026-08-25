@@ -4,7 +4,6 @@ import { onMounted, ref } from 'vue'
 import { apiClient } from '../api/client'
 import AppIcon from '../components/AppIcon.vue'
 import {
-  formatError,
   pushToast,
   requestOptions,
   selectHousehold,
@@ -16,6 +15,7 @@ import {
   getShowDemoHouseholds,
   setShowDemoHouseholds,
 } from '../ui/demoData'
+import { describeScenarioError, describeSeedError } from '../ui/demoLab'
 
 interface Scenario {
   id: string
@@ -29,15 +29,17 @@ const seeding = ref(false)
 const seedReport = ref<Record<string, unknown> | null>(null)
 const seedError = ref('')
 const scenarios = ref<Scenario[]>([])
+const scenarioError = ref('')
 const showDemo = ref(getShowDemoHouseholds())
 
 async function loadScenarios(): Promise<void> {
+  scenarioError.value = ''
   try {
     const data = await apiClient.listClassroomScenarios(requestOptions.value)
     scenarios.value = (data.scenarios ?? []) as Scenario[]
   } catch (cause) {
     scenarios.value = []
-    seedError.value = formatError(cause)
+    scenarioError.value = describeScenarioError(cause)
   }
 }
 
@@ -46,13 +48,16 @@ async function runSeed(): Promise<void> {
   seedError.value = ''
   try {
     seedReport.value = await apiClient.seedFormalDemoHealth(requestOptions.value)
-    pushToast('已补种虚构演示数据（幂等）', 'success')
+    pushToast('success', '已补种虚构演示数据（幂等）')
     if (typeof seedReport.value.household_id === 'string') {
       await selectHousehold(seedReport.value.household_id)
     }
+    if (scenarioError.value || !scenarios.value.length) {
+      void loadScenarios()
+    }
   } catch (cause) {
-    seedError.value = formatError(cause)
-    pushToast(seedError.value, 'error')
+    seedError.value = describeSeedError(cause)
+    pushToast('error', seedError.value)
   } finally {
     seeding.value = false
   }
@@ -62,7 +67,7 @@ function onToggleDemo(event: Event): void {
   const checked = (event.target as HTMLInputElement).checked
   showDemo.value = checked
   setShowDemoHouseholds(checked)
-  pushToast(checked ? '成员前台将显示演示家庭' : '成员前台默认隐藏演示家庭（仅剩演示时仍保留）', 'info')
+  pushToast('info', checked ? '成员前台将显示演示家庭' : '成员前台默认隐藏演示家庭（仅剩演示时仍保留）')
 }
 
 async function openScenario(scenario: Scenario): Promise<void> {
@@ -138,6 +143,12 @@ onMounted(() => {
       </div>
     </div>
     <div class="section-stack" style="gap: 12px">
+      <p v-if="scenarioError" class="notice error" role="alert">
+        {{ scenarioError }}
+        <button type="button" class="btn btn-ghost btn-small" @click="loadScenarios">
+          重新加载剧本
+        </button>
+      </p>
       <article v-for="scenario in scenarios" :key="scenario.id" class="row-card">
         <strong>{{ scenario.title }}</strong>
         <p>{{ scenario.summary }}</p>
@@ -145,7 +156,7 @@ onMounted(() => {
           打开对应页面
         </button>
       </article>
-      <p v-if="!scenarios.length" class="muted">加载剧本失败时，可先补种数据再刷新本页。</p>
+      <p v-if="!scenarios.length && !scenarioError" class="muted">暂无剧本可显示，请刷新本页重试。</p>
     </div>
   </section>
 </template>
