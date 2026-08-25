@@ -17,7 +17,10 @@ class HealthResponse(BaseModel):
 
 
 class AuthCredentials(BaseModel):
-    actor_id: str = Field(min_length=1, max_length=120)
+    # The same actor-id charset used for member account binding: rejecting
+    # whitespace/control characters at registration keeps log lines and audit
+    # rows injection-free and every registered account bindable to a member.
+    actor_id: str = Field(min_length=1, max_length=120, pattern=ACTOR_ID_PATTERN)
     password: str = Field(min_length=8, max_length=256)
 
 
@@ -72,6 +75,16 @@ class FaceCredentialRead(BaseModel):
     consented_at: datetime
     revoked_at: datetime | None
     created_at: datetime
+    upgrade_recommended: bool = False
+    template_count: int = 1
+
+
+class FaceAuthFailureSummaryRead(BaseModel):
+    """Desensitized FACE auth failure buckets; never includes scores or templates."""
+
+    days: int
+    totals: dict[str, int]
+    by_day: dict[str, dict[str, int]]
 
 
 # ── HCT-427: step-up confirmation and session revalidation ─────────
@@ -510,9 +523,44 @@ class RiskDetailResponse(BaseModel):
 # ── HCT-207: Manual review schemas ────────────────────────────────────
 
 
+class MedicationReviewPayload(BaseModel):
+    """Whitelist for medication confirm / correct health-event payloads.
+
+    Aligns with HCT-207 candidate cards and the fields HCT-103 / HCT-435
+    projection reads from ``medication_confirmed`` / ``medication_corrected``
+    events.  Unknown keys are rejected so a dirty dict cannot land in the
+    immutable event log.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    drug_name: str = Field(min_length=1, max_length=200)
+    drug: str | None = Field(default=None, max_length=200)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    evidence: list[str] = Field(default_factory=list)
+    dosage: str | None = Field(default=None, max_length=120)
+    frequency: str | None = Field(default=None, max_length=120)
+    candidate_id: str | None = Field(default=None, max_length=128)
+    rank: int | None = Field(default=None, ge=1)
+    conflicts: list[str] = Field(default_factory=list)
+    specification: str | None = Field(default=None, max_length=200)
+    manufacturer: str | None = Field(default=None, max_length=200)
+    active_ingredients: list[Any] = Field(default_factory=list)
+    indications: list[Any] = Field(default_factory=list)
+    cautions: list[Any] = Field(default_factory=list)
+    contraindications: list[Any] = Field(default_factory=list)
+    interaction_warnings: list[Any] = Field(default_factory=list)
+    master_data_version: str | None = Field(default=None, max_length=128)
+    expiry_date: str | None = Field(default=None, max_length=40)
+    stock: Any = None
+    ingredient: str | None = Field(default=None, max_length=200)
+
+
 class CandidateItem(BaseModel):
-    drug_name: str
-    confidence: float | None = None
+    """Compact candidate card shown in review UI (subset of the whitelist)."""
+
+    drug_name: str = Field(min_length=1, max_length=200)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     evidence: list[str] = Field(default_factory=list)
     dosage: str | None = None
     frequency: str | None = None
@@ -526,7 +574,7 @@ class ReviewTaskConfirm(BaseModel):
 
 class ReviewTaskCorrect(BaseModel):
     expected_version: int = Field(ge=1)
-    manual_payload: dict[str, Any] = Field(min_length=1)
+    manual_payload: MedicationReviewPayload
     correction_note: str | None = None
 
 
@@ -595,6 +643,9 @@ class VisionTaskRead(BaseModel):
     input_digest: str | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    lease_owner: str | None = None
+    lease_expires_at: datetime | None = None
+    attempt_count: int = Field(default=0, ge=0)
     created_by: str
     created_at: datetime
 
@@ -618,6 +669,19 @@ class VisionTaskRead(BaseModel):
             "next_action": actions.get(self.error_code, "请刷新任务状态并联系项目维护者。"),
         }
         return self
+
+
+class VisionTaskClaimRequest(BaseModel):
+    """Bounded worker claim request; the actor header identifies the worker."""
+
+    limit: int = Field(default=10, ge=1, le=100)
+    lease_seconds: int | None = Field(default=None, ge=30, le=86_400)
+
+
+class VisionTaskLeaseRequest(BaseModel):
+    """Optional lease extension for a long-running local inference."""
+
+    lease_seconds: int | None = Field(default=None, ge=30, le=86_400)
 
 
 class VisionTaskCleanupRequest(BaseModel):
@@ -718,6 +782,21 @@ class KnowledgeRetrieveResponse(BaseModel):
     query_id: str | None = None
     degraded: bool = False
     degrade_reason: str | None = None
+
+
+class KnowledgeQueryAuditRead(BaseModel):
+    """Minimal actor-scoped retrieval audit; never returns query text."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    query_digest: str = Field(min_length=64, max_length=64)
+    query_length: int = Field(ge=0)
+    household_id: str | None = None
+    member_id: str | None = None
+    returned_count: int = Field(ge=0)
+    top_chunk_count: int = Field(ge=0)
+    created_at: datetime
 
 
 # ── HCT-403: Ollama tool calling schemas ────────────────────────────

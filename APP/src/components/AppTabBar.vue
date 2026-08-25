@@ -22,7 +22,7 @@ const NORMAL_TABS: TabItem[] = [
   { to: '/me', label: '我的', icon: 'user' },
 ]
 
-/** 长辈模式：入口减到 4 个，突出求助。 */
+/** 长辈模式：入口减到 4 个，突出求助。助手页从「今日 / 我的」进入。 */
 const ELDER_TABS: TabItem[] = [
   { to: '/', label: '今日', icon: 'home' },
   { to: '/scan', label: '拍药盒', icon: 'camera' },

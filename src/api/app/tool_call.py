@@ -18,12 +18,21 @@ import json
 import logging
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import BaseModel, Field, ValidationError
+from ai.safety.lexicon import (
+    DATA_EXFILTRATION_TERMS,
+    FOLLOW_UP_RISK_TERMS,
+    MEDICAL_BOUNDARY_TERMS,
+    MEDICATION_SAFETY_ROUTE_TERMS,
+    URGENT_ROUTE_TERMS,
+    medical_boundary_hits,
+)
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -36,19 +45,11 @@ MAX_RETRIES = 2
 RETRY_BACKOFF = 2.0
 MAX_TOOL_ROUNDS = 3
 
-# Medical boundary keywords that must never appear in output
-_MEDICAL_PROHIBITIONS: list[str] = [
-    "诊断", "确诊", "处方", "给药", "建议停药", "建议换药",
-    "诊断:", "Diagnosis:", "Prescription:", "你应当", "你必须",
-    "buy", "purchase", "order", "点击购买", "咨询电话", "添加微信",
-]
-_DATA_EXFILTRATION_PROHIBITIONS: list[str] = [
-    "身份证号",
-    "身份证号码",
-    "联系方式",
-    "手机号码",
-    "银行卡号",
-]
+# Re-export shared lexicon names used by tests / callers that historically
+# imported the private module-level lists from this file.
+_MEDICAL_PROHIBITIONS: list[str] = list(MEDICAL_BOUNDARY_TERMS)
+_DATA_EXFILTRATION_PROHIBITIONS: list[str] = list(DATA_EXFILTRATION_TERMS)
+_FOLLOW_UP_RISK_TERMS = FOLLOW_UP_RISK_TERMS
 
 # Default degrade template when model is unavailable
 _DEGRADE_TEMPLATE = """当前助手服务暂时不可用。您可以：
@@ -172,12 +173,61 @@ class ToolDefinition(BaseModel):
 # ── Output Schemas ─────────────────────────────────────────────────────
 
 
+ASSISTANT_OUTPUT_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["answer", "sources", "confidence", "escalate"],
+    "properties": {
+        "answer": {"type": "string", "minLength": 1, "maxLength": 800},
+        "sources": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {"type": "string", "minLength": 1, "maxLength": 200},
+        },
+        "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+        "escalate": {"type": "boolean"},
+    },
+}
+
+
 class HealthAssistantOutput(BaseModel):
-    """Structured output schema for the health assistant."""
-    answer: str = Field(description="Natural language response to the user")
-    sources: list[str] = Field(default_factory=list, description="Referenced source IDs")
-    confidence: str = Field(default="low", description="high | medium | low")
+    """Structured output schema for the health assistant.
+
+    Validation order for every model turn:
+    1. JSON object parse (or degrade)
+    2. Field-level Pydantic / JSON-schema checks below
+    3. Shared medical / exfiltration / link blacklist as a final gate
+    """
+
+    answer: str = Field(min_length=1, max_length=800, description="Natural language response")
+    sources: list[str] = Field(default_factory=list, max_length=16, description="Source IDs")
+    confidence: Literal["high", "medium", "low"] = Field(default="low")
     escalate: bool = Field(default=False, description="Whether to escalate to a human")
+
+    @field_validator("answer")
+    @classmethod
+    def _answer_must_be_substantive(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("ANSWER_EMPTY")
+        if cleaned.casefold() in _PLACEHOLDER_ANSWER_LABELS:
+            raise ValueError("ANSWER_PLACEHOLDER")
+        return cleaned
+
+    @field_validator("sources")
+    @classmethod
+    def _sources_must_be_tokens(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for item in value:
+            if not isinstance(item, str):
+                raise ValueError("SOURCE_NOT_STRING")
+            token = item.strip()
+            if not token:
+                raise ValueError("SOURCE_EMPTY")
+            if len(token) > 200:
+                raise ValueError("SOURCE_TOO_LONG")
+            normalized.append(token)
+        return normalized[:16]
 
 
 class ToolCallRequest(BaseModel):
@@ -331,6 +381,7 @@ class OllamaClient:
         temperature: float = 0.3,
         max_tokens: int = 512,
         timeout: float | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Send a chat completion request to Ollama."""
         payload: dict[str, Any] = {
@@ -347,6 +398,11 @@ class OllamaClient:
         }
         if tools:
             payload["tools"] = tools
+        # Prefer schema-constrained JSON for the assistant contract.  Tool
+        # rounds still include tools; Ollama ignores unknown fields and uses
+        # format when emitting the final message content.
+        if response_format is not None:
+            payload["format"] = response_format
 
         last_error: str | None = None
         for attempt in range(MAX_RETRIES + 1):
@@ -361,11 +417,17 @@ class OllamaClient:
                 last_error = "TIMEOUT"
                 logger.warning("Ollama request timed out (attempt %d)", attempt + 1)
             except httpx.HTTPStatusError as exc:
-                last_error = f"HTTP_{exc.response.status_code}"
+                status_code = exc.response.status_code
+                last_error = f"HTTP_{status_code}"
                 logger.warning(
                     "Ollama HTTP error %s (attempt %d)",
-                    exc.response.status_code, attempt + 1,
+                    status_code, attempt + 1,
                 )
+                # A 4xx (other than 408/429) is deterministic — for example
+                # an unknown model name.  Retrying only delays the structured
+                # degrade response the caller is waiting for.
+                if 400 <= status_code < 500 and status_code not in (408, 429):
+                    break
             except Exception as exc:
                 last_error = str(exc)[:120]
                 logger.warning("Ollama connection error (attempt %d): %s", attempt + 1, exc)
@@ -385,8 +447,14 @@ class OllamaClient:
         temperature: float = 0.3,
         max_tokens: int = 512,
         timeout: float | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ):
-        """Stream chat completion chunks from Ollama."""
+        """Stream chat completion chunks from Ollama.
+
+        ``cancel_check`` is polled between chunks; when it returns True the
+        HTTP stream is abandoned and a RuntimeError is raised so the
+        orchestrator can stop without waiting for the full generation.
+        """
         payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
@@ -404,6 +472,8 @@ class OllamaClient:
             with client.stream("POST", f"{self.base_url}/api/chat", json=payload) as resp:
                 resp.raise_for_status()
                 for line in resp.iter_lines():
+                    if cancel_check is not None and cancel_check():
+                        raise RuntimeError("OLLAMA_CANCELLED")
                     if not line:
                         continue
                     data = json.loads(line)
@@ -419,17 +489,13 @@ class OllamaClient:
 
 
 def _check_medical_boundary(output_text: str) -> list[str]:
-    violations = []
-    for keyword in _MEDICAL_PROHIBITIONS:
-        if keyword.lower() in output_text.lower():
-            violations.append(keyword)
-    return violations
+    return medical_boundary_hits(output_text)
 
 
 def _check_data_exfiltration(output_text: str) -> list[str]:
     return [
         keyword
-        for keyword in _DATA_EXFILTRATION_PROHIBITIONS
+        for keyword in DATA_EXFILTRATION_TERMS
         if keyword.casefold() in output_text.casefold()
     ]
 
@@ -446,11 +512,6 @@ def _contains_external_links(output_text: str) -> bool:
 
 _FOLLOW_UP_MAX_COUNT = 3
 _FOLLOW_UP_MAX_LENGTH = 80
-_FOLLOW_UP_RISK_TERMS = (
-    "剂量", "吃多少", "多少吃", "怎么吃", "一次吃", "一天吃", "应该吃", "几粒", "几片",
-    "漏服", "补服", "补双倍", "同服", "一起吃", "相互作用", "停药", "换药", "过量", "误服",
-    "诊断", "处方",
-)
 _FOLLOW_UP_MEDICATION_TERMS = (
     "药", "用药", "服用", "吃什么", "吃哪", "阿莫西林", "布洛芬", "处方",
 )
@@ -490,20 +551,13 @@ def classify_question(query: str) -> str:
     knowledge retrieval before Ollama is allowed to produce an answer.
     """
     normalized = re.sub(r"\s+", "", query.casefold())
-    if any(term in normalized for term in (
-        "呼吸困难", "意识异常", "疑似中毒", "昏迷", "抽搐", "严重过敏",
-    )):
+    if any(term in normalized for term in URGENT_ROUTE_TERMS):
         return "URGENT"
     if any(term in normalized for term in ("一起吃", "一同服用", "共同服用")) and any(
         term in normalized for term in ("药", "阿莫西林", "布洛芬", "处方")
     ):
         return "MEDICATION_SAFETY"
-    if any(term in normalized for term in (
-        "能不能一起吃", "能否一起吃", "可以一起吃", "能不能同服", "能否同服",
-        "相互作用", "药物相互作用", "配伍", "停药", "换药", "调整剂量",
-        "一次吃多少", "一天吃几", "怎么服用", "吃多少", "同服",
-        "开个处方", "开处方", "帮我开药", "调整一下剂量", "剂量",
-    )):
+    if any(term in normalized for term in MEDICATION_SAFETY_ROUTE_TERMS):
         return "MEDICATION_SAFETY"
     if any(term in normalized for term in (
         "吃什么药", "正在用药", "在用药", "用药记录", "药品记录", "药品清单",
@@ -1197,6 +1251,7 @@ def _execute_get_document_metadata(
     member_id: str | None,
     arguments: dict[str, Any],
 ) -> dict[str, Any]:
+    from app.config import get_settings
     from app.knowledge import KnowledgeDocument, _check_permission
 
     document_id = str(arguments.get("document_id") or "").strip()
@@ -1210,6 +1265,8 @@ def _execute_get_document_metadata(
         actor_id,
         household_id,
         member_id,
+        doc_created_by=document.created_by,
+        knowledge_admin_ids=get_settings().knowledge_admin_actor_set,
     ):
         return {"error": "DOCUMENT_NOT_FOUND"}
     return {
@@ -1412,6 +1469,7 @@ def run_assistant(
                 temperature=request.temperature,
                 max_tokens=request.max_tokens,
                 timeout=timeout,
+                response_format=ASSISTANT_OUTPUT_JSON_SCHEMA,
             )
         except RuntimeError:
             return degraded("MODEL_UNAVAILABLE")
@@ -1573,7 +1631,9 @@ def parse_model_output(raw_text: str) -> HealthAssistantOutput:
 
     Handles the fine-tuned v5 contract drift: ``response`` instead of
     ``answer``, source objects instead of strings, thinking-block leakage
-    and malformed JSON (regex fallback).
+    and malformed JSON (regex fallback).  Field-level schema validation
+    runs inside ``HealthAssistantOutput``; medical blacklist is applied by
+    ``run_assistant`` afterwards.
     """
     text = strip_thinking(raw_text)
     parsed = _extract_json_object(text)
@@ -1581,11 +1641,15 @@ def parse_model_output(raw_text: str) -> HealthAssistantOutput:
         answer = parsed.get("answer") or parsed.get("response") or parsed.get("content")
         if isinstance(answer, str) and answer.strip():
             confidence = parsed.get("confidence")
-            return HealthAssistantOutput(
-                answer=answer.strip(),
-                sources=_normalize_sources(parsed.get("sources")),
-                confidence=confidence if confidence in ("high", "medium", "low") else "low",
-                escalate=bool(parsed.get("escalate", False)),
+            return HealthAssistantOutput.model_validate(
+                {
+                    "answer": answer.strip(),
+                    "sources": _normalize_sources(parsed.get("sources")),
+                    "confidence": (
+                        confidence if confidence in ("high", "medium", "low") else "low"
+                    ),
+                    "escalate": bool(parsed.get("escalate", False)),
+                }
             )
     return _parse_loose_output(text)
 

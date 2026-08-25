@@ -156,12 +156,23 @@ test('家庭成员进入前台，只看到自己的照护入口和已确认记�
   await expect(page.getByText('allergy_conflict')).toHaveCount(0)
   await expect(page.getByText('SEVERE')).toHaveCount(0)
 
+  await expect(page.getByText('健康信息只保存在家里 · 详见使用帮助')).toBeVisible()
+
   await page.evaluate(() => {
     localStorage.setItem('hct-vision-tasks:grandma-account', JSON.stringify(['member-task-1']))
   })
   await page.locator('aside.sidebar').getByRole('button', { name: '我的家庭', exact: true }).click()
+  // 「需要留意」应排在待确认照片块之前，避免长辈先滑到底才看见风险
+  const riskBox = page.locator('[aria-label="需要留意的情况"]')
+  const pendingBox = page.locator('[aria-label="等待家人确认的照片"]')
+  await expect(riskBox).toBeVisible()
+  await expect(pendingBox).toBeVisible()
+  const riskY = (await riskBox.boundingBox())?.y ?? Number.POSITIVE_INFINITY
+  const pendingY = (await pendingBox.boundingBox())?.y ?? 0
+  expect(riskY).toBeLessThan(pendingY)
   await expect(page.getByRole('heading', { name: '等待家人确认的照片' })).toBeVisible()
   await expect(page.getByText('正在看照片', { exact: true }).first()).toBeVisible()
+  await expect(page.getByRole('button', { name: '看看进度' })).toBeVisible()
   await page.locator('aside.sidebar').getByRole('button', { name: '拍照录药', exact: true }).click()
   await expect(page.getByRole('heading', { name: '把药盒拍清楚就可以了' })).toBeVisible()
   await expect(page.getByText('正在看照片', { exact: true }).first()).toBeVisible()
@@ -169,7 +180,54 @@ test('家庭成员进入前台，只看到自己的照护入口和已确认记�
   await page.locator('aside.sidebar').getByRole('button', { name: '我的记录', exact: true }).click()
   await expect(page.getByRole('heading', { name: '奶奶的健康记录' })).toBeVisible()
   await expect(page.getByText('药品：布洛芬缓释胶囊')).toBeVisible()
-  await expect(page.getByText('这里只展示家人确认过的内容')).toBeVisible()
+  await expect(page.getByText('只展示家人确认过的内容')).toBeVisible()
+})
+
+test('识别失败时首页主按钮改为去重拍，快捷入口同步为重拍药盒', async ({ page }) => {
+  await installMemberApi(page)
+  await page.route('**/api/v1/vision-tasks/member-task-1', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: 'member-task-1',
+        household_id: household.id,
+        member_id: member.id,
+        file_id: 'member-photo-1.jpg',
+        task_type: 'medicine',
+        status: 'failed',
+        error_code: 'MODEL_INFERENCE_ERROR',
+        error_message: 'synthetic blur',
+        error_detail: null,
+        result: null,
+        model_version: null,
+        model_threshold: null,
+        schema_version: null,
+        code_version: null,
+        data_version: null,
+        preprocess_version: null,
+        input_digest: null,
+        created_by: member.actor_id,
+        created_at: '2026-08-24T08:00:00Z',
+      }),
+    })
+  })
+  await page.goto('/')
+  await page.getByLabel('开发身份标识').fill('grandma-account')
+  await page.getByRole('button', { name: '进入家庭空间' }).click()
+  await page.evaluate(() => {
+    localStorage.setItem('hct-vision-tasks:grandma-account', JSON.stringify(['member-task-1']))
+  })
+  await page.locator('aside.sidebar').getByRole('button', { name: '我的家庭', exact: true }).click()
+
+  await expect(page.getByRole('heading', { name: '有照片需要重新拍' })).toBeVisible()
+  await expect(page.getByText('没看清楚，请重新拍一张')).toBeVisible()
+  await expect(page.getByRole('button', { name: '去重拍' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '看看进度' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /重拍药盒/ })).toBeVisible()
+
+  await page.getByRole('button', { name: '去重拍' }).click()
+  await expect(page.getByRole('heading', { name: '把药盒拍清楚就可以了' })).toBeVisible()
 })
 
 /* ── HCT-439 阶段四/六：成员拍照 → 待确认 → 管理员确认 → 前台可见（mock API 全链路 UI 演示，

@@ -5,7 +5,7 @@ import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from queue import Queue
-from threading import Thread
+from threading import Event, Thread
 from typing import Any, NoReturn
 
 from ai.vision.candidate_fusion import (
@@ -52,6 +52,7 @@ from app.auth import (
     create_face_challenge,
     create_face_session,
     create_family_face_challenge,
+    enforce_registration_rate_limit,
     family_face_rate_actor,
     generate_pin_challenge,
     introspect_session,
@@ -83,27 +84,38 @@ from app.event_service import (
 )
 from app.face_credentials import (
     FACE_CONSENT_VERSION,
-    FACE_MATCH_THRESHOLD,
-    FAMILY_FACE_MATCH_MARGIN,
+    FACE_FEATURE_VERSION_MULTI,
     LEGACY_FACE_ALGORITHM_VERSION,
+    V2_FACE_ALGORITHM_VERSION,
+    aggregate_match_scores,
     check_face_liveness,
     decrypt_template,
     encrypt_template,
     extract_face_template,
     extract_legacy_face_template,
-    face_template_similarity,
+    extract_v2_face_template,
+    face_models_ready,
+    family_match_margin_for,
+    is_legacy_face_algorithm,
+    match_threshold_for,
+    normalize_face_failure_reason,
+    pack_face_templates,
+    ranking_margin,
+    score_probe_against_gallery,
+    unpack_face_templates,
 )
 from app.file_upload import (
     compute_hash,
     delete_file_tree,
+    file_owner,
     validate_and_store,
     validate_extension,
     validate_filename,
     validate_magic,
     validate_size,
 )
-from app.knowledge import KnowledgeDocument
-from app.local_agents import get_agent_catalog, run_local_multi_agent
+from app.knowledge import KnowledgeDocument, RetrievalQuery
+from app.local_agents import OrchestrationCancelled, get_agent_catalog, run_local_multi_agent
 from app.models import (
     AccessAudit,
     CareAuthorization,
@@ -158,6 +170,7 @@ from app.schemas import (
     ExportManifestCreate,
     ExportManifestInvalidate,
     ExportManifestRead,
+    FaceAuthFailureSummaryRead,
     FaceChallengeRead,
     FaceChallengeRequest,
     FaceCredentialRead,
@@ -175,6 +188,7 @@ from app.schemas import (
     HouseholdUpdate,
     KnowledgeDocumentCreate,
     KnowledgeDocumentRead,
+    KnowledgeQueryAuditRead,
     KnowledgeRetrieveRequest,
     KnowledgeRetrieveResponse,
     MemberAccountBindingUpdate,
@@ -215,9 +229,11 @@ from app.schemas import (
     TrainingConsentRevoke,
     VisionFusionRead,
     VisionQualityRead,
+    VisionTaskClaimRequest,
     VisionTaskCleanupRead,
     VisionTaskCleanupRequest,
     VisionTaskCreate,
+    VisionTaskLeaseRequest,
     VisionTaskRead,
 )
 from app.security import (
@@ -238,10 +254,13 @@ from app.vision_tasks import (
     VISION_MEDIA_TYPES,
     VisionTaskStatus,
     _file_digest,
+    assert_vision_task_lease,
+    claim_vision_tasks,
     cleanup_expired_video_files,
     create_vision_task,
     get_vision_task,
     list_vision_tasks,
+    renew_vision_task_lease,
     retry_vision_task,
     transition_status,
 )
@@ -251,6 +270,15 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1")
 settings = get_settings()
+
+
+def _face_extractor_for_algorithm(algorithm_version: str):
+    """Resolve extractors via this module so contract tests can monkeypatch them."""
+    if algorithm_version == LEGACY_FACE_ALGORITHM_VERSION:
+        return extract_legacy_face_template
+    if algorithm_version == V2_FACE_ALGORITHM_VERSION:
+        return extract_v2_face_template
+    return extract_face_template
 
 
 def _raise_resource_not_found() -> NoReturn:
@@ -404,6 +432,10 @@ def capabilities() -> CapabilityResponse:
         available.append("vision-task-video")
     else:
         unavailable.append("vision-task-video")
+    if face_models_ready():
+        available.append("face-recognition-local")
+    else:
+        unavailable.append("face-recognition-local")
     return CapabilityResponse(phase="P0-foundation", available=available, unavailable=unavailable)
 
 
@@ -1568,8 +1600,8 @@ async def upload_file(
     file: UploadFile = File(...),
     actor_id: str = Depends(get_actor_id),
 ) -> dict:
-    """Upload a file with validation, store with random key."""
-    result = await validate_and_store(file)
+    """Upload a file with validation, store with random key bound to the uploader."""
+    result = await validate_and_store(file, owner=actor_id)
     logger.info(
         "FILE_UPLOADED actor=%s key=%s size=%d",
         actor_id,
@@ -1579,37 +1611,129 @@ async def upload_file(
     return result
 
 
+def _actor_can_read_stored_file(
+    session: Session,
+    storage_key: str,
+    actor_id: str,
+    access_purpose: str | None,
+) -> bool:
+    """Allow non-uploaders to read a file only through an authorized vision task.
+
+    Mirrors ``_require_vision_task_access``: the review flow legitimately lets
+    a household owner (or an authorized caregiver) open evidence uploaded by a
+    member, but only when a vision task links the file to their household.
+    """
+    tasks = session.scalars(
+        select(VisionTask).where(VisionTask.file_id == storage_key)
+    ).all()
+    for task in tasks:
+        if not task.member_id:
+            if task.created_by == actor_id:
+                return True
+            continue
+        member = session.get(Member, task.member_id)
+        household = session.get(Household, task.household_id)
+        if member is None or household is None or _is_erased(household, member):
+            continue
+        if has_member_read_access(session, household, member.id, actor_id, access_purpose):
+            return True
+    return False
+
+
+def _actor_can_delete_stored_file(session: Session, storage_key: str, actor_id: str) -> bool:
+    """Allow household owners to delete evidence linked to their household tasks."""
+    tasks = session.scalars(
+        select(VisionTask).where(VisionTask.file_id == storage_key)
+    ).all()
+    for task in tasks:
+        household = session.get(Household, task.household_id)
+        if household is None or _is_erased(household):
+            continue
+        if household.created_by == actor_id:
+            return True
+    return False
+
+
 @router.get("/files/{storage_key}")
 def download_file(
     storage_key: str,
     actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
 ) -> FileResponse:
-    """Download a previously uploaded file by storage key."""
+    """Download a stored file: uploader always, others via an authorized vision task.
+
+    Legacy objects without ownership metadata are fail-closed: they are readable
+    only through the same vision-task authorization path (never by key alone).
+    """
     settings = get_settings()
     root = Path(settings.file_root).resolve()
     target = (root / storage_key).resolve()
 
-    if not str(target).startswith(str(root)):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="FILE_NOT_FOUND")
-    if not target.exists():
+    if not target.is_relative_to(root) or not target.is_file():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="FILE_NOT_FOUND")
 
+    owner = file_owner(storage_key)
+    if owner is None or owner != actor_id:
+        if not _actor_can_read_stored_file(session, storage_key, actor_id, access_purpose):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="FILE_NOT_FOUND")
+
     logger.info("FILE_DOWNLOADED actor=%s key=%s", actor_id, storage_key)
-    return FileResponse(str(target))
+    return FileResponse(
+        str(target),
+        filename=Path(storage_key).name,
+        content_disposition_type="attachment",
+    )
 
 
 @router.delete("/files/{storage_key}")
 def delete_file(
     storage_key: str,
     actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
 ) -> dict:
-    """Delete a file and its thumbnails/cache/index entries."""
+    """Delete a file and its thumbnails/cache/index entries.
+
+    Uploaders may always delete their own objects. Household owners may delete
+    evidence linked to a vision task in their household (audited). Legacy
+    objects without ownership metadata follow the same rules (no open delete).
+    Erasure tasks delete server-side and are not affected.
+    """
+    owner = file_owner(storage_key)
+    as_uploader = owner == actor_id
+    as_household_owner = _actor_can_delete_stored_file(session, storage_key, actor_id)
+    if not as_uploader and not as_household_owner:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="FILE_NOT_FOUND")
+
+    audit_household_id: str | None = None
+    if as_household_owner and not as_uploader:
+        task = session.scalar(select(VisionTask).where(VisionTask.file_id == storage_key))
+        if task is not None:
+            audit_household_id = task.household_id
+
     deleted = delete_file_tree(storage_key)
+    if audit_household_id is not None:
+        session.add(
+            AccessAudit(
+                household_id=audit_household_id,
+                authorization_id=None,
+                actor_id=actor_id,
+                operation="DELETE",
+                action="DELETE_FILE",
+                data_field="file",
+                purpose=None,
+                outcome="ALLOWED",
+                reason="HOUSEHOLD_OWNER_EVIDENCE_CLEANUP",
+                request_id=current_request_id(),
+            )
+        )
+        session.commit()
     logger.info(
-        "FILE_DELETED actor=%s key=%s deleted_paths=%d",
+        "FILE_DELETED actor=%s key=%s deleted_paths=%d owner_cleanup=%s",
         actor_id,
         storage_key,
         len(deleted),
+        audit_household_id is not None,
     )
     return {"storage_key": storage_key, "deleted_paths": len(deleted)}
 
@@ -1620,8 +1744,15 @@ def delete_file(
 @router.post("/auth/register", response_model=dict, status_code=status.HTTP_201_CREATED)
 def auth_register(
     payload: AuthCredentials,
+    request: Request,
     session: Session = Depends(get_session),
 ) -> dict:
+    client_host = request.client.host if request.client else None
+    enforce_registration_rate_limit(
+        session,
+        actor_id=payload.actor_id,
+        client_key=client_host,
+    )
     register_account(payload.actor_id, payload.password, session)
     # Commit before the browser follows registration with a separate login
     # request; the dependency also commits successful requests at the boundary.
@@ -1715,7 +1846,7 @@ async def auth_face_login(
 ) -> dict[str, Any]:
     """Match an in-memory motion sequence and issue the normal Bearer session."""
     try:
-        rate_key = check_face_rate_limit(household_id, actor_id)
+        rate_key = check_face_rate_limit(household_id, actor_id, session)
     except HTTPException:
         _record_authentication_audit(
             session,
@@ -1728,14 +1859,14 @@ async def auth_face_login(
         raise
 
     def failed(reason: str = "FACE_AUTH_FAILED") -> NoReturn:
-        record_face_failure(rate_key)
+        record_face_failure(rate_key, session)
         _record_authentication_audit(
             session,
             household_id=household_id,
             actor_id=actor_id,
             method="FACE",
             outcome="FAILED",
-            reason=reason,
+            reason=normalize_face_failure_reason(reason),
         )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="FACE_AUTH_FAILED")
 
@@ -1758,6 +1889,7 @@ async def auth_face_login(
 
     frame_bytes: list[bytes] = []
     templates: list[bytes] = []
+    yaws: list[float] = []
     try:
         if len(frames) < 2 or len(frames) > 3:
             failed("FRAME_COUNT_INVALID")
@@ -1781,21 +1913,23 @@ async def auth_face_login(
             )
             if not quality["allow_downstream"]:
                 failed("FRAME_QUALITY_INVALID")
-            extractor = (
-                extract_legacy_face_template
-                if credential.algorithm_version == LEGACY_FACE_ALGORITHM_VERSION
-                else extract_face_template
-            )
-            template, _ = extractor(data)
+            extractor = _face_extractor_for_algorithm(credential.algorithm_version)
+            if credential.algorithm_version.startswith("opencv-yunet-sface"):
+                template, frame_meta = extractor(data)
+                yaws.append(float(frame_meta.get("yaw", 0.0)))
+            else:
+                template, _ = extractor(data)
             templates.append(template)
         try:
-            check_face_liveness(templates)
+            pose_yaws = yaws if settings.face_require_pose_liveness and yaws else None
+            check_face_liveness(templates, pose_yaws)
         except ValueError as exc:
             if str(exc) == "FACE_LIVENESS_FAILED":
                 failed("LIVENESS_FAILED")
             failed("FACE_MATCH_FAILED")
         try:
             stored_template = decrypt_template(credential.encrypted_template)
+            gallery = unpack_face_templates(stored_template)
         except HTTPException as exc:
             _record_authentication_audit(
                 session,
@@ -1809,10 +1943,14 @@ async def auth_face_login(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="FACE_AUTH_UNAVAILABLE",
             ) from exc
-        best_similarity = max(
-            face_template_similarity(template, stored_template) for template in templates
+        except ValueError:
+            failed("FACE_MATCH_FAILED")
+        # Every frame must match the enrolled gallery (best angle per frame),
+        # then take the minimum across frames so one stolen photo cannot pass.
+        match_score = aggregate_match_scores(
+            [score_probe_against_gallery(template, gallery) for template in templates]
         )
-        if best_similarity < FACE_MATCH_THRESHOLD:
+        if match_score < match_threshold_for(credential.algorithm_version):
             failed()
     except HTTPException:
         raise
@@ -1836,7 +1974,7 @@ async def auth_face_login(
             frame_bytes[index] = b""
         templates.clear()
 
-    clear_face_failures(rate_key)
+    clear_face_failures(rate_key, session)
     _record_authentication_audit(
         session,
         household_id=household_id,
@@ -1862,7 +2000,7 @@ async def auth_family_face_login(
     """Identify one member inside the already bound household (1:N)."""
     rate_actor = family_face_rate_actor()
     try:
-        rate_key = check_face_rate_limit(household_id, rate_actor)
+        rate_key = check_face_rate_limit(household_id, rate_actor, session)
     except HTTPException:
         _record_authentication_audit(
             session,
@@ -1875,14 +2013,14 @@ async def auth_family_face_login(
         raise
 
     def failed(reason: str = "FACE_AUTH_FAILED") -> NoReturn:
-        record_face_failure(rate_key)
+        record_face_failure(rate_key, session)
         _record_authentication_audit(
             session,
             household_id=household_id,
             actor_id=rate_actor,
             method="FACE",
             outcome="FAILED",
-            reason=reason,
+            reason=normalize_face_failure_reason(reason),
         )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="FACE_AUTH_FAILED")
 
@@ -1910,6 +2048,7 @@ async def auth_family_face_login(
 
     frame_bytes: list[bytes] = []
     templates_by_algorithm: dict[str, list[bytes]] = {}
+    yaws_by_algorithm: dict[str, list[float]] = {}
     try:
         if len(frames) < 2 or len(frames) > 3:
             failed("FRAME_COUNT_INVALID")
@@ -1934,48 +2073,64 @@ async def auth_family_face_login(
             if not quality["allow_downstream"]:
                 failed("FRAME_QUALITY_INVALID")
 
-        # A household may contain legacy v1 and current v2 credentials during
+        # A household may contain legacy v1/v2 and current v3 credentials during
         # migration, so derive each feature representation only once per
         # algorithm version and keep all raw frames in memory only.
         for algorithm_version in {credential.algorithm_version for credential in credentials}:
-            extractor = (
-                extract_legacy_face_template
-                if algorithm_version == LEGACY_FACE_ALGORITHM_VERSION
-                else extract_face_template
-            )
-            extracted = [extractor(data)[0] for data in frame_bytes]
+            extractor = _face_extractor_for_algorithm(algorithm_version)
+            extracted: list[bytes] = []
+            yaws: list[float] = []
+            for data in frame_bytes:
+                template, frame_meta = extractor(data)
+                extracted.append(template)
+                if algorithm_version.startswith("opencv-yunet-sface"):
+                    yaws.append(float(frame_meta.get("yaw", 0.0)))
             try:
-                check_face_liveness(extracted)
+                pose_yaws = yaws if settings.face_require_pose_liveness and yaws else None
+                check_face_liveness(extracted, pose_yaws)
             except ValueError as exc:
                 if str(exc) == "FACE_LIVENESS_FAILED":
                     failed("LIVENESS_FAILED")
                 failed("FACE_MATCH_FAILED")
             templates_by_algorithm[algorithm_version] = extracted
+            yaws_by_algorithm[algorithm_version] = yaws
 
-        candidates: list[tuple[float, str]] = []
+        candidates: list[tuple[float, float, str, str]] = []
         decrypt_failures = 0
         for credential in credentials:
             try:
                 stored_template = decrypt_template(credential.encrypted_template)
+                gallery = unpack_face_templates(stored_template)
                 templates = templates_by_algorithm[credential.algorithm_version]
-                score = max(
-                    face_template_similarity(template, stored_template) for template in templates
+                # Same rule as 1:1 login: all frames must match one member gallery.
+                score = aggregate_match_scores(
+                    [score_probe_against_gallery(template, gallery) for template in templates]
                 )
             except (HTTPException, ValueError, KeyError):
                 decrypt_failures += 1
                 continue
-            candidates.append((score, credential.actor_id))
+            candidates.append(
+                (
+                    ranking_margin(score, credential.algorithm_version),
+                    score,
+                    credential.actor_id,
+                    credential.algorithm_version,
+                )
+            )
         if not candidates:
             if decrypt_failures:
                 raise RuntimeError("FACE_CREDENTIALS_UNAVAILABLE")
             failed("CREDENTIAL_UNAVAILABLE")
 
         candidates.sort(key=lambda item: item[0], reverse=True)
-        best_score, best_actor_id = candidates[0]
-        second_score = candidates[1][0] if len(candidates) > 1 else None
-        if best_score < FACE_MATCH_THRESHOLD:
+        best_margin, best_score, best_actor_id, best_algorithm = candidates[0]
+        second_margin = candidates[1][0] if len(candidates) > 1 else None
+        if best_margin < 0 or best_score < match_threshold_for(best_algorithm):
             failed("NO_MATCH")
-        if second_score is not None and best_score - second_score < FAMILY_FACE_MATCH_MARGIN:
+        if (
+            second_margin is not None
+            and best_margin - second_margin < family_match_margin_for(best_algorithm)
+        ):
             # A close race between two family members is not safe to resolve
             # automatically; the UI falls back to PIN/explicit account login.
             failed("AMBIGUOUS_MATCH")
@@ -2003,7 +2158,7 @@ async def auth_family_face_login(
             templates.clear()
         templates_by_algorithm.clear()
 
-    clear_face_failures(rate_key)
+    clear_face_failures(rate_key, session)
     _record_authentication_audit(
         session,
         household_id=household_id,
@@ -2138,6 +2293,26 @@ def _confirm_face_registration(
     verify_reauthentication(actor_id, household_id, confirmation_method, confirmation_code, session)
 
 
+def _face_credential_read(credential: FaceCredential) -> FaceCredentialRead:
+    template_count = 3 if "multi" in (credential.feature_version or "") else 1
+    return FaceCredentialRead(
+        id=credential.id,
+        household_id=credential.household_id,
+        actor_id=credential.actor_id,
+        algorithm_version=credential.algorithm_version,
+        feature_version=credential.feature_version,
+        credential_version=credential.credential_version,
+        consent_version=credential.consent_version,
+        status=credential.status,  # type: ignore[arg-type]
+        created_by=credential.created_by,
+        consented_at=credential.consented_at,
+        revoked_at=credential.revoked_at,
+        created_at=credential.created_at,
+        upgrade_recommended=is_legacy_face_algorithm(credential.algorithm_version),
+        template_count=template_count,
+    )
+
+
 @router.get(
     "/households/{household_id}/face-credentials",
     response_model=list[FaceCredentialRead],
@@ -2146,9 +2321,9 @@ def list_face_credentials(
     household_id: str,
     actor_id: str = Depends(get_actor_id),
     session: Session = Depends(get_session),
-) -> list[FaceCredential]:
+) -> list[FaceCredentialRead]:
     require_household_owner(session, household_id, actor_id)
-    return list(
+    rows = list(
         session.scalars(
             select(FaceCredential)
             .where(
@@ -2158,6 +2333,41 @@ def list_face_credentials(
             .order_by(FaceCredential.created_at.desc())
         ).all()
     )
+    return [_face_credential_read(row) for row in rows]
+
+
+@router.get(
+    "/households/{household_id}/auth-audit/face-summary",
+    response_model=FaceAuthFailureSummaryRead,
+)
+def face_auth_failure_summary(
+    household_id: str,
+    days: int = 7,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> FaceAuthFailureSummaryRead:
+    """Owner-only desensitized FACE failure buckets (no scores/templates/images)."""
+    require_household_owner(session, household_id, actor_id)
+    window_days = max(1, min(int(days), 30))
+    since = datetime.now(UTC) - timedelta(days=window_days)
+    rows = session.scalars(
+        select(AccessAudit).where(
+            AccessAudit.household_id == household_id,
+            AccessAudit.operation == "AUTHENTICATION",
+            AccessAudit.action == "FACE_LOGIN",
+            AccessAudit.outcome == "FAILED",
+            AccessAudit.created_at >= since,
+        )
+    ).all()
+    totals: dict[str, int] = {}
+    by_day: dict[str, dict[str, int]] = {}
+    for row in rows:
+        bucket = normalize_face_failure_reason(row.reason or "FACE_AUTH_FAILED")
+        totals[bucket] = totals.get(bucket, 0) + 1
+        day_key = row.created_at.astimezone(UTC).date().isoformat()
+        day_bucket = by_day.setdefault(day_key, {})
+        day_bucket[bucket] = day_bucket.get(bucket, 0) + 1
+    return FaceAuthFailureSummaryRead(days=window_days, totals=totals, by_day=by_day)
 
 
 @router.post(
@@ -2203,6 +2413,19 @@ async def register_face_credential(
     if active is not None and not replace_existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="FACE_CREDENTIAL_EXISTS")
 
+    # Verify the PIN/password/step-up confirmation before touching any
+    # biometric pixels: without a valid second factor the endpoint must not
+    # act as a face-quality/liveness oracle or burn CPU on frame processing.
+    _confirm_face_registration(
+        actor_id=actor_id,
+        household_id=household.id,
+        session_token=session_token,
+        confirmation_method=confirmation_method,
+        confirmation_code=confirmation_code,
+        confirmation_challenge_id=confirmation_challenge_id,
+        session=session,
+    )
+
     # ``file`` remains accepted for one release so old local clients do not
     # break. The web UI always sends a 2–3 frame dynamic sequence.
     uploads = list(frames)
@@ -2214,7 +2437,9 @@ async def register_face_credential(
             detail="FACE_LIVENESS_FAILED",
         )
     templates: list[bytes] = []
+    yaws: list[float] = []
     metadata: dict[str, Any] | None = None
+    packed_template = b""
     try:
         from ai.vision.quality_gate import assess_image, decode_image
 
@@ -2238,28 +2463,26 @@ async def register_face_credential(
             )
             if not quality["allow_downstream"]:
                 raise ValueError("FACE_FRAME_LOW_QUALITY")
-            template, frame_metadata = extract_face_template(image_bytes)
+            # Geometry gates (face size/pose/blur) run inside extract_face_template.
+            template, frame_metadata = extract_face_template(image_bytes, enforce_geometry=True)
             templates.append(template)
+            yaws.append(float(frame_metadata.get("yaw", 0.0)))
             metadata = frame_metadata
             image_bytes = b""
         try:
-            check_face_liveness(templates)
+            pose_yaws = yaws if settings.face_require_pose_liveness else None
+            check_face_liveness(templates, pose_yaws)
         except ValueError as exc:
             raise ValueError("FACE_LIVENESS_FAILED") from exc
-        # Store the sequence's most representative frame, not a potentially
-        # extreme turn. This keeps the encrypted schema compact and stable.
-        representative_index = max(
-            range(len(templates)),
-            key=lambda index: (
-                sum(
-                    face_template_similarity(templates[index], other)
-                    for other in templates
-                    if other is not templates[index]
-                )
-                / max(1, len(templates) - 1)
-            ),
-        )
-        template = templates[representative_index]
+        # Keep every angle in an encrypted multi-template gallery so login can
+        # tolerate mild head turns without lowering the match threshold.
+        packed_template = pack_face_templates(templates)
+        if metadata is not None and len(templates) > 1:
+            metadata = {
+                **metadata,
+                "feature_version": FACE_FEATURE_VERSION_MULTI,
+                "template_count": len(templates),
+            }
     except RuntimeError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2273,34 +2496,29 @@ async def register_face_credential(
     finally:
         # Drop all decoded registration frames before touching the database.
         templates.clear()
+        yaws.clear()
 
-    if metadata is None:
+    if metadata is None or not packed_template:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="FACE_FRAME_INVALID",
         )
 
-    _confirm_face_registration(
-        actor_id=actor_id,
-        household_id=household.id,
-        session_token=session_token,
-        confirmation_method=confirmation_method,
-        confirmation_code=confirmation_code,
-        confirmation_challenge_id=confirmation_challenge_id,
-        session=session,
-    )
     now = datetime.now(UTC)
     previous_version = active.credential_version if active is not None else 0
     if active is not None:
         active.status = "REVOKED"
         active.revoked_at = now
         active.encrypted_template = b""
+        # Rebinding replaces the trusted template, so household-scoped
+        # sessions issued under the previous credential stop working now.
+        revoke_household_sessions(household.id, {target}, session)
         session.flush()
 
     credential = FaceCredential(
         household_id=household.id,
         actor_id=target,
-        encrypted_template=encrypt_template(template),
+        encrypted_template=encrypt_template(packed_template),
         algorithm_version=metadata["algorithm_version"],
         feature_version=metadata["feature_version"],
         credential_version=previous_version + 1,
@@ -2335,7 +2553,7 @@ async def register_face_credential(
         credential.id,
         credential.credential_version,
     )
-    return credential
+    return _face_credential_read(credential)
 
 
 @router.delete(
@@ -2347,7 +2565,7 @@ def revoke_face_credential(
     credential_id: str,
     actor_id: str = Depends(get_actor_id),
     session: Session = Depends(get_session),
-) -> FaceCredential:
+) -> FaceCredentialRead:
     household = require_household_owner(session, household_id, actor_id)
     credential = session.scalar(
         select(FaceCredential).where(
@@ -2361,6 +2579,10 @@ def revoke_face_credential(
         credential.status = "DELETED"
         credential.revoked_at = datetime.now(UTC)
         credential.encrypted_template = b""
+        # HCT-426: revoking the credential must also cut live access that was
+        # obtained with it, so the account's household-scoped sessions
+        # (face/PIN issued) become invalid immediately.
+        revoke_household_sessions(household.id, {credential.actor_id}, session)
         session.add(
             AccessAudit(
                 household_id=household.id,
@@ -2378,7 +2600,7 @@ def revoke_face_credential(
         )
         session.commit()
         session.refresh(credential)
-    return credential
+    return _face_credential_read(credential)
 
 
 # ── HCT-301: Event timeline & projection ───────────────────────────
@@ -2955,13 +3177,23 @@ def list_knowledge_documents(
     """List active documents visible to the caller."""
     from app.knowledge import _check_permission
 
+    knowledge_admins = get_settings().knowledge_admin_actor_set
     stmt = (
         select(KnowledgeDocument)
         .where(KnowledgeDocument.status == "active")
         .order_by(KnowledgeDocument.created_at.desc())
     )
     docs = session.scalars(stmt).all()
-    return [d for d in docs if _check_permission(d.permission_scope, actor_id)]
+    return [
+        d
+        for d in docs
+        if _check_permission(
+            d.permission_scope or {},
+            actor_id,
+            doc_created_by=d.created_by,
+            knowledge_admin_ids=knowledge_admins,
+        )
+    ]
 
 
 @router.get("/knowledge/documents/{doc_id}", response_model=KnowledgeDocumentRead)
@@ -2975,7 +3207,12 @@ def get_knowledge_document(
     doc = session.get(KnowledgeDocument, doc_id)
     if doc is None or doc.status != "active":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="DOCUMENT_NOT_FOUND")
-    if not _check_permission(doc.permission_scope, actor_id):
+    if not _check_permission(
+        doc.permission_scope or {},
+        actor_id,
+        doc_created_by=doc.created_by,
+        knowledge_admin_ids=get_settings().knowledge_admin_actor_set,
+    ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="DOCUMENT_NOT_FOUND")
     return doc
 
@@ -3152,6 +3389,34 @@ def retrieve_knowledge(
             degraded=True,
             degrade_reason=reason,
         )
+
+
+@router.get("/knowledge/query-audit", response_model=list[KnowledgeQueryAuditRead])
+def list_knowledge_query_audit(
+    limit: int = Query(default=50, ge=1, le=100),
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> list[KnowledgeQueryAuditRead]:
+    """Return only the caller's privacy-safe retrieval audit summaries."""
+    entries = session.scalars(
+        select(RetrievalQuery)
+        .where(RetrievalQuery.actor_id == actor_id)
+        .order_by(RetrievalQuery.created_at.desc())
+        .limit(limit)
+    ).all()
+    return [
+        KnowledgeQueryAuditRead(
+            id=entry.id,
+            query_digest=entry.query_digest,
+            query_length=entry.query_length,
+            household_id=entry.household_id,
+            member_id=entry.member_id,
+            returned_count=entry.returned_count,
+            top_chunk_count=len(entry.top_chunk_ids or []),
+            created_at=entry.created_at,
+        )
+        for entry in entries
+    ]
 
 
 @router.delete("/knowledge/documents/{doc_id}")
@@ -3391,6 +3656,7 @@ def assistant_chat_stream(
         member_id=member_id,
     )
     event_queue: Queue[tuple[str, dict[str, Any]] | None] = Queue()
+    cancel_event = Event()
 
     def worker() -> None:
         worker_session = SessionLocal()
@@ -3400,6 +3666,9 @@ def assistant_chat_stream(
 
             def on_token(token: str) -> None:
                 event_queue.put(("token", {"token": token}))
+
+            def on_status(phase: str) -> None:
+                event_queue.put(("status", {"phase": phase}))
 
             def on_external_sources(
                 sources: list[dict[str, str]],
@@ -3424,10 +3693,19 @@ def assistant_chat_stream(
                 sensitive_values=[member_display_name],
                 on_trace=on_trace,
                 on_synthesis_token=on_token,
+                on_status=on_status,
                 on_external_sources=on_external_sources,
+                cancel_event=cancel_event,
             )
-            worker_session.commit()
-            event_queue.put(("done", {"response": result}))
+            if cancel_event.is_set():
+                worker_session.rollback()
+                event_queue.put(("error", {"message": "CANCELLED", "code": "CANCELLED"}))
+            else:
+                worker_session.commit()
+                event_queue.put(("done", {"response": result}))
+        except OrchestrationCancelled:
+            worker_session.rollback()
+            event_queue.put(("error", {"message": "CANCELLED", "code": "CANCELLED"}))
         except Exception as exc:
             worker_session.rollback()
             logger.exception("assistant chat stream failed")
@@ -3439,12 +3717,17 @@ def assistant_chat_stream(
     Thread(target=worker, daemon=True).start()
 
     def generate():
-        while True:
-            item = event_queue.get()
-            if item is None:
-                break
-            kind, data = item
-            yield f"event: {kind}\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
+        try:
+            while True:
+                item = event_queue.get()
+                if item is None:
+                    break
+                kind, data = item
+                payload = json.dumps(data, ensure_ascii=False, default=str)
+                yield f"event: {kind}\ndata: {payload}\n\n"
+        finally:
+            # Client disconnect or generator close: stop Ollama and workers.
+            cancel_event.set()
 
     return StreamingResponse(
         generate(),
@@ -3904,6 +4187,10 @@ def submit_vision_evidence_endpoint(
         action="WRITE_EVENTS",
         access_purpose=access_purpose,
     )
+    # HCT-441: once a worker has claimed the task, only that worker may
+    # publish evidence while its lease is still live.  Unclaimed queued
+    # tasks remain compatible with older local adapters.
+    assert_vision_task_lease(task, actor_id)
     if task.status in {
         VisionTaskStatus.SUCCEEDED,
         VisionTaskStatus.FAILED,
@@ -4111,6 +4398,29 @@ def list_my_vision_tasks_endpoint(
     return list(session.scalars(stmt).all())
 
 
+@router.post("/vision-tasks/claim", response_model=list[VisionTaskRead])
+def claim_vision_tasks_endpoint(
+    payload: VisionTaskClaimRequest,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> list[VisionTask]:
+    """Atomically claim this worker's queued tasks with expiring leases.
+
+    The actor header is both the task creator scope and the worker identity;
+    no worker can claim another actor's jobs.  Expired leases are recovered
+    before the next batch is selected, and exhausted jobs become ``timeout``.
+    """
+    tasks = claim_vision_tasks(
+        session,
+        actor_id=actor_id,
+        limit=min(payload.limit, settings.vision_worker_claim_batch_size),
+        lease_seconds=payload.lease_seconds or settings.vision_worker_lease_seconds,
+        max_attempts=settings.vision_worker_max_attempts,
+    )
+    session.commit()
+    return tasks
+
+
 @router.get("/vision-tasks/{task_id}", response_model=VisionTaskRead)
 def get_vision_task_endpoint(
     task_id: str,
@@ -4125,6 +4435,34 @@ def get_vision_task_endpoint(
         action="READ_EVENTS",
         access_purpose=access_purpose,
     )
+
+
+@router.post("/vision-tasks/{task_id}/lease", response_model=VisionTaskRead)
+def renew_vision_task_lease_endpoint(
+    task_id: str,
+    payload: VisionTaskLeaseRequest,
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> VisionTask:
+    """Renew a live worker lease immediately before publishing evidence."""
+    task = _require_vision_task_access(
+        session,
+        task_id,
+        actor_id=actor_id,
+        action="WRITE_EVENTS",
+        access_purpose=access_purpose,
+    )
+    if task.created_by != actor_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="VISION_TASK_NOT_FOUND")
+    renewed = renew_vision_task_lease(
+        session,
+        task,
+        worker_id=actor_id,
+        lease_seconds=payload.lease_seconds or settings.vision_worker_lease_seconds,
+    )
+    session.commit()
+    return renewed
 
 
 @router.get("/households/{household_id}/vision-tasks", response_model=list[VisionTaskRead])
@@ -5287,6 +5625,14 @@ def invalidate_export_manifest_endpoint(
 from app import model_binding as _mb  # noqa: E402
 
 
+def _can_govern_model_release(actor_id: str, binding: _mb.ModelVersionBinding) -> bool:
+    """Release activate/rollback: configured admins, else only the binding creator."""
+    admins = get_settings().model_release_admin_actor_set
+    if admins:
+        return actor_id in admins
+    return binding.created_by == actor_id
+
+
 def _mb_raise_val(err: str) -> NoReturn:
     mapping: dict[str, int] = {
         "BINDING_NOT_FOUND": 404,
@@ -5357,8 +5703,10 @@ def create_model_binding_endpoint(
 def list_model_bindings_endpoint(
     model_id: str | None = None,
     release_status: str | None = None,
+    actor_id: str = Depends(get_actor_id),
     session: Session = Depends(get_session),
 ) -> list[ModelVersionBindingRead]:
+    del actor_id  # Release-ledger metadata is D1 internal: identity required.
     bindings = _mb.list_bindings(session, model_id=model_id, release_status=release_status)
     return [ModelVersionBindingRead.model_validate(b) for b in bindings]
 
@@ -5369,8 +5717,10 @@ def list_model_bindings_endpoint(
 )
 def get_model_binding_endpoint(
     binding_id: str,
+    actor_id: str = Depends(get_actor_id),
     session: Session = Depends(get_session),
 ) -> ModelVersionBindingRead:
+    del actor_id
     binding = _mb.get_binding(session, binding_id)
     if binding is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="BINDING_NOT_FOUND")
@@ -5384,17 +5734,30 @@ def get_model_binding_endpoint(
 def activate_model_binding_endpoint(
     binding_id: str,
     payload: ModelVersionBindingActivate,
+    actor_id: str = Depends(get_actor_id),
     session: Session = Depends(get_session),
 ) -> ModelVersionBindingRead:
+    """Activate a model release. High-risk governance: identity + role required."""
     binding = _mb.get_binding(session, binding_id)
-    if binding is None:
+    if binding is None or not _can_govern_model_release(actor_id, binding):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="BINDING_NOT_FOUND")
+    if payload.approved_by != actor_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="APPROVED_BY_MUST_MATCH_ACTOR",
+        )
     try:
-        _mb.activate_binding(session, binding, approved_by=payload.approved_by)
+        _mb.activate_binding(session, binding, approved_by=actor_id)
     except ValueError as exc:
         _mb_raise_val(str(exc))
     session.commit()
     session.refresh(binding)
+    logger.info(
+        "MODEL_BINDING_ACTIVATE_REQUESTED binding=%s actor=%s approved_by=%s",
+        binding.id,
+        actor_id,
+        actor_id,
+    )
     return ModelVersionBindingRead.model_validate(binding)
 
 
@@ -5405,16 +5768,18 @@ def activate_model_binding_endpoint(
 def rollback_model_binding_endpoint(
     binding_id: str,
     payload: ModelVersionBindingRollback,
+    actor_id: str = Depends(get_actor_id),
     session: Session = Depends(get_session),
 ) -> ModelVersionBindingRead:
+    """Roll back a model release, attributed to the authenticated caller."""
     binding = _mb.get_binding(session, binding_id)
-    if binding is None:
+    if binding is None or not _can_govern_model_release(actor_id, binding):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="BINDING_NOT_FOUND")
     try:
         _mb.rollback_binding(
             session,
             binding,
-            actor_id="admin",
+            actor_id=actor_id,
             reason=payload.reason,
             evidence_hash=payload.evidence_hash,
         )
@@ -5428,8 +5793,10 @@ def rollback_model_binding_endpoint(
 @router.get("/model-version-bindings/{binding_id}/comparison", response_model=dict)
 def get_model_binding_comparison_endpoint(
     binding_id: str,
+    actor_id: str = Depends(get_actor_id),
     session: Session = Depends(get_session),
 ) -> dict:
+    del actor_id
     binding = _mb.get_binding(session, binding_id)
     if binding is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="BINDING_NOT_FOUND")

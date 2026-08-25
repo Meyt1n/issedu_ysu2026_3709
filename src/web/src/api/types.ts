@@ -60,6 +60,8 @@ export interface FaceCredential {
   consented_at: string
   revoked_at: string | null
   created_at: string
+  upgrade_recommended?: boolean
+  template_count?: number
 }
 
 export interface CreateMemberInput {

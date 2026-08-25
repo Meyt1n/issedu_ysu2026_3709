@@ -44,6 +44,12 @@ class Settings(BaseSettings):
     # default and let operators lengthen the window without changing code.
     vision_video_retention_seconds: int = Field(default=86_400, ge=3_600, le=2_592_000)
     vision_video_cleanup_batch_size: int = Field(default=100, ge=1, le=1_000)
+    # HCT-441: asynchronous workers claim jobs with a bounded lease.  An
+    # expired lease is eligible for another worker, while repeated failures
+    # eventually become a visible timeout instead of staying stuck in running.
+    vision_worker_lease_seconds: int = Field(default=900, ge=30, le=86_400)
+    vision_worker_max_attempts: int = Field(default=3, ge=1, le=10)
+    vision_worker_claim_batch_size: int = Field(default=10, ge=1, le=100)
     vision_quality_min_width: int = 640
     vision_quality_min_height: int = 480
     vision_quality_min_blur_variance: float = 80.0
@@ -56,6 +62,14 @@ class Settings(BaseSettings):
     vision_quality_min_subject_area_ratio: float = 0.08
     vision_quality_max_border_touch_ratio: float = 0.50
     biometric_encryption_key: str = "dev-only-biometric-key-change-me"
+    # Local YuNet + SFace ONNX cache for HCT-425 v3 face embeddings.  Weights
+    # stay outside git; first use may download from OpenCV Zoo when enabled.
+    face_model_dir: str = "./models/face"
+    face_model_auto_download: bool = True
+    # Calibrate with scripts/calibrate_face_thresholds.py on local camera sets.
+    face_match_threshold_sface: float = Field(default=0.40, ge=0.20, le=0.95)
+    face_match_margin_sface: float = Field(default=0.05, ge=0.01, le=0.30)
+    face_require_pose_liveness: bool = True
     ruleset_version: str = "rules-v0"
     knowledge_version: str = "knowledge-v0"
     embedding_version: str = "unavailable"
@@ -73,6 +87,10 @@ class Settings(BaseSettings):
     agent_web_search_timeout_seconds: float = Field(default=8.0, gt=0, le=20)
     agent_web_search_max_results: int = Field(default=5, ge=1, le=10)
     agent_web_search_allowed_domains: str = ""
+    # Short TTL cache for redacted web-search queries (seconds). 0 disables cache.
+    agent_web_search_cache_ttl_seconds: float = Field(default=180.0, ge=0, le=3600)
+    # Minimum seconds between outbound search calls from this process (0 = off).
+    agent_web_search_min_interval_seconds: float = Field(default=1.0, ge=0, le=60)
     weather_adapter: str = "disabled"
     weather_provider: str = "generic"
     weather_api_url: str = ""
@@ -91,6 +109,12 @@ class Settings(BaseSettings):
     log_mask_enabled: bool = True
     upload_allowed_extensions: str = ".jpg,.jpeg,.png,.pdf,.mp4,.mov"
     upload_max_size_bytes: int = 10 * 1024 * 1024
+    # Comma-separated actor ids allowed to read ``internal`` knowledge docs.
+    # Empty means internal docs are creator-only (plus household/member scopes).
+    knowledge_admin_actors: str = ""
+    # Comma-separated actor ids allowed to activate/rollback model releases.
+    # Empty means only the binding creator may govern that release.
+    model_release_admin_actors: str = ""
 
     @field_validator("default_household_time_zone")
     @classmethod
@@ -162,6 +186,20 @@ class Settings(BaseSettings):
         return {
             item.strip().lower()
             for item in self.agent_web_search_allowed_domains.split(",")
+            if item.strip()
+        }
+
+    @property
+    def knowledge_admin_actor_set(self) -> set[str]:
+        return {
+            item.strip() for item in self.knowledge_admin_actors.split(",") if item.strip()
+        }
+
+    @property
+    def model_release_admin_actor_set(self) -> set[str]:
+        return {
+            item.strip()
+            for item in self.model_release_admin_actors.split(",")
             if item.strip()
         }
 

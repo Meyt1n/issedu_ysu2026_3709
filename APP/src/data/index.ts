@@ -124,6 +124,21 @@ export function activeProvider(): DataProvider {
   return guardAuthorization(liveProvider)
 }
 
+/**
+ * 联机模式下构造指向「家庭服务器」的 ApiClient（例如电脑本机 FastAPI）。
+ * 演示模式返回 null，由页面给出诚实降级说明，不伪装助手可用。
+ */
+export function createLiveApiClient(): ApiClient | null {
+  const { session } = useSession()
+  const { auth } = useAuth()
+  if (session.dataMode !== 'live') return null
+  if (session.authMode === 'real' && auth.status !== 'authenticated') return null
+  return new ApiClient({
+    baseUrl: session.serverBaseUrl,
+    ...(session.authMode === 'real' ? { authSessionProvider: getAuthSession } : {}),
+  })
+}
+
 /** 当前是否允许发起写操作；正式会话失效时页面必须禁用提交入口。 */
 export function canSubmitWrites(): boolean {
   const { session } = useSession()

@@ -6,7 +6,6 @@ import hashlib
 import logging
 import secrets
 import time
-from collections import defaultdict
 from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -44,8 +43,13 @@ _password_hashes: dict[str, str] = {}
 _pin_hashes: dict[tuple[str, str], str] = {}
 _sessions: dict[str, dict[str, Any]] = {}
 _pin_challenges: dict[str, dict[str, Any]] = {}
+# Face login challenges ARE authoritative here but deliberately process-local:
+# they are opaque, single-use and expire after FACE_CHALLENGE_TTL_SECONDS, so
+# nothing biometric or replayable survives a restart.  Face *rate limits* use
+# the durable AuthRateLimitAttempt table like password and PIN logins.
 _face_challenges: dict[str, dict[str, Any]] = {}
-_face_failed_attempts: dict[str, list[float]] = defaultdict(list)
+MAX_FACE_CHALLENGES_PER_HOUSEHOLD = 32
+MAX_FACE_CHALLENGES_TOTAL = 4096
 
 
 @contextmanager
@@ -143,6 +147,43 @@ def _clear_failures(db: Session, rate_key: str) -> None:
     db.execute(delete(AuthRateLimitAttempt).where(AuthRateLimitAttempt.rate_key == rate_key))
 
 
+def enforce_registration_rate_limit(
+    db: Session,
+    *,
+    actor_id: str,
+    client_key: str | None = None,
+    max_attempts: int = MAX_LOGIN_ATTEMPTS,
+) -> None:
+    """Throttle account creation by actor id and optional client fingerprint/IP."""
+    keys = [f"register:{actor_id}"]
+    if client_key:
+        keys.append(f"register-client:{client_key}")
+    for rate_key in keys:
+        cutoff = _now() - timedelta(seconds=LOCKOUT_SECONDS)
+        db.execute(
+            delete(AuthRateLimitAttempt).where(
+                AuthRateLimitAttempt.rate_key == rate_key,
+                AuthRateLimitAttempt.failed_at < cutoff,
+            )
+        )
+        count = (
+            db.scalar(
+                select(func.count(AuthRateLimitAttempt.id)).where(
+                    AuthRateLimitAttempt.rate_key == rate_key,
+                    AuthRateLimitAttempt.failed_at >= cutoff,
+                )
+            )
+            or 0
+        )
+        if count >= max_attempts:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="REGISTER_RATE_LIMITED",
+            )
+        db.add(AuthRateLimitAttempt(rate_key=rate_key, failed_at=_now()))
+    db.flush()
+
+
 def register_account(actor_id: str, password: str, session: Session | None = None) -> None:
     with _session_scope(session) as db:
         if db.get(AuthAccount, actor_id) is not None:
@@ -211,7 +252,19 @@ def create_face_challenge(actor_id: str, household_id: str) -> dict[str, Any]:
     for challenge_id, challenge in list(_face_challenges.items()):
         if challenge["expires_at"] < now:
             _face_challenges.pop(challenge_id, None)
-    if len(_face_challenges) >= 2048:
+    # The issue endpoint is unauthenticated, so eviction must stay
+    # household-scoped: flooding one household id cannot evict another
+    # family's still-valid login challenge.
+    household_challenges = [
+        key
+        for key, challenge in _face_challenges.items()
+        if challenge["household_id"] == household_id
+    ]
+    while len(household_challenges) >= MAX_FACE_CHALLENGES_PER_HOUSEHOLD:
+        oldest = min(household_challenges, key=lambda key: _face_challenges[key]["expires_at"])
+        _face_challenges.pop(oldest, None)
+        household_challenges.remove(oldest)
+    if len(_face_challenges) >= MAX_FACE_CHALLENGES_TOTAL:
         oldest = min(_face_challenges, key=lambda key: _face_challenges[key]["expires_at"])
         _face_challenges.pop(oldest, None)
     challenge_id = secrets.token_hex(16)
@@ -251,23 +304,28 @@ def family_face_rate_actor() -> str:
     return FAMILY_FACE_ACTOR_SENTINEL
 
 
-def check_face_rate_limit(household_id: str, actor_id: str) -> str:
+def check_face_rate_limit(
+    household_id: str, actor_id: str, session: Session | None = None
+) -> str:
+    """Face failures share the durable rate-limit table used by password/PIN."""
     rate_key = f"face:{household_id}:{actor_id}"
-    now = time.time()
-    attempts = [t for t in _face_failed_attempts[rate_key] if t > now - LOCKOUT_SECONDS]
-    _face_failed_attempts[rate_key] = attempts
-    if len(attempts) >= MAX_LOGIN_ATTEMPTS:
-        wait = max(1, int(LOCKOUT_SECONDS - (now - min(attempts))))
-        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=f"LOCKED:{wait}")
+    with _session_scope(session) as db:
+        _check_rate_limit(db, rate_key)
     return rate_key
 
 
-def record_face_failure(rate_key: str) -> None:
-    _face_failed_attempts[rate_key].append(time.time())
+def record_face_failure(rate_key: str, session: Session | None = None) -> None:
+    with _session_scope(session) as db:
+        _record_failure(db, rate_key)
+        # The caller raises 401 right after this, which would roll the request
+        # session back; commit here so lockout counting survives uniformly for
+        # existing and non-existing households alike.
+        db.commit()
 
 
-def clear_face_failures(rate_key: str) -> None:
-    _face_failed_attempts.pop(rate_key, None)
+def clear_face_failures(rate_key: str, session: Session | None = None) -> None:
+    with _session_scope(session) as db:
+        _clear_failures(db, rate_key)
 
 
 def create_face_session(

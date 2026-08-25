@@ -198,3 +198,26 @@ def test_calibration_requires_both_splits() -> None:
     )
     with pytest.raises(ValueError, match="FUSION_CALIBRATION_SPLITS_REQUIRED"):
         calibrate_thresholds([sample], [])
+
+
+def test_default_fusion_thresholds_match_registered_calibration() -> None:
+    import json
+    from pathlib import Path
+
+    from ai.vision.candidate_fusion import FusionThresholds
+
+    thresholds = FusionThresholds()
+    registry = json.loads(
+        (
+            Path(__file__).resolve().parents[2]
+            / "docs"
+            / "model-registry"
+            / "HCT-206-fusion-thresholds-calibrated-v1.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert thresholds.config_version == registry["config_version"]
+    assert thresholds.matched_score == registry["thresholds"]["matched_score"]
+    assert thresholds.unknown_score == registry["thresholds"]["unknown_score"]
+    assert thresholds.min_margin == registry["thresholds"]["min_margin"]
+    assert registry["production_eligible"] is False
+    assert "fusion-thresholds-demo-v1" in registry["supersedes"]

@@ -520,6 +520,15 @@ onMounted(() => {
       />
     </section>
 
+    <RouterLink class="card link-card" to="/assistant">
+      <AppIcon name="mic" :size="22" />
+      <span class="link-card-text">
+        <strong>语音助手</strong>
+        <span class="meta-line">唤醒「小燕小燕」· 连家庭服务器（电脑后端）提问</span>
+      </span>
+      <AppIcon name="chevron-right" :size="18" />
+    </RouterLink>
+
     <RouterLink class="card link-card" to="/me/accessibility">
       <AppIcon name="settings" :size="22" />
       <span class="link-card-text">

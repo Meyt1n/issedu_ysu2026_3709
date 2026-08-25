@@ -1,4 +1,4 @@
-docs/knowledge/staging/documents/
-docs/knowledge/staging/meta/
-docs/knowledge/staging/crawl_runs.jsonl
-docs/knowledge/approved/incoming/
+staging/documents/
+staging/meta/
+staging/crawl_runs.jsonl
+approved/incoming/

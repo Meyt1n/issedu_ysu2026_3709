@@ -6,8 +6,10 @@ from app.config import Settings
 from app.search_providers import (
     DuckDuckGoHtmlProvider,
     SearXNGProvider,
+    clear_search_cache,
     execute_web_search,
     get_search_provider,
+    rank_search_results,
 )
 
 
@@ -75,5 +77,88 @@ def test_execute_web_search_delegates_to_provider(monkeypatch) -> None:
         "app.search_providers.get_search_provider",
         lambda settings: _StubProvider(),
     )
-    results = execute_web_search("test", settings=Settings())
+    clear_search_cache()
+    results = execute_web_search("test", settings=Settings(agent_web_search_cache_ttl_seconds=0))
     assert results[0]["title"] == "x"
+
+
+def test_rank_search_results_prefers_query_overlap_and_medical_domains() -> None:
+    ranked = rank_search_results(
+        "布洛芬 注意事项",
+        [
+            {
+                "title": "无关新闻",
+                "url": "https://news.example/a",
+                "snippet": "体育比分",
+                "domain": "news.example",
+            },
+            {
+                "title": "布洛芬注意事项",
+                "url": "https://www.nih.gov/ibuprofen",
+                "snippet": "用药提示",
+                "domain": "www.nih.gov",
+            },
+        ],
+        max_results=2,
+    )
+    assert ranked[0]["domain"] == "www.nih.gov"
+
+
+def test_execute_web_search_uses_ttl_cache(monkeypatch) -> None:
+    calls = {"count": 0}
+
+    class _StubProvider:
+        def search(self, query: str, *, settings: Settings):
+            calls["count"] += 1
+            return [{
+                "title": "布洛芬说明书",
+                "url": "https://example.com/ibu",
+                "snippet": "布洛芬注意事项",
+                "domain": "example.com",
+                "source": "external_web_search",
+            }]
+
+    monkeypatch.setattr(
+        "app.search_providers.get_search_provider",
+        lambda settings: _StubProvider(),
+    )
+    clear_search_cache()
+    settings = Settings(
+        agent_web_search_cache_ttl_seconds=300,
+        agent_web_search_min_interval_seconds=0,
+    )
+    first = execute_web_search("布洛芬注意事项", settings=settings)
+    second = execute_web_search("布洛芬注意事项", settings=settings)
+    assert first == second
+    assert calls["count"] == 1
+
+
+def test_execute_web_search_enforces_min_interval(monkeypatch) -> None:
+    from app.search_providers import SearchRateLimited
+
+    class _StubProvider:
+        def search(self, query: str, *, settings: Settings):
+            return [{
+                "title": "a",
+                "url": "https://example.com/a",
+                "snippet": "a",
+                "domain": "example.com",
+                "source": "external_web_search",
+            }]
+
+    monkeypatch.setattr(
+        "app.search_providers.get_search_provider",
+        lambda settings: _StubProvider(),
+    )
+    clear_search_cache()
+    settings = Settings(
+        agent_web_search_cache_ttl_seconds=0,
+        agent_web_search_min_interval_seconds=30,
+    )
+    execute_web_search("第一次", settings=settings)
+    try:
+        execute_web_search("第二次", settings=settings)
+        raised = False
+    except SearchRateLimited:
+        raised = True
+    assert raised is True

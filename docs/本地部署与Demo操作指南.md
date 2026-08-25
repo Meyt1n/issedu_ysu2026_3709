@@ -45,6 +45,51 @@ chmod +x scripts/start.sh
 
 增强档（额外启动 Ollama 容器）在启动前设置 `$env:COMPOSE_PROFILE='enhanced'`（Bash：`export COMPOSE_PROFILE=enhanced`）。容器内仍需自行拉取或创建模型；未配置 `OLLAMA_MODEL` 时助手保持结构化降级。
 
+### 1.3 人脸识别本地模型（HCT-424/425）
+
+人脸登录使用本地 OpenCV YuNet + SFace ONNX，**权重不进 Git**。首次部署请先准备模型：
+
+```bash
+uv run python scripts/ensure_face_models.py
+```
+
+然后在 `.env` 中确认：
+
+- `FACE_MODEL_DIR=./models/face`
+- `FACE_MODEL_AUTO_DOWNLOAD=true`（或改为 false 并手工拷贝 ONNX）
+- `FACE_MATCH_THRESHOLD_SFACE` / `FACE_MATCH_MARGIN_SFACE`（见下方本机标定）
+
+`/api/v1/meta/capabilities` 在模型就绪时会包含 `face-recognition-local`；未就绪时欢迎页会提示改用 PIN/密码。旧灰度 v1/v2 凭证仍可登录，管理员页会提示重新绑定升级。
+
+#### 真实家庭摄像头阈值标定（必须本机完成）
+
+默认阈值（`0.40` / margin `0.05`）来自公开样例，**不能代替你们家庭真实摄像头场景**。云端 Agent / CI **无法代采真人脸**，因此误拒/误识校准必须在维护者本机完成：
+
+1. 用浏览器或摄像头为 3～6 位家庭成员采集 `enroll/` 与 `probe/` 照片（多种光线与轻微转头），目录示例：
+
+```text
+face-samples/
+  grandpa/enroll/*.jpg
+  grandpa/probe/*.jpg
+  grandma/enroll/*.jpg
+  grandma/probe/*.jpg
+```
+
+2. 本机运行校准（只读本地图片，不上传、不入库）：
+
+```bash
+uv run python scripts/calibrate_face_thresholds.py ./face-samples
+```
+
+3. 把脚本输出的推荐值写入 `.env` 后重启 API：
+
+```env
+FACE_MATCH_THRESHOLD_SFACE=...
+FACE_MATCH_MARGIN_SFACE=...
+```
+
+未完成本机标定前，可将人脸登录视为“可用但未按家庭场景验收”；正式演示或 R3 前应完成上述步骤。
+
 ### 1.2 本地进程开发路径
 
 需要调试 Vue/FastAPI 时可以不启动 Compose 的 API/Web，但仍必须先安装依赖并执行迁移。若 `.env` 里的 `DATABASE_URL` 指向 MySQL 而本机没有库，请改成 SQLite，例如 `$env:DATABASE_URL='sqlite+pysqlite:///./homecare-dev.sqlite3'`。
@@ -159,6 +204,8 @@ Windows 本地开发代理固定使用 `127.0.0.1`，避免 `localhost` 解析�
 - 常见故障：数据库未就绪、模型缺失、OCR 超时、向量索引不匹配、磁盘不足。
 
 ## 6. 连续 Demo 剧本
+
+演示助手「朗读回答」或随身版长辈「语音播报」前，先按 [中文语音包与听感准备说明](demo/中文语音包与听感准备说明.md) 确认演示机已安装 Natural 类中文 TTS；仅有机械默认包时须在演示话术中诚实说明听感受限。
 
 1. 上传新药短视频或主动拍照，OpenCV 选择质量合格的证据帧，先运行全图 OCR；YOLO 仅辅助检测包装和条码区域。
 2. 条码由专用解码器读取，OCR 与条码或主数据冲突时系统返回 `CONFLICT`，不自动入库；页面同时展示原始 OCR 区域、条码证据、包装特征、本地主数据和各阶段模型版本。

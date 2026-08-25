@@ -248,16 +248,20 @@ def test_greeting_fast_path_never_touches_model_or_tools(monkeypatch) -> None:
     monkeypatch.setattr("app.local_agents.execute_whitelisted_tool", _forbidden)
     monkeypatch.setattr("app.local_agents.execute_web_search", _forbidden)
 
+    phases: list[str] = []
     result = run_local_multi_agent(
         None,
         messages=[{"role": "user", "content": "你好"}],
         actor_id="actor",
         allow_network_search=True,
+        on_status=phases.append,
     )
 
     assert result["degraded"] is False
     assert result["answer"]
     assert result["network_used"] is False
+    assert phases[0] == "routing"
+    assert "generating" in phases
     statuses = {trace["agent_id"]: trace["status"] for trace in result["agent_trace"]}
     assert statuses["database"] == "skipped"
     assert statuses["knowledge"] == "skipped"
@@ -406,3 +410,108 @@ def test_medication_safety_short_circuits_without_knowledge(monkeypatch) -> None
     synthesis = next(trace for trace in result["agent_trace"] if trace["agent_id"] == "synthesis")
     assert synthesis["status"] == "degraded"
     assert "跳过模型" in synthesis["summary"]
+
+
+def test_compact_local_evidence_keeps_query_relevant_fields() -> None:
+    from app.local_agents import _compact_local_evidence
+
+    database = {
+        "get_member_state": {
+            "sources": ["state"],
+            "state": {
+                "drugs": [{"name": "布洛芬"}],
+                "allergies": [],
+                "plans": [],
+                "notes": "x" * 5000,
+            },
+        },
+        "get_health_events": {"sources": [], "events": []},
+        "get_applied_rules": {"sources": ["RULE-1"], "rules": [{"id": "RULE-1"}]},
+    }
+    knowledge = {
+        "results": [
+            {
+                "document_id": "d1",
+                "chunk_id": "c1",
+                "title": "说明书",
+                "text": "很长的正文" * 200,
+            }
+        ]
+    }
+
+    med = _compact_local_evidence(database, knowledge, query_type="MEDICATION_SAFETY")
+    assert "布洛芬" in med
+    assert "notes" not in med
+    assert "get_applied_rules" not in med
+
+    rules = _compact_local_evidence(database, knowledge, query_type="RULE_EVIDENCE")
+    assert "RULE-1" in rules
+    assert "get_member_state" not in rules
+
+
+def test_synthesis_streams_only_validated_answer(monkeypatch) -> None:
+    from app.config import Settings
+    from app.local_agents import _synthesis_agent
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def chat_stream(self, **kwargs):
+            draft = '{"answer":"最终回答","sources":[],"confidence":"high","escalate":false}'
+            yield draft[:20]
+            yield draft[20:]
+
+    monkeypatch.setattr("app.local_agents.OllamaClient", FakeClient)
+    monkeypatch.setattr("app.local_agents.is_loopback_ollama_url", lambda url: True)
+
+    tokens: list[str] = []
+    statuses: list[str] = []
+    result = _synthesis_agent(
+        messages=[{"role": "user", "content": "今天天气怎样"}],
+        query_type="GENERAL",
+        database={},
+        knowledge={},
+        external_sources=[],
+        model="local-model",
+        max_tokens=128,
+        temperature=0.1,
+        settings=Settings(),
+        on_token=tokens.append,
+        on_status=statuses.append,
+    )
+
+    assert result["answer"] == "最终回答"
+    assert "".join(tokens) == "最终回答"
+    assert "{" not in "".join(tokens)
+    assert statuses == ["generating", "validating"]
+
+
+def test_synthesis_emits_validating_status(monkeypatch) -> None:
+    from app.config import Settings
+    from app.local_agents import _synthesis_agent
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def chat_stream(self, **kwargs):
+            yield '{"answer":"ok","sources":[],"confidence":"high","escalate":false}'
+
+    monkeypatch.setattr("app.local_agents.OllamaClient", FakeClient)
+    monkeypatch.setattr("app.local_agents.is_loopback_ollama_url", lambda url: True)
+
+    phases: list[str] = []
+    _synthesis_agent(
+        messages=[{"role": "user", "content": "一般问题"}],
+        query_type="GENERAL",
+        database={},
+        knowledge={},
+        external_sources=[],
+        model="local-model",
+        max_tokens=64,
+        temperature=0.1,
+        settings=Settings(),
+        on_status=phases.append,
+    )
+    assert phases == ["generating", "validating"]

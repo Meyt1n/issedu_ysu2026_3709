@@ -83,6 +83,7 @@ const webSearchAvailable = ref<boolean | null>(null)
 const workflowTrace = ref<AssistantAgentTrace[]>([])
 const selectedAgentId = ref<string | null>(null)
 const workflowExpanded = ref(false)
+const orchestrationPhase = ref<string | null>(null)
 type VoiceMode = 'off' | 'wake' | 'active'
 
 const voiceMode = ref<VoiceMode>('off')
@@ -110,6 +111,14 @@ let voiceFatalError = false
 
 const speechInputSupported = isSpeechInputSupported()
 const speechOutputSupported = isSpeechOutputSupported()
+let activeSendController: AbortController | null = null
+
+function cancelActiveSend(): void {
+  if (activeSendController) {
+    activeSendController.abort()
+    activeSendController = null
+  }
+}
 
 async function loadAgentCatalog(): Promise<void> {
   try {
@@ -124,7 +133,7 @@ async function loadAgentCatalog(): Promise<void> {
 }
 
 const voiceStatusText = computed(() => {
-  if (voiceMode.value === 'wake') return '正在聆听唤醒词：“小燕打开”'
+  if (voiceMode.value === 'wake') return '正在聆听唤醒词：“小燕小燕”'
   if (voiceMode.value === 'active') return '已唤醒，识别中的文字会实时填入草稿'
   return ''
 })
@@ -170,19 +179,25 @@ function traceForAgent(agentId: string): AssistantAgentTrace | undefined {
   return workflowTrace.value.find(trace => trace.agent_id === agentId)
 }
 
-// Statuses shown here come from the backend agent_trace once a reply arrives;
-// while a request is in flight the UI only claims "processing", never a fake
-// step-by-step progression.
+// Prefer finished traces; while in flight highlight only the active phase stage.
 function agentStatus(stage: AgentStage): AgentVisualStatus {
   const trace = traceForAgent(stage.id)
   if (trace) {
-    if (trace.status === 'completed' || trace.status === 'skipped' || trace.status === 'blocked' || trace.status === 'degraded') {
-      return trace.status
+    if (['completed', 'skipped', 'blocked', 'degraded'].includes(trace.status)) {
+      return trace.status as AgentVisualStatus
     }
   }
   if (!sending.value) return 'idle'
-  if (stage.network && (!allowNetworkSearch.value || webSearchAvailable.value === false)) return 'skipped'
-  return 'running'
+  if (stage.network && (!allowNetworkSearch.value || webSearchAvailable.value === false)) {
+    return 'skipped'
+  }
+
+  const phase = orchestrationPhase.value
+  if (phase === 'routing' && stage.id === 'router') return 'running'
+  if (phase === 'retrieving' && (stage.id === 'database' || stage.id === 'knowledge')) return 'running'
+  if (phase === 'searching' && stage.id === 'web_search') return 'running'
+  if ((phase === 'generating' || phase === 'validating') && stage.id === 'synthesis') return 'running'
+  return 'pending'
 }
 
 function agentStatusLabel(status: AgentVisualStatus): string {
@@ -207,8 +222,27 @@ function agentStatusDetail(stage: AgentStage): string {
   return stage.description
 }
 
+const PHASE_LABELS: Record<string, string> = {
+  routing: '正在识别问题类型…',
+  retrieving: '正在核对档案与本地资料…',
+  searching: '正在获取脱敏联网参考…',
+  generating: '正在本机生成回答…',
+  validating: '正在校验引用与安全边界…',
+}
+
+const thinkingText = computed(() => {
+  if (orchestrationPhase.value && PHASE_LABELS[orchestrationPhase.value]) {
+    return PHASE_LABELS[orchestrationPhase.value]
+  }
+  return '正在本机核对证据并生成回答…'
+})
+
 const workflowSummary = computed(() => {
-  if (sending.value) return '正在本机分析中…'
+  if (sending.value) {
+    return orchestrationPhase.value && PHASE_LABELS[orchestrationPhase.value]
+      ? PHASE_LABELS[orchestrationPhase.value]
+      : '正在本机分析中…'
+  }
   const traces = workflowTrace.value
   if (traces.length > 0) {
     const completed = traces.filter(trace => trace.status === 'completed').length
@@ -285,6 +319,7 @@ function persistChatSession(): void {
 }
 
 function clearConversation(): void {
+  cancelActiveSend()
   stopVoiceInput()
   if (speakingIndex.value !== null) {
     stopSpeaking()
@@ -297,9 +332,11 @@ function clearConversation(): void {
   clearChatSession(session.actorId, session.selectedHouseholdId, session.selectedMemberId)
   history.value = []
   workflowTrace.value = []
+  orchestrationPhase.value = null
   draft.value = ''
   sendError.value = ''
   voiceError.value = ''
+  sending.value = false
 }
 
 function useSuggestedQuestion(question: string): void {
@@ -354,6 +391,7 @@ function questionTypeLabel(queryType?: string | null): string {
 watch(
   () => [session.actorId, session.selectedHouseholdId, session.selectedMemberId] as const,
   ([actorId, householdId, memberId]) => {
+    cancelActiveSend()
     if (streamTimer) {
       clearInterval(streamTimer)
       streamTimer = null
@@ -556,6 +594,7 @@ async function send(text?: string): Promise<void> {
   const content = (text ?? draft.value).trim()
   if (!content || sending.value) return
 
+  cancelActiveSend()
   stopVoiceInput()
   if (speakingIndex.value !== null) {
     stopSpeaking()
@@ -567,6 +606,8 @@ async function send(text?: string): Promise<void> {
   sending.value = true
   sendError.value = ''
   workflowTrace.value = []
+  orchestrationPhase.value = 'routing'
+  workflowExpanded.value = true
   scrollToEnd()
 
   const streamingEntry: ChatEntry = {
@@ -576,38 +617,14 @@ async function send(text?: string): Promise<void> {
   }
   history.value.push(streamingEntry)
   const entryIndex = history.value.length - 1
+  const controller = new AbortController()
+  activeSendController = controller
 
-  try {
-    const reply = await apiClient.assistantChatStream(
-      {
-        messages: history.value
-          .slice(0, -1)
-          .map(entry => ({ role: entry.role, content: entry.content })),
-        max_tokens: 1024,
-        agent_mode: 'multi_agent',
-        allow_network_search: allowNetworkSearch.value,
-      },
-      {
-        onTrace: upsertWorkflowTrace,
-        onToken: token => {
-          const entry = history.value[entryIndex]
-          if (!entry || !token) return
-          entry.content += token
-          entry.revealed = entry.content.length
-          scrollToEnd()
-        },
-        onExternalSources: sources => {
-          const entry = history.value[entryIndex]
-          if (entry) entry.externalSources = sources
-        },
-      },
-      session.selectedHouseholdId || undefined,
-      session.selectedMemberId || undefined,
-      requestOptions.value,
-    )
+  const applyReply = (reply: Awaited<ReturnType<typeof apiClient.assistantChat>>) => {
     const entry = history.value[entryIndex]!
+    const alreadyStreamed = entry.content.length > 0 && entry.content === reply.answer
     entry.content = reply.answer
-    entry.revealed = 0
+    entry.revealed = alreadyStreamed ? reply.answer.length : 0
     entry.sources = reply.sources
     entry.citations = reply.citations
     entry.confidence = reply.confidence
@@ -627,33 +644,91 @@ async function send(text?: string): Promise<void> {
     workflowTrace.value = reply.agent_trace ?? []
     if (reply.model) modelLabel.value = formatModelLabel(reply.model)
     persistChatSession()
-    streamReveal(entry)
+    if (!alreadyStreamed) streamReveal(entry)
+  }
+
+  const chatInput = {
+    messages: history.value
+      .slice(0, -1)
+      .map(entry => ({ role: entry.role, content: entry.content })),
+    max_tokens: 1024,
+    agent_mode: 'multi_agent' as const,
+    allow_network_search: allowNetworkSearch.value,
+  }
+
+  try {
+    const reply = await apiClient.assistantChatStream(
+      chatInput,
+      {
+        onTrace: upsertWorkflowTrace,
+        onStatus: phase => {
+          orchestrationPhase.value = phase
+        },
+        onToken: token => {
+          const entry = history.value[entryIndex]
+          if (!entry || !token) return
+          // Tokens are already the validated final answer text.
+          entry.content += token
+          entry.revealed = entry.content.length
+          scrollToEnd()
+        },
+        onExternalSources: sources => {
+          const entry = history.value[entryIndex]
+          if (entry) entry.externalSources = sources
+        },
+      },
+      session.selectedHouseholdId || undefined,
+      session.selectedMemberId || undefined,
+      { ...requestOptions.value, signal: controller.signal },
+    )
+    applyReply(reply)
   } catch (cause) {
-    sendError.value = formatError(cause)
-    workflowTrace.value = []
-    if (history.value[entryIndex]?.role === 'assistant' && !history.value[entryIndex]?.sources) {
-      history.value.pop()
+    if (controller.signal.aborted) {
+      if (history.value[entryIndex]?.role === 'assistant') history.value.pop()
+      return
     }
-    const entry: ChatEntry = {
-      role: 'assistant',
-      content: '本地模型或其依赖当前不可用，无法生成回答。家庭事实、规则与任务不受影响，可直接在对应页面查看。',
-      revealed: 0,
-      degraded: true,
-      degradeReason: 'REQUEST_FAILED',
+    // Fall back to the non-streaming endpoint when SSE is unavailable.
+    try {
+      const reply = await apiClient.assistantChat(
+        chatInput,
+        session.selectedHouseholdId || undefined,
+        session.selectedMemberId || undefined,
+        { ...requestOptions.value, signal: controller.signal },
+      )
+      applyReply(reply)
+    } catch (fallbackCause) {
+      if (controller.signal.aborted) {
+        if (history.value[entryIndex]?.role === 'assistant') history.value.pop()
+        return
+      }
+      sendError.value = formatError(fallbackCause)
+      workflowTrace.value = []
+      if (history.value[entryIndex]?.role === 'assistant') history.value.pop()
+      const entry: ChatEntry = {
+        role: 'assistant',
+        content: '本地模型或其依赖当前不可用，无法生成回答。家庭事实、规则与任务不受影响，可直接在对应页面查看。',
+        revealed: 0,
+        degraded: true,
+        degradeReason: 'REQUEST_FAILED',
+      }
+      history.value.push(entry)
+      persistChatSession()
+      streamReveal(history.value[history.value.length - 1]!)
     }
-    history.value.push(entry)
-    persistChatSession()
-    streamReveal(history.value[history.value.length - 1]!)
   } finally {
+    if (activeSendController === controller) activeSendController = null
+    orchestrationPhase.value = null
     sending.value = false
   }
 }
 
 function onMemberChange(event: Event): void {
+  cancelActiveSend()
   selectMember((event.target as HTMLSelectElement).value)
 }
 
 onBeforeUnmount(() => {
+  cancelActiveSend()
   if (streamTimer) clearInterval(streamTimer)
   stopVoiceInput()
   stopSpeaking()
@@ -938,7 +1013,7 @@ onBeforeUnmount(() => {
         </span>
         <div class="chat-bubble thinking-bubble" role="status">
           <span class="thinking-wave" aria-hidden="true"><i /><i /><i /><i /></span>
-          <span class="thinking-text">正在本机核对证据并生成回答，通常需要一分钟内…</span>
+          <span class="thinking-text">{{ thinkingText }}</span>
         </div>
       </div>
     </div>
@@ -964,11 +1039,20 @@ onBeforeUnmount(() => {
           :disabled="sending || !speechInputSupported"
           :aria-label="listening ? '停止语音唤醒' : '开启语音唤醒'"
           :aria-pressed="listening"
-          :title="speechInputSupported ? '先点击开启，再说“小燕打开”；识别文字只会实时填入草稿' : '当前浏览器不支持语音输入'"
+          :title="speechInputSupported ? '先点击开启，再说“小燕小燕”；识别文字只会实时填入草稿' : '当前浏览器不支持语音输入'"
           @click="toggleVoiceInput"
         >
           <AppIcon name="microphone" :size="15" />
           {{ voiceButtonLabel }}
+        </button>
+        <button
+          v-if="sending"
+          type="button"
+          class="btn btn-ghost"
+          aria-label="停止生成本次回答"
+          @click="cancelActiveSend"
+        >
+          停止
         </button>
         <button type="submit" class="btn btn-primary" :disabled="!canSend">
           {{ sending ? '发送中' : '发送' }}
@@ -1006,7 +1090,7 @@ onBeforeUnmount(() => {
       {{ voiceError }}
     </p>
     <p class="text-faint" style="font-size: 12px; line-height: 1.6; margin: 10px 0 0">
-      先点击“开启唤醒”，再说“小燕打开”开始实时填入草稿；发送前可修改。语音回复由浏览器本地朗读，原始音频不会上传到本地助手 API。
+      先点击“开启唤醒”，再说“小燕小燕”开始实时填入草稿；发送前可修改。语音回复由浏览器本地朗读，原始音频不会上传到本地助手 API。
     </p>
   </section>
 </template>

@@ -318,17 +318,9 @@ onBeforeUnmount(() => {
       </template>
 
       <div class="sidebar-foot">
-            <p class="privacy-note">
-              <AppIcon name="lock" :size="16" />
-              <span>{{ session.portal === 'admin' ? '家庭健康数据默认不出网，全部保存在本地可信域。' : '健康信息默认只保存在家里，不会自动上网。' }}</span>
-            </p>
-        <p v-if="session.portal === 'admin'" class="privacy-note">
-          <AppIcon name="leaf" :size="16" />
-          <span>管理后台负责复核、授权和记录；当前用途须与授权用途一致，否则读不到字段。</span>
-        </p>
-        <p v-else class="privacy-note">
-          <AppIcon name="leaf" :size="16" />
-          <span>拍完照片交给家人确认，确认后才会出现在你的记录里。</span>
+        <p class="privacy-note">
+          <AppIcon name="lock" :size="16" />
+          <span>{{ session.portal === 'admin' ? '健康数据默认只保存在本地。' : '健康信息只保存在家里 · 详见使用帮助' }}</span>
         </p>
         <button type="button" class="sidebar-collapse" :title="sidebarMini ? '展开导航' : '收起导航'" @click="toggleSidebar">
           <AppIcon name="arrow-right" :size="15" style="transform: rotate(180deg)" />
@@ -347,25 +339,6 @@ onBeforeUnmount(() => {
           <h1 class="topbar-title">{{ activeNav.label }}</h1>
         </div>
         <div class="topbar-side">
-          <button
-            v-if="session.portal === 'admin'"
-            type="button"
-            class="palette-trigger"
-            title="打开命令面板（Ctrl+K）"
-            @click="paletteRef?.show()"
-          >
-            <AppIcon name="compass" :size="15" />
-            <span class="palette-trigger-text">快速跳转</span>
-            <kbd class="palette-kbd">Ctrl</kbd><kbd class="palette-kbd">K</kbd>
-          </button>
-          <span
-            v-if="session.portal === 'admin'"
-            class="api-dot"
-            :title="session.capabilities ? `本地 API 已连接 · 阶段 ${session.capabilities.phase}` : '本地 API 状态未知'"
-          >
-            <i :class="session.capabilities ? 'on' : 'off'" />
-            {{ session.capabilities ? '本地在线' : '状态未知' }}
-          </span>
           <label v-if="householdOptions.length > 0" class="context-select">
             家庭
             <select
@@ -393,7 +366,7 @@ onBeforeUnmount(() => {
             <button
               type="button"
               class="icon-button"
-              title="切换界面主题"
+              :title="session.portal === 'admin' ? '工具与主题' : '切换界面主题'"
               :aria-expanded="themeMenuOpen"
               @click="themeMenuOpen = !themeMenuOpen"
             >
@@ -401,6 +374,24 @@ onBeforeUnmount(() => {
             </button>
             <div v-if="themeMenuOpen" class="theme-backdrop" @click="themeMenuOpen = false" />
             <div v-if="themeMenuOpen" class="theme-menu" role="menu">
+              <template v-if="session.portal === 'admin'">
+                <p class="theme-menu-label">管理工具</p>
+                <button
+                  type="button"
+                  class="theme-option"
+                  role="menuitem"
+                  @click="paletteRef?.show(); themeMenuOpen = false"
+                >
+                  <span class="theme-name">
+                    <strong>快速跳转</strong>
+                    <span>Ctrl + K</span>
+                  </span>
+                </button>
+                <p class="theme-tool-status">
+                  <i :class="session.capabilities ? 'on' : 'off'" />
+                  {{ session.capabilities ? `本地在线 · ${session.capabilities.phase}` : '本地状态未知' }}
+                </p>
+              </template>
               <p class="theme-menu-label">界面主题</p>
               <button
                 v-for="theme in THEMES"
@@ -424,6 +415,7 @@ onBeforeUnmount(() => {
           </div>
           <span
             class="identity-chip"
+            :class="{ admin: session.portal === 'admin' }"
             :title="session.portal === 'admin'
               ? `${currentHouseholdLabel} · ${session.actorId} · 用途 ${session.accessPurpose || '未填'}`
               : `${currentHouseholdLabel} · 当前成员`"
@@ -431,7 +423,7 @@ onBeforeUnmount(() => {
             <AppIcon name="members" :size="16" />
             <span class="identity-person">
               <strong>{{ currentMemberLabel }}</strong>
-              <small v-if="session.portal === 'admin'">
+              <small v-if="session.portal === 'admin'" class="identity-admin-meta">
                 {{ session.actorId }} · {{ session.isOwnerView ? '可管授权' : '仅授权范围' }} · {{ session.accessPurpose || '未填用途' }}
               </small>
               <small v-else>当前家庭成员</small>

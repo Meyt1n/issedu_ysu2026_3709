@@ -137,6 +137,41 @@ class TestReviewLifecycle:
 
         assert updated.status == ReviewStatus.SKIPPED
 
+    def test_confirm_without_candidate_is_rejected(self, session):
+        """No caller may write a confirmed event with an empty payload.
+
+        An UNKNOWN result carries zero candidates; with multiple candidates
+        the caller must choose one.  Both situations previously produced a
+        ``medication_confirmed`` event with payload ``{}`` when this library
+        function was called directly (the HTTP route had its own guard).
+        """
+        # ``_make_task`` swaps a falsy candidate list for its default, so an
+        # UNKNOWN task with truly zero candidates is created directly.
+        no_candidates = create_review_task(
+            session,
+            vision_task_id=str(uuid.uuid4()),
+            household_id=str(uuid.uuid4()),
+            member_id=str(uuid.uuid4()),
+            candidates=[],
+            fusion_status=FusionStatus.UNKNOWN,
+        )
+        several = _make_task(
+            session,
+            candidates=[
+                {"drug_name": "阿莫西林", "confidence": 0.55},
+                {"drug_name": "头孢拉定", "confidence": 0.52},
+            ],
+            fusion_status=FusionStatus.CONFLICT,
+        )
+        session.commit()
+
+        for task in (no_candidates, several):
+            with pytest.raises(HTTPException) as exc_info:
+                confirm_review(session, task, actor_id="actor-1")
+            assert exc_info.value.detail == "REVIEW_CANDIDATE_REQUIRED"
+            session.rollback()
+            assert get_review_task(session, task.id).status == ReviewStatus.PENDING_REVIEW
+
 
 # ── Idempotency tests ──────────────────────────────────────────────────
 
@@ -203,7 +238,13 @@ class TestIdempotency:
         assert retried_event == first_event
 
     def test_confirm_retry_with_same_key_rejects_different_payload(self, session):
-        task = _make_task(session)
+        task = _make_task(
+            session,
+            candidates=[
+                {"drug_name": "first", "confidence": 0.9},
+                {"drug_name": "different", "confidence": 0.8},
+            ],
+        )
         session.commit()
 
         confirm_review(
@@ -292,7 +333,12 @@ class TestIdempotency:
 
     def test_already_corrected_conflict(self, session):
         task = _make_task(session)
-        correct_review(session, task, actor_id="a1", manual_payload={"x": 1})
+        correct_review(
+            session,
+            task,
+            actor_id="a1",
+            manual_payload={"drug_name": "阿莫西林胶囊"},
+        )
         session.commit()
 
         with pytest.raises(HTTPException):  # REVIEW_ALREADY_CORRECTED
@@ -403,3 +449,43 @@ class TestConcurrentSafety:
             competing_session.rollback()
         finally:
             competing_session.close()
+
+
+class TestReviewPayloadWhitelist:
+    """Confirm/correct payloads must stay inside the medication field whitelist."""
+
+    def test_confirm_rejects_candidate_not_in_task(self, session):
+        task = _make_task(session, candidates=[{"drug_name": "阿莫西林", "confidence": 0.9}])
+        session.commit()
+        with pytest.raises(HTTPException) as exc_info:
+            confirm_review(
+                session,
+                task,
+                actor_id="a1",
+                selected_candidate={"drug_name": "头孢拉定"},
+            )
+        assert exc_info.value.detail == "REVIEW_CANDIDATE_NOT_IN_TASK"
+
+    def test_confirm_strips_unknown_fields(self, session):
+        task = _make_task(
+            session,
+            candidates=[{"drug_name": "阿莫西林", "confidence": 0.9, "junk": "nope"}],
+        )
+        session.commit()
+        # Stored candidate may historically contain extra keys; normalisation
+        # strips them before the health event is built.
+        _, event = confirm_review(session, task, actor_id="a1")
+        assert event["payload"] == {"drug_name": "阿莫西林", "confidence": 0.9}
+        assert "junk" not in event["payload"]
+
+    def test_correct_rejects_unknown_fields(self, session):
+        task = _make_task(session)
+        session.commit()
+        with pytest.raises(HTTPException) as exc_info:
+            correct_review(
+                session,
+                task,
+                actor_id="a1",
+                manual_payload={"drug_name": "阿莫西林", "diagnosis": "forbidden"},
+            )
+        assert exc_info.value.detail == "REVIEW_PAYLOAD_INVALID"

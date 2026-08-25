@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { RouterLink } from 'vue-router'
 
 import AppIcon from '@/components/AppIcon.vue'
 import ConfettiBurst from '@/components/ConfettiBurst.vue'
@@ -405,6 +406,15 @@ onMounted(reload)
 
     <PrivacyBadge />
 
+    <RouterLink class="card link-card assistant-entry" to="/assistant">
+      <AppIcon name="mic" :size="22" />
+      <span class="link-card-text">
+        <strong>语音助手</strong>
+        <span class="meta-line">说「小燕小燕」提问；联机后连接电脑后端</span>
+      </span>
+      <AppIcon name="chevron-right" :size="18" />
+    </RouterLink>
+
     <label class="field">
       当前成员
       <select v-model="memberSelection" :disabled="loading" @change="onMemberChange">
@@ -633,4 +643,15 @@ onMounted(reload)
   padding: 0 4px;
 }
 .done-tasks ul { margin-top: 8px; }
+
+.link-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-decoration: none;
+  color: inherit;
+  min-height: var(--tap);
+}
+.link-card-text { flex: 1; display: grid; gap: 2px; }
+.assistant-entry .meta-line { color: var(--c-ink-faint); font-size: 0.9rem; }
 </style>

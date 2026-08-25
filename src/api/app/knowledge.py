@@ -8,6 +8,7 @@ import json
 import logging
 import math
 import re
+import unicodedata
 from collections import Counter
 from datetime import UTC, datetime
 
@@ -74,7 +75,11 @@ class RetrievalQuery(Base):
     __tablename__ = "retrieval_query"
 
     id = Column(String(36), primary_key=True, default=new_id)
-    query_text = Column(Text, nullable=False)
+    # HCT-442: query text is intentionally not retained.  Keep the nullable
+    # legacy column so the migration can redact historical rows in place.
+    query_text = Column(Text, nullable=True)
+    query_digest = Column(String(64), nullable=False, index=True)
+    query_length = Column(Integer, nullable=False, default=0)
     actor_id = Column(String(120), nullable=False)
     household_id = Column(String(36), nullable=True)
     member_id = Column(String(36), nullable=True)
@@ -93,13 +98,38 @@ _CHINESE_STOPWORDS = frozenset({
 })
 _TOKEN_PATTERN = re.compile(r"[a-z0-9_]+|[\u3400-\u9fff]+", re.IGNORECASE)
 
+# Teaching / demo aliases only — expands short or colloquial drug queries so
+# TF-IDF can hit the longer authorised document wording.  Not a formulary.
+_DRUG_QUERY_ALIASES: dict[str, tuple[str, ...]] = {
+    "阿莫": ("阿莫西林",),
+    "阿莫西林": ("阿莫西林胶囊", "阿莫西林颗粒"),
+    "布洛": ("布洛芬",),
+    "布洛芬": ("布洛芬缓释胶囊", "布洛芬片"),
+    "头孢": ("头孢拉定", "头孢克肟"),
+    "维生素c": ("维生素C", "抗坏血酸"),
+    "vc": ("维生素C", "抗坏血酸"),
+}
+
+
+def _expand_query_aliases(text: str) -> str:
+    """Append known demo drug aliases so short queries still retrieve."""
+    extras: list[str] = []
+    lowered = text.casefold()
+    for needle, aliases in _DRUG_QUERY_ALIASES.items():
+        if needle.casefold() in lowered:
+            extras.extend(aliases)
+    if not extras:
+        return text
+    return f"{text} {' '.join(dict.fromkeys(extras))}"
+
 
 def _tokenize(text: str) -> list[str]:
     """Tokenize Latin words and unsegmented Chinese text for local retrieval.
 
     Chinese source documents rarely contain spaces between words.  Keeping a
-    segment plus overlapping bigrams lets a short query match a longer
-    sentence without requiring an external segmenter.
+    segment plus overlapping bigrams / trigrams lets a short query match a
+    longer sentence without requiring an external segmenter.  Query-side
+    callers should pass text through ``_expand_query_aliases`` first.
     """
     tokens: list[str] = []
     for raw_token in _TOKEN_PATTERN.findall(text.casefold()):
@@ -112,9 +142,18 @@ def _tokenize(text: str) -> list[str]:
                     raw_token[index : index + 2]
                     for index in range(len(raw_token) - 1)
                 )
+            if len(raw_token) > 3:
+                tokens.extend(
+                    raw_token[index : index + 3]
+                    for index in range(len(raw_token) - 2)
+                )
         elif len(raw_token) > 1:
             tokens.append(raw_token)
     return tokens
+
+
+def _query_tokens(text: str) -> list[str]:
+    return _tokenize(_expand_query_aliases(text))
 
 
 def _tf(text: str) -> dict[str, int]:
@@ -125,26 +164,59 @@ def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def query_audit_fingerprint(query_text: str) -> tuple[str, int]:
+    """Return a stable, non-reversible audit digest and normalized length.
+
+    Unicode compatibility normalization and whitespace folding make harmless
+    formatting differences correlate without retaining the user's health
+    question.  The digest is not used as an authorization token.
+    """
+
+    normalized = " ".join(unicodedata.normalize("NFKC", query_text).split())
+    return _content_hash(normalized), len(normalized)
+
+
 # ── Permission check ───────────────────────────────────────────────────
+
+def normalize_permission_scope(
+    permission_scope: dict | None,
+    *,
+    created_by: str,
+) -> dict:
+    """Stamp creator identity so empty scopes never become world-readable."""
+    scope = dict(permission_scope or {})
+    scope.setdefault("created_by", created_by)
+    return scope
+
 
 def _check_permission(
     doc_scope: dict,
     actor_id: str,
     household_id: str | None = None,
     member_id: str | None = None,
+    *,
+    doc_created_by: str | None = None,
+    knowledge_admin_ids: set[str] | frozenset[str] | None = None,
 ) -> bool:
-    if not doc_scope:
+    """Authorize knowledge access. Empty scope is creator-only (default deny).
+
+    ``internal: true`` is a staff/knowledge-admin gate, not a public flag.
+    """
+    scope = doc_scope or {}
+    creator = scope.get("created_by") or doc_created_by
+    if creator and creator == actor_id:
         return True
-    if doc_scope.get("created_by") == actor_id:
-        return True
-    hh_ids = doc_scope.get("household_ids", [])
+    if not scope:
+        return False
+    hh_ids = scope.get("household_ids", [])
     if hh_ids and household_id and household_id in hh_ids:
         return True
-    m_ids = doc_scope.get("member_ids", [])
+    m_ids = scope.get("member_ids", [])
     if m_ids and member_id and member_id in m_ids:
         return True
-    if doc_scope.get("internal", False):
-        return True
+    if scope.get("internal", False):
+        admins = knowledge_admin_ids or set()
+        return actor_id in admins
     return False
 
 
@@ -172,7 +244,9 @@ def add_document(
         content_hash=content_hash,
         full_text=content,
         created_by=created_by,
-        permission_scope=permission_scope or {},
+        permission_scope=normalize_permission_scope(
+            permission_scope, created_by=created_by
+        ),
         effective_from=effective_from,
         effective_until=effective_until,
     )
@@ -265,10 +339,7 @@ def retrieve(
     member_id: str | None = None,
     top_k: int = 5,
 ) -> list[dict]:
-    normalized_query = re.sub(r"\s+", " ", str(query or "")).strip()
-    if not normalized_query:
-        raise ValueError("EMPTY_QUERY")
-    q_tokens = _tokenize(normalized_query)
+    q_tokens = _query_tokens(query)
     if not q_tokens:
         # Stopword-only or single-character noise degrades exactly like an
         # empty query instead of scanning the index for nothing.
@@ -295,8 +366,18 @@ def retrieve(
 
     accessible_ids: set = set()
     doc_meta: dict = {}
+    from app.config import get_settings
+
+    knowledge_admins = get_settings().knowledge_admin_actor_set
     for doc in all_docs:
-        if _check_permission(doc.permission_scope, actor_id, household_id, member_id):
+        if _check_permission(
+            doc.permission_scope or {},
+            actor_id,
+            household_id,
+            member_id,
+            doc_created_by=doc.created_by,
+            knowledge_admin_ids=knowledge_admins,
+        ):
             accessible_ids.add(doc.id)
             doc_meta[doc.id] = {
                 "title": doc.title,
@@ -316,15 +397,10 @@ def retrieve(
         raise ValueError("EMPTY_INDEX")
 
     # 3. Scoring: smoothed chunk-level TF-IDF + lightweight local cosine.
-    #    * IDF is computed against the chunk collection (df counts chunks), so
-    #      a term present in every chunk keeps a small positive weight instead
-    #      of turning negative and hiding matching chunks.
-    #    * TF is sublinear (1 + ln tf) so a chunk repeating one keyword cannot
-    #      drown out a chunk that actually covers the question.
-    #    * Coverage weighting prefers chunks matching more distinct query
-    #      terms, which keeps multi-document teaching content well ranked.
-    #    * Cosine over bag-of-terms vectors is a local "light vector" signal
-    #      (no external embedding download) blended at _VECTOR_SCORE_WEIGHT.
+    #    * IDF uses the chunk collection (df counts chunks) so common terms keep
+    #      a small positive weight instead of going negative (master IDF fix).
+    #    * TF is sublinear (1 + ln tf); coverage + bag-of-terms cosine blend
+    #      keep multi-topic teaching cards ranked without cloud embeddings.
     n_chunks = len(chunks)
     df: Counter = Counter()
     for ch in chunks:
@@ -345,7 +421,7 @@ def retrieve(
             matched_tokens += 1
             if tok in original_unique:
                 matched_original += 1
-            idf = math.log((1 + n_chunks) / (1 + df[tok])) + 1.0
+            idf = math.log((1 + n_chunks) / (1 + df.get(tok, 0))) + 1.0
             score += (1.0 + math.log(tf)) * idf
         if matched_tokens:
             coverage = matched_original / len(original_unique)
@@ -419,8 +495,11 @@ def log_query(
     top_chunk_ids: list | None = None,
     returned_count: int = 0,
 ) -> RetrievalQuery:
+    digest, query_length = query_audit_fingerprint(query_text)
     entry = RetrievalQuery(
-        query_text=query_text[:1000],
+        query_text=None,
+        query_digest=digest,
+        query_length=query_length,
         actor_id=actor_id,
         household_id=household_id,
         member_id=member_id,

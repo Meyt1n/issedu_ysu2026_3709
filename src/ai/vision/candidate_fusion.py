@@ -47,12 +47,22 @@ class FusionWeights(BaseModel):
 
 
 class FusionThresholds(BaseModel):
+    """Decision thresholds for MATCHED / UNKNOWN gating.
+
+    Defaults come from the frozen synthetic technical calibration fixture
+    (``tests/fixtures/hct206/calibration_fixture.json``) and are registered as
+    ``fusion-thresholds-calibrated-v1``.  They are not production-released
+    medicine accuracy; HCT-201 remains the production data gate.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
-    matched_score: float = Field(default=0.80, ge=0, le=1)
-    unknown_score: float = Field(default=0.35, ge=0, le=1)
+    matched_score: float = Field(default=0.50, ge=0, le=1)
+    unknown_score: float = Field(default=0.10, ge=0, le=1)
     min_margin: float = Field(default=0.10, ge=0, le=1)
-    config_version: str = Field(default="fusion-thresholds-demo-v1", min_length=1, max_length=128)
+    config_version: str = Field(
+        default="fusion-thresholds-calibrated-v1", min_length=1, max_length=128
+    )
 
     @model_validator(mode="after")
     def thresholds_must_be_ordered(self) -> FusionThresholds:
@@ -66,10 +76,12 @@ class FusionRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    matched_score: float = Field(default=0.80, ge=0, le=1)
-    unknown_score: float = Field(default=0.35, ge=0, le=1)
+    matched_score: float = Field(default=0.50, ge=0, le=1)
+    unknown_score: float = Field(default=0.10, ge=0, le=1)
     min_margin: float = Field(default=0.10, ge=0, le=1)
-    config_version: str = Field(default="fusion-thresholds-demo-v1", min_length=1, max_length=128)
+    config_version: str = Field(
+        default="fusion-thresholds-calibrated-v1", min_length=1, max_length=128
+    )
 
     def thresholds(self) -> FusionThresholds:
         return FusionThresholds(

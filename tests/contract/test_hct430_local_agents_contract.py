@@ -55,3 +55,25 @@ def test_assistant_stream_requires_multi_agent(client: TestClient) -> None:
     )
     assert response.status_code == 422
     assert response.json()["detail"] == "STREAM_REQUIRES_MULTI_AGENT"
+
+
+def test_assistant_stream_greeting_emits_trace_token_done(client: TestClient) -> None:
+    with client.stream(
+        "POST",
+        "/api/v1/assistant/chat/stream",
+        headers={"X-Actor-Id": "hct430-stream-owner"},
+        json={
+            "messages": [{"role": "user", "content": "你好"}],
+            "agent_mode": "multi_agent",
+        },
+    ) as response:
+        assert response.status_code == 200
+        body = "".join(response.iter_text())
+
+    assert "event: trace" in body
+    assert "event: token" in body
+    assert "event: done" in body
+    assert "event: status" in body
+    assert "家庭健康助手" in body
+    # Validated answer text is streamed; the raw JSON draft must not appear.
+    assert '{"answer"' not in body
