@@ -22,11 +22,12 @@ def commit(
     name: str,
     email: str,
     sha: str = "0123456789abcdef",
+    message: str = "",
 ) -> dict:
     return {
         "sha": sha,
         "author": {"login": login} if login else None,
-        "commit": {"author": {"name": name, "email": email}},
+        "commit": {"author": {"name": name, "email": email}, "message": message},
     }
 
 
@@ -154,6 +155,40 @@ def test_resolves_owner_pr_to_owner_credentials() -> None:
 
     assert result["token_env"] == "CLOUD_REPO_PASSWORD"
     assert result["cloud_username_env"] == "CLOUD_REPO_USERNAME"
+
+
+def test_accepts_cursor_agent_commit_with_registered_pr_owner_coauthor() -> None:
+    result = IDENTITY.resolve_identity(
+        "Meyt1n",
+        [
+            commit(
+                login="cursoragent",
+                name="Cursor Agent",
+                email="cursoragent@cursor.com",
+                message=(
+                    "feat: delegated change\n\n"
+                    "Co-authored-by: Meyt1n <Meyt1n@users.noreply.github.com>"
+                ),
+            )
+        ],
+    )
+
+    assert result["token_env"] == "CLOUD_REPO_PASSWORD"
+
+
+def test_rejects_cursor_agent_commit_without_registered_coauthor() -> None:
+    with pytest.raises(IDENTITY.IdentityError, match="提交账号不一致"):
+        IDENTITY.resolve_identity(
+            "Meyt1n",
+            [
+                commit(
+                    login="cursoragent",
+                    name="Cursor Agent",
+                    email="cursoragent@cursor.com",
+                    message="feat: delegated change",
+                )
+            ],
+        )
 
 
 def test_rejects_unmapped_pr_author_without_fallback() -> None:
