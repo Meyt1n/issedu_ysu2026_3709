@@ -108,9 +108,9 @@ def test_compose_has_locatable_health_checks_for_all_services() -> None:
 
     assert all(
         f"  {service}:" in compose
-        for service in ("db", "api", "outbox-worker", "web", "ollama")
+        for service in ("db", "api", "outbox-worker", "care-plan-worker", "web", "ollama")
     )
-    assert compose.count("healthcheck:") == 5
+    assert compose.count("healthcheck:") == 6
     assert "condition: service_healthy" in compose
     assert "wget --spider" in compose or "urllib.request" in compose
 
@@ -130,7 +130,8 @@ def test_api_runtime_can_import_api_and_local_ai_packages() -> None:
     compose = read_repo_file("docker-compose.yml")
     api_dockerfile = read_repo_file("docker/api.Dockerfile")
 
-    assert compose.count("PYTHONPATH: /app/src/api:/app/src") == 2
+    # api + outbox-worker + care-plan-worker 三个 Python 服务都要能导入两个包根。
+    assert compose.count("PYTHONPATH: /app/src/api:/app/src") == 3
     assert "ENV PYTHONPATH=/app/src/api:/app/src" in api_dockerfile
 
 
