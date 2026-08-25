@@ -51,17 +51,44 @@ chmod +x scripts/start.sh
 
 ```bash
 uv run python scripts/ensure_face_models.py
-# 可选：用本机摄像头采样目录校准阈值（不上传、不落库原图）
-# uv run python scripts/calibrate_face_thresholds.py ./face-samples
 ```
 
 然后在 `.env` 中确认：
 
 - `FACE_MODEL_DIR=./models/face`
 - `FACE_MODEL_AUTO_DOWNLOAD=true`（或改为 false 并手工拷贝 ONNX）
-- `FACE_MATCH_THRESHOLD_SFACE` / `FACE_MATCH_MARGIN_SFACE`（校准脚本输出）
+- `FACE_MATCH_THRESHOLD_SFACE` / `FACE_MATCH_MARGIN_SFACE`（见下方本机标定）
 
 `/api/v1/meta/capabilities` 在模型就绪时会包含 `face-recognition-local`；未就绪时欢迎页会提示改用 PIN/密码。旧灰度 v1/v2 凭证仍可登录，管理员页会提示重新绑定升级。
+
+#### 真实家庭摄像头阈值标定（必须本机完成）
+
+默认阈值（`0.40` / margin `0.05`）来自公开样例，**不能代替你们家庭真实摄像头场景**。云端 Agent / CI **无法代采真人脸**，因此误拒/误识校准必须在维护者本机完成：
+
+1. 用浏览器或摄像头为 3～6 位家庭成员采集 `enroll/` 与 `probe/` 照片（多种光线与轻微转头），目录示例：
+
+```text
+face-samples/
+  grandpa/enroll/*.jpg
+  grandpa/probe/*.jpg
+  grandma/enroll/*.jpg
+  grandma/probe/*.jpg
+```
+
+2. 本机运行校准（只读本地图片，不上传、不入库）：
+
+```bash
+uv run python scripts/calibrate_face_thresholds.py ./face-samples
+```
+
+3. 把脚本输出的推荐值写入 `.env` 后重启 API：
+
+```env
+FACE_MATCH_THRESHOLD_SFACE=...
+FACE_MATCH_MARGIN_SFACE=...
+```
+
+未完成本机标定前，可将人脸登录视为“可用但未按家庭场景验收”；正式演示或 R3 前应完成上述步骤。
 
 ### 1.2 本地进程开发路径
 

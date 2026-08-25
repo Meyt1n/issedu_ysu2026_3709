@@ -15,6 +15,10 @@ Outputs JSON with recommended FACE_MATCH_THRESHOLD_SFACE and
 FACE_MATCH_MARGIN_SFACE.  Never prints embeddings or raw scores per image path
 beyond aggregate statistics.
 
+This must be run on a maintainer machine with real household camera samples.
+Cloud agents / CI cannot capture real faces for you; see
+``docs/本地部署与Demo操作指南.md`` §1.3.
+
 Usage::
 
     uv run python scripts/calibrate_face_thresholds.py ./samples
