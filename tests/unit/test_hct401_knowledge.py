@@ -287,7 +287,7 @@ class TestTokenizer:
             title="amox-alias",
         )
         assert "阿莫西林" in _expand_query_aliases("阿莫 怎么服用")
-        results = retrieve(db_session, query="阿莫 用法", actor_id="u1")
+        results = retrieve(db_session, query="阿莫 用法", actor_id="test-actor")
         assert results
         assert "阿莫西林" in results[0]["text"]
         tokens = _query_tokens("阿莫西林")

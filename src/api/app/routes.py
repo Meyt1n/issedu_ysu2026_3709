@@ -52,6 +52,7 @@ from app.auth import (
     create_face_challenge,
     create_face_session,
     create_family_face_challenge,
+    enforce_face_challenge_rate_limit,
     enforce_registration_rate_limit,
     family_face_rate_actor,
     generate_pin_challenge,
@@ -224,6 +225,7 @@ from app.schemas import (
     RiskAlertRead,
     RiskDetailResponse,
     RiskListResponse,
+    SecurityDashboardRead,
     SessionIntrospectRead,
     StepUpChallengeRead,
     StepUpChallengeRequest,
@@ -441,7 +443,64 @@ def capabilities() -> CapabilityResponse:
         available.append("face-recognition-local")
     else:
         unavailable.append("face-recognition-local")
-    return CapabilityResponse(phase="P0-foundation", available=available, unavailable=unavailable)
+    cfg = get_settings()
+    return CapabilityResponse(
+        phase="P0-foundation",
+        available=available,
+        unavailable=unavailable,
+        knowledge_admin_configured=bool(cfg.knowledge_admin_actor_set),
+        model_release_admin_configured=bool(cfg.model_release_admin_actor_set),
+        model_release_dual_control=cfg.model_release_dual_control,
+        owner_requires_access_purpose=cfg.owner_requires_access_purpose,
+    )
+
+
+@router.get("/meta/security-dashboard", response_model=SecurityDashboardRead)
+def security_dashboard(
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> SecurityDashboardRead:
+    """Aggregate access/auth audit counters for teaching demos (owner-scoped)."""
+    owned = list(
+        session.scalars(select(Household).where(Household.created_by == actor_id)).all()
+    )
+    household_ids = [h.id for h in owned if h.deleted_at is None]
+    if not household_ids:
+        return SecurityDashboardRead(household_count=0)
+
+    audits = list(
+        session.scalars(
+            select(AccessAudit)
+            .where(AccessAudit.household_id.in_(household_ids))
+            .order_by(AccessAudit.created_at.desc())
+            .limit(500)
+        ).all()
+    )
+    allowed = sum(1 for a in audits if a.outcome == "ALLOWED")
+    denied = sum(1 for a in audits if a.outcome == "DENIED")
+    file_cleanups = sum(1 for a in audits if a.action == "DELETE_FILE")
+    auth_failures = sum(
+        1 for a in audits if a.operation == "AUTHENTICATION" and a.outcome == "FAILED"
+    )
+    recent_denied = [
+        {
+            "action": a.action,
+            "reason": a.reason,
+            "actor_id": a.actor_id,
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+        }
+        for a in audits
+        if a.outcome == "DENIED"
+    ][:20]
+    return SecurityDashboardRead(
+        household_count=len(household_ids),
+        access_allowed=allowed,
+        access_denied=denied,
+        file_owner_cleanups=file_cleanups,
+        auth_failures=auth_failures,
+        model_release_events=0,
+        recent_denied=recent_denied,
+    )
 
 
 def _valid_authorizations(
@@ -1830,14 +1889,36 @@ def auth_pin_login(
 
 
 @router.post("/auth/face-challenge", response_model=FaceChallengeRead)
-def auth_face_challenge(payload: FaceChallengeRequest) -> dict[str, Any]:
+def auth_face_challenge(
+    payload: FaceChallengeRequest,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
     """Issue an opaque short-lived challenge; binding is checked at login."""
+    client_host = request.client.host if request.client else None
+    enforce_face_challenge_rate_limit(
+        session,
+        household_id=payload.household_id,
+        client_key=client_host,
+    )
+    session.commit()
     return create_face_challenge(payload.actor_id, payload.household_id)
 
 
 @router.post("/auth/family-face-challenge", response_model=FaceChallengeRead)
-def auth_family_face_challenge(payload: FamilyFaceChallengeRequest) -> dict[str, Any]:
+def auth_family_face_challenge(
+    payload: FamilyFaceChallengeRequest,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
     """Issue a household-scoped challenge; actor identity is resolved later."""
+    client_host = request.client.host if request.client else None
+    enforce_face_challenge_rate_limit(
+        session,
+        household_id=payload.household_id,
+        client_key=client_host,
+    )
+    session.commit()
     return create_family_face_challenge(payload.household_id)
 
 
@@ -5593,9 +5674,26 @@ def invalidate_export_manifest_endpoint(
 from app import model_binding as _mb  # noqa: E402
 
 
-def _can_govern_model_release(actor_id: str, binding: _mb.ModelVersionBinding) -> bool:
-    """Release activate/rollback: configured admins, else only the binding creator."""
-    admins = get_settings().model_release_admin_actor_set
+def _can_govern_model_release(
+    actor_id: str,
+    binding: _mb.ModelVersionBinding,
+    *,
+    action: str = "rollback",
+) -> bool:
+    """Authorize model release governance.
+
+    - Dual-control activate: activator must differ from creator; when
+      ``MODEL_RELEASE_ADMIN_ACTORS`` is set the activator must be listed.
+    - Rollback / non-dual: creator, or listed release admins.
+    """
+    settings = get_settings()
+    admins = settings.model_release_admin_actor_set
+    if action == "activate" and settings.model_release_dual_control:
+        if actor_id == binding.created_by:
+            return False
+        if admins:
+            return actor_id in admins
+        return True
     if admins:
         return actor_id in admins
     return binding.created_by == actor_id
@@ -5618,6 +5716,9 @@ def _mb_raise_val(err: str) -> NoReturn:
         "HCT404_COMPARISON_HASH_MISMATCH": 422,
         "HCT404_ROLLBACK_REASON_REQUIRED": 422,
         "HCT404_ROLLBACK_EVIDENCE_REQUIRED": 422,
+        "RELEASE_DUAL_CONTROL_REQUIRED": 422,
+        "RELEASE_ADMIN_REQUIRED": 403,
+        "KNOWLEDGE_ADMIN_REQUIRED": 403,
     }
     status_code_val = 422
     for prefix, code in mapping.items():
@@ -5705,10 +5806,28 @@ def activate_model_binding_endpoint(
     actor_id: str = Depends(get_actor_id),
     session: Session = Depends(get_session),
 ) -> ModelVersionBindingRead:
-    """Activate a model release. High-risk governance: identity + role required."""
+    """Activate a model release. Dual-control: activator must not be the creator."""
     binding = _mb.get_binding(session, binding_id)
-    if binding is None or not _can_govern_model_release(actor_id, binding):
+    if binding is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="BINDING_NOT_FOUND")
+    settings = get_settings()
+    if settings.model_release_dual_control and actor_id == binding.created_by:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="RELEASE_DUAL_CONTROL_REQUIRED",
+        )
+    if not _can_govern_model_release(actor_id, binding, action="activate"):
+        detail = (
+            "RELEASE_ADMIN_REQUIRED"
+            if settings.model_release_admin_actor_set
+            else "BINDING_NOT_FOUND"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN
+            if detail == "RELEASE_ADMIN_REQUIRED"
+            else status.HTTP_404_NOT_FOUND,
+            detail=detail,
+        )
     if payload.approved_by != actor_id:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -5741,8 +5860,20 @@ def rollback_model_binding_endpoint(
 ) -> ModelVersionBindingRead:
     """Roll back a model release, attributed to the authenticated caller."""
     binding = _mb.get_binding(session, binding_id)
-    if binding is None or not _can_govern_model_release(actor_id, binding):
+    if binding is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="BINDING_NOT_FOUND")
+    if not _can_govern_model_release(actor_id, binding, action="rollback"):
+        detail = (
+            "RELEASE_ADMIN_REQUIRED"
+            if get_settings().model_release_admin_actor_set
+            else "BINDING_NOT_FOUND"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN
+            if detail == "RELEASE_ADMIN_REQUIRED"
+            else status.HTTP_404_NOT_FOUND,
+            detail=detail,
+        )
     try:
         _mb.rollback_binding(
             session,

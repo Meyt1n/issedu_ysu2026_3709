@@ -136,12 +136,28 @@ def has_authorized_action(
 ) -> bool:
     # P0 管理边界：家庭 owner 是家庭管理员，可访问本家庭的成员目录和健康事实；
     # 非 owner 照护者必须同时满足成员、字段、动作和有效期授权。子女身份本身不等于 owner。
+    # 可选收紧：OWNER_REQUIRES_ACCESS_PURPOSE=true 时 owner 也必须声明访问目的。
     if household.deleted_at is not None:
         return False
     member = session.get(Member, member_id)
     if member is None or member.household_id != household.id or member.deleted_at is not None:
         return False
     if household.created_by == actor_id:
+        from app.config import get_settings
+
+        if get_settings().owner_requires_access_purpose and purpose is None:
+            _record_access_decision(
+                session,
+                household_id=household.id,
+                authorization_id=None,
+                actor_id=actor_id,
+                action=action,
+                data_field=data_field,
+                purpose=purpose,
+                outcome="DENIED",
+                reason="OWNER_PURPOSE_REQUIRED",
+            )
+            return False
         return True
 
     now = datetime.now(UTC)

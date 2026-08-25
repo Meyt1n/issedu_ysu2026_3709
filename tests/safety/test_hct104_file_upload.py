@@ -135,8 +135,9 @@ class TestValidateAndStore:
         assert result["extension"] == ".jpg"
         assert result["size_bytes"] == len(content)
         assert len(result["hash"]) == 64
+        assert "path" not in result
 
-        # Verify stored file
-        stored = Path(result["path"])
+        # Verify stored file via storage_key under the patched file root
+        stored = tmp_path / result["storage_key"]
         assert stored.exists()
         assert stored.read_bytes() == content

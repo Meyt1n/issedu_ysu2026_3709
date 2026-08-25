@@ -113,8 +113,18 @@ class Settings(BaseSettings):
     # Empty means internal docs are creator-only (plus household/member scopes).
     knowledge_admin_actors: str = ""
     # Comma-separated actor ids allowed to activate/rollback model releases.
-    # Empty means only the binding creator may govern that release.
+    # Empty means only the binding creator may govern that release (when dual
+    # control is off). With dual control on, empty means any non-creator may
+    # activate; set an allowlist for shared demos.
     model_release_admin_actors: str = ""
+    # Require activator != binding.created_by for HCT-404 dual-control drills.
+    model_release_dual_control: bool = True
+    # When true, household owners must supply X-Access-Purpose for field-level
+    # health reads (step toward post-P0 owner ABAC). Default off for P0 demos.
+    owner_requires_access_purpose: bool = False
+    # Process-local face challenges remain a production gap until a durable
+    # challenge store ships; keep the gate explicit.
+    allow_process_local_face_challenges_in_production: bool = False
 
     @field_validator("default_household_time_zone")
     @classmethod
@@ -126,19 +136,18 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def reject_unsafe_production_configuration(self) -> "Settings":
-        """Prevent the local demo auth stores from being deployed as production.
+        """Fail closed for production until remaining demo gaps are closed.
 
-        Password/PIN/face challenges and bearer sessions are intentionally
-        process-local in this phase.  Starting with ``APP_ENV=production``
-        would otherwise make a restart silently log everyone out and would
-        retain development trust shortcuts.  Fail closed until the database
-        session store, rotation and CSRF deployment work is delivered.
+        Bearer sessions and password/PIN rate limits are database-backed
+        (HCT-428). Remaining production blockers are development trust
+        shortcuts, weak signing keys, egress posture, and process-local face
+        challenges.
         """
 
         if self.app_env.strip().casefold() not in {"prod", "production"}:
             return self
 
-        problems: list[str] = ["database-backed session persistence is not implemented"]
+        problems: list[str] = []
         if self.allow_dev_actor_header:
             problems.append("ALLOW_DEV_ACTOR_HEADER must be false")
         if self.cursor_signing_key in {"", "dev-only-change-me"}:
@@ -151,6 +160,12 @@ class Settings(BaseSettings):
             problems.append("EGRESS_DEFAULT_DENY must remain true")
         if self.agent_web_search_enabled and not self.agent_web_search_allowed_domain_set:
             problems.append("AGENT_WEB_SEARCH_ALLOWED_DOMAINS is required when search is enabled")
+        if not self.allow_process_local_face_challenges_in_production:
+            problems.append(
+                "face login challenges are process-local; "
+                "set ALLOW_PROCESS_LOCAL_FACE_CHALLENGES_IN_PRODUCTION=true only for "
+                "single-node drills, or wait for durable challenge storage"
+            )
         if problems:
             raise ValueError("PRODUCTION_CONFIGURATION_BLOCKED: " + "; ".join(problems))
         return self
