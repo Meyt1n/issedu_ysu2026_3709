@@ -11,7 +11,7 @@ const memberName = computed(() => selectedMember.value?.display_name ?? '家人'
   <section class="page-hero member-portal-hero">
     <p class="eyebrow">使用帮助</p>
     <h2 class="hero-greeting">有问题先看这里</h2>
-    <p class="hero-sub">这里用最简单的话说明怎么拍照、怎么看记录，以及信息保存在哪里。</p>
+    <p class="hero-sub">怎么拍照、怎么看记录，以及信息保存在哪里。</p>
   </section>
 
   <section class="card member-help-card">
