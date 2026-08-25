@@ -595,6 +595,13 @@ button:focus-visible, a:focus-visible {
   padding: 0;
 }
 
+/*
+ * 助手外壳铺满整个容器且容器无内边距富余，卡片入场的 translateY(14px)
+ * 会在动画期间形成 14px 的纵向滚动溢出；页面级过渡已提供入场动效，
+ * 这里豁免卡片入场，保证任何时刻内容都收在视口内。
+ */
+.view-container.view-assistant > * { animation: none; }
+
 .view-assistant .agent-workflow-panel {
   flex: 0 0 auto;
 }
