@@ -551,6 +551,8 @@ button:focus-visible, a:focus-visible {
 .icon-button:hover { background: var(--paper-deep); color: var(--ink); }
 
 .view-container {
+  /* 内容从顶部开始排布；不足一屏时不再把多余高度摊进行间距（图三/图七等大空隙问题）。 */
+  align-content: start;
   display: grid;
   gap: 16px;
   flex: 1 1 auto;
@@ -581,34 +583,20 @@ button:focus-visible, a:focus-visible {
  * .view-container 自己滚动。这样浏览器缩放只会改变可用视口，页面不会
  * 产生一层额外的全局纵向滚动条。
  */
+/* 图五/图六：助手页占满主区（除全局侧栏外整块视口都是对话画布）。 */
 .view-container.view-assistant {
   align-content: stretch;
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: clamp(10px, 1.6vh, 22px);
+  gap: 0;
+  max-width: none;
   overflow: hidden;
-  padding: clamp(14px, 2.8vh, 30px) clamp(16px, 2.5vw, 34px) clamp(12px, 2.4vh, 30px);
-}
-
-.view-assistant > .page-hero { flex: 0 0 auto; }
-
-.view-assistant > .card {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
-  padding: clamp(14px, 2vh, 24px) clamp(16px, 2vw, 26px);
-}
-
-.view-assistant .session-bar {
-  margin: calc(-1 * clamp(14px, 2vh, 24px)) calc(-1 * clamp(16px, 2vw, 26px)) clamp(10px, 1.6vh, 20px);
+  padding: 0;
 }
 
 .view-assistant .agent-workflow-panel {
   flex: 0 0 auto;
-  margin-bottom: clamp(8px, 1.4vh, 18px);
 }
 
 .view-assistant .chat-window {
@@ -621,7 +609,7 @@ button:focus-visible, a:focus-visible {
 .view-assistant .chat-compose,
 .view-assistant .agent-network-toggle,
 .view-assistant .voice-session-panel,
-.view-assistant > .card > .text-faint {
+.view-assistant .notice {
   flex: 0 0 auto;
 }
 
@@ -1538,9 +1526,16 @@ button:focus-visible, a:focus-visible {
 .capture-zone .capture-hint { color: var(--ink-soft); font-size: 13.5px; line-height: 1.6; }
 .capture-zone .app-icon { color: var(--clay); }
 
+/* 图二：左侧虚线上传框与右侧拍摄参考面板等宽等高。 */
 .capture-layout {
-  align-items: start;
-  grid-template-columns: minmax(0, 1.1fr) minmax(280px, .9fr);
+  align-items: stretch;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.capture-layout > .capture-zone {
+  align-content: center;
+  height: 100%;
+  min-height: 300px;
 }
 
 .capture-zone {
@@ -2373,9 +2368,35 @@ button:focus-visible, a:focus-visible {
 }
 
 .graph-node { cursor: pointer; transition: transform 0.22s ease; transform-box: fill-box; transform-origin: center; }
-.graph-node:hover { transform: scale(1.12); }
-.graph-node circle { transition: filter 0.2s ease; }
-.graph-node:hover circle { filter: drop-shadow(0 3px 9px rgba(84, 70, 41, 0.35)); }
+.graph-node:hover, .graph-node:focus-visible { transform: translateY(-3px) scale(1.12); }
+.graph-node circle {
+  filter: drop-shadow(0 5px 8px rgba(42, 80, 69, 0.26));
+  transition: filter 0.2s ease;
+}
+.graph-node:hover circle,
+.graph-node:focus-visible circle { filter: drop-shadow(0 10px 16px rgba(42, 80, 69, 0.4)); }
+
+/* 图四：节点做成带高光的“小球”，轻微悬浮呼吸；投影椭圆增加落地感。 */
+.graph-node-inner {
+  animation: node-float 5.4s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.graph-node-shadow { fill: rgba(42, 80, 69, 0.14); }
+
+.graph-center-sphere { filter: drop-shadow(0 9px 18px rgba(28, 55, 47, 0.42)); }
+
+@keyframes node-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .graph-node-inner { animation: none; }
+  .graph-node:hover, .graph-node:focus-visible { transform: none; }
+  .graph-particle { display: none; }
+}
 
 .graph-node text {
   fill: var(--ink);
@@ -3065,6 +3086,10 @@ button:focus-visible, a:focus-visible {
   flex-wrap: wrap;
   padding: 20px 0;
 }
+
+/* 图三：用药安全页标题、信号数字与风险区块之间收紧纵向节奏。 */
+.view-risks .stat-strip { padding: 14px 0; }
+.view-risks .sec-head { margin-bottom: 14px; }
 
 .stat-cell {
   display: grid;
@@ -5203,6 +5228,7 @@ button:focus-visible, a:focus-visible {
     max-width: 200px;
   }
   .view-container { padding: 20px 18px 40px; }
+  .view-container.view-assistant { padding: 0; }
   .app-footer { padding: 14px 18px 20px; }
   .chat-bubble { max-width: 92%; }
   .member-quick-grid { grid-template-columns: 1fr; }
@@ -5213,10 +5239,7 @@ button:focus-visible, a:focus-visible {
 @media (max-height: 820px) and (min-width: 861px) {
   .view-container { padding-bottom: 20px; padding-top: 18px; }
 
-  .view-container.view-assistant { gap: 10px; }
-  .view-assistant .page-hero .hero-greeting { font-size: clamp(24px, 3.4vh, 30px); }
-  .view-assistant .page-hero .hero-sub { font-size: 13px; line-height: 1.4; }
-  .view-assistant > .card { padding-bottom: 12px; padding-top: 12px; }
+  .view-container.view-assistant { padding: 0; }
   .view-assistant .agent-workflow-panel { padding: 10px 12px 8px; }
   .view-assistant .agent-workflow-heading { margin-bottom: 8px; }
   .view-assistant .agent-stage { gap: 2px; min-height: 78px; padding: 7px 8px; }

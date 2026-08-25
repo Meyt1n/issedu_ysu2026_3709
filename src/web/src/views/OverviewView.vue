@@ -568,7 +568,10 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
 }
 
 .home-dashboard-card {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
+  overflow: hidden;
   padding: 22px;
   border: 1px solid rgba(190, 167, 125, 0.28);
   border-radius: 22px;
@@ -607,12 +610,23 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
   line-height: 1.65;
 }
 
+/* 列表在卡片内部滚动，避免行内容溢出卡片下边缘（图一修复）。 */
 .home-dashboard-list {
   display: grid;
+  align-content: start;
+  flex: 1 1 auto;
   gap: 9px;
   margin: 0;
-  padding: 0;
+  padding: 0 2px 2px 0;
   list-style: none;
+  min-height: 0;
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+.home-dashboard-list-row .pill,
+.home-dashboard-list-row > svg {
+  flex-shrink: 0;
 }
 
 .home-dashboard-list-row,

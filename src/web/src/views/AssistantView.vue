@@ -10,11 +10,18 @@ import type {
 } from '../api/types'
 import {
   clearChatSession,
+  createChatThread,
+  deleteChatThread,
+  getActiveChatThreadId,
   getAssistantSessionId,
+  listChatThreads,
   loadChatSession,
   regenerateAssistantSessionId,
   saveChatSession,
   sessionEntryToStored,
+  setActiveChatThread,
+  touchChatThread,
+  type ChatThreadMeta,
   type StoredChatEntry,
 } from '../assistant/chatSession'
 import { normalizeSuggestedQuestions } from '../assistant/followUp'
@@ -60,6 +67,7 @@ import {
   selectedMember,
   session,
 } from '../store'
+import { relativeTime } from '../ui/labels'
 
 interface ChatEntry {
   role: 'user' | 'assistant'
@@ -122,6 +130,9 @@ const workflowRouteExplanation = ref<string | null>(null)
 const liveEvidencePreview = ref<EvidencePreview | null>(null)
 const stopStatus = ref('')
 const assistantSessionId = ref('')
+const threads = ref<ChatThreadMeta[]>([])
+const activeThreadId = ref('')
+const settingsOpen = ref(false)
 type VoiceMode = DictationMode
 
 const voiceMode = ref<VoiceMode>('off')
@@ -361,6 +372,7 @@ function rotateAssistantSession(): void {
     session.actorId,
     session.selectedHouseholdId,
     session.selectedMemberId,
+    activeThreadId.value,
   )
 }
 
@@ -586,6 +598,19 @@ const workflowSummary = computed(() => {
   return '发送问题后，可在此查看处理进度'
 })
 
+// 图五/图六：多智能体流程默认收成一枚小状态胶囊，详情按需展开。
+const workflowChipLabel = computed(() => {
+  if (sending.value) {
+    return orchestrationPhase.value && PHASE_LABELS[orchestrationPhase.value]
+      ? PHASE_LABELS[orchestrationPhase.value]
+      : '正在本机分析…'
+  }
+  const done = workflowTrace.value.filter(trace =>
+    ['completed', 'skipped', 'blocked', 'degraded'].includes(trace.status),
+  ).length
+  return done > 0 ? `本地分析 · ${done} 步完成` : '本地分析'
+})
+
 const selectedAgent = computed(() => AGENT_STAGES.find(stage => stage.id === selectedAgentId.value) ?? null)
 const selectedAgentTrace = computed(() => (
   selectedAgentId.value ? traceForAgent(selectedAgentId.value) : undefined
@@ -653,7 +678,116 @@ function persistChatSession(): void {
     session.selectedHouseholdId,
     session.selectedMemberId,
     history.value.map(entry => sessionEntryToStored(entry)),
+    activeThreadId.value,
   )
+  const firstQuestion = history.value.find(entry => entry.role === 'user')?.content
+  touchChatThread(
+    session.actorId,
+    session.selectedHouseholdId,
+    session.selectedMemberId,
+    activeThreadId.value,
+    firstQuestion,
+  )
+  refreshThreads()
+}
+
+function refreshThreads(): void {
+  threads.value = listChatThreads(session.actorId, session.selectedHouseholdId, session.selectedMemberId)
+}
+
+/** 切换/新建线索前的公共收尾：停掉请求、语音与打字机。 */
+function suspendActiveConversation(): void {
+  cancelActiveSend()
+  stopVoiceInput()
+  if (speakingIndex.value !== null) {
+    stopSpeaking()
+    speakingIndex.value = null
+    speakingProgress.value = ''
+  }
+  if (streamTimer) {
+    clearInterval(streamTimer)
+    streamTimer = null
+  }
+  workflowTrace.value = []
+  orchestrationPhase.value = null
+  workflowRouteExplanation.value = null
+  liveEvidencePreview.value = null
+  sendError.value = ''
+  stopStatus.value = ''
+  sending.value = false
+}
+
+function switchThread(threadId: string): void {
+  if (!threadId || threadId === activeThreadId.value) return
+  suspendActiveConversation()
+  activeThreadId.value = threadId
+  setActiveChatThread(session.actorId, session.selectedHouseholdId, session.selectedMemberId, threadId)
+  assistantSessionId.value = getAssistantSessionId(
+    session.actorId,
+    session.selectedHouseholdId,
+    session.selectedMemberId,
+    threadId,
+  )
+  restoreChatSession(loadChatSession(
+    session.actorId,
+    session.selectedHouseholdId,
+    session.selectedMemberId,
+    threadId,
+  ))
+}
+
+function startNewThread(): void {
+  suspendActiveConversation()
+  const meta = createChatThread(session.actorId, session.selectedHouseholdId, session.selectedMemberId)
+  activeThreadId.value = meta.id
+  assistantSessionId.value = getAssistantSessionId(
+    session.actorId,
+    session.selectedHouseholdId,
+    session.selectedMemberId,
+    meta.id,
+  )
+  history.value = []
+  draft.value = ''
+  refreshThreads()
+}
+
+function removeThread(threadId: string): void {
+  if (!threadId) return
+  const remoteId = getAssistantSessionId(
+    session.actorId,
+    session.selectedHouseholdId,
+    session.selectedMemberId,
+    threadId,
+  )
+  clearRemoteAssistantSession(remoteId)
+  const remaining = deleteChatThread(
+    session.actorId,
+    session.selectedHouseholdId,
+    session.selectedMemberId,
+    threadId,
+  )
+  threads.value = remaining
+  if (threadId === activeThreadId.value) {
+    suspendActiveConversation()
+    const nextId = getActiveChatThreadId(session.actorId, session.selectedHouseholdId, session.selectedMemberId)
+    activeThreadId.value = nextId
+    assistantSessionId.value = getAssistantSessionId(
+      session.actorId,
+      session.selectedHouseholdId,
+      session.selectedMemberId,
+      nextId,
+    )
+    restoreChatSession(loadChatSession(
+      session.actorId,
+      session.selectedHouseholdId,
+      session.selectedMemberId,
+      nextId,
+    ))
+  }
+}
+
+function threadTimeLabel(thread: ChatThreadMeta): string {
+  return relativeTime(new Date(thread.updatedAt).toISOString())
 }
 
 function clearConversation(): void {
@@ -668,7 +802,7 @@ function clearConversation(): void {
     clearInterval(streamTimer)
     streamTimer = null
   }
-  clearChatSession(session.actorId, session.selectedHouseholdId, session.selectedMemberId)
+  clearChatSession(session.actorId, session.selectedHouseholdId, session.selectedMemberId, activeThreadId.value)
   history.value = []
   workflowTrace.value = []
   orchestrationPhase.value = null
@@ -766,15 +900,17 @@ watch(
       clearInterval(streamTimer)
       streamTimer = null
     }
+    threads.value = listChatThreads(actorId, householdId, memberId)
+    activeThreadId.value = getActiveChatThreadId(actorId, householdId, memberId)
     const shouldRegenerate = Boolean(memberId && (memberChanged || regenerateOnNextValidContext))
     assistantSessionId.value = shouldRegenerate
-      ? regenerateAssistantSessionId(actorId, householdId, memberId)
-      : getAssistantSessionId(actorId, householdId, memberId)
+      ? regenerateAssistantSessionId(actorId, householdId, memberId, activeThreadId.value)
+      : getAssistantSessionId(actorId, householdId, memberId, activeThreadId.value)
     if (memberId) regenerateOnNextValidContext = false
     workflowRouteExplanation.value = null
     liveEvidencePreview.value = null
     stopStatus.value = ''
-    restoreChatSession(loadChatSession(actorId, householdId, memberId))
+    restoreChatSession(loadChatSession(actorId, householdId, memberId, activeThreadId.value))
   },
   { immediate: true },
 )
@@ -904,7 +1040,6 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
   orchestrationPhase.value = 'routing'
   workflowRouteExplanation.value = null
   liveEvidencePreview.value = null
-  workflowExpanded.value = true
   scrollToEnd()
 
   const streamingEntry: ChatEntry = {
@@ -1056,91 +1191,114 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="page-hero">
-    <div class="card-heading" style="margin-bottom: 0">
-      <div>
-        <h2 class="hero-greeting">本地证据助手</h2>
-        <p class="hero-sub">
-          助手只基于本地事实、规则与文档回答，并给出引用；资料不足时会明确说「无法判断」，不会替医生做决定。
-        </p>
-      </div>
-      <label class="context-select">
-        当前成员
-        <select :value="session.selectedMemberId" @change="onMemberChange">
-          <option v-for="member in session.members" :key="member.id" :value="member.id">
-            {{ member.display_name }}
-          </option>
-        </select>
-      </label>
-      <div v-if="history.length > 0" class="row-actions">
-        <span class="text-faint" style="font-size: 12px">仅保存在当前标签页</span>
-        <button type="button" class="btn btn-ghost btn-small" :disabled="sending" @click="clearConversation">
-          清空会话
-        </button>
-      </div>
-    </div>
-  </section>
-
-  <section class="card">
-    <div class="session-bar" aria-label="会话状态">
-      <span class="session-item">
-        <AppIcon name="assistant" :size="17" />
-        <span class="session-text">
-          <span class="session-label">本地模型</span>
-          <span class="session-value">{{ modelLabel }}</span>
-        </span>
-      </span>
-      <span class="session-item">
-        <AppIcon name="eye" :size="17" />
-        <span class="session-text">
-          <span class="session-label">可见范围</span>
-          <span class="session-value">{{ selectedMember?.display_name ?? '未选择成员' }}</span>
-        </span>
-      </span>
-      <span class="session-item">
-        <AppIcon name="compass" :size="17" />
-        <span class="session-text">
-          <span class="session-label">证据模式</span>
-          <span class="session-value">先依据后解释</span>
-        </span>
-      </span>
-      <span class="session-item">
-        <AppIcon name="assistant" :size="17" />
-        <span class="session-text">
-          <span class="session-label">处理方式</span>
-          <span class="session-value">本地多步核对</span>
-        </span>
-      </span>
-      <span class="session-item">
-        <AppIcon name="leaf" :size="17" />
-        <span class="session-text">
-          <span class="session-label">使用边界</span>
-          <span class="session-value">健康参考 · 需人工确认</span>
-        </span>
-      </span>
-    </div>
-    <section class="agent-workflow-panel" aria-label="本地分析流程">
-      <div class="agent-workflow-heading">
-        <div>
-          <span class="agent-workflow-kicker"><AppIcon name="sparkle" :size="13" />本地分析流程</span>
-          <strong>识别 · 检索 · 生成，全程在本机完成</strong>
-          <small>{{ workflowSummary }}</small>
-        </div>
-        <div class="agent-workflow-actions">
-          <span class="agent-local-badge">
-            <i />数据不离开本机
-          </span>
+  <div class="assistant-shell">
+    <aside class="assistant-rail" aria-label="对话记录">
+      <button type="button" class="btn btn-primary assistant-new-thread" :disabled="sending" @click="startNewThread">
+        <AppIcon name="plus" :size="15" />
+        开始新对话
+      </button>
+      <ul class="assistant-thread-list">
+        <li
+          v-for="thread in threads"
+          :key="thread.id"
+          class="assistant-thread"
+          :class="{ active: thread.id === activeThreadId }"
+        >
           <button
             type="button"
-            class="btn btn-ghost btn-small"
+            class="assistant-thread-open"
+            :aria-current="thread.id === activeThreadId ? 'true' : undefined"
+            :disabled="sending"
+            @click="switchThread(thread.id)"
+          >
+            <strong>{{ thread.title }}</strong>
+            <span>{{ threadTimeLabel(thread) }}</span>
+          </button>
+          <button
+            v-if="threads.length > 1"
+            type="button"
+            class="assistant-thread-delete"
+            :aria-label="`删除对话：${thread.title}`"
+            :disabled="sending"
+            @click="removeThread(thread.id)"
+          >
+            <AppIcon name="close" :size="12" />
+          </button>
+        </li>
+      </ul>
+      <p class="assistant-rail-note">
+        <AppIcon name="lock" :size="12" />
+        对话只保存在当前标签页，退出登录即清除。
+      </p>
+    </aside>
+
+    <section class="assistant-main" aria-label="对话区域">
+      <header class="assistant-topbar">
+        <div class="assistant-topbar-title">
+          <h2 class="hero-greeting">本地证据助手</h2>
+          <p>基于本地事实与规则回答并给出引用；资料不足会明说，不替医生做决定。</p>
+        </div>
+        <div class="assistant-topbar-actions">
+          <label class="context-select">
+            当前成员
+            <select :value="session.selectedMemberId" @change="onMemberChange">
+              <option v-for="member in session.members" :key="member.id" :value="member.id">
+                {{ member.display_name }}
+              </option>
+            </select>
+          </label>
+          <button
+            type="button"
+            class="assistant-status-chip"
+            :class="{ busy: sending, open: workflowExpanded }"
             :aria-expanded="workflowExpanded"
+            aria-label="查看本地分析过程"
             @click="toggleWorkflowPanel"
           >
-            {{ workflowExpanded ? '收起详情' : '查看详情' }}
+            <AppIcon name="sparkle" :size="13" />
+            {{ workflowChipLabel }}
+          </button>
+          <button
+            v-if="history.length > 0"
+            type="button"
+            class="btn btn-ghost btn-small"
+            :disabled="sending"
+            @click="clearConversation"
+          >
+            清空会话
+          </button>
+          <button
+            type="button"
+            class="icon-button assistant-settings-button"
+            aria-label="助手设置"
+            :aria-expanded="settingsOpen"
+            @click="settingsOpen = !settingsOpen"
+          >
+            <AppIcon name="settings" :size="18" />
           </button>
         </div>
-      </div>
-      <template v-if="workflowExpanded">
+      </header>
+
+      <section v-if="workflowExpanded" class="agent-workflow-panel assistant-workflow-pop" aria-label="本地分析流程">
+        <div class="agent-workflow-heading">
+          <div>
+            <span class="agent-workflow-kicker"><AppIcon name="sparkle" :size="13" />本地分析流程</span>
+            <small>{{ workflowSummary }}</small>
+          </div>
+          <div class="agent-workflow-actions">
+            <span class="agent-local-badge">
+              <i />数据不离开本机
+            </span>
+            <button
+              type="button"
+              class="btn btn-ghost btn-small"
+              :aria-expanded="workflowExpanded"
+              @click="toggleWorkflowPanel"
+            >
+              收起
+            </button>
+          </div>
+        </div>
         <div class="agent-workflow-grid">
           <span class="agent-flow-rail" aria-hidden="true">
             <span class="agent-flow-fill" :class="{ 'is-indeterminate': sending }" :style="{ width: workflowProgressWidth }">
@@ -1204,9 +1362,9 @@ onBeforeUnmount(() => {
         <p class="agent-workflow-note">
           <AppIcon name="lock" :size="12" />健康档案不会发送到外部；回答只引用通过服务端校验的本地资料。
         </p>
-      </template>
-    </section>
-    <div ref="chatWindow" class="chat-window">
+      </section>
+
+      <div ref="chatWindow" class="chat-window">
       <div v-if="history.length === 0" class="empty-state">
         <AppIcon class="empty-art" name="assistant" :size="40" />
         <strong>向家庭助手提问</strong>
@@ -1420,227 +1578,645 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <p v-if="sendError" class="notice error" role="alert" style="margin-top: 14px">
-      <AppIcon name="alert" :size="16" />
-      {{ sendError }}
-    </p>
-    <p v-if="stopStatus" class="notice info" role="status" aria-live="polite" style="margin-top: 14px">
-      {{ stopStatus }}
-    </p>
+      <p v-if="sendError" class="notice error" role="alert">
+        <AppIcon name="alert" :size="16" />
+        {{ sendError }}
+      </p>
+      <p v-if="stopStatus" class="notice info" role="status" aria-live="polite">
+        {{ stopStatus }}
+      </p>
+      <p v-if="voiceError" class="notice error" role="alert">
+        <AppIcon name="alert" :size="16" />
+        {{ voiceError }}
+      </p>
 
-    <form class="chat-compose" @submit.prevent="send()">
-      <textarea
-        ref="draftInput"
-        v-model="draft"
-        rows="2"
-        placeholder="例如：最近的用药提醒是依据什么？（回答仅供参考，不构成医疗建议）"
-        @focus="onDraftFocus"
-        @keydown.enter.exact.prevent="send()"
-      />
-      <div v-if="voiceMode === 'ready' || voiceMode === 'command'" class="voice-ready-actions" role="group" aria-label="口述确认">
-        <button ref="sendButton" type="submit" class="btn btn-primary btn-large" :disabled="!canSend">
-          发送
-        </button>
-        <button type="button" class="btn btn-ghost" @click="editDraftLine">
-          改一句
-        </button>
-        <button type="button" class="btn btn-ghost" @click="redoVoiceDraft">
-          重说
-        </button>
-        <button type="button" class="btn btn-ghost btn-small" @click="toggleVoiceInput">
-          {{ voiceButtonLabel }}
-        </button>
+      <div
+        v-if="needMicGesture && !listening"
+        class="voice-session-panel wake"
+        role="status"
+        aria-live="polite"
+      >
+        <span class="voice-session-visual" aria-hidden="true">
+          <AppIcon name="microphone" :size="17" />
+        </span>
+        <span class="voice-session-copy">
+          <strong>需要一次点按开启麦克风</strong>
+          <span>浏览器要求用户手势后才能开麦；点按后会自动等待「{{ wakePhrase }}」。</span>
+        </span>
       </div>
-      <p v-if="voiceSendHint" class="text-faint" style="font-size: 13px; margin: 6px 0 0" role="status">{{ voiceSendHint }}</p>
-      <div v-if="voiceMode !== 'ready' && voiceMode !== 'command'" class="chat-compose-actions">
-        <button
-          type="button"
-          class="btn btn-ghost btn-small voice-input-button"
-          :class="{ listening, active: voiceMode === 'active', ready: voiceMode === 'ready', need: needMicGesture }"
-          :disabled="sending || !speechInputSupported"
-          :aria-label="listening ? '停止语音唤醒' : voiceButtonLabel"
-          :aria-pressed="listening"
-          :title="speechInputSupported ? `进入助手页后会自动尝试聆听；首次需点按允许麦克风，再说「${wakePhrase}」` : '当前浏览器不支持语音输入'"
-          @click="toggleVoiceInput"
-        >
-          <AppIcon name="microphone" :size="15" />
-          {{ voiceButtonLabel }}
-        </button>
-        <button
-          v-if="sending"
-          type="button"
-          class="btn btn-ghost"
-          aria-label="停止生成本次回答"
-          @click="cancelActiveSend(true)"
-        >
-          停止
-        </button>
-        <button ref="sendButton" type="submit" class="btn btn-primary" :disabled="!canSend">
-          {{ sending ? '发送中' : '发送' }}
-        </button>
+      <div
+        v-if="listening || voiceMode === 'ready'"
+        class="voice-session-panel"
+        :class="voiceMode"
+        role="status"
+        aria-live="polite"
+      >
+        <span class="voice-session-visual" aria-hidden="true">
+          <span class="voice-session-ring" />
+          <span class="voice-session-ring second" />
+          <AppIcon name="microphone" :size="17" />
+        </span>
+        <span class="voice-session-copy">
+          <strong>
+            {{
+              voiceMode === 'wake'
+                ? '等待唤醒'
+                : voiceMode === 'ready'
+                  ? '已听完'
+                  : voiceMode === 'command'
+                    ? '指令聆听'
+                    : '已唤醒，正在实时输入'
+            }}
+          </strong>
+          <span>{{ voiceStatusText }}</span>
+          <span v-if="voicePreview" class="voice-live-transcript">{{ voicePreview }}</span>
+        </span>
       </div>
-    </form>
-    <label class="agent-network-toggle">
-      <input v-model="allowNetworkSearch" type="checkbox" :disabled="sending || webSearchAvailable === false" />
-      <span>
-        <strong>
-          补充联网参考
-          <span v-if="webSearchFixture && webSearchAvailable" class="pill sage" style="margin-left: 6px">教学夹具 · 不出网</span>
-        </strong>
-        <small v-if="webSearchAvailable === false">
-          {{ webSearchDisabledText }}
-          <button type="button" class="link-inline" @click="showWebSearchHelp = !showWebSearchHelp">
-            {{ showWebSearchHelp ? '收起启用方法' : '如何启用？' }}
+
+      <form class="chat-compose assistant-composer" @submit.prevent="send()">
+        <textarea
+          ref="draftInput"
+          v-model="draft"
+          rows="3"
+          placeholder="例如：最近的用药提醒是依据什么？（回答仅供参考，不构成医疗建议）"
+          @focus="onDraftFocus"
+          @keydown.enter.exact.prevent="send()"
+        />
+        <div v-if="voiceMode === 'ready' || voiceMode === 'command'" class="voice-ready-actions" role="group" aria-label="口述确认">
+          <button ref="sendButton" type="submit" class="btn btn-primary btn-large" :disabled="!canSend">
+            发送
           </button>
-        </small>
-        <small v-else-if="webSearchFixture">开启后由本机教学夹具提供演示用外部参考样式，不会发起任何网络请求；夹具内容不构成医疗证据。</small>
-        <small v-else>开启后仅将脱敏后的问题发送到可信搜索服务以补充公开参考；家庭成员、健康记录与图片始终保留在本机。</small>
-      </span>
-    </label>
-    <div v-if="showWebSearchHelp && webSearchAvailable === false" class="notice info web-search-help" role="note">
-      <p style="margin: 0 0 6px">{{ webSearchHint ?? '请部署负责人在 .env 中开启联网搜索后重启 API。' }}</p>
-      <pre class="mono web-search-help-env"><code>AGENT_WEB_SEARCH_ENABLED=true
+          <button type="button" class="btn btn-ghost" @click="editDraftLine">
+            改一句
+          </button>
+          <button type="button" class="btn btn-ghost" @click="redoVoiceDraft">
+            重说
+          </button>
+          <button type="button" class="btn btn-ghost btn-small" @click="toggleVoiceInput">
+            {{ voiceButtonLabel }}
+          </button>
+        </div>
+        <p v-if="voiceSendHint" class="text-faint" style="font-size: 13px; margin: 6px 0 0" role="status">{{ voiceSendHint }}</p>
+        <div v-if="voiceMode !== 'ready' && voiceMode !== 'command'" class="chat-compose-actions assistant-composer-actions">
+          <label
+            class="assistant-net-toggle"
+            :title="webSearchAvailable === false
+              ? webSearchDisabledText
+              : '仅发送脱敏后的问题以补充公开参考；详情见右上角设置'"
+          >
+            <input v-model="allowNetworkSearch" type="checkbox" :disabled="sending || webSearchAvailable === false" />
+            <AppIcon name="cloud" :size="14" />
+            联网搜索
+            <span v-if="webSearchFixture && webSearchAvailable" class="pill sage">夹具</span>
+          </label>
+          <span class="assistant-composer-spacer" aria-hidden="true" />
+          <button
+            type="button"
+            class="btn btn-ghost btn-small voice-input-button"
+            :class="{ listening, active: voiceMode === 'active', ready: voiceMode === 'ready', need: needMicGesture }"
+            :disabled="sending || !speechInputSupported"
+            :aria-label="listening ? '停止语音唤醒' : voiceButtonLabel"
+            :aria-pressed="listening"
+            :title="speechInputSupported ? `进入助手页后会自动尝试聆听；首次需点按允许麦克风，再说「${wakePhrase}」` : '当前浏览器不支持语音输入'"
+            @click="toggleVoiceInput"
+          >
+            <AppIcon name="microphone" :size="15" />
+            {{ voiceButtonLabel }}
+          </button>
+          <button
+            v-if="sending"
+            type="button"
+            class="btn btn-ghost"
+            aria-label="停止生成本次回答"
+            @click="cancelActiveSend(true)"
+          >
+            停止
+          </button>
+          <button ref="sendButton" type="submit" class="btn btn-primary" :disabled="!canSend">
+            {{ sending ? '发送中' : '发送' }}
+          </button>
+        </div>
+      </form>
+      <p class="assistant-footnote">
+        回答基于本地证据，仅供参考，不构成医疗建议；紧急情况请直接联系医生或药师。
+      </p>
+    </section>
+
+    <div
+      v-if="settingsOpen"
+      class="assistant-settings-backdrop"
+      aria-hidden="true"
+      @click="settingsOpen = false"
+    />
+    <aside v-if="settingsOpen" class="assistant-settings" role="dialog" aria-modal="false" aria-label="助手设置">
+      <header class="assistant-settings-head">
+        <strong><AppIcon name="settings" :size="16" />助手设置</strong>
+        <button type="button" class="icon-button" aria-label="关闭设置" @click="settingsOpen = false">
+          <AppIcon name="close" :size="15" />
+        </button>
+      </header>
+
+      <section class="assistant-settings-section" aria-label="会话状态">
+        <h4>会话状态</h4>
+        <dl class="assistant-settings-facts">
+          <div><dt>本地模型</dt><dd>{{ modelLabel }}</dd></div>
+          <div><dt>可见范围</dt><dd>{{ selectedMember?.display_name ?? '未选择成员' }}</dd></div>
+          <div><dt>证据模式</dt><dd>先依据后解释</dd></div>
+          <div><dt>处理方式</dt><dd>本地多步核对</dd></div>
+          <div><dt>使用边界</dt><dd>健康参考 · 需人工确认</dd></div>
+        </dl>
+      </section>
+
+      <section class="assistant-settings-section" aria-label="联网搜索">
+        <h4>联网搜索</h4>
+        <label class="agent-network-toggle">
+          <input v-model="allowNetworkSearch" type="checkbox" :disabled="sending || webSearchAvailable === false" />
+          <span>
+            <strong>
+              补充联网参考
+              <span v-if="webSearchFixture && webSearchAvailable" class="pill sage" style="margin-left: 6px">教学夹具 · 不出网</span>
+            </strong>
+            <small v-if="webSearchAvailable === false">
+              {{ webSearchDisabledText }}
+              <button type="button" class="link-inline" @click="showWebSearchHelp = !showWebSearchHelp">
+                {{ showWebSearchHelp ? '收起启用方法' : '如何启用？' }}
+              </button>
+            </small>
+            <small v-else-if="webSearchFixture">开启后由本机教学夹具提供演示用外部参考样式，不会发起任何网络请求；夹具内容不构成医疗证据。</small>
+            <small v-else>开启后仅将脱敏后的问题发送到可信搜索服务以补充公开参考；家庭成员、健康记录与图片始终保留在本机。</small>
+          </span>
+        </label>
+        <div v-if="showWebSearchHelp && webSearchAvailable === false" class="notice info web-search-help" role="note">
+          <p style="margin: 0 0 6px">{{ webSearchHint ?? '请部署负责人在 .env 中开启联网搜索后重启 API。' }}</p>
+          <pre class="mono web-search-help-env"><code>AGENT_WEB_SEARCH_ENABLED=true
 # 离线课堂演示（不出网）：
 AGENT_WEB_SEARCH_PROVIDER=fixture
 # 真实联网（白名单出口）：
 # AGENT_WEB_SEARCH_PROVIDER=duckduckgo_html
 # AGENT_WEB_SEARCH_ALLOWED_DOMAINS=html.duckduckgo.com</code></pre>
-      <p style="margin: 6px 0 0">修改 .env 并重启 API 后刷新本页；每次提问仍需勾选本选项，外部结果只作为「非本地审核证据」参考。</p>
-    </div>
-    <div
-      v-if="needMicGesture && !listening"
-      class="voice-session-panel wake"
-      role="status"
-      aria-live="polite"
-    >
-      <span class="voice-session-visual" aria-hidden="true">
-        <AppIcon name="microphone" :size="17" />
-      </span>
-      <span class="voice-session-copy">
-        <strong>需要一次点按开启麦克风</strong>
-        <span>浏览器要求用户手势后才能开麦；点按后会自动等待「{{ wakePhrase }}」。</span>
-      </span>
-    </div>
-    <div
-      v-if="listening || voiceMode === 'ready'"
-      class="voice-session-panel"
-      :class="voiceMode"
-      role="status"
-      aria-live="polite"
-    >
-      <span class="voice-session-visual" aria-hidden="true">
-        <span class="voice-session-ring" />
-        <span class="voice-session-ring second" />
-        <AppIcon name="microphone" :size="17" />
-      </span>
-      <span class="voice-session-copy">
-        <strong>
-          {{
-            voiceMode === 'wake'
-              ? '等待唤醒'
-              : voiceMode === 'ready'
-                ? '已听完'
-                : voiceMode === 'command'
-                  ? '指令聆听'
-                  : '已唤醒，正在实时输入'
-          }}
-        </strong>
-        <span>{{ voiceStatusText }}</span>
-        <span v-if="voicePreview" class="voice-live-transcript">{{ voicePreview }}</span>
-      </span>
-    </div>
-    <p v-if="voiceError" class="notice error" role="alert" style="margin-top: 10px">
-      <AppIcon name="alert" :size="16" />
-      {{ voiceError }}
-    </p>
-    <p class="text-faint" style="font-size: 12px; line-height: 1.6; margin: 10px 0 0">
-      先点击开启唤醒，再说「{{ wakePhrase }}」开始实时填入草稿。
-      说完并静音后会倒计时自动发送（可在下方偏好改时长或关闭）；等待时可说「取消」「继续说」，或说「发送吧」立即发送。
-      语音回复由浏览器本地朗读，原始音频不会上传到本地助手 API。
-    </p>
+          <p style="margin: 6px 0 0">修改 .env 并重启 API 后刷新本页；每次提问仍需勾选本选项，外部结果只作为「非本地审核证据」参考。</p>
+        </div>
+      </section>
 
-    <section class="voice-prefs-panel card-sub" aria-label="语音偏好与自检">
-      <strong class="voice-prefs-title">语音偏好</strong>
-      <label class="voice-pref-row">
-        <span>唤醒词</span>
-        <input
-          v-model="wakePhraseDraft"
-          type="text"
-          maxlength="8"
-          aria-label="自定义唤醒词"
-          @change="saveWakePhrase"
-        />
-      </label>
-      <div class="row-actions" style="margin: 0 0 8px">
-        <button
-          v-for="preset in WAKE_PHRASE_PRESETS"
-          :key="preset.id"
-          type="button"
-          class="btn btn-ghost btn-small"
-          @click="applyWakePreset(preset.phrase)"
-        >
-          {{ preset.label }}
-        </button>
-      </div>
-      <label class="voice-pref-row">
-        <span>静音结束</span>
-        <select :value="silencePresetId" @change="applySilencePreset(($event.target as HTMLSelectElement).value)">
-          <option v-for="preset in SILENCE_PRESETS" :key="preset.id" :value="preset.id">
+      <section class="assistant-settings-section voice-prefs-panel" aria-label="语音偏好与自检">
+        <h4>语音偏好</h4>
+        <p class="text-faint" style="font-size: 12px; line-height: 1.6; margin: 0 0 10px">
+          点击输入框旁的麦克风按钮开启唤醒，再说「{{ wakePhrase }}」开始实时填入草稿。
+          说完并静音后会倒计时自动发送（可在下方改时长或关闭）；等待时可说「取消」「继续说」，或说「发送吧」立即发送。
+          语音回复由浏览器本地朗读，原始音频不会上传到本地助手 API。
+        </p>
+        <label class="voice-pref-row">
+          <span>唤醒词</span>
+          <input
+            v-model="wakePhraseDraft"
+            type="text"
+            maxlength="8"
+            aria-label="自定义唤醒词"
+            @change="saveWakePhrase"
+          />
+        </label>
+        <div class="row-actions" style="margin: 0 0 8px">
+          <button
+            v-for="preset in WAKE_PHRASE_PRESETS"
+            :key="preset.id"
+            type="button"
+            class="btn btn-ghost btn-small"
+            @click="applyWakePreset(preset.phrase)"
+          >
             {{ preset.label }}
-          </option>
-        </select>
-      </label>
-      <label class="voice-pref-row">
-        <span>说完后自动发送</span>
-        <select :value="autoSendPresetId" @change="applyAutoSendPreset(($event.target as HTMLSelectElement).value)">
-          <option v-for="preset in AUTO_SEND_PRESETS" :key="preset.id" :value="preset.id">
-            {{ preset.label }}
-          </option>
-        </select>
-      </label>
-      <label class="voice-pref-row">
-        <input
-          type="checkbox"
-          :checked="voicePrefs.confirmSound"
-          @change="toggleVoicePref('confirmSound', ($event.target as HTMLInputElement).checked)"
-        />
-        <span>听写结束后轻量提示音</span>
-      </label>
-      <label class="voice-pref-row">
-        <input
-          type="checkbox"
-          :checked="voicePrefs.doubleWake"
-          @change="toggleVoicePref('doubleWake', ($event.target as HTMLInputElement).checked)"
-        />
-        <span>双次唤醒确认（降低误唤醒）</span>
-      </label>
-      <label class="voice-pref-row">
-        <input
-          type="checkbox"
-          :checked="voicePrefs.voiceCommands"
-          @change="toggleVoicePref('voiceCommands', ($event.target as HTMLInputElement).checked)"
-        />
-        <span>听写后聆听白名单语音指令</span>
-      </label>
-      <div class="row-actions" style="margin-top: 8px">
-        <button type="button" class="btn btn-ghost btn-small" :disabled="voicePackChecking" @click="checkVoicePacks">
-          {{ voicePackChecking ? '检测中…' : '检查中文语音包' }}
-        </button>
-        <button type="button" class="btn btn-ghost btn-small" :disabled="preflightRunning" @click="runPreflight">
-          {{ preflightRunning ? '自检中…' : '运行语音预检' }}
-        </button>
-      </div>
-      <p v-if="voicePackReport" class="text-faint" style="font-size: 12px; margin: 8px 0 0">
-        {{ voicePackReport.guidance }}
-      </p>
-      <ul v-if="preflightReport" class="voice-preflight-list">
-        <li v-for="(line, idx) in preflightReport.guidance" :key="idx">{{ line }}</li>
-      </ul>
-    </section>
-  </section>
+          </button>
+        </div>
+        <label class="voice-pref-row">
+          <span>静音结束</span>
+          <select :value="silencePresetId" @change="applySilencePreset(($event.target as HTMLSelectElement).value)">
+            <option v-for="preset in SILENCE_PRESETS" :key="preset.id" :value="preset.id">
+              {{ preset.label }}
+            </option>
+          </select>
+        </label>
+        <label class="voice-pref-row">
+          <span>说完后自动发送</span>
+          <select :value="autoSendPresetId" @change="applyAutoSendPreset(($event.target as HTMLSelectElement).value)">
+            <option v-for="preset in AUTO_SEND_PRESETS" :key="preset.id" :value="preset.id">
+              {{ preset.label }}
+            </option>
+          </select>
+        </label>
+        <label class="voice-pref-row">
+          <input
+            type="checkbox"
+            :checked="voicePrefs.confirmSound"
+            @change="toggleVoicePref('confirmSound', ($event.target as HTMLInputElement).checked)"
+          />
+          <span>听写结束后轻量提示音</span>
+        </label>
+        <label class="voice-pref-row">
+          <input
+            type="checkbox"
+            :checked="voicePrefs.doubleWake"
+            @change="toggleVoicePref('doubleWake', ($event.target as HTMLInputElement).checked)"
+          />
+          <span>双次唤醒确认（降低误唤醒）</span>
+        </label>
+        <label class="voice-pref-row">
+          <input
+            type="checkbox"
+            :checked="voicePrefs.voiceCommands"
+            @change="toggleVoicePref('voiceCommands', ($event.target as HTMLInputElement).checked)"
+          />
+          <span>听写后聆听白名单语音指令</span>
+        </label>
+        <div class="row-actions" style="margin-top: 8px">
+          <button type="button" class="btn btn-ghost btn-small" :disabled="voicePackChecking" @click="checkVoicePacks">
+            {{ voicePackChecking ? '检测中…' : '检查中文语音包' }}
+          </button>
+          <button type="button" class="btn btn-ghost btn-small" :disabled="preflightRunning" @click="runPreflight">
+            {{ preflightRunning ? '自检中…' : '运行语音预检' }}
+          </button>
+        </div>
+        <p v-if="voicePackReport" class="text-faint" style="font-size: 12px; margin: 8px 0 0">
+          {{ voicePackReport.guidance }}
+        </p>
+        <ul v-if="preflightReport" class="voice-preflight-list">
+          <li v-for="(line, idx) in preflightReport.guidance" :key="idx">{{ line }}</li>
+        </ul>
+      </section>
+    </aside>
+  </div>
 </template>
 
 <style scoped>
+/* ---------- 图五/图六：全幅对话画布 + 会话轨 + 设置抽屉 ---------- */
+
+.assistant-shell {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+  width: 100%;
+}
+
+.assistant-rail {
+  background: color-mix(in srgb, var(--paper-deep, #f1e9d8) 62%, transparent);
+  border-right: 1px solid var(--line-soft, rgba(190, 167, 125, 0.3));
+  display: flex;
+  flex: 0 0 232px;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  padding: 16px 12px 12px;
+  width: 232px;
+}
+
+.assistant-new-thread {
+  justify-content: center;
+  width: 100%;
+}
+
+.assistant-thread-list {
+  align-content: start;
+  display: grid;
+  flex: 1 1 auto;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 2px 0 0;
+}
+
+.assistant-thread {
+  display: flex;
+  position: relative;
+}
+
+.assistant-thread-open {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  cursor: pointer;
+  display: grid;
+  flex: 1 1 auto;
+  gap: 2px;
+  min-width: 0;
+  padding: 9px 28px 9px 11px;
+  text-align: left;
+  transition: background 0.16s ease, border-color 0.16s ease;
+}
+
+.assistant-thread-open strong {
+  color: var(--ink, #3f3a31);
+  font-size: 13px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistant-thread-open > span {
+  color: var(--ink-faint, #a2937c);
+  font-size: 11px;
+}
+
+.assistant-thread-open:hover,
+.assistant-thread-open:focus-visible {
+  background: color-mix(in srgb, var(--card, #fffcf3) 80%, transparent);
+  border-color: var(--line-soft, rgba(190, 167, 125, 0.3));
+  outline: none;
+}
+
+.assistant-thread.active .assistant-thread-open {
+  background: var(--card, #fffcf3);
+  border-color: color-mix(in srgb, var(--pine, #38665a) 34%, transparent);
+  box-shadow: 0 6px 16px rgba(94, 71, 42, 0.08);
+}
+
+.assistant-thread-delete {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  color: var(--ink-faint, #a2937c);
+  cursor: pointer;
+  display: inline-flex;
+  height: 22px;
+  justify-content: center;
+  opacity: 0;
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  transition: opacity 0.15s ease, color 0.15s ease;
+  width: 22px;
+}
+
+.assistant-thread:hover .assistant-thread-delete,
+.assistant-thread-delete:focus-visible {
+  opacity: 1;
+}
+
+.assistant-thread-delete:hover { color: var(--rose, #b04a5a); }
+
+.assistant-rail-note {
+  align-items: center;
+  color: var(--ink-faint, #a2937c);
+  display: flex;
+  font-size: 11.5px;
+  gap: 5px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.assistant-main {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  min-width: 0;
+  padding: 14px clamp(16px, 2.4vw, 30px) 12px;
+}
+
+.assistant-topbar {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  justify-content: space-between;
+}
+
+.assistant-topbar-title { display: grid; gap: 2px; min-width: 0; }
+
+.assistant-topbar-title h2 {
+  font-family: var(--font-display);
+  font-size: clamp(19px, 1.8vw, 23px);
+  letter-spacing: 0.4px;
+  margin: 0;
+}
+
+.assistant-topbar-title p {
+  color: var(--ink-soft, #6d6659);
+  font-size: 12.5px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.assistant-topbar-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.assistant-status-chip {
+  align-items: center;
+  background: color-mix(in srgb, var(--pine, #38665a) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pine, #38665a) 26%, transparent);
+  border-radius: 999px;
+  color: var(--pine-deep, #2a5045);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 700;
+  gap: 6px;
+  max-width: 260px;
+  overflow: hidden;
+  padding: 7px 12px;
+  text-overflow: ellipsis;
+  transition: background 0.16s ease, border-color 0.16s ease;
+  white-space: nowrap;
+}
+
+.assistant-status-chip:hover,
+.assistant-status-chip.open {
+  background: color-mix(in srgb, var(--pine, #38665a) 16%, transparent);
+  border-color: color-mix(in srgb, var(--pine, #38665a) 42%, transparent);
+}
+
+.assistant-status-chip.busy .app-icon { animation: assistant-chip-spin 1.6s linear infinite; }
+
+@keyframes assistant-chip-spin {
+  to { transform: rotate(360deg); }
+}
+
+.assistant-workflow-pop {
+  flex: 0 0 auto;
+  max-height: 44vh;
+  overflow-y: auto;
+}
+
+.assistant-composer {
+  background: color-mix(in srgb, var(--card, #fffcf3) 88%, transparent);
+  border: 1px solid var(--line, rgba(190, 167, 125, 0.4));
+  border-radius: 18px;
+  box-shadow: 0 10px 26px rgba(94, 71, 42, 0.07);
+  flex-direction: column;
+  gap: 9px;
+  margin-top: 4px;
+  padding: 12px 14px;
+}
+
+.assistant-composer textarea {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  font-size: 15px;
+  min-height: 68px;
+  outline: none;
+  width: 100%;
+}
+
+/* 输入焦点转移到整个输入卡上，保持可见的键盘焦点提示。 */
+.assistant-composer:focus-within {
+  border-color: color-mix(in srgb, var(--pine, #38665a) 46%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pine, #38665a) 16%, transparent);
+}
+
+.assistant-composer .assistant-composer-actions {
+  align-items: center;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+.assistant-composer .assistant-composer-actions > .btn {
+  flex: 0 0 auto;
+  height: 42px;
+  min-width: 96px;
+  width: auto;
+}
+
+.assistant-composer-spacer { flex: 1 1 auto; }
+
+.assistant-net-toggle {
+  align-items: center;
+  color: var(--ink-soft, #6d6659);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 12.5px;
+  font-weight: 650;
+  gap: 6px;
+}
+
+.assistant-net-toggle input { accent-color: var(--pine, #38665a); }
+
+.assistant-net-toggle .pill { font-size: 10.5px; padding: 2px 7px; }
+
+.assistant-footnote {
+  color: var(--ink-faint, #a2937c);
+  flex: 0 0 auto;
+  font-size: 11.5px;
+  line-height: 1.5;
+  margin: 0;
+  text-align: center;
+}
+
+.assistant-settings-backdrop {
+  background: rgba(63, 58, 49, 0.22);
+  inset: 0;
+  position: absolute;
+  z-index: 30;
+}
+
+.assistant-settings {
+  animation: assistant-drawer-in 0.22s ease both;
+  background: var(--card, #fffcf3);
+  border-left: 1px solid var(--line, rgba(190, 167, 125, 0.4));
+  bottom: 0;
+  box-shadow: -18px 0 40px rgba(94, 71, 42, 0.14);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+  padding: 18px 18px 24px;
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: min(380px, 94vw);
+  z-index: 31;
+}
+
+@keyframes assistant-drawer-in {
+  from { opacity: 0; transform: translateX(24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.assistant-settings-head {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.assistant-settings-head strong {
+  align-items: center;
+  display: inline-flex;
+  font-family: var(--font-display);
+  font-size: 16px;
+  gap: 7px;
+}
+
+.assistant-settings-section {
+  border-top: 1px dashed var(--line, rgba(190, 167, 125, 0.4));
+  padding-top: 12px;
+}
+
+.assistant-settings-section h4 {
+  font-family: var(--font-display);
+  font-size: 14px;
+  margin: 0 0 8px;
+}
+
+.assistant-settings-facts { display: grid; gap: 7px; margin: 0; }
+
+.assistant-settings-facts > div { display: flex; font-size: 13px; gap: 10px; }
+
+.assistant-settings-facts dt { color: var(--ink-soft, #6d6659); flex: 0 0 76px; }
+
+.assistant-settings-facts dd { margin: 0; overflow-wrap: anywhere; }
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-settings { animation: none; }
+  .assistant-status-chip.busy .app-icon { animation: none; }
+}
+
+@media (max-width: 860px) {
+  .assistant-shell { flex-direction: column; }
+
+  .assistant-rail {
+    align-items: center;
+    border-bottom: 1px solid var(--line-soft, rgba(190, 167, 125, 0.3));
+    border-right: 0;
+    flex: 0 0 auto;
+    flex-direction: row;
+    gap: 8px;
+    padding: 10px 14px;
+    width: 100%;
+  }
+
+  .assistant-new-thread { flex: 0 0 auto; width: auto; }
+
+  .assistant-thread-list {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 0;
+  }
+
+  .assistant-thread-open { padding: 7px 26px 7px 10px; }
+
+  .assistant-thread-open strong { max-width: 130px; }
+
+  .assistant-thread-open > span { display: none; }
+
+  .assistant-thread-delete { opacity: 1; }
+
+  .assistant-rail-note { display: none; }
+
+  .assistant-main { padding: 12px 14px 10px; }
+}
+
 .voice-ready-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1660,16 +2236,6 @@ AGENT_WEB_SEARCH_PROVIDER=fixture
 }
 .speech-segment-chips .btn.active {
   outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
-}
-.voice-prefs-panel {
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px solid color-mix(in srgb, var(--ink) 8%, transparent);
-}
-.voice-prefs-title {
-  display: block;
-  font-size: 13px;
-  margin-bottom: 8px;
 }
 .voice-pref-row {
   display: flex;
