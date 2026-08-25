@@ -200,6 +200,15 @@
       "version": "demo-cn-en-v4",
       "permission_scope": {},
       "content_sha256": "c3c1d06494546f83100989d77c300607baedbe7586d4a68460bcfd14648840c3"
+    },
+    {
+      "path": "感冒样症状居家照护教学卡.md",
+      "title": "HomeCare Twin 感冒样症状居家照护教学卡",
+      "source": "homecare-demo-kb",
+      "license": "internal-demo",
+      "version": "demo-cn-en-v4",
+      "permission_scope": {},
+      "content_sha256": "81a9a3b28ca90de7dcff64ed82bafa9cd4167fedc375960a7f70a6468cc01de6"
     }
   ]
 }

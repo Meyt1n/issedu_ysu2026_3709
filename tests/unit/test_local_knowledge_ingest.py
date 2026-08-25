@@ -127,8 +127,8 @@ def test_repo_demo_manifest_ingests_and_topics_are_retrievable(db_session) -> No
         index_version="demo-cn-en-v4",
     )
 
-    assert result["index"]["document_count"] == 22
-    assert len(result["created"]) == 22
+    assert result["index"]["document_count"] == 23
+    assert len(result["created"]) == 23
 
     topic_queries = {
         "药品身份核对": "家庭用药安全演示知识卡",
@@ -153,6 +153,7 @@ def test_repo_demo_manifest_ingests_and_topics_are_retrievable(db_session) -> No
         "语音只是交互不是证据": "语音交互与证据边界教学卡",
         "指标趋势观察异常沟通": "指标趋势观察与异常沟通教学卡",
         "多证据视觉质量门控": "多证据视觉质量门控教学卡",
+        "夏天吹空调后有点鼻塞可以了解哪些用药资料": "感冒样症状居家照护教学卡",
     }
     for query, expected_title_part in topic_queries.items():
         results = retrieve(db_session, query=query, actor_id="demo-admin", top_k=3)
