@@ -9,6 +9,8 @@ from __future__ import annotations
 import html as html_lib
 import logging
 import re
+import threading
+import time
 from html.parser import HTMLParser
 from typing import Protocol
 from urllib.parse import parse_qs, unquote, urlparse
@@ -18,6 +20,26 @@ import httpx
 from app.config import Settings
 
 logger = logging.getLogger(__name__)
+
+_MEDICAL_DOMAIN_HINTS = (
+    "nih.gov",
+    "who.int",
+    "cdc.gov",
+    "mayoclinic.org",
+    "medlineplus.gov",
+    "drugs.com",
+    "webmd.com",
+    "nmpa.gov.cn",
+    "nhc.gov.cn",
+    "cma.org.cn",
+    "msdmanuals.com",
+    "uptodate.com",
+    "gov.cn",
+    "edu.cn",
+)
+
+_CACHE_LOCK = threading.Lock()
+_SEARCH_CACHE: dict[str, tuple[float, list[dict[str, str]]]] = {}
 
 
 class SearchProvider(Protocol):
@@ -141,6 +163,78 @@ def parse_search_results(body: str, max_results: int = 5) -> list[dict[str, str]
     return _normalize_results(parser.results, max_results)
 
 
+def _query_tokens(query: str) -> set[str]:
+    tokens = re.findall(r"[\w\u4e00-\u9fff]{2,}", str(query or "").casefold())
+    return set(tokens)
+
+
+def rank_search_results(
+    query: str,
+    results: list[dict[str, str]],
+    *,
+    max_results: int,
+) -> list[dict[str, str]]:
+    """Prefer results that overlap the query terms or come from medical domains."""
+    tokens = _query_tokens(query)
+    scored: list[tuple[int, dict[str, str]]] = []
+    for item in results:
+        haystack = f"{item.get('title', '')} {item.get('snippet', '')}".casefold()
+        domain = (item.get("domain") or "").casefold()
+        score = sum(1 for token in tokens if token in haystack)
+        if any(hint in domain for hint in _MEDICAL_DOMAIN_HINTS):
+            score += 2
+        scored.append((score, item))
+    scored.sort(key=lambda pair: (-pair[0], pair[1].get("title", "")))
+    # Keep low-scoring items only when nothing better exists, so empty pages
+    # still surface whatever the provider returned.
+    preferred = [item for score, item in scored if score > 0]
+    ordered = preferred or [item for _, item in scored]
+    return ordered[:max_results]
+
+
+def _cache_key(settings: Settings, query: str) -> str:
+    return "|".join([
+        (settings.agent_web_search_provider or "duckduckgo_html").strip().casefold(),
+        settings.agent_web_search_url.strip(),
+        query.strip().casefold(),
+    ])
+
+
+def _cache_get(key: str, ttl_seconds: float) -> list[dict[str, str]] | None:
+    if ttl_seconds <= 0:
+        return None
+    now = time.monotonic()
+    with _CACHE_LOCK:
+        entry = _SEARCH_CACHE.get(key)
+        if not entry:
+            return None
+        expires_at, payload = entry
+        if expires_at < now:
+            _SEARCH_CACHE.pop(key, None)
+            return None
+        return [dict(item) for item in payload]
+
+
+def _cache_put(key: str, results: list[dict[str, str]], ttl_seconds: float) -> None:
+    if ttl_seconds <= 0:
+        return
+    with _CACHE_LOCK:
+        _SEARCH_CACHE[key] = (
+            time.monotonic() + ttl_seconds,
+            [dict(item) for item in results],
+        )
+        # Bound memory: drop oldest-ish entries when the map grows too large.
+        if len(_SEARCH_CACHE) > 256:
+            oldest = sorted(_SEARCH_CACHE.items(), key=lambda item: item[1][0])[:64]
+            for stale_key, _ in oldest:
+                _SEARCH_CACHE.pop(stale_key, None)
+
+
+def clear_search_cache() -> None:
+    with _CACHE_LOCK:
+        _SEARCH_CACHE.clear()
+
+
 class DuckDuckGoHtmlProvider:
     """Parse DuckDuckGo's HTML result page (default provider)."""
 
@@ -154,7 +248,7 @@ class DuckDuckGoHtmlProvider:
         ) as client:
             response = client.get(settings.agent_web_search_url.strip(), params=params)
             response.raise_for_status()
-        return parse_search_results(response.text, settings.agent_web_search_max_results)
+        return parse_search_results(response.text, settings.agent_web_search_max_results * 2)
 
 
 class SearXNGProvider:
@@ -187,7 +281,7 @@ class SearXNGProvider:
                     "url": str(item.get("url") or ""),
                     "snippet": str(item.get("content") or item.get("snippet") or ""),
                 })
-        return _normalize_results(items, settings.agent_web_search_max_results)
+        return _normalize_results(items, settings.agent_web_search_max_results * 2)
 
 
 def get_search_provider(settings: Settings) -> SearchProvider:
@@ -198,4 +292,17 @@ def get_search_provider(settings: Settings) -> SearchProvider:
 
 
 def execute_web_search(query: str, *, settings: Settings) -> list[dict[str, str]]:
-    return get_search_provider(settings).search(query, settings=settings)
+    ttl = float(settings.agent_web_search_cache_ttl_seconds or 0)
+    key = _cache_key(settings, query)
+    cached = _cache_get(key, ttl)
+    if cached is not None:
+        return rank_search_results(
+            query, cached, max_results=settings.agent_web_search_max_results
+        )
+
+    raw = get_search_provider(settings).search(query, settings=settings)
+    ranked = rank_search_results(
+        query, raw, max_results=settings.agent_web_search_max_results
+    )
+    _cache_put(key, ranked, ttl)
+    return ranked

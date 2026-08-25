@@ -18,6 +18,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
@@ -391,8 +392,14 @@ class OllamaClient:
         temperature: float = 0.3,
         max_tokens: int = 512,
         timeout: float | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ):
-        """Stream chat completion chunks from Ollama."""
+        """Stream chat completion chunks from Ollama.
+
+        ``cancel_check`` is polled between chunks; when it returns True the
+        HTTP stream is abandoned and a RuntimeError is raised so the
+        orchestrator can stop without waiting for the full generation.
+        """
         payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
@@ -410,6 +417,8 @@ class OllamaClient:
             with client.stream("POST", f"{self.base_url}/api/chat", json=payload) as resp:
                 resp.raise_for_status()
                 for line in resp.iter_lines():
+                    if cancel_check is not None and cancel_check():
+                        raise RuntimeError("OLLAMA_CANCELLED")
                     if not line:
                         continue
                     data = json.loads(line)

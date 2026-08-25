@@ -875,6 +875,7 @@ export class ApiClient {
     handlers: {
       onTrace?: (trace: AssistantAgentTrace) => void
       onToken?: (token: string) => void
+      onStatus?: (phase: string) => void
       onExternalSources?: (sources: AssistantExternalSource[], networkQuery?: string | null) => void
     },
     householdId?: string,
@@ -940,6 +941,7 @@ export class ApiClient {
         if (!dataLine) continue
         const payload = JSON.parse(dataLine) as Record<string, unknown>
         if (eventName === 'trace') handlers.onTrace?.(payload.trace as AssistantAgentTrace)
+        if (eventName === 'status') handlers.onStatus?.(String(payload.phase ?? ''))
         if (eventName === 'token') handlers.onToken?.(String(payload.token ?? ''))
         if (eventName === 'external_sources') {
           handlers.onExternalSources?.(
@@ -949,6 +951,13 @@ export class ApiClient {
         }
         if (eventName === 'done') finalResponse = payload.response as AssistantResponse
         if (eventName === 'error') {
+          const code = String(payload.code ?? '')
+          if (code === 'CANCELLED' || String(payload.message ?? '') === 'CANCELLED') {
+            throw new ApiClientError('Assistant stream cancelled', {
+              status: 0,
+              code: 'DEPENDENCY_UNAVAILABLE',
+            })
+          }
           throw new ApiClientError(String(payload.message ?? 'Stream failed'), {
             status: 0,
             code: 'DEPENDENCY_UNAVAILABLE',
