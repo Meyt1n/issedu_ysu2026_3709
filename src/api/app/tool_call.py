@@ -24,15 +24,12 @@ from typing import Any, Literal
 from urllib.parse import urlparse
 
 import httpx
+from ai.safety.classifier import classify_question_dual_detail
 from ai.safety.lexicon import (
     DATA_EXFILTRATION_TERMS,
     FOLLOW_UP_RISK_TERMS,
     MEDICAL_BOUNDARY_TERMS,
-    MEDICATION_SAFETY_ROUTE_TERMS,
-    SYMPTOM_CONTEXT_TERMS,
-    SYMPTOM_MEDICATION_INTENT_TERMS,
     TEACHING_REMINDER,
-    URGENT_ROUTE_TERMS,
     medical_boundary_hits,
 )
 from ai.safety.seasonal_context import seasonal_care_context
@@ -347,6 +344,15 @@ register_tool(
 )
 
 register_tool(
+    name="get_care_plan_status",
+    description="Get today's authorised care-plan status and pending actions (read-only).",
+    params={
+        "household_id": {"type": "string", "description": "Household UUID"},
+        "member_id": {"type": "string", "description": "Member UUID"},
+    },
+)
+
+register_tool(
     name="get_document_metadata",
     description="Get metadata for a specific knowledge document.",
     params={
@@ -481,8 +487,12 @@ class OllamaClient:
         with httpx.Client(timeout=timeout or REQUEST_TIMEOUT, trust_env=False) as client:
             with client.stream("POST", f"{self.base_url}/api/chat", json=payload) as resp:
                 resp.raise_for_status()
+                if cancel_check is not None and cancel_check():
+                    resp.close()
+                    raise RuntimeError("OLLAMA_CANCELLED")
                 for line in resp.iter_lines():
                     if cancel_check is not None and cancel_check():
+                        resp.close()
                         raise RuntimeError("OLLAMA_CANCELLED")
                     if not line:
                         continue
@@ -554,45 +564,40 @@ _QUESTION_TYPES = {
 }
 
 
-def classify_question(query: str) -> str:
-    """Classify the latest question with a deterministic, local safety route.
+def classify_question_detail(query: str, override: str | None = None) -> dict[str, Any]:
+    """Classify the latest question with lexicon + optional local model.
 
-    This is a routing hint, not a medical conclusion.
+    This is a routing hint, not a medical conclusion.  High-risk medication
+    questions are intentionally routed to both member facts and approved
+    knowledge retrieval before Ollama is allowed to produce an answer.
+    ``SYMPTOM_MEDICATION``（“感冒吃什么药”类资料解释）走批准知识 + 过敏/疾病史。
 
-    * ``MEDICATION_SAFETY`` — individual dose / stop / switch / interaction.
-    * ``SYMPTOM_MEDICATION`` — “what medicine for a cold” style guidance from
-      approved knowledge + allergy/disease history (household formulary optional).
+    HCT-442: lexicon is always on. When ``AGENT_CLASSIFIER_ENABLED=true`` and
+    Ollama is loopback, a short local classification pass merges by severity
+    (prefer MEDICATION_SAFETY / URGENT). Model failure falls back to lexicon.
     """
-    normalized = re.sub(r"\s+", "", query.casefold())
-    if any(term in normalized for term in URGENT_ROUTE_TERMS):
-        return "URGENT"
-    if any(term in normalized for term in ("一起吃", "一同服用", "共同服用")) and any(
-        term in normalized for term in ("药", "阿莫西林", "布洛芬", "处方")
-    ):
-        return "MEDICATION_SAFETY"
-    if any(term in normalized for term in MEDICATION_SAFETY_ROUTE_TERMS):
-        return "MEDICATION_SAFETY"
-    medicine_intent = any(term in normalized for term in SYMPTOM_MEDICATION_INTENT_TERMS)
-    symptom_context = any(term in normalized for term in SYMPTOM_CONTEXT_TERMS)
-    if medicine_intent or (
-        symptom_context and any(term in normalized for term in ("药", "用药", "吃药"))
-    ):
-        return "SYMPTOM_MEDICATION"
-    if any(term in normalized for term in (
-        "正在用药", "在用药", "用药记录", "药品记录", "药品清单",
-        "扫描的药", "刚才扫描", "有哪些药", "药名", "家里有什么药", "家庭药箱",
-    )):
-        return "MEDICATION_RECORD"
-    if any(term in normalized for term in (
-        "家庭档案", "健康档案", "健康记录", "最近发生", "最近有哪些", "过敏史",
-        "疾病记录", "成员信息", "健康变化", "健康事件",
-    )):
-        return "FAMILY_RECORD"
-    if any(term in normalized for term in (
-        "规则", "提醒依据", "风险依据", "引用", "来源", "证据", "依据",
-    )):
-        return "RULE_EVIDENCE"
-    return "GENERAL"
+    try:
+        from app.config import get_settings
+
+        settings = get_settings()
+        return classify_question_dual_detail(
+            query,
+            model_enabled=bool(settings.agent_classifier_enabled),
+            is_loopback_url=is_loopback_ollama_url,
+            ollama_base_url=settings.ollama_base_url,
+            ollama_model=settings.ollama_model,
+            ollama_timeout=float(settings.agent_classifier_timeout_seconds),
+            chat_factory=lambda base_url: OllamaClient(base_url=base_url),
+            override=override,
+        )
+    except Exception:  # noqa: BLE001 — routing must never fail open to crash
+        logger.exception("dual classifier failed; falling back to lexicon")
+        return classify_question_dual_detail(query, override=override)
+
+
+def classify_question(query: str) -> str:
+    """Return the merged routing label for backwards-compatible callers."""
+    return str(classify_question_detail(query)["merged"])
 
 
 def question_type_label(query_type: str) -> str:
@@ -874,31 +879,15 @@ def _authorized_member_events(
     member/field/action/purpose check used by the ordinary timeline endpoint
     is repeated immediately before tool data is read.
     """
-    from app.models import Household, Member
-    from app.security import has_authorized_action
-
-    if not household_id or not member_id:
-        return None, "TOOL_SCOPE_DENIED"
-    household = session.get(Household, household_id)
-    member = session.get(Member, member_id)
-    if (
-        household is None
-        or member is None
-        or household.deleted_at is not None
-        or member.deleted_at is not None
-        or member.household_id != household_id
-    ):
-        return None, "TOOL_SCOPE_DENIED"
-    if not has_authorized_action(
+    scope_error = validate_member_tool_scope(
         session,
-        household,
-        member_id,
-        actor_id,
-        "READ_EVENTS",
-        "health_events",
-        access_purpose,
-    ):
-        return None, "TOOL_SCOPE_DENIED"
+        actor_id=actor_id,
+        household_id=household_id,
+        member_id=member_id,
+        access_purpose=access_purpose,
+    )
+    if scope_error:
+        return None, scope_error
 
     from app.projection import get_timeline
 
@@ -908,6 +897,43 @@ def _authorized_member_events(
     if limit is not None:
         events = events[-max(1, min(limit, 20)):]
     return events, None
+
+
+def validate_member_tool_scope(
+    session: Session,
+    *,
+    actor_id: str,
+    household_id: str | None,
+    member_id: str | None,
+    access_purpose: str | None,
+) -> str | None:
+    """Recheck current member authorization before serving cached tool data."""
+    from app.models import Household, Member
+    from app.security import has_authorized_action
+
+    if not household_id or not member_id:
+        return "TOOL_SCOPE_DENIED"
+    household = session.get(Household, household_id)
+    member = session.get(Member, member_id)
+    if (
+        household is None
+        or member is None
+        or household.deleted_at is not None
+        or member.deleted_at is not None
+        or member.household_id != household_id
+    ):
+        return "TOOL_SCOPE_DENIED"
+    if not has_authorized_action(
+        session,
+        household,
+        member_id,
+        actor_id,
+        "READ_EVENTS",
+        "health_events",
+        access_purpose,
+    ):
+        return "TOOL_SCOPE_DENIED"
+    return None
 
 
 _SAFE_EVENT_PAYLOAD_KEYS = (
@@ -1198,6 +1224,117 @@ def _execute_get_risk_alerts(
     }
 
 
+def _execute_get_care_plan_status(
+    session: Session,
+    *,
+    actor_id: str,
+    household_id: str | None,
+    member_id: str | None,
+    access_purpose: str | None,
+) -> dict[str, Any]:
+    """Return a compact, authorised slice of the server plan workbench."""
+    from datetime import UTC, datetime
+    from zoneinfo import ZoneInfo
+
+    from app.care_plan import build_plan_workbench
+    from app.models import Household
+
+    events, error = _authorized_member_events(
+        session,
+        actor_id=actor_id,
+        household_id=household_id,
+        member_id=member_id,
+        access_purpose=access_purpose,
+    )
+    if error:
+        return {
+            "error": error,
+            "today_plans": [],
+            "missed": [],
+            "pending_confirm": [],
+            "sources": [],
+        }
+
+    household = session.get(Household, household_id)
+    if household is None or household.deleted_at is not None:
+        return {
+            "error": "TOOL_SCOPE_DENIED",
+            "today_plans": [],
+            "missed": [],
+            "pending_confirm": [],
+            "sources": [],
+        }
+
+    now = datetime.now(UTC)
+    local_today = now.astimezone(ZoneInfo(household.time_zone)).date()
+    workbench = build_plan_workbench(
+        events or [],
+        time_zone=household.time_zone,
+        now=now,
+    )
+
+    def compact(item: dict[str, Any]) -> dict[str, Any]:
+        next_action = item.get("next_action_at")
+        last_action = item.get("last_action")
+        compact_last_action = None
+        if isinstance(last_action, dict):
+            recorded_at = last_action.get("recorded_at")
+            compact_last_action = {
+                "action": last_action.get("action"),
+                "recorded_at": (
+                    recorded_at.isoformat()
+                    if hasattr(recorded_at, "isoformat")
+                    else recorded_at
+                ),
+                "reason": last_action.get("reason"),
+            }
+        return {
+            "plan_event_id": item.get("plan_event_id"),
+            "drug": item.get("drug"),
+            "schedule": item.get("schedule"),
+            "dose": item.get("dose"),
+            "times": item.get("times") or [],
+            "status": item.get("status"),
+            "next_action_at": (
+                next_action.isoformat()
+                if hasattr(next_action, "isoformat")
+                else next_action
+            ),
+            "last_action": compact_last_action,
+        }
+
+    today_plans = [
+        compact(item)
+        for item in workbench
+        if hasattr(item.get("next_action_at"), "astimezone")
+        and item["next_action_at"].astimezone(ZoneInfo(household.time_zone)).date()
+        == local_today
+    ]
+    missed = [
+        compact(item)
+        for item in workbench
+        if isinstance(item.get("last_action"), dict)
+        and item["last_action"].get("action") == "MISS"
+    ]
+    pending_confirm = [
+        compact(item)
+        for item in workbench
+        if "CONFIRM" in (item.get("allowed_actions") or [])
+    ]
+    sources = list(dict.fromkeys(
+        str(item["plan_event_id"])
+        for item in [*today_plans, *missed, *pending_confirm]
+        if item.get("plan_event_id")
+    ))
+    return {
+        "today_plans": today_plans,
+        "missed": missed,
+        "pending_confirm": pending_confirm,
+        "sources": sources,
+        "total": len(workbench),
+    }
+
+
 def _execute_retrieve_knowledge(
     session: Session,
     *,
@@ -1330,6 +1467,7 @@ def execute_whitelisted_tool(
         "get_member_state",
         "get_applied_rules",
         "get_risk_alerts",
+        "get_care_plan_status",
     }:
         if not household_id or not member_id:
             return {"error": "TOOL_SCOPE_DENIED"}
@@ -1384,6 +1522,14 @@ def execute_whitelisted_tool(
         )
     if name == "get_risk_alerts":
         return _execute_get_risk_alerts(
+            session,
+            actor_id=actor_id,
+            household_id=household_id,
+            member_id=member_id,
+            access_purpose=access_purpose,
+        )
+    if name == "get_care_plan_status":
+        return _execute_get_care_plan_status(
             session,
             actor_id=actor_id,
             household_id=household_id,

@@ -91,6 +91,11 @@ class Settings(BaseSettings):
     agent_web_search_cache_ttl_seconds: float = Field(default=180.0, ge=0, le=3600)
     # Minimum seconds between outbound search calls from this process (0 = off).
     agent_web_search_min_interval_seconds: float = Field(default=1.0, ge=0, le=60)
+    # HCT-442: optional loopback Ollama classifier merged with lexicon (default off).
+    agent_classifier_enabled: bool = False
+    agent_classifier_timeout_seconds: float = Field(default=3.0, gt=0, le=15)
+    # Session-scoped in-process cache for authorised local retrieval results.
+    agent_retrieval_cache_ttl_seconds: float = Field(default=120.0, ge=0, le=3600)
     weather_adapter: str = "disabled"
     weather_provider: str = "generic"
     weather_api_url: str = ""

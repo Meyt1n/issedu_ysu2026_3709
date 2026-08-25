@@ -682,6 +682,9 @@ export interface AssistantChatInput {
   max_tokens?: number
   agent_mode?: 'single' | 'multi_agent'
   allow_network_search?: boolean
+  query_type_override?: string
+  assistant_session_id?: string
+  clear_session_cache?: boolean
 }
 
 export interface AssistantCitation {
@@ -702,6 +705,7 @@ export interface AssistantAgentTrace {
   duration_ms?: number
   summary?: string
   source_count?: number
+  classifier?: Record<string, unknown>
 }
 
 export interface AssistantExternalSource {
@@ -732,6 +736,29 @@ export interface AssistantAgentCatalog {
   agents: AssistantAgentCatalogItem[]
 }
 
+export interface EvidencePreview {
+  query_type: string
+  database_tools: string[]
+  knowledge_titles: string[]
+  knowledge_count: number
+  external_count: number
+  rule_tools: string[]
+}
+
+export interface WebSearchOpsSnapshot {
+  web_search_enabled: boolean
+  web_search_ready: boolean
+  web_search_provider: string
+  cache_ttl_seconds: number
+  min_interval_seconds: number
+  cache_entries: number
+  cache_hits: number
+  cache_misses: number
+  cache_hit_rate: number
+  rate_limited_hits: number
+  searches: number
+}
+
 export interface AssistantResponse {
   answer: string
   sources: string[]
@@ -752,6 +779,10 @@ export interface AssistantResponse {
   network_query?: string | null
   agent_trace?: AssistantAgentTrace[]
   external_sources?: AssistantExternalSource[]
+  route_explanation?: string | null
+  classifier?: Record<string, unknown> | null
+  evidence_preview?: EvidencePreview | null
+  retrieval_cache_hit?: boolean
 }
 
 export interface AssistantTool {

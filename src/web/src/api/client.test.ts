@@ -445,3 +445,122 @@ describe('ApiClient authorization contract', () => {
     expect(JSON.parse(String(requests[1]?.init.body))).toEqual({ household_id: 'household-1', pin: '042006' })
   })
 })
+
+describe('ApiClient assistant UX operations', () => {
+  it('parses evidence previews before the final streamed response', async () => {
+    const encoder = new TextEncoder()
+    const previews: unknown[] = []
+    let requestBody: Record<string, unknown> = {}
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(
+          'event: evidence_preview\ndata: {"query_type":"MEDICATION_SAFETY","database_tools":["get_member_state"],"knowledge_titles":["审核资料"],"knowledge_count":1,"external_count":0,"rule_tools":["get_applied_rules"]}\n\n',
+        ))
+        controller.enqueue(encoder.encode(
+          'event: done\ndata: {"response":{"answer":"已核对","sources":[],"confidence":"high","escalate":false,"degraded":false,"degrade_reason":null}}\n\n',
+        ))
+        controller.close()
+      },
+    })
+    const client = new ApiClient({
+      baseUrl: 'http://local.test',
+      fetcher: async (_input, init) => {
+        requestBody = JSON.parse(String(init?.body))
+        return new Response(stream, {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        })
+      },
+    })
+
+    const reply = await client.assistantChatStream(
+      {
+        messages: [{ role: 'user', content: '请核对用药安全' }],
+        agent_mode: 'multi_agent',
+        assistant_session_id: 'session-1',
+      },
+      { onEvidencePreview: preview => previews.push(preview) },
+    )
+
+    expect(requestBody.assistant_session_id).toBe('session-1')
+    expect(previews).toEqual([{
+      query_type: 'MEDICATION_SAFETY',
+      database_tools: ['get_member_state'],
+      knowledge_titles: ['审核资料'],
+      knowledge_count: 1,
+      external_count: 0,
+      rule_tools: ['get_applied_rules'],
+    }])
+    expect(reply.answer).toBe('已核对')
+  })
+
+  it('exposes a distinguishable cancellation without a completed response', async () => {
+    const onCancelled = vi.fn()
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('event: cancelled\ndata: {"code":"CANCELLED"}\n\n'))
+        controller.close()
+      },
+    })
+    const client = new ApiClient({
+      baseUrl: 'http://local.test',
+      fetcher: async () => new Response(stream, {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      }),
+    })
+
+    await expect(client.assistantChatStream(
+      { messages: [{ role: 'user', content: '停止' }], agent_mode: 'multi_agent' },
+      { onCancelled },
+    )).rejects.toMatchObject({
+      code: 'CANCELLED',
+      message: expect.stringContaining('CANCELLED'),
+    })
+    expect(onCancelled).toHaveBeenCalledOnce()
+  })
+
+  it('loads query-free search metrics and clears one assistant session cache', async () => {
+    const requests: Array<{ url: string; body: unknown }> = []
+    const client = new ApiClient({
+      baseUrl: 'http://local.test',
+      fetcher: async (input, init) => {
+        requests.push({
+          url: String(input),
+          body: init?.body ? JSON.parse(String(init.body)) : null,
+        })
+        return new Response(JSON.stringify(
+          String(input).endsWith('/web-search/ops')
+            ? {
+                web_search_enabled: true,
+                web_search_ready: true,
+                web_search_provider: 'searxng',
+                cache_ttl_seconds: 120,
+                min_interval_seconds: 1,
+                cache_entries: 2,
+                cache_hits: 3,
+                cache_misses: 1,
+                cache_hit_rate: 0.75,
+                rate_limited_hits: 0,
+                searches: 1,
+              }
+            : { assistant_session_id: 'session-1', cleared_entries: 2 },
+        ), { status: 200 })
+      },
+    })
+
+    const snapshot = await client.getAssistantWebSearchOps()
+    const cleared = await client.clearAssistantSessionCache('session-1')
+
+    expect(snapshot.cache_hit_rate).toBe(0.75)
+    expect(cleared.cleared_entries).toBe(2)
+    expect(requests).toEqual([
+      { url: 'http://local.test/api/v1/assistant/web-search/ops', body: null },
+      {
+        url: 'http://local.test/api/v1/assistant/session-cache/clear',
+        body: { assistant_session_id: 'session-1' },
+      },
+    ])
+  })
+})

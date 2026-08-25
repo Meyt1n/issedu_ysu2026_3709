@@ -22,6 +22,7 @@ def test_agent_catalog_exposes_local_only_graph(client: TestClient) -> None:
     assert {item["agent_id"] for item in body["agents"]} >= {
         "router",
         "database",
+        "rules",
         "knowledge",
         "web_search",
         "synthesis",
@@ -36,6 +37,9 @@ def test_assistant_request_preserves_legacy_single_agent_default() -> None:
 
     assert payload.agent_mode == "single"
     assert payload.allow_network_search is False
+    assert payload.query_type_override is None
+    assert payload.assistant_session_id is None
+    assert payload.clear_session_cache is False
 
 
 def test_agent_catalog_exposes_search_provider(client: TestClient) -> None:
@@ -74,6 +78,33 @@ def test_assistant_stream_greeting_emits_trace_token_done(client: TestClient) ->
     assert "event: token" in body
     assert "event: done" in body
     assert "event: status" in body
+    assert "event: evidence_preview" in body
     assert "家庭健康助手" in body
     # Validated answer text is streamed; the raw JSON draft must not appear.
     assert '{"answer"' not in body
+
+
+def test_assistant_stream_emits_explicit_cancelled_event(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    from app.local_agents import OrchestrationCancelled
+
+    def cancel(*_args, **_kwargs):
+        raise OrchestrationCancelled("test cancellation")
+
+    monkeypatch.setattr("app.routes.run_local_multi_agent", cancel)
+    with client.stream(
+        "POST",
+        "/api/v1/assistant/chat/stream",
+        headers={"X-Actor-Id": "hct430-stream-owner"},
+        json={
+            "messages": [{"role": "user", "content": "查看规则依据"}],
+            "agent_mode": "multi_agent",
+        },
+    ) as response:
+        assert response.status_code == 200
+        body = "".join(response.iter_text())
+
+    assert "event: cancelled" in body
+    assert '"code": "CANCELLED"' in body

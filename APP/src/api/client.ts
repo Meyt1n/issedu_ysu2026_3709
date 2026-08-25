@@ -6,6 +6,7 @@ import type {
   AssistantExternalSource,
   AssistantResponse,
   CapabilityResponse,
+  EvidencePreview,
   HealthEvent,
   HealthResponse,
   Household,
@@ -344,15 +345,18 @@ export class ApiClient {
   }
 
   /**
-   * 流式助手聊天：与网页端同源 SSE；慢模型时边生成边显示。
-   * 仍不上传音频。若流式不可用，调用方可回退到 assistantChat。
+   * 多智能体流式聊天：与网页端同源 SSE，逐步接收 trace / status / token / done。
+   * 仍不上传音频；仅推送校验后的最终回答文本。若流式不可用，调用方可回退到 assistantChat。
    */
   async assistantChatStream(
     input: AssistantChatInput,
     handlers: {
       onTrace?: (trace: AssistantAgentTrace) => void
       onToken?: (token: string) => void
+      onStatus?: (phase: string) => void
       onExternalSources?: (sources: AssistantExternalSource[], networkQuery?: string | null) => void
+      onEvidencePreview?: (preview: EvidencePreview) => void
+      onCancelled?: () => void
     },
     householdId?: string,
     memberId?: string,
@@ -440,10 +444,7 @@ export class ApiClient {
 
       const reader = response.body?.getReader()
       if (!reader) {
-        throw new ApiClientError('Streaming response unavailable', {
-          status: 0,
-          code: 'DEPENDENCY_UNAVAILABLE',
-        })
+        throw new ApiClientError('流式响应不可用', { status: 0, code: 'DEPENDENCY_UNAVAILABLE' })
       }
 
       const decoder = new TextDecoder()
@@ -467,7 +468,11 @@ export class ApiClient {
           if (!dataLine) continue
           const payload = JSON.parse(dataLine) as Record<string, unknown>
           if (eventName === 'trace') handlers.onTrace?.(payload.trace as AssistantAgentTrace)
+          if (eventName === 'status') handlers.onStatus?.(String(payload.phase ?? ''))
           if (eventName === 'token') handlers.onToken?.(String(payload.token ?? ''))
+          if (eventName === 'evidence_preview') {
+            handlers.onEvidencePreview?.(payload as unknown as EvidencePreview)
+          }
           if (eventName === 'external_sources') {
             handlers.onExternalSources?.(
               (payload.external_sources as AssistantExternalSource[]) ?? [],
@@ -475,8 +480,20 @@ export class ApiClient {
             )
           }
           if (eventName === 'done') finalResponse = payload.response as AssistantResponse
+          if (eventName === 'cancelled') {
+            handlers.onCancelled?.()
+            throw new ApiClientError('ASSISTANT_STREAM_CANCELLED', {
+              status: 0,
+              code: 'CANCELLED',
+            })
+          }
           if (eventName === 'error') {
-            throw new ApiClientError(String(payload.message ?? 'Stream failed'), {
+            const code = String(payload.code ?? '')
+            if (code === 'CANCELLED' || String(payload.message ?? '') === 'CANCELLED') {
+              handlers.onCancelled?.()
+              throw new ApiClientError('ASSISTANT_STREAM_CANCELLED', { status: 0, code: 'CANCELLED' })
+            }
+            throw new ApiClientError(String(payload.message ?? '流式失败'), {
               status: 0,
               code: 'DEPENDENCY_UNAVAILABLE',
             })
@@ -485,10 +502,7 @@ export class ApiClient {
       }
 
       if (!finalResponse) {
-        throw new ApiClientError('Assistant stream ended without a response', {
-          status: 0,
-          code: 'DEPENDENCY_UNAVAILABLE',
-        })
+        throw new ApiClientError('流式结束但未收到回答', { status: 0, code: 'DEPENDENCY_UNAVAILABLE' })
       }
       return finalResponse
     } finally {

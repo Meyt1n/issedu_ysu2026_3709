@@ -134,6 +134,7 @@ from app.models import (
     VisionTask,
 )
 from app.request_context import current_request_id
+from app.retrieval_cache import clear_actor_session
 from app.review import (
     FusionStatus as ReviewFusionStatus,
 )
@@ -160,6 +161,7 @@ from app.schemas import (
     AccessAuditSummaryRead,
     AssistantRequest,
     AssistantResponse,
+    AssistantSessionCacheClearRequest,
     AuthCredentials,
     AuthorizationCreate,
     AuthorizationRead,
@@ -243,6 +245,7 @@ from app.schemas import (
     VisionTaskLeaseRequest,
     VisionTaskRead,
 )
+from app.search_providers import search_ops_snapshot
 from app.security import (
     get_access_purpose,
     get_actor_id,
@@ -3646,6 +3649,44 @@ def list_assistant_agents(
     return get_agent_catalog(settings)
 
 
+@router.get("/assistant/web-search/ops")
+def get_assistant_web_search_ops(
+    actor_id: str = Depends(get_actor_id),
+) -> dict[str, Any]:
+    """Return query-free search metrics to authorised local operators."""
+    current_settings = get_settings()
+    admins = current_settings.knowledge_admin_actor_set
+    production = current_settings.app_env.strip().casefold() in {"prod", "production"}
+    if (admins and actor_id not in admins) or (not admins and production):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="ASSISTANT_OPS_FORBIDDEN",
+        )
+    return search_ops_snapshot(current_settings)
+
+
+@router.post("/assistant/session-cache/clear")
+def clear_assistant_session_cache(
+    payload: AssistantSessionCacheClearRequest,
+    actor_id: str = Depends(get_actor_id),
+) -> dict[str, Any]:
+    """Clear only the caller's scopes for one opaque assistant session id."""
+    assistant_session_id = payload.assistant_session_id.strip()
+    if not assistant_session_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="ASSISTANT_SESSION_ID_REQUIRED",
+        )
+    removed = clear_actor_session(
+        assistant_session_id=assistant_session_id,
+        actor_id=actor_id,
+    )
+    return {
+        "assistant_session_id": assistant_session_id,
+        "cleared_entries": removed,
+    }
+
+
 @router.get("/health-news")
 async def list_health_news(
     actor_id: str = Depends(get_actor_id),
@@ -3794,6 +3835,9 @@ def assistant_chat(
             max_tokens=payload.max_tokens,
             temperature=payload.temperature,
             allow_network_search=payload.allow_network_search,
+            query_type_override=payload.query_type_override,
+            assistant_session_id=payload.assistant_session_id,
+            clear_session_cache=payload.clear_session_cache,
             sensitive_values=[member_display_name],
         )
     else:
@@ -3865,6 +3909,9 @@ def assistant_chat_stream(
                     "network_query": network_query,
                 }))
 
+            def on_evidence_preview(preview: dict[str, Any]) -> None:
+                event_queue.put(("evidence_preview", preview))
+
             result = run_local_multi_agent(
                 worker_session,
                 messages=messages,
@@ -3876,22 +3923,26 @@ def assistant_chat_stream(
                 max_tokens=payload.max_tokens,
                 temperature=payload.temperature,
                 allow_network_search=payload.allow_network_search,
+                query_type_override=payload.query_type_override,
+                assistant_session_id=payload.assistant_session_id,
+                clear_session_cache=payload.clear_session_cache,
                 sensitive_values=[member_display_name],
                 on_trace=on_trace,
                 on_synthesis_token=on_token,
                 on_status=on_status,
                 on_external_sources=on_external_sources,
+                on_evidence_preview=on_evidence_preview,
                 cancel_event=cancel_event,
             )
             if cancel_event.is_set():
                 worker_session.rollback()
-                event_queue.put(("error", {"message": "CANCELLED", "code": "CANCELLED"}))
+                event_queue.put(("cancelled", {"code": "CANCELLED"}))
             else:
                 worker_session.commit()
                 event_queue.put(("done", {"response": result}))
         except OrchestrationCancelled:
             worker_session.rollback()
-            event_queue.put(("error", {"message": "CANCELLED", "code": "CANCELLED"}))
+            event_queue.put(("cancelled", {"code": "CANCELLED"}))
         except Exception as exc:
             worker_session.rollback()
             logger.exception("assistant chat stream failed")

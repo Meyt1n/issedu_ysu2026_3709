@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { ApiClient, ApiClientError } from './client'
 import type { AuthSession } from './auth'
@@ -267,11 +267,84 @@ describe('请求回执追踪与超时区分（MOB-144）', () => {
     expect(reply.answer).toContain('受约束')
   })
 
+  it('assistantChatStream 解析 SSE status/evidence_preview/token/done', async () => {
+    let url = ''
+    let accept = ''
+    let body = ''
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('event: status\ndata: {"phase":"routing"}\n\n'))
+        controller.enqueue(encoder.encode(
+          'event: evidence_preview\ndata: {"query_type":"GENERAL","database_tools":["get_member_state"],"knowledge_titles":[],"knowledge_count":0,"external_count":0,"rule_tools":[]}\n\n',
+        ))
+        controller.enqueue(encoder.encode('event: token\ndata: {"token":"本地"}\n\n'))
+        controller.enqueue(
+          encoder.encode(
+            'event: done\ndata: {"response":{"answer":"本地回答","sources":[],"confidence":"low","escalate":false,"degraded":false,"query_type":"GENERAL","agent_trace":[{"agent_id":"router","role":"路由","status":"completed","local":true,"network_used":false}]}}\n\n',
+          ),
+        )
+        controller.close()
+      },
+    })
+    const phases: string[] = []
+    const tokens: string[] = []
+    const previews: unknown[] = []
+    const client = new ApiClient({
+      baseUrl: 'http://192.168.1.8:8000',
+      fetcher: async (input, init) => {
+        url = String(input)
+        accept = new Headers(init?.headers).get('Accept') ?? ''
+        body = String(init?.body ?? '')
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'text/event-stream' }),
+          body: stream,
+          text: async () => '',
+        } as unknown as Response
+      },
+    })
+
+    const reply = await client.assistantChatStream(
+      {
+        messages: [{ role: 'user', content: '你好' }],
+        agent_mode: 'multi_agent',
+        allow_network_search: false,
+        assistant_session_id: 'mobile-session-1',
+      },
+      {
+        onStatus: (phase) => phases.push(phase),
+        onToken: (token) => tokens.push(token),
+        onEvidencePreview: (preview) => previews.push(preview),
+      },
+      'hh-1',
+      'm-1',
+    )
+
+    expect(url).toContain('/api/v1/assistant/chat/stream')
+    expect(url).toContain('household_id=hh-1')
+    expect(accept).toBe('text/event-stream')
+    expect(JSON.parse(body).assistant_session_id).toBe('mobile-session-1')
+    expect(phases).toEqual(['routing'])
+    expect(tokens).toEqual(['本地'])
+    expect(previews).toEqual([{
+      query_type: 'GENERAL',
+      database_tools: ['get_member_state'],
+      knowledge_titles: [],
+      knowledge_count: 0,
+      external_count: 0,
+      rule_tools: [],
+    }])
+    expect(reply.answer).toBe('本地回答')
+    expect(reply.agent_trace?.[0]?.agent_id).toBe('router')
+  })
+
   it('assistantChatStream 解析 SSE token/done 且不携带音频字段', async () => {
     let url = ''
     let body = ''
     const encoder = new TextEncoder()
-    const stream = new ReadableStream({
+    const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(encoder.encode('event: token\ndata: {"token":"本"}\n\n'))
         controller.enqueue(encoder.encode('event: token\ndata: {"token":"地"}\n\n'))
@@ -310,5 +383,35 @@ describe('请求回执追踪与超时区分（MOB-144）', () => {
     expect(body).not.toMatch(/audio|microphone|media/i)
     expect(tokens.join('')).toBe('本地')
     expect(reply.answer).toBe('本地解释')
+  })
+
+  it('assistantChatStream 将 cancelled 事件作为可区分的取消错误', async () => {
+    const encoder = new TextEncoder()
+    const onCancelled = vi.fn()
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('event: cancelled\ndata: {"code":"CANCELLED"}\n\n'))
+        controller.close()
+      },
+    })
+    const client = new ApiClient({
+      baseUrl: 'http://192.168.1.8:8000',
+      fetcher: async () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'text/event-stream' }),
+        body: stream,
+        text: async () => '',
+      }) as unknown as Response,
+    })
+
+    await expect(client.assistantChatStream(
+      { messages: [{ role: 'user', content: '停止' }], agent_mode: 'multi_agent' },
+      { onCancelled },
+    )).rejects.toMatchObject({
+      code: 'CANCELLED',
+      message: expect.stringContaining('CANCELLED'),
+    })
+    expect(onCancelled).toHaveBeenCalledOnce()
   })
 })

@@ -6,7 +6,7 @@ import { activeProvider } from '@/data'
 import type { MemberSummary } from '@/data/types'
 import AppIcon from '@/components/AppIcon.vue'
 import { ApiClientError } from '@/api/client'
-import type { AssistantResponse } from '@/api/types'
+import type { AssistantResponse, EvidencePreview } from '@/api/types'
 import { createLiveApiClient } from '@/data'
 import {
   AUTO_SEND_PRESETS,
@@ -44,6 +44,17 @@ interface ChatEntry {
   degradeReason?: string | null
   sources?: string[]
   suggestedQuestions?: string[]
+  queryType?: string | null
+  networkUsed?: boolean
+  agentTraceSummary?: string
+}
+
+const PHASE_LABELS: Record<string, string> = {
+  routing: '正在识别问题类型…',
+  retrieving: '正在核对档案与本地资料…',
+  searching: '正在获取脱敏联网参考…',
+  generating: '正在本机生成回答…',
+  validating: '正在校验引用与安全边界…',
 }
 
 const { session } = useSession()
@@ -60,6 +71,17 @@ const speakingIndex = ref<number | null>(null)
 const speakingProgress = ref('')
 const needMicGesture = ref(false)
 const chatEnd = ref<HTMLElement | null>(null)
+const orchestrationPhase = ref<string | null>(null)
+const allowNetworkSearch = ref(false)
+const liveEvidencePreview = ref<EvidencePreview | null>(null)
+const cancelStatus = ref('')
+
+function createAssistantSessionId(): string {
+  return globalThis.crypto?.randomUUID?.()
+    ?? `app-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 18)}`
+}
+
+const assistantSessionId = ref(createAssistantSessionId())
 const draftInput = ref<HTMLTextAreaElement | null>(null)
 const sendButton = ref<HTMLButtonElement | null>(null)
 const memberSummaries = ref<MemberSummary[]>([])
@@ -99,6 +121,12 @@ const listening = computed(() =>
 const liveMode = computed(() => session.dataMode === 'live')
 const serverLabel = computed(() => session.serverBaseUrl.trim() || '（未填写服务器地址）')
 const assistantReady = computed(() => liveMode.value && Boolean(session.serverBaseUrl.trim()))
+const thinkingText = computed(() => {
+  if (orchestrationPhase.value && PHASE_LABELS[orchestrationPhase.value]) {
+    return PHASE_LABELS[orchestrationPhase.value]
+  }
+  return '正在本机分析…'
+})
 
 const voiceStatusLabel = computed(() => {
   if (voiceMode.value === 'wake') return `正在聆听唤醒词：「${wakePhrase.value}」`
@@ -108,6 +136,49 @@ const voiceStatusLabel = computed(() => {
   }
   return needMicGesture.value ? '点按下方按钮一次以开启麦克风聆听' : ''
 })
+
+let activeSendController: AbortController | null = null
+
+function cancelActiveSend(): void {
+  if (activeSendController) {
+    activeSendController.abort()
+    activeSendController = null
+  }
+}
+
+function isAssistantCancellation(cause: unknown): boolean {
+  return cause instanceof ApiClientError
+    && (cause.code === 'CANCELLED' || cause.message.includes('CANCELLED'))
+}
+
+const evidencePreviewText = computed(() => {
+  const preview = liveEvidencePreview.value
+  if (!preview) return ''
+  const parts = [
+    `档案 ${preview.database_tools.length} 项`,
+    `规则 ${preview.rule_tools.length} 项`,
+    `本地资料 ${preview.knowledge_count} 条`,
+  ]
+  if (preview.external_count) parts.push(`外部参考 ${preview.external_count} 条`)
+  return `已找到可核对依据：${parts.join(' · ')}。预览不含健康正文。`
+})
+
+watch(
+  () => [
+    session.dataMode,
+    session.serverBaseUrl,
+    session.actorId,
+    session.currentHouseholdId,
+    session.currentMemberId,
+  ],
+  (_current, previous) => {
+    if (!previous) return
+    cancelActiveSend()
+    assistantSessionId.value = createAssistantSessionId()
+    liveEvidencePreview.value = null
+    cancelStatus.value = ''
+  },
+)
 
 const voiceButtonLabel = computed(() => {
   if (voiceMode.value === 'wake') return '等待唤醒'
@@ -383,10 +454,75 @@ function applySuggested(question: string): void {
   stopVoiceInput()
 }
 
-async function send(text?: string): Promise<void> {
+function resendAsMedicationSafety(replyIndex: number): void {
+  for (let index = replyIndex - 1; index >= 0; index -= 1) {
+    const entry = history.value[index]
+    if (entry?.role === 'user') {
+      void send(entry.content, 'MEDICATION_SAFETY')
+      return
+    }
+  }
+}
+
+function summarizeAgentTrace(reply: AssistantResponse): string | undefined {
+  const traces = reply.agent_trace ?? []
+  if (!traces.length) return undefined
+  const completed = traces.filter((item) => item.status === 'completed').length
+  const skipped = traces.filter((item) => item.status === 'skipped').length
+  const parts = [`本地分析 ${completed} 步完成`]
+  if (skipped) parts.push(`${skipped} 步跳过`)
+  if (reply.network_used) parts.push('含脱敏联网参考')
+  return parts.join(' · ')
+}
+
+function pushAssistantReply(reply: AssistantResponse): void {
+  history.value.push({
+    role: 'assistant',
+    content: reply.answer,
+    degraded: reply.degraded,
+    degradeReason: reply.degrade_reason,
+    sources: reply.sources,
+    suggestedQuestions: (reply.suggested_questions ?? []).filter(
+      (item) => typeof item === 'string' && item.trim(),
+    ),
+    queryType: reply.query_type,
+    networkUsed: reply.network_used,
+    agentTraceSummary: summarizeAgentTrace(reply),
+  })
+  if (reply.degraded) {
+    sendError.value = reply.degrade_reason
+      ? `回答已降级：${reply.degrade_reason}`
+      : '回答已降级，请稍后重试或检查家庭服务器与模型服务。'
+  }
+  persistChatSession()
+  scrollToEnd()
+  if (settings.voiceBroadcast && reply.answer.trim()) {
+    const lastIndex = history.value.length - 1
+    speakingIndex.value = lastIndex
+    speakingProgress.value = ''
+    speakingSegmentIndex.value = 0
+    const started = speakText(reply.answer, {
+      onFinished: () => {
+        if (speakingIndex.value === lastIndex) {
+          speakingIndex.value = null
+          speakingProgress.value = ''
+          speakingSegmentIndex.value = 0
+        }
+      },
+      onProgress: (progress) => {
+        speakingSegmentIndex.value = progress.index
+        speakingProgress.value = `正在朗读 ${progress.index + 1}/${progress.total}`
+      },
+    })
+    if (!started) speakingIndex.value = null
+  }
+}
+
+async function send(text?: string, queryTypeOverride?: string): Promise<void> {
   const content = (text ?? draft.value).trim()
   if (!content || sending.value) return
 
+  cancelActiveSend()
   stopVoiceInput()
   stopSpeaking()
   speakingIndex.value = null
@@ -397,6 +533,9 @@ async function send(text?: string): Promise<void> {
   draft.value = ''
   sending.value = true
   sendError.value = ''
+  cancelStatus.value = ''
+  liveEvidencePreview.value = null
+  orchestrationPhase.value = 'routing'
   scrollToEnd()
 
   if (!liveMode.value) {
@@ -409,6 +548,7 @@ async function send(text?: string): Promise<void> {
     })
     persistChatSession()
     sending.value = false
+    orchestrationPhase.value = null
     scrollToEnd()
     if (!needMicGesture.value) void beginWakeListening()
     return
@@ -423,6 +563,7 @@ async function send(text?: string): Promise<void> {
     })
     persistChatSession()
     sending.value = false
+    orchestrationPhase.value = null
     scrollToEnd()
     if (!needMicGesture.value) void beginWakeListening()
     return
@@ -438,89 +579,82 @@ async function send(text?: string): Promise<void> {
     })
     persistChatSession()
     sending.value = false
+    orchestrationPhase.value = null
     scrollToEnd()
     if (!needMicGesture.value) void beginWakeListening()
     return
   }
 
-  const streamingEntry: ChatEntry = { role: 'assistant', content: '' }
-  history.value.push(streamingEntry)
-  const entryIndex = history.value.length - 1
-
+  const controller = new AbortController()
+  activeSendController = controller
+  const messages = history.value.map((entry) => ({ role: entry.role, content: entry.content }))
   const chatInput = {
-    messages: history.value
-      .slice(0, -1)
-      .map((entry) => ({ role: entry.role, content: entry.content })),
+    messages,
     max_tokens: 1024,
     agent_mode: 'multi_agent' as const,
-    allow_network_search: false,
+    allow_network_search: allowNetworkSearch.value,
+    query_type_override: queryTypeOverride,
+    assistant_session_id: assistantSessionId.value,
   }
+  const householdId = session.currentHouseholdId || undefined
+  const memberId = session.currentMemberId || undefined
+  const requestOpts = { ...requestOptions(), signal: controller.signal }
 
-  const applyReply = (reply: AssistantResponse) => {
-    const entry = history.value[entryIndex]!
-    entry.content = reply.answer
-    entry.degraded = reply.degraded
-    entry.degradeReason = reply.degrade_reason
-    entry.sources = reply.sources
-    entry.suggestedQuestions = (reply.suggested_questions ?? []).filter(
-      (item) => typeof item === 'string' && item.trim(),
-    )
-    persistChatSession()
-    scrollToEnd()
-    if (settings.voiceBroadcast) {
-      speakingIndex.value = entryIndex
-      speakingProgress.value = ''
-      speakingSegmentIndex.value = 0
-      if (
-        !speakText(reply.answer, {
-          onFinished: () => {
-            if (speakingIndex.value === entryIndex) {
-              speakingIndex.value = null
-              speakingProgress.value = ''
-              speakingSegmentIndex.value = 0
-            }
-          },
-          onProgress: (progress) => {
-            speakingSegmentIndex.value = progress.index
-            speakingProgress.value = `正在朗读 ${progress.index + 1}/${progress.total}`
-          },
-        })
-      ) {
-        speakingIndex.value = null
-      }
-    }
-  }
+  let streamingAnswer = ''
+  let streamStarted = false
+  let streamCancelled = false
 
   try {
-    const reply = await client.assistantChatStream(
-      chatInput,
-      {
-        onToken: (token) => {
-          const entry = history.value[entryIndex]
-          if (!entry || !token) return
-          entry.content += token
-          scrollToEnd()
-        },
-      },
-      session.currentHouseholdId || undefined,
-      session.currentMemberId || undefined,
-      requestOptions(),
-    )
-    applyReply(reply)
-  } catch {
-    if (history.value[entryIndex]?.role === 'assistant' && !history.value[entryIndex]?.content) {
-      history.value.pop()
-    }
     try {
-      const reply = await client.assistantChat(
+      const reply = await client.assistantChatStream(
         chatInput,
-        session.currentHouseholdId || undefined,
-        session.currentMemberId || undefined,
-        requestOptions(),
+        {
+          onStatus: (phase) => {
+            orchestrationPhase.value = phase || 'retrieving'
+          },
+          onToken: (token) => {
+            if (!token) return
+            streamStarted = true
+            streamingAnswer += token
+            orchestrationPhase.value = 'generating'
+          },
+          onEvidencePreview: (preview) => {
+            liveEvidencePreview.value = preview
+            scrollToEnd()
+          },
+          onCancelled: () => {
+            streamCancelled = true
+          },
+        },
+        householdId,
+        memberId,
+        requestOpts,
       )
-      sendError.value = '流式不可用，已改为整包回答'
-      applyReply(reply)
-    } catch (cause) {
+      pushAssistantReply(reply)
+    } catch (streamError) {
+      if (controller.signal.aborted || streamCancelled || isAssistantCancellation(streamError)) {
+        cancelStatus.value = '已停止'
+        return
+      }
+      if (streamStarted && streamingAnswer.trim()) {
+        history.value.push({
+          role: 'assistant',
+          content: streamingAnswer.trim(),
+          degraded: true,
+          degradeReason: 'stream_incomplete',
+        })
+        sendError.value = '流式连接中断，已保留已生成内容。'
+        persistChatSession()
+        scrollToEnd()
+        return
+      }
+      const reply = await client.assistantChat(chatInput, householdId, memberId, requestOpts)
+      pushAssistantReply(reply)
+    }
+  } catch (cause) {
+    if (controller.signal.aborted || isAssistantCancellation(cause)) {
+      cancelStatus.value = '已停止'
+    } else {
       const message =
         cause instanceof ApiClientError
           ? cause.message
@@ -534,23 +668,35 @@ async function send(text?: string): Promise<void> {
         degradeReason: 'request_failed',
       })
       persistChatSession()
-      scrollToEnd()
     }
+    scrollToEnd()
   } finally {
+    if (activeSendController === controller) activeSendController = null
     sending.value = false
+    orchestrationPhase.value = null
+    liveEvidencePreview.value = null
     if (!needMicGesture.value) void beginWakeListening()
   }
 }
 
+function stopGenerating(): void {
+  cancelActiveSend()
+}
+
 function clearChat(): void {
+  cancelActiveSend()
   stopVoiceInput()
   stopSpeaking()
   speakingIndex.value = null
   speakingProgress.value = ''
   history.value = []
+  assistantSessionId.value = createAssistantSessionId()
   draft.value = ''
   sendError.value = ''
   voiceError.value = ''
+  cancelStatus.value = ''
+  liveEvidencePreview.value = null
+  orchestrationPhase.value = null
   clearChatSession(session.actorId, session.currentHouseholdId, session.currentMemberId)
 }
 
@@ -576,6 +722,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  cancelActiveSend()
   document.removeEventListener('visibilitychange', onVisibilityChange)
   dictation?.dispose()
   dictation = null
@@ -606,7 +753,7 @@ onBeforeUnmount(() => {
       <p class="meta-line">
         {{
           liveMode
-            ? '将流式请求你电脑上的 /api/v1/assistant/chat/stream；音频不会上传。'
+            ? '联机后走本地多智能体流式接口；识别文字确认发送才请求家庭服务器，音频不会上传。'
             : '演示模式不调用后端。切换联机并填写电脑局域网地址后即可对话。'
         }}
       </p>
@@ -614,6 +761,10 @@ onBeforeUnmount(() => {
         家庭 {{ session.currentHouseholdId || '未选' }} · 成员 {{ session.currentMemberId || '未选' }}
         · 会话按身份/家庭/成员隔离（仅本标签页）
       </p>
+      <label v-if="liveMode" class="network-toggle">
+        <input v-model="allowNetworkSearch" type="checkbox" :disabled="sending" />
+        允许本次脱敏联网参考（需家庭服务器已开启搜索）
+      </label>
     </section>
 
     <section class="card chat-card" aria-label="对话">
@@ -629,6 +780,8 @@ onBeforeUnmount(() => {
         <p class="bubble-role">{{ entry.role === 'user' ? '我' : '助手' }}</p>
         <p class="bubble-text">{{ entry.content }}</p>
         <p v-if="entry.degraded" class="meta-line">降级说明：{{ entry.degradeReason || '受控降级' }}</p>
+        <p v-if="entry.agentTraceSummary" class="meta-line">{{ entry.agentTraceSummary }}</p>
+        <p v-if="entry.networkUsed" class="meta-line">含外部参考 · 需人工确认，不作诊断</p>
         <div v-if="entry.role === 'assistant' && entry.content" class="bubble-actions">
           <button
             type="button"
@@ -637,6 +790,14 @@ onBeforeUnmount(() => {
             @click="toggleSpeech(index, entry.content)"
           >
             {{ speakingIndex === index ? '停止朗读' : '朗读回答' }}
+          </button>
+          <button
+            type="button"
+            class="btn btn-secondary"
+            :disabled="sending"
+            @click="resendAsMedicationSafety(index)"
+          >
+            按用药安全再查一次
           </button>
           <button
             v-if="speakingIndex === index && speakingProgress"
@@ -678,6 +839,11 @@ onBeforeUnmount(() => {
       <div ref="chatEnd" />
     </section>
 
+    <p v-if="sending && evidencePreviewText" class="evidence-preview-line" role="status" aria-live="polite">
+      {{ evidencePreviewText }}
+    </p>
+    <p v-if="sending" class="thinking-line" role="status" aria-live="polite">{{ thinkingText }}</p>
+    <p v-if="cancelStatus" class="meta-line" role="status" aria-live="polite">{{ cancelStatus }}</p>
     <p v-if="sendError" class="error-line" role="alert">{{ sendError }}</p>
     <p v-if="voiceError" class="error-line" role="status">{{ voiceError }}</p>
     <p v-if="needMicGesture && !listening" class="voice-status" role="status">
@@ -728,8 +894,16 @@ onBeforeUnmount(() => {
         <button type="button" class="btn btn-secondary" :disabled="sending || history.length === 0" @click="clearChat">
           清空
         </button>
+        <button
+          v-if="sending"
+          type="button"
+          class="btn btn-secondary"
+          @click="stopGenerating"
+        >
+          停止
+        </button>
         <button ref="sendButton" type="submit" class="btn btn-primary" :disabled="sending || !draft.trim()">
-          {{ sending ? '发送中…' : '发送' }}
+          {{ sending ? '分析中…' : '发送' }}
         </button>
       </div>
     </form>
@@ -919,5 +1093,28 @@ onBeforeUnmount(() => {
 @media (max-width: 380px) {
   .composer-actions { grid-template-columns: 1fr; }
   .ready-actions { grid-template-columns: 1fr; }
+}
+
+.network-toggle {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 8px;
+  min-height: var(--tap);
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+.thinking-line {
+  margin: 0;
+  color: var(--accent);
+  font-weight: 600;
+}
+.evidence-preview-line {
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  border-radius: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 0;
+  padding: 10px 12px;
 }
 </style>

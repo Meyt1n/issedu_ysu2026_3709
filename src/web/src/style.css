@@ -1926,6 +1926,7 @@ button:focus-visible, a:focus-visible {
 }
 
 .chat-evidence-summary { color: var(--pine); }
+.chat-route-explanation { color: var(--ink-soft); line-height: 1.55; }
 
 .chat-agent-locality { color: var(--pine); }
 .chat-agent-network { color: var(--clay); margin-left: 6px; }
@@ -1946,6 +1947,37 @@ button:focus-visible, a:focus-visible {
 }
 
 .chat-agent-chip small { color: var(--ink-faint); margin-left: 3px; }
+
+.assistant-evidence-preview {
+  background: color-mix(in srgb, var(--pine-tint) 54%, var(--paper));
+  border: 1px solid color-mix(in srgb, var(--pine) 30%, var(--line));
+  border-radius: 13px;
+  color: var(--ink-soft);
+  display: grid;
+  gap: 7px;
+  margin: 4px 46px 12px;
+  padding: 11px 13px;
+}
+
+.assistant-evidence-preview-heading {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 12px;
+  justify-content: space-between;
+}
+
+.assistant-evidence-preview-heading > span {
+  align-items: center;
+  color: var(--pine);
+  display: inline-flex;
+  font-weight: 700;
+  gap: 5px;
+}
+
+.assistant-evidence-preview-heading small { color: var(--ink-faint); }
+.assistant-evidence-preview p { margin: 0; }
+.assistant-evidence-preview-groups { display: grid; font-size: 12.5px; gap: 3px; line-height: 1.5; }
 
 .chat-external-sources { border-color: color-mix(in srgb, var(--clay) 34%, var(--line)); }
 
@@ -2614,6 +2646,34 @@ button:focus-visible, a:focus-visible {
 }
 
 .chunk-hit .hit-score { color: var(--pine-deep); font-weight: 700; }
+
+.ops-status-line {
+  align-items: center;
+  color: var(--ink-soft);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+  gap: 8px 12px;
+}
+
+.ops-metrics {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 13px 0 0;
+}
+
+.ops-metrics > div {
+  background: color-mix(in srgb, var(--pine-tint) 32%, transparent);
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  display: grid;
+  gap: 3px;
+  padding: 9px 10px;
+}
+
+.ops-metrics dt { color: var(--ink-faint); font-size: 11px; }
+.ops-metrics dd { color: var(--ink); font-size: 18px; font-weight: 700; margin: 0; }
 
 /* ============================================================
    主题系统 · data-theme 令牌覆盖
@@ -3852,7 +3912,7 @@ button:focus-visible, a:focus-visible {
 .agent-workflow-grid {
   display: grid;
   gap: 7px;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   position: relative;
 }
 
@@ -4032,16 +4092,17 @@ button:focus-visible, a:focus-visible {
   .session-item + .session-item { border-left: 0; padding-left: 0; }
   .agent-workflow-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .agent-flow-rail { display: none; }
-  .agent-stage:nth-child(3)::after { display: none; }
+  .agent-stage:nth-child(4)::after { display: none; }
   .agent-detail-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 560px) {
   .agent-workflow-heading { display: grid; }
   .agent-workflow-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .agent-stage:nth-child(3)::after { display: block; }
-  .agent-stage:nth-child(even)::after { display: none; }
+  .agent-stage:nth-child(4)::after { display: block; }
+  .agent-stage:nth-child(odd)::after { display: none; }
   .agent-workflow-note { align-items: flex-start; }
+  .assistant-evidence-preview { margin-left: 0; margin-right: 0; }
 }
 
 /* ---------- 图谱内嵌图例 ---------- */
