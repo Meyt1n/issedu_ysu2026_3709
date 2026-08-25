@@ -345,8 +345,9 @@ describe('ApiClient authorization contract', () => {
     }
   })
 
-  it('converts a hung request into DEPENDENCY_UNAVAILABLE instead of pending forever', async () => {
+  it('converts a hung request into REQUEST_TIMEOUT instead of pending forever', async () => {
     // 复现 dev 代理丢失响应的场景：fetch 永不 resolve，只能被超时信号中止。
+    // 超时必须与「连不上 API」区分，避免界面把慢响应误报成 API 未启动。
     const fetcher: typeof fetch = (_input, init) =>
       new Promise<Response>((_resolve, reject) => {
         init?.signal?.addEventListener('abort', () => {
@@ -359,8 +360,21 @@ describe('ApiClient authorization contract', () => {
       client.listHouseholds({ actorId: 'owner', timeoutMs: 40 }),
     ).rejects.toMatchObject({
       status: 0,
-      code: 'DEPENDENCY_UNAVAILABLE',
+      code: 'REQUEST_TIMEOUT',
       message: expect.stringContaining('timed out'),
+    })
+  })
+
+  it('reports a refused connection as DEPENDENCY_UNAVAILABLE (API not reachable)', async () => {
+    const fetcher: typeof fetch = async () => {
+      throw new TypeError('Failed to fetch')
+    }
+    const client = new ApiClient({ baseUrl: 'http://local.test', fetcher })
+
+    await expect(client.listHouseholds({ actorId: 'owner' })).rejects.toMatchObject({
+      status: 0,
+      code: 'DEPENDENCY_UNAVAILABLE',
+      message: 'API service is unavailable',
     })
   })
 

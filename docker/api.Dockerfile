@@ -14,6 +14,10 @@ RUN pip install --no-cache-dir uv==0.6.5 \
 COPY alembic.ini ./
 COPY migrations ./migrations
 COPY src ./src
+# 知识爬虫（/knowledge/crawl/*）依赖仓库内的白名单与离线夹具；缺少它们时
+# 容器内爬虫接口会以 KNOWLEDGE_CRAWL_CONFIG_MISSING 降级而不是可用。
+# staging 与 approved/incoming 为运行期产物，写入容器文件系统（教学演示用途）。
+COPY docs/knowledge ./docs/knowledge
 
 ENV PYTHONPATH=/app/src/api:/app/src
 

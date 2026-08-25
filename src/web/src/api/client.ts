@@ -167,15 +167,18 @@ export class ApiClient {
       })
     } catch (cause) {
       if (options.signal?.aborted) throw cause
-      throw new ApiClientError(
-        timeoutSignal.aborted
-          ? `API request timed out after ${timeoutMs}ms`
-          : 'API service is unavailable',
-        {
+      // 超时（API 可能只是慢或正在重启）与连接失败（API 未启动 / 端口不对）
+      // 必须区分：否则界面会把一切失败都说成「API 服务不可用」。
+      if (timeoutSignal.aborted) {
+        throw new ApiClientError(`API request timed out after ${timeoutMs}ms`, {
           status: 0,
-          code: 'DEPENDENCY_UNAVAILABLE',
-        },
-      )
+          code: 'REQUEST_TIMEOUT',
+        })
+      }
+      throw new ApiClientError('API service is unavailable', {
+        status: 0,
+        code: 'DEPENDENCY_UNAVAILABLE',
+      })
     }
     const requestId = response.headers.get('x-request-id')
     const text = await response.text()
