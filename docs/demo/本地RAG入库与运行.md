@@ -2,7 +2,7 @@
 
 本仓库的本地 RAG 由三部分组成：批准知识清单、版本化文档/分块索引、权限前置后的检索与引用校验。模型只能使用工具返回的可访问片段，不能把模型记忆或未命中的内容伪装成知识库事实。
 
-当前仓库提供一份只含合成演示内容的清单：`本地RAG知识清单.json`。它引用同目录下的六张教学演示知识卡，不含真实家庭健康数据，也不代表临床指南或个体化用药建议：
+当前仓库提供一份只含合成演示内容的清单：`本地RAG知识清单.json`。它引用同目录下的 **22** 张教学演示知识卡，不含真实家庭健康数据，也不代表临床指南或个体化用药建议：
 
 | 文件 | 主题 | 文档版本 |
 |---|---|---|
@@ -12,6 +12,22 @@
 | `血压血糖居家记录观察教学卡.md` | 指标记录与观察方法，不解读数值高低 | `demo-cn-en-v2` |
 | `居家照护沟通与紧急联络教学卡.md` | 何时联系医务人员/急救、联络准备清单 | `demo-cn-en-v2` |
 | `药品包装识别与人工复核教学卡.md` | 多证据识别、四状态、人工复核要点 | `demo-cn-en-v2` |
+| `提醒确认与未确认升级教学卡.md` | 确认含义、再提醒与未确认升级 | `demo-cn-en-v3` |
+| `家庭成员角色与字段授权教学卡.md` | 角色、字段级授权、最小必要披露 | `demo-cn-en-v3` |
+| `健康事件追加不可覆盖教学卡.md` | 事件追加、纠错保留、状态投影 | `demo-cn-en-v3` |
+| `规则命中解释与证据分区教学卡.md` | 规则/模型分权、证据分区展示 | `demo-cn-en-v3` |
+| `本地优先与隐私不出网教学卡.md` | 本地优先、日志边界、出口降级 | `demo-cn-en-v3` |
+| `助手拒答与紧急升级教学卡.md` | 拒答场景、紧急升级、证据不足 | `demo-cn-en-v3` |
+| `服药时间窗与提醒预算教学卡.md` | 安全时间窗、告警预算与等级 | `demo-cn-en-v3` |
+| `居家环境跌倒风险观察教学卡.md` | 环境观察清单、非诊断沟通 | `demo-cn-en-v3` |
+| `外出备药与旅行清单教学卡.md` | 出行前核对、途中管理、回程盘点 | `demo-cn-en-v3` |
+| `医嘱变更人工确认教学卡.md` | 变更对照、禁止自动执行 | `demo-cn-en-v3` |
+| `删除撤权与知识传播教学卡.md` | 撤权传播、删除与索引 | `demo-cn-en-v3` |
+| `天气行动卡低风险提示教学卡.md` | 低风险生活提示、禁止改医嘱 | `demo-cn-en-v3` |
+| `家庭药箱分类盘点教学卡.md` | 分类存放、盘点、儿童安全 | `demo-cn-en-v3` |
+| `语音交互与证据边界教学卡.md` | 语音仅交互层、非证据来源 | `demo-cn-en-v3` |
+| `指标趋势观察与异常沟通教学卡.md` | 趋势记录与沟通准备 | `demo-cn-en-v3` |
+| `多证据视觉质量门控教学卡.md` | OCR-first、质量门控、四状态 | `demo-cn-en-v3` |
 
 全部知识卡都是自写合成教学文，标注「教学演示、非诊断、非处方」；不得把它们扩展成剂量、停药、换药或诊断结论，也不得复制受版权保护的说明书全文。
 
@@ -35,7 +51,7 @@ uv run python scripts/ingest_local_knowledge.py `
   --manifest docs/demo/本地RAG知识清单.json `
   --source-root docs/demo `
   --actor-id demo-admin `
-  --index-version demo-cn-en-v2 `
+  --index-version demo-cn-en-v3 `
   --dry-run
 ```
 
@@ -50,12 +66,12 @@ uv run python scripts/ingest_local_knowledge.py `
   --manifest docs/demo/本地RAG知识清单.json `
   --source-root docs/demo `
   --actor-id demo-admin `
-  --index-version demo-cn-en-v2
+  --index-version demo-cn-en-v3
 ```
 
 命令会在同一事务中完成文档登记、自动分块和索引快照。分块按 Markdown 章节切分（超长章节回退为带重叠的字符窗口），`locator` 会带上 `section:<章节名>` 前缀，便于引用定位。重复执行同一清单不会重复插入；如果同一 `title/source/version` 的原文、许可或权限发生变化，会报 `DOCUMENT_VERSION_CONFLICT`，应提高文档版本并重新做清单审核。索引版本已经存在但内容发生变化时会报 `INDEX_VERSION_CONFLICT`，不能覆盖旧快照。
 
-在已经用旧清单（`demo-cn-en-v1` 索引）入库过的数据库上执行本清单时，原有文档会被 `skip`，五张新教学卡会被 `create`，并生成新的 `demo-cn-en-v2` 索引快照；旧索引快照保留用于审计。分块策略更新后，如需让旧文档也使用章节分块，应在干净数据库上全量重建并使用新的索引版本。
+在已经用旧清单（`demo-cn-en-v1` / `demo-cn-en-v2`）入库过的数据库上执行本清单时，已有文档会被 `skip`，`demo-cn-en-v3` 新增卡会被 `create`，并生成新的 `demo-cn-en-v3` 索引快照；旧索引快照保留用于审计。分块策略更新后，如需让旧文档也使用最新分块，应在干净数据库上全量重建并使用新的索引版本。
 
 ## 检索验证
 
@@ -73,7 +89,7 @@ Invoke-RestMethod `
 
 正常结果应包含 `document_id`、`version`、`chunk_id`、`locator`、`text` 和 `score`，`locator` 形如 `section:4. 过期药品识别与处置|chars:415-650`。检索评分是块级平滑 TF-IDF：词频取次线性（1 + ln tf），并按查询词覆盖度加权，覆盖更多查询词的块排前。查询没有命中时返回 `degraded=true`、`degrade_reason=NO_RELEVANT_RESULTS`；空白或纯停用词查询返回 `EMPTY_QUERY`；没有权限时返回 `NO_AUTHORISED_DOCUMENTS`。这些状态都不能交给模型补写事实。
 
-其它主题的验证查询示例：`药品身份核对`、`过敏信息记录和分享注意什么`、`血压血糖记录观察`、`什么时候需要联系急救`、`药盒包装识别人工复核`，预期各自命中对应教学卡（与 `tests/unit/test_local_knowledge_ingest.py` 的主题断言一致）。
+其它主题的验证查询示例见 `tests/unit/test_local_knowledge_ingest.py` 的 `topic_queries`（含提醒升级、字段授权、事件追加、拒答升级、药箱盘点、视觉门控等），预期各自命中对应教学卡。
 
 ## 接入助手时的边界
 

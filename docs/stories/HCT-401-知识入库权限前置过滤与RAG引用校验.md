@@ -24,8 +24,8 @@
 ## 当前可运行入口
 
 - `scripts/ingest_local_knowledge.py`：从批准 JSON 清单校验并入库，只接受清单指定的 UTF-8 `.md`/`.txt`。
-- `docs/demo/本地RAG知识清单.json`：六张合成教学演示知识卡（用药安全、存放处置、过敏授权、指标记录、紧急联络、包装复核）。
-- `docs/demo/本地RAG入库与运行.md`：dry-run、正式入库和 API 检索命令（索引版本 `demo-cn-en-v2`）。
+- `docs/demo/本地RAG知识清单.json`：22 张合成教学演示知识卡（用药安全、存放处置、过敏授权、指标记录、紧急联络、包装复核，以及提醒升级、字段授权、事件追加、规则证据分区、本地隐私、拒答升级、时间窗预算、跌倒观察、外出备药、医嘱确认、删除撤权、天气行动卡、药箱盘点、语音边界、指标趋势、视觉门控等）。
+- `docs/demo/本地RAG入库与运行.md`：dry-run、正式入库和 API 检索命令（当前索引版本 `demo-cn-en-v3`）。
 
 ## 2026-08-25 增量（知识库扩充与检索质量修复）
 
@@ -33,7 +33,7 @@
 - 分块改为 Markdown 章节感知：按标题切分（超长章节回退为带重叠的字符窗口），`locator` 携带 `section:<章节名>` 前缀，对齐 07-AI与RAG设计规范「保留章节标签」的要求。
 - 空白/纯停用词查询在检索入口提前返回 `EMPTY_QUERY` 结构化降级。
 - `local_agents._knowledge_agent` 的 trace 区分「检索完成但无命中」（`NO_RELEVANT_RESULTS`，`completed`）与真实阻断（`NO_AUTHORISED_DOCUMENTS`/`EMPTY_INDEX`/越权，`blocked`）；权限前置过滤、引用校验与用药安全短路逻辑均未弱化。
-- 知识库从 1 份扩充到 6 份合成教学卡，清单逐项登记 source/license/version/permission_scope/content_sha256；`tests/unit/test_local_knowledge_ingest.py::test_repo_demo_manifest_ingests_and_topics_are_retrievable` 固定清单可入库、哈希一致且六个主题查询各自命中对应文档。
+- 知识库从 1 份扩充到 22 份合成教学卡（含 v2/v3 增量），清单逐项登记 source/license/version/permission_scope/content_sha256；`tests/unit/test_local_knowledge_ingest.py::test_repo_demo_manifest_ingests_and_topics_are_retrievable` 固定清单可入库、哈希一致且各主题查询各自命中对应文档。
 
 ## 测试证据
 

@@ -1,5 +1,5 @@
 {
-  "manifest_version": "2",
+  "manifest_version": "3",
   "status": "approved",
   "approval_note": "仅用于 HomeCare Twin 本地教学演示；全部为自写合成教学知识卡，不含真实家庭健康数据，不构成诊断、处方或用药建议。",
   "documents": [
@@ -56,6 +56,150 @@
       "version": "demo-cn-en-v2",
       "permission_scope": {},
       "content_sha256": "6e8f68fb6bc06afe54dc92a52e56a8930b25bbdce54f6b2ab2754b4c2e97ddde"
+    },
+    {
+      "path": "提醒确认与未确认升级教学卡.md",
+      "title": "HomeCare Twin 提醒确认与未确认升级教学卡",
+      "source": "homecare-demo-kb",
+      "license": "internal-demo",
+      "version": "demo-cn-en-v3",
+      "permission_scope": {},
+      "content_sha256": "1ecb2ead9b6856baaf00865b4cb91e547afaeec777a82e32895853d3c45baf77"
+    },
+    {
+      "path": "家庭成员角色与字段授权教学卡.md",
+      "title": "HomeCare Twin 家庭成员角色与字段授权教学卡",
+      "source": "homecare-demo-kb",
+      "license": "internal-demo",
+      "version": "demo-cn-en-v3",
+      "permission_scope": {},
+      "content_sha256": "10c72981da0f8e1c6c38b744f2b3a64d8de62e25c4c75f68f8b272c9a3395976"
+    },
+    {
+      "path": "健康事件追加不可覆盖教学卡.md",
+      "title": "HomeCare Twin 健康事件追加与不可覆盖教学卡",
+      "source": "homecare-demo-kb",
+      "license": "internal-demo",
+      "version": "demo-cn-en-v3",
+      "permission_scope": {},
+      "content_sha256": "966de63b2ed1095f35a10a138906603bd5b720982d6ca18a15dfe19b96aeee20"
+    },
+    {
+      "path": "规则命中解释与证据分区教学卡.md",
+      "title": "HomeCare Twin 规则命中解释与证据分区教学卡",
+      "source": "homecare-demo-kb",
+      "license": "internal-demo",
+      "version": "demo-cn-en-v3",
+      "permission_scope": {},
+      "content_sha256": "c8150fe7b591845a38e1211bbf757c005b8885578d188f6cfd17a06fe72527fc"
+    },
+    {
+      "path": "本地优先与隐私不出网教学卡.md",
+      "title": "HomeCare Twin 本地优先与隐私不出网教学卡",
+      "source": "homecare-demo-kb",
+      "license": "internal-demo",
+      "version": "demo-cn-en-v3",
+      "permission_scope": {},
+      "content_sha256": "eaf638693736837b23c998f6728ae391d26097b456072ac4126b8ad8eb422cb1"
+    },
+    {
+      "path": "助手拒答与紧急升级教学卡.md",
+      "title": "HomeCare Twin 助手拒答与紧急升级教学卡",
+      "source": "homecare-demo-kb",
+      "license": "internal-demo",
+      "version": "demo-cn-en-v3",
+      "permission_scope": {},
+      "content_sha256": "9126d586278ae5ceb35d7371c0d12265fa5ef397cc4a1310f88ade743ebccfc7"
+    },
+    {
+      "path": "服药时间窗与提醒预算教学卡.md",
+      "title": "HomeCare Twin 服药时间窗与提醒预算教学卡",
+      "source": "homecare-demo-kb",
+      "license": "internal-demo",
+      "version": "demo-cn-en-v3",
+      "permission_scope": {},
+      "content_sha256": "7a7b938aebf4e3215063cf3be72d4365ce95b74f6aaa2d7ce2a13682ed550229"
+    },
+    {
+      "path": "居家环境跌倒风险观察教学卡.md",
+      "title": "HomeCare Twin 居家环境跌倒风险观察教学卡",
+      "source": "homecare-demo-kb",
+      "license": "internal-demo",
+      "version": "demo-cn-en-v3",
+      "permission_scope": {},
+      "content_sha256": "f360c5b08fdb8b898c4695175c932b39ae70761eab4be0476373a2f78a7ea043"
+    },
+    {
+      "path": "外出备药与旅行清单教学卡.md",
+      "title": "HomeCare Twin 外出备药与旅行清单教学卡",
+      "source": "homecare-demo-kb",
+      "license": "internal-demo",
+      "version": "demo-cn-en-v3",
+      "permission_scope": {},
+      "content_sha256": "9ec7613525c2451595838cc7f857969cd8463b1bc80e99258ab007801f194898"
+    },
+    {
+      "path": "医嘱变更人工确认教学卡.md",
+      "title": "HomeCare Twin 医嘱变更人工确认教学卡",
+      "source": "homecare-demo-kb",
+      "license": "internal-demo",
+      "version": "demo-cn-en-v3",
+      "permission_scope": {},
+      "content_sha256": "067e7d692ecfe99f49926eb8787f6fa20f43199bba78771159bb6a50e020b3d0"
+    },
+    {
+      "path": "删除撤权与知识传播教学卡.md",
+      "title": "HomeCare Twin 删除撤权与知识传播教学卡",
+      "source": "homecare-demo-kb",
+      "license": "internal-demo",
+      "version": "demo-cn-en-v3",
+      "permission_scope": {},
+      "content_sha256": "a16142a5abc5d586bb5b07124474e74aea142a31ab4ef2370d3a7a168417a056"
+    },
+    {
+      "path": "天气行动卡低风险提示教学卡.md",
+      "title": "HomeCare Twin 天气行动卡低风险提示教学卡",
+      "source": "homecare-demo-kb",
+      "license": "internal-demo",
+      "version": "demo-cn-en-v3",
+      "permission_scope": {},
+      "content_sha256": "7013efd69e05b6deb83bf8cba2b88bfbcde324af82137acaa5a1005a57a1bca1"
+    },
+    {
+      "path": "家庭药箱分类盘点教学卡.md",
+      "title": "HomeCare Twin 家庭药箱分类盘点教学卡",
+      "source": "homecare-demo-kb",
+      "license": "internal-demo",
+      "version": "demo-cn-en-v3",
+      "permission_scope": {},
+      "content_sha256": "eacb7d66becf2ea5ec45b1ff623433ed0554fb7d859009ab6a6623c1facffceb"
+    },
+    {
+      "path": "语音交互与证据边界教学卡.md",
+      "title": "HomeCare Twin 语音交互与证据边界教学卡",
+      "source": "homecare-demo-kb",
+      "license": "internal-demo",
+      "version": "demo-cn-en-v3",
+      "permission_scope": {},
+      "content_sha256": "3539fb61515b9fe3014002829d67caf8068ce10649e2981079c24a5ab0042f4b"
+    },
+    {
+      "path": "指标趋势观察与异常沟通教学卡.md",
+      "title": "HomeCare Twin 指标趋势观察与异常沟通教学卡",
+      "source": "homecare-demo-kb",
+      "license": "internal-demo",
+      "version": "demo-cn-en-v3",
+      "permission_scope": {},
+      "content_sha256": "726854be912f77a46aa08a19544b4702587d4597970a57c463a7fd91ac75491d"
+    },
+    {
+      "path": "多证据视觉质量门控教学卡.md",
+      "title": "HomeCare Twin 多证据视觉质量门控教学卡",
+      "source": "homecare-demo-kb",
+      "license": "internal-demo",
+      "version": "demo-cn-en-v3",
+      "permission_scope": {},
+      "content_sha256": "e9d29cadeb51edef10bca4c70a837212a145b540ab9eaab70148ca6d98e38d27"
     }
   ]
 }
