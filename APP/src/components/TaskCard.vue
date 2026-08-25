@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
+import { RouterLink } from 'vue-router'
 
 import AppIcon from '@/components/AppIcon.vue'
 import LevelTag from '@/components/LevelTag.vue'
-import { taskLevelTone } from '@/data/labels'
+import { caregiverEscalationStatusLabel, caregiverEscalationStatusTone, taskLevelTone } from '@/data/labels'
 import type { CareTask, TaskAction, TaskActionPayload } from '@/data/types'
 import { formatDateTime } from '@/utils/format'
 
@@ -91,6 +92,24 @@ function submitSkip(): void {
     <p class="meta-line">{{ policyMessage }}</p>
     <p v-if="policy?.nextAllowedAt" class="meta-line">下一允许时间：{{ formatDateTime(policy.nextAllowedAt) }}</p>
     <p v-if="props.task.skipReason" class="meta-line">跳过原因：{{ props.task.skipReason }}</p>
+
+    <section v-if="props.task.escalation" class="task-escalation" aria-label="照护升级状态">
+      <div class="card-title-row">
+        <strong>照护升级状态</strong>
+        <span class="tag" :data-tone="caregiverEscalationStatusTone(props.task.escalation.status)">
+          {{ caregiverEscalationStatusLabel(props.task.escalation.status) }}
+        </span>
+      </div>
+      <p class="meta-line">{{ props.task.escalation.reason }}</p>
+      <p class="meta-line">
+        目标：{{ props.task.escalation.target === 'AUTHORIZED_CAREGIVER' ? '服务端授权照护者（身份信息已隐藏）' : '无有效授权照护者' }}
+      </p>
+      <p class="meta-line">升级时间：{{ formatDateTime(props.task.escalation.occurredAt) }}</p>
+      <p v-if="props.task.escalation.dueAt" class="meta-line">原计划时间：{{ formatDateTime(props.task.escalation.dueAt) }}</p>
+      <p class="meta-line">下一步：{{ props.task.escalation.nextStep }}</p>
+      <p class="meta-line">升级回执：{{ props.task.escalation.auditEventId }}</p>
+      <RouterLink class="btn btn-quiet" to="/help">联系家人 / 120</RouterLink>
+    </section>
 
     <template v-if="props.task.status === 'PENDING' || props.task.status === 'DEFERRED'">
       <div class="btn-row">
@@ -195,6 +214,16 @@ html[data-contrast='high'] .task-card::before { background: #000; }
 .task-title { flex: 1; min-width: 0; display: grid; gap: 4px; }
 .task-tags { display: grid; gap: 5px; justify-items: end; }
 .task-detail { color: var(--c-ink-soft); font-size: 0.9rem; }
+.task-escalation {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--c-line-strong);
+  border-radius: 12px;
+  background: var(--c-surface-soft);
+}
+.task-escalation .btn { justify-self: start; }
 .task-panel {
   border-top: 1px solid var(--c-line);
   padding-top: 12px;

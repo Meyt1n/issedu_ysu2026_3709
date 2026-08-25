@@ -2,6 +2,7 @@
 
 export type TaskLevel = 'INFO' | 'GENERAL' | 'HIGH' | 'URGENT'
 export type TaskStatus = 'PENDING' | 'CONFIRMED' | 'DEFERRED' | 'SKIPPED' | 'ESCALATED'
+export type CaregiverEscalationStatus = 'CREATED' | 'QUEUED' | 'VIEWED' | 'PROCESSED' | 'FAILED' | 'UNAVAILABLE' | 'UNKNOWN'
 export type RiskLevel = 'SEVERE' | 'WARNING' | 'INFO' | 'TIP' | (string & {})
 export type RecognitionStatus = 'MATCHED' | 'CONFLICT' | 'UNKNOWN' | 'REVIEW'
 
@@ -30,6 +31,21 @@ export interface CareTask {
   reminder?: ReminderPolicy
   lastActionAt?: string
   skipReason?: string
+  /** 服务端升级/通知事件的脱敏只读摘要；APP 不推断条件、不猜测联系人。 */
+  escalation?: CaregiverEscalation
+}
+
+export interface CaregiverEscalation {
+  status: CaregiverEscalationStatus
+  target: 'AUTHORIZED_CAREGIVER' | 'NONE'
+  reason: string
+  occurredAt: string
+  dueAt: string | null
+  nextStep: string
+  /** care_escalated 的服务端事件 ID，用于审计回查。 */
+  auditEventId: string
+  /** caregiver_notified 的服务端事件 ID；没有通知回执时为空。 */
+  notificationEventId?: string
 }
 
 export type TaskAction = 'confirm' | 'defer' | 'skip'
@@ -210,7 +226,7 @@ export type TaskActionReceipt = 'RECEIPTED' | 'SUPERSEDED' | 'LOCAL_PENDING' | '
 export interface TaskActionHistoryEntry {
   /** 服务端事件 ID（回执标识）；本地条目使用临时标记。 */
   eventId: string
-  action: TaskAction | 'unknown'
+  action: TaskAction | 'escalate' | 'caregiver_notify' | 'unknown'
   actionLabel: string
   taskTitle: string
   memberName: string
