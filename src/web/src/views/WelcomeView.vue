@@ -25,6 +25,7 @@ import {
   activePortalEntryMode,
   crossPortalPortsHint,
   crossPortalUrl,
+  MEMBER_PORTAL_ENTRY_STEPS,
   portalEntryBranding,
   portalEntryConflictNotice,
 } from '../ui/portalEntry'
@@ -463,17 +464,39 @@ async function submitCreate(): Promise<void> {
             {{ entryConflictNotice.crossLinkLabel }}（{{ crossPortalPortsHint(entryConflictNotice.crossLinkTarget) }}）
           </span>
         </div>
+        <div
+          v-else-if="entryMode === 'member' && !showCreateForm"
+          class="notice entry-guide"
+          role="note"
+          data-testid="member-portal-entry-guide"
+        >
+          <AppIcon name="info" :size="16" />
+          <div>
+            <strong>正确进入成员前台</strong>
+            <ol>
+              <li v-for="step in MEMBER_PORTAL_ENTRY_STEPS" :key="step">{{ step }}</li>
+            </ol>
+          </div>
+        </div>
         <div class="segmented-control" role="group" aria-label="选择登录方式">
           <button v-if="showDevelopmentEntry" type="button" :class="{ active: authMode === 'development' }" @click="authMode = 'development'">开发演示</button>
           <button type="button" :class="{ active: authMode === 'session' }" @click="authMode = 'session'">正式账号登录</button>
         </div>
-        <p v-if="authMode === 'development'" class="form-sub">仅用于非生产本地演示，使用开发身份标识；不会建立正式会话。</p>
+        <p v-if="authMode === 'development' && entryMode === 'member'" class="form-sub">
+          仅本地演示。请填<strong>家庭成员</strong>身份（如 grandma-demo）；创建家庭的管理员（如 demo-parent）会被引导去管理后台。
+        </p>
+        <p v-else-if="authMode === 'development'" class="form-sub">仅用于非生产本地演示，使用开发身份标识；不会建立正式会话。</p>
         <p v-else-if="entryBranding" class="form-sub">登录信息只留在当前页面，关掉后需要重新登录。</p>
         <p v-else class="form-sub">用家里的账号进入。登录信息只留在当前页面，关掉后需要重新登录。</p>
         <form v-if="authMode === 'development'" class="section-stack" @submit.prevent="submitConnect">
           <label class="field">
             开发身份标识
-            <input v-model="actorId" autocomplete="off" placeholder="例如 parent-1" required />
+            <input
+              v-model="actorId"
+              autocomplete="off"
+              :placeholder="entryMode === 'member' ? '例如 grandma-demo' : '例如 demo-parent'"
+              required
+            />
           </label>
           <label v-if="authMode === 'development'" class="field">
             访问用途代码
@@ -653,6 +676,10 @@ async function submitCreate(): Promise<void> {
         <h2>创建你的家庭</h2>
         <p class="form-sub">
           身份 <strong>{{ session.actorId }}</strong> 名下还没有可见的家庭。创建一个家庭并添加成员，即可开始记录。
+        </p>
+        <p v-if="entryMode === 'member'" class="notice warn" role="status">
+          <AppIcon name="info" :size="16" />
+          创建者会成为家庭管理员。建家成功后请改用管理后台完成配置；家人日常请用成员账号回到本前台登录。
         </p>
         <form class="section-stack" @submit.prevent="submitCreate">
           <label class="field">

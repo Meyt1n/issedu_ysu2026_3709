@@ -6,6 +6,7 @@ import {
   connectWithFamilyFace,
   connectWithPassword,
   connectWithPin,
+  createHouseholdAndEnter,
   bindFaceHousehold,
   clearBoundFaceHousehold,
   formatError,
@@ -434,6 +435,31 @@ describe('portal entry lock (HCT-453)', () => {
     await connect('parent-admin', 'family-care')
     expect(session.status).toBe('ready')
     expect(session.entryConflict).toBeNull()
+  })
+
+  it('rewrites the conflict message after creating a household on the member entry', async () => {
+    overridePortalEntryModeForTest('member')
+    vi.spyOn(apiClient, 'listHouseholds')
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([{ ...household, created_by: 'parent-admin' }])
+    vi.spyOn(apiClient, 'createHousehold').mockResolvedValue({
+      ...household,
+      created_by: 'parent-admin',
+    })
+    vi.spyOn(apiClient, 'createMember').mockResolvedValue(grandma)
+    vi.spyOn(apiClient, 'logout').mockResolvedValue({ status: 'logged_out' })
+
+    await connect('parent-admin', 'family-care')
+    expect(session.status).toBe('empty')
+
+    await createHouseholdAndEnter('入口测试家庭', [
+      { displayName: '奶奶', role: 'DEPENDENT', actorId: 'grandma-account' },
+    ])
+
+    expect(session.status).toBe('signed-out')
+    expect(session.entryConflict).toBe('need-admin-entry')
+    expect(session.error).toContain('家庭已创建')
+    expect(session.error).toContain('管理后台')
   })
 })
 

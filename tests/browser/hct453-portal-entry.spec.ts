@@ -119,6 +119,8 @@ test('成员前台入口展示个人前台品牌：人脸/PIN 为主，密码收
   await expect(page.getByLabel('六位数字 PIN')).toBeVisible()
   await expect(page.getByRole('button', { name: '其他方式：用账号密码登录' })).toBeVisible()
   await expect(page.getByRole('button', { name: '进入我的前台' })).toBeVisible()
+  await expect(page.getByTestId('member-portal-entry-guide')).toContainText('正确进入成员前台')
+  await expect(page.getByTestId('member-portal-entry-guide')).toContainText('web-member')
 
   // 跨端指引指向管理后台端口，并显式带上 ?portal=admin 覆盖。
   const crossLink = page.getByRole('link', { name: /我是家庭管理员，去管理后台/ })
@@ -176,7 +178,8 @@ test('成员前台入口拦截管理员账号：登出并指向管理后台，�
   await page.getByRole('button', { name: '进入我的前台' }).click()
 
   // 不落在管理后台：无应用框架、无后台导航。
-  await expect(page.getByRole('alert')).toContainText('这是家庭成员前台入口')
+  await expect(page.getByRole('alert')).toContainText('这是家庭成员前台')
+  await expect(page.getByRole('alert')).toContainText('管理后台')
   await expect(page.locator('.app-frame')).toHaveCount(0)
   await expect(page.getByRole('button', { name: '人工复核' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '家庭总览' })).toHaveCount(0)
@@ -195,7 +198,8 @@ test('管理后台入口拦截成员账号：登出并指向成员前台，不�
   await page.getByLabel('密码').fill('synthetic-password-123')
   await page.getByRole('button', { name: '进入管理后台' }).click()
 
-  await expect(page.getByRole('alert')).toContainText('这是家庭管理后台入口')
+  await expect(page.getByRole('alert')).toContainText('这是家庭管理后台')
+  await expect(page.getByRole('alert')).toContainText('成员前台')
   await expect(page.locator('.app-frame')).toHaveCount(0)
   await expect(page.getByRole('button', { name: '拍照录药' })).toHaveCount(0)
 

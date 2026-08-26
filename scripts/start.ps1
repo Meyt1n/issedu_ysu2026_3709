@@ -88,14 +88,20 @@ switch ($Target) {
         Invoke-CheckedCommand { uv run uvicorn app.main:app --app-dir src/api --reload --host 0.0.0.0 --port 8000 }
     }
     "web" {
+        # HCT-456：裸 auto 单入口仅供调试；产品「成员前台」必须用 web-member。
+        Write-Host "提示：当前是调试单入口（auto，按账号角色进门户）。产品成员前台请用: .\scripts\start.ps1 web-member → http://127.0.0.1:5173" -ForegroundColor Yellow
         Invoke-CheckedCommand { npm run dev:web }
     }
     "web-member" {
         # HCT-453 成员前台入口（默认 http://127.0.0.1:5173，可用 HCT_WEB_PORT 覆盖）
+        $memberPort = if ($env:HCT_WEB_PORT) { $env:HCT_WEB_PORT } else { "5173" }
+        Write-Host "成员前台入口：启动后打开 http://127.0.0.1:$memberPort ，用家庭成员账号（人脸/PIN）登录；管理员请另开 web-admin。" -ForegroundColor Cyan
         Invoke-CheckedCommand { npm run dev:web:member }
     }
     "web-admin" {
         # HCT-453 管理后台入口（默认 http://127.0.0.1:5174，可用 HCT_ADMIN_WEB_PORT 覆盖）
+        $adminPort = if ($env:HCT_ADMIN_WEB_PORT) { $env:HCT_ADMIN_WEB_PORT } else { "5174" }
+        Write-Host "管理后台入口：启动后打开 http://127.0.0.1:$adminPort ，用管理员账号密码登录。" -ForegroundColor Cyan
         Invoke-CheckedCommand { npm run dev:web:admin }
     }
     "migrate" {

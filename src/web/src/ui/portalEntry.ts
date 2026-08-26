@@ -244,23 +244,41 @@ export function portalEntryBranding(mode: PortalEntryMode): PortalEntryBranding 
   return null
 }
 
+/** 欢迎页「正确进入成员前台」短清单（HCT-456）。 */
+export const MEMBER_PORTAL_ENTRY_STEPS: ReadonlyArray<string> = [
+  '先启动 API，再执行 scripts/start.sh|ps1 web-member（不要只用 web）',
+  '打开 http://127.0.0.1:5173（Compose 用 http://localhost:8080）',
+  '用家庭成员账号刷脸或 PIN 进入；管理员（创建家庭的人，如 demo-parent）请改去管理后台 5174/8081',
+]
+
 /** 入口/门户不匹配时的用户可读提示。 */
-export function portalEntryConflictNotice(conflict: PortalEntryConflict): {
+export function portalEntryConflictNotice(
+  conflict: PortalEntryConflict,
+  context: { afterCreate?: boolean } = {},
+): {
   message: string
   crossLinkLabel: string
   crossLinkTarget: 'member' | 'admin'
 } {
   if (conflict === 'need-admin-entry') {
+    if (context.afterCreate) {
+      return {
+        message:
+          '家庭已创建。创建者是家庭管理员，成员前台不会停留在管理界面。请改用管理后台（5174/8081）完成配置；家人日常再用成员账号（如 grandma-demo）在成员前台刷脸或 PIN 进入。',
+        crossLinkLabel: '去管理后台登录',
+        crossLinkTarget: 'admin',
+      }
+    }
     return {
       message:
-        '这是家庭成员前台入口。这个账号是家庭管理员，为避免在前台误操作后台功能，请改用管理后台入口登录。',
+        '这是家庭成员前台。当前账号是家庭管理员（创建家庭的人）。请改用管理后台（5174/8081）登录；若要进本页，请换家庭成员账号（演示可用 grandma-demo / grandpa-demo）刷脸或 PIN。',
       crossLinkLabel: '去管理后台登录',
       crossLinkTarget: 'admin',
     }
   }
   return {
     message:
-      '这是家庭管理后台入口。这个账号是家庭成员，请回到成员前台用人脸或家庭 PIN 登录。',
+      '这是家庭管理后台。当前账号是家庭成员。请先启动 web-member，打开成员前台（5173/8080），用人脸或家庭 PIN 登录；不要用管理员账号进成员前台。',
     crossLinkLabel: '回成员前台登录',
     crossLinkTarget: 'member',
   }
