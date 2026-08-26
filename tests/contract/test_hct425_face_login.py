@@ -85,8 +85,9 @@ def test_face_challenge_is_opaque_and_single_use(client: TestClient) -> None:
 
     assert first.status_code == 401
     assert second.status_code == 401
-    assert first.json()["detail"] == "FACE_AUTH_FAILED"
-    assert second.json()["detail"] == "FACE_AUTH_FAILED"
+    # One frame → count invalid; replayed challenge → challenge invalid.
+    assert first.json()["detail"] == "FRAME_COUNT_INVALID"
+    assert second.json()["detail"] == "CHALLENGE_INVALID"
 
 
 def test_face_failures_are_rate_limited(client: TestClient) -> None:
@@ -381,7 +382,9 @@ def test_face_login_rejects_a_single_injected_matching_frame(
     )
 
     assert rejected.status_code == 401
-    assert rejected.json()["detail"] == "FACE_AUTH_FAILED"
+    # Injected photo + attacker motion fails the all-frames min-score gate as NO_MATCH
+    # (desensitized; never returns scores or which frame failed).
+    assert rejected.json()["detail"] == "NO_MATCH"
 
 
 def test_deleting_a_face_credential_revokes_household_sessions(
@@ -616,4 +619,4 @@ def test_family_face_login_rejects_an_ambiguous_member_match(
     )
 
     assert rejected.status_code == 401
-    assert rejected.json()["detail"] == "FACE_AUTH_FAILED"
+    assert rejected.json()["detail"] == "AMBIGUOUS_MATCH"

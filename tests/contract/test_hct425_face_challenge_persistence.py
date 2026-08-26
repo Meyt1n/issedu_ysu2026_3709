@@ -116,7 +116,7 @@ def test_expired_challenge_is_rejected_and_deleted(client: TestClient, db_sessio
         files=files,
     )
     assert rejected.status_code == 401
-    assert rejected.json()["detail"] == "FACE_AUTH_FAILED"
+    assert rejected.json()["detail"] == "CHALLENGE_INVALID"
     db_session.expire_all()
     assert db_session.get(AuthFaceChallenge, challenge_id) is None
 
