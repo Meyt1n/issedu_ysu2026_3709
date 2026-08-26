@@ -452,7 +452,15 @@ def capabilities() -> CapabilityResponse:
         "llm",
         "risk-acknowledgement",
     ]
-    unavailable = ["vision-inference", "llm-cloud", "external-web"]
+    unavailable = ["vision-inference", "llm-cloud"]
+    # Keep the global capability sidebar aligned with the assistant catalog.
+    # ``external-web`` is available only after the configured provider passes
+    # the egress checks and is not an offline teaching fixture.
+    agent_catalog = get_agent_catalog(settings)
+    if agent_catalog["web_search_ready"] and not agent_catalog["web_search_offline_fixture"]:
+        available.append("external-web")
+    else:
+        unavailable.append("external-web")
     # HCT-414-D2 (DEMO_ONLY until the HCT-201 fixed quality set is signed off):
     # the video task capability is declarative so mobile clients can hide the
     # video entry when the server does not provide it.

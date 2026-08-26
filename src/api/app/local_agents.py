@@ -53,6 +53,7 @@ from app.search_providers import (
     SearchRateLimited,
     execute_web_search,
     is_fixture_search_provider,
+    search_ops_snapshot,
 )
 from app.tool_call import (
     ASSISTANT_SYSTEM_PROMPT,
@@ -289,11 +290,8 @@ def _trace(
 
 def get_agent_catalog(settings: Settings | None = None) -> dict[str, Any]:
     settings = settings or get_settings()
-    web_search_ready = False
-    if settings.agent_web_search_enabled:
-        web_search_ready = is_web_search_egress_allowed(
-            settings.agent_web_search_url.strip(), settings
-        )
+    search_ops = search_ops_snapshot(settings)
+    web_search_ready = bool(search_ops["web_search_ready"])
     fixture_provider = is_fixture_search_provider(settings)
     # A machine-readable reason plus an operator hint let the UI say exactly
     # why search is not running and how to turn it on, instead of a silent
@@ -304,11 +302,17 @@ def get_agent_catalog(settings: Settings | None = None) -> dict[str, Any]:
             "在 .env 设置 AGENT_WEB_SEARCH_ENABLED=true 并重启 API；"
             "离线课堂演示可同时设置 AGENT_WEB_SEARCH_PROVIDER=fixture（不出网）。"
         )
-    elif not web_search_ready:
+    elif not is_web_search_egress_allowed(settings.agent_web_search_url.strip(), settings):
         unavailable_reason = "EGRESS_BLOCKED"
         enable_hint = (
             "AGENT_WEB_SEARCH_URL 必须是 HTTPS，且其域名需列入 "
             "AGENT_WEB_SEARCH_ALLOWED_DOMAINS（如 html.duckduckgo.com），修改后重启 API。"
+        )
+    elif search_ops.get("last_search_status") == "failure":
+        unavailable_reason = "PROVIDER_UNAVAILABLE"
+        enable_hint = (
+            "最近一次搜索请求未能连接到配置的提供方；请检查出口网络，或切换到获批的 "
+            "SearXNG 地址后重启 API。系统不会用缓存或夹具冒充真实结果。"
         )
     else:
         unavailable_reason = "OPT_IN_REQUIRED"
@@ -322,9 +326,9 @@ def get_agent_catalog(settings: Settings | None = None) -> dict[str, Any]:
         "all_agents_local": True,
         "ollama_local_only": True,
         "web_search_enabled": settings.agent_web_search_enabled,
-        # True only when the deployment switch is on AND the configured search
-        # endpoint passes the HTTPS/domain allowlist check, so the UI can show
-        # an accurate availability state without probing the network.
+        # True only when the deployment switch and allowlist pass and the last
+        # observed provider request did not fail.  A failed provider must not
+        # remain advertised as a ready external capability.
         "web_search_ready": web_search_ready,
         "web_search_provider": settings.agent_web_search_provider,
         "web_search_offline_fixture": fixture_provider,
@@ -1153,7 +1157,11 @@ def _synthesis_agent(
     parsed = None
     matched_citations: list[dict[str, str]] = []
     # HCT-450: citation correction retry.  Open-chat demo skips the wall.
-    retry_budget = 1 if open_chat else 2
+    # Open-chat mode is intentionally permissive about citations, but it
+    # still gets one quality retry when the model emits a control token or an
+    # otherwise invalid contract.  Showing the token would be worse than a
+    # short structured degrade response.
+    retry_budget = 2
     for attempt in range(retry_budget):
         if on_status is not None:
             on_status("generating")
@@ -1193,6 +1201,16 @@ def _synthesis_agent(
                 except Exception:  # noqa: BLE001
                     parsed = None
         if parsed is None:
+            if open_chat and attempt + 1 < retry_budget:
+                conversation.append({
+                    "role": "system",
+                    "content": (
+                        "上一稿不是可展示的自然语言回答，可能泄漏了内部控制词。"
+                        "请直接回答用户问题，只输出符合 JSON 契约的完整中文 answer，"
+                        "不要输出 route、help、external、status 等标签。"
+                    ),
+                })
+                continue
             return degraded("SCHEMA_VALIDATION_FAILED")
         if not open_chat and _check_medical_boundary(parsed.answer):
             return degraded("MEDICAL_BOUNDARY_VIOLATION")

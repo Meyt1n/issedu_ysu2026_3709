@@ -267,6 +267,34 @@ def test_search_ops_snapshot_reports_cache_metrics(monkeypatch) -> None:
     assert "query" not in snapshot
 
 
+def test_search_provider_failure_removes_ready_claim(monkeypatch) -> None:
+    class FailingProvider:
+        def search(self, query: str, *, settings: Settings):
+            raise TimeoutError("provider blocked")
+
+    monkeypatch.setattr(
+        "app.search_providers.get_search_provider",
+        lambda _settings: FailingProvider(),
+    )
+    clear_search_cache()
+    reset_search_ops_metrics()
+    settings = Settings(
+        agent_web_search_enabled=True,
+        agent_web_search_url="https://example.com/search",
+        agent_web_search_allowed_domains="example.com",
+        agent_web_search_cache_ttl_seconds=0,
+        agent_web_search_min_interval_seconds=0,
+    )
+    with pytest.raises(TimeoutError):
+        execute_web_search("真实网络可达性", settings=settings)
+
+    snapshot = search_ops_snapshot(settings)
+    assert snapshot["web_search_ready"] is False
+    assert snapshot["last_search_status"] == "failure"
+    assert snapshot["last_search_error"] == "TimeoutError"
+    reset_search_ops_metrics()
+
+
 def test_search_ops_endpoint_allows_authenticated_development_actor(
     client: TestClient,
 ) -> None:

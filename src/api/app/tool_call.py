@@ -116,6 +116,19 @@ _PLACEHOLDER_ANSWER_LABELS = {
     "risk_only",
     "refuse",
     "urgent_escalate",
+    # ``route`` is an internal router field that the fine-tuned model has
+    # occasionally echoed as the whole answer.  It is never a user-facing
+    # response and must enter the structured degrade path.
+    "route",
+    "help",
+    "external",
+    "status",
+    "response",
+    "answer",
+    "tool",
+    "database",
+    "knowledge",
+    "synthesis",
 }
 
 
@@ -441,10 +454,28 @@ class OllamaClient:
             except httpx.HTTPStatusError as exc:
                 status_code = exc.response.status_code
                 last_error = f"HTTP_{status_code}"
+                detail = exc.response.text[:200].replace("\n", " ")
                 logger.warning(
-                    "Ollama HTTP error %s (attempt %d)",
-                    status_code, attempt + 1,
+                    "Ollama HTTP error %s (attempt %d): %s",
+                    status_code, attempt + 1, detail,
                 )
+                # Ollama releases differ in whether ``format`` may accompany
+                # a tool-call request.  The local model still supports tools;
+                # retry the same request without the optional response schema
+                # so the tool round can complete, then validate the final
+                # answer in the application layer.  This is a deterministic
+                # compatibility retry, not a network retry.
+                if (
+                    status_code == 400
+                    and payload.get("tools")
+                    and "format" in payload
+                ):
+                    payload.pop("format", None)
+                    logger.info(
+                        "Retrying Ollama tool request without response format "
+                        "for server compatibility",
+                    )
+                    continue
                 # A 4xx (other than 408/429) is deterministic — for example
                 # an unknown model name.  Retrying only delays the structured
                 # degrade response the caller is waiting for.
