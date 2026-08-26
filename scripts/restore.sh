@@ -46,7 +46,9 @@ gzip -dc "$backup_path/mysqldump.sql.gz" \
 
 entry_count="$(uv run python -c 'import json,sys; from pathlib import Path; p=Path(sys.argv[1]); print(len(json.loads(p.read_text(encoding="utf-8")).get("files",[])) if p.exists() else 0)' "$backup_path/file_manifest.json")"
 if ((entry_count > 0)); then
-  [[ -d "$file_root" ]] || { echo "File root is missing after restore: $file_root" >&2; exit 1; }
+  # Recover FILE_ROOT from the archived contents before hash verification.
+  uv run python scripts/hct408_file_archive.py restore \
+    --backup "$backup_path" --file-root "$file_root" --wipe-existing
   uv run python scripts/hct408_validate_backup.py --backup "$backup_path" --file-root "$file_root"
 fi
 

@@ -47,6 +47,9 @@ if ((skip_files == 0)); then
   [[ -d "$file_root" ]] || { echo "FILE_ROOT not found: $file_root" >&2; exit 1; }
   uv run python scripts/hct408_file_inventory.py --root "$file_root" \
     --output "$backup_path/file_manifest.json"
+  # Inventory alone cannot recover destroyed files; archive the contents.
+  uv run python scripts/hct408_file_archive.py create \
+    --root "$file_root" --backup "$backup_path"
 fi
 
 if ((skip_version == 0)); then

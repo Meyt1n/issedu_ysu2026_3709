@@ -75,10 +75,10 @@ $fileManifest = Join-Path $backupPath "file_manifest.json"
 if (Test-Path -LiteralPath $fileManifest) {
     $manifestFiles = @((Get-Content -LiteralPath $fileManifest -Raw | ConvertFrom-Json).files)
     $fileRootValue = if ($FileRoot) { $FileRoot } elseif ($env:FILE_ROOT) { $env:FILE_ROOT } else { "./data/files" }
-    if ($manifestFiles.Count -gt 0 -and -not (Test-Path -LiteralPath $fileRootValue)) {
-        throw "File root is missing after restore: $fileRootValue"
-    }
     if ($manifestFiles.Count -gt 0) {
+        Write-Host "[HCT-408 restore] restoring FILE_ROOT from files.tar.gz into $fileRootValue ..."
+        & uv run python (Join-Path $scriptDir "hct408_file_archive.py") restore --backup $backupPath --file-root $fileRootValue --wipe-existing
+        if ($LASTEXITCODE -ne 0) { throw "FILE_ROOT archive restore failed." }
         Write-Host "[HCT-408 restore] validating file references under $fileRootValue ..."
         & uv run python $validator --backup $backupPath --file-root $fileRootValue
         if ($LASTEXITCODE -ne 0) { throw "File reference validation failed after restore." }
