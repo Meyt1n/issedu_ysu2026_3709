@@ -260,7 +260,7 @@ class HealthAssistantRequest(BaseModel):
     messages: list[dict[str, Any]]
     tools: list[dict[str, Any]] = Field(default_factory=list)
     temperature: float = Field(default=0.3, ge=0.0, le=2.0)
-    max_tokens: int = Field(default=512, ge=1, le=4096)
+    max_tokens: int = Field(default=512, ge=1, le=16384)
 
 
 # ── Tool Registry ──────────────────────────────────────────────────────
@@ -759,19 +759,48 @@ def suggest_follow_up_questions(
 SYMPTOM_KNOWLEDGE_GAP_REASON = "KNOWLEDGE_UNAVAILABLE"
 
 
-def build_symptom_knowledge_gap_answer() -> str:
+def build_symptom_knowledge_gap_answer(*, user_text: str | None = None) -> str:
     """Compose the deterministic, non-scary empty-library teaching answer.
 
-    The text may use the calendar-based seasonal framing and generic
-    non-drug care habits, but it must never name a concrete drug as if it
-    were reviewed evidence, and it must not decide dosage or suitability.
+    The text may use calendar-based seasonal framing and generic non-drug
+    care habits, but it must never name a concrete drug as if it were
+    reviewed evidence, and it must not decide dosage or suitability.
+
+    ``user_text`` keeps the fallback on-topic (e.g. diarrhoea must not get
+    the summer air-conditioning / stuffy-nose sentence).
     """
+    text = str(user_text or "")
+    lowered = text.casefold()
+    if any(token in text for token in ("腹泻", "拉肚子", "腹泻", "泻肚")) or "diarr" in lowered:
+        care = (
+            "腹泻时可以先清淡饮食、少量多次补水，观察有无血便、高热或明显脱水；"
+            "幼儿、老人或症状加重时请尽快联系医务人员。"
+        )
+    elif any(token in text for token in ("发烧", "发热", "高热")):
+        care = (
+            "发热时可以先休息、适量补水，注意体温变化；"
+            "持续高热、精神差或伴随呼吸困难时请及时就医。"
+        )
+    elif any(token in text for token in ("咳嗽", "咽痛", "嗓子", "喉咙")):
+        care = (
+            "咽痒咳嗽时可以先注意休息、保暖加湿，避免刺激性食物；"
+            "若持续加重或影响呼吸，请咨询医生或药师。"
+        )
+    else:
+        care = seasonal_care_hint()
     return (
-        f"{seasonal_care_hint()}"
+        f"{care}"
         "本机知识库暂时没有已审核的相关知识卡，我不能凭空报出具体药品资料。"
         "如果想了解对症的常用药说明，建议咨询医生或药师；"
         "也可以先把经过审核的资料卡加入本机知识库，我就能带着出处慢慢讲给你听。"
     )
+
+
+def _last_user_text(messages: list[dict[str, Any]]) -> str:
+    for message in reversed(messages or []):
+        if message.get("role") == "user" and isinstance(message.get("content"), str):
+            return message["content"]
+    return ""
 
 
 def symptom_knowledge_gap_result(
@@ -792,6 +821,7 @@ def symptom_knowledge_gap_result(
         model,
         query_type=query_type,
     )
+    result["answer"] = build_symptom_knowledge_gap_answer(user_text=_last_user_text(messages))
     result["suggested_questions"] = suggest_follow_up_questions(
         messages,
         query_type=query_type,
@@ -1665,12 +1695,21 @@ def run_assistant(
         degrade_reason, model, route, suggested_questions, query_type, risk_notice
     """
     from app.config import get_settings
+    from app.open_chat import (
+        OPEN_CHAT_SYSTEM_PROMPT,
+        coerce_open_model_answer,
+        effective_max_tokens,
+        is_open_chat,
+        local_clock_context,
+    )
 
     settings = get_settings()
     model = model or settings.ollama_model
     timeout = settings.ollama_timeout_seconds
     client = OllamaClient(settings.ollama_base_url)
     query_type = classify_question(_latest_user_query(messages))
+    open_chat = is_open_chat(settings)
+    max_tokens = effective_max_tokens(max_tokens, settings)
 
     def degraded(reason: str) -> dict[str, Any]:
         return degrade_result(
@@ -1717,7 +1756,8 @@ def run_assistant(
             "优先调用 get_applied_rules 或 get_risk_alerts，并在 sources 中引用"
             "工具返回的规则编号或事件 ID。"
         )
-    system_parts = [ASSISTANT_SYSTEM_PROMPT, routing_hint] + [
+    base_prompt = OPEN_CHAT_SYSTEM_PROMPT if open_chat else ASSISTANT_SYSTEM_PROMPT
+    system_parts = [base_prompt, local_clock_context(), routing_hint] + [
         str(message.get("content", ""))
         for message in messages
         if message.get("role") == "system" and message.get("content")
@@ -1790,6 +1830,13 @@ def run_assistant(
             continue
 
         parsed = _parse_assistant_output(raw_content)
+        if parsed is None and open_chat:
+            coerced = coerce_open_model_answer(raw_content)
+            if coerced is not None:
+                try:
+                    parsed = HealthAssistantOutput.model_validate(coerced)
+                except ValidationError:
+                    parsed = None
         if parsed is None:
             return degraded("SCHEMA_VALIDATION_FAILED")
         break
@@ -1797,16 +1844,17 @@ def run_assistant(
         return degraded("SCHEMA_VALIDATION_FAILED")
 
     assert parsed is not None
-    violations = _check_medical_boundary(parsed.answer)
-    if violations:
-        logger.warning("Medical boundary violation: %s", violations)
-        return degraded("MEDICAL_BOUNDARY_VIOLATION")
-    if _contains_external_links(parsed.answer):
-        logger.warning("External link detected in assistant output")
-        return degraded("EXTERNAL_LINK_DETECTED")
-    if _check_data_exfiltration(parsed.answer):
-        logger.warning("Sensitive data exfiltration detected in assistant output")
-        return degraded("DATA_EXFILTRATION_VIOLATION")
+    if not open_chat:
+        violations = _check_medical_boundary(parsed.answer)
+        if violations:
+            logger.warning("Medical boundary violation: %s", violations)
+            return degraded("MEDICAL_BOUNDARY_VIOLATION")
+        if _contains_external_links(parsed.answer):
+            logger.warning("External link detected in assistant output")
+            return degraded("EXTERNAL_LINK_DETECTED")
+        if _check_data_exfiltration(parsed.answer):
+            logger.warning("Sensitive data exfiltration detected in assistant output")
+            return degraded("DATA_EXFILTRATION_VIOLATION")
 
     # A model-proposed tool is never an authority boundary.  Unknown tools,
     # missing sessions and cross-scope arguments all degrade to the same
@@ -1818,15 +1866,41 @@ def run_assistant(
     ):
         return degraded("TOOL_SCOPE_DENIED")
     if "NO_AUTHORISED_DOCUMENTS" in tool_errors and not allowed_citations:
-        if query_type == "SYMPTOM_MEDICATION":
+        if open_chat:
+            pass  # Continue with the model draft; empty library is OK in demo mode.
+        elif query_type == "SYMPTOM_MEDICATION":
             # Empty / not-yet-seeded teaching library: degrade gently instead
             # of the hard no-authorised-documents refusal.
             return symptom_knowledge_gap_result(messages, model=model)
-        return degraded("NO_AUTHORISED_DOCUMENTS")
+        else:
+            return degraded("NO_AUTHORISED_DOCUMENTS")
 
     matched_citations = filter_claimed_citations(parsed.sources, allowed_citations)
     unmatched = _unmatched_source_tokens(parsed.sources, matched_citations)
     unknown_sources = [token for token in unmatched if token not in allowed_fact_sources]
+    if open_chat:
+        # Demo mode: keep any real citations, drop unverifiable tokens quietly.
+        fact_sources = [token for token in unmatched if token in allowed_fact_sources]
+        escalated = bool(parsed.escalate)
+        return {
+            "answer": parsed.answer,
+            "sources": [item["chunk_id"] for item in matched_citations] + fact_sources,
+            "citations": matched_citations,
+            "suggested_questions": suggest_follow_up_questions(
+                messages,
+                escalate=escalated,
+                query_type=query_type,
+                has_citations=bool(matched_citations),
+            ),
+            "confidence": parsed.confidence,
+            "escalate": escalated,
+            "degraded": False,
+            "degrade_reason": None,
+            "model": model,
+            "route": None,
+            "query_type": query_type,
+            "risk_notice": None,
+        }
     if any(_looks_like_knowledge_citation(token) for token in unknown_sources):
         return degraded("CITATION_NOT_FOUND")
     if allowed_citations and not matched_citations:

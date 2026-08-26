@@ -37,7 +37,7 @@ describe('buildAssistantChatInput', () => {
     ])
     expect(input.query_type_override).toBe('MEDICATION_SAFETY')
     expect(input.assistant_session_id).toBe('session-1')
-    expect(input.max_tokens).toBe(1024)
+    expect(input.max_tokens).toBe(4096)
   })
 
   it('omits an empty assistant session id', () => {

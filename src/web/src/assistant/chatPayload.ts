@@ -18,7 +18,8 @@ export interface AssistantChatPayloadOptions {
 export function buildAssistantChatInput(options: AssistantChatPayloadOptions): AssistantChatInput {
   return {
     messages: options.history.map(entry => ({ role: entry.role, content: entry.content })),
-    max_tokens: options.maxTokens ?? 1024,
+    // HCT-451: open-chat demos need a larger budget; server also floors via AGENT_OPEN_MAX_TOKENS.
+    max_tokens: options.maxTokens ?? 4096,
     agent_mode: 'multi_agent',
     allow_network_search: options.allowNetworkSearch,
     query_type_override: options.queryTypeOverride,

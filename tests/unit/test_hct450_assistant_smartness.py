@@ -104,7 +104,7 @@ def test_synthesis_prompt_enumerates_retrieved_chunks_and_binds_citation(
         model="local-model",
         max_tokens=256,
         temperature=0.1,
-        settings=Settings(),
+        settings=Settings(agent_open_chat=False),
     )
 
     system_prompt = client_cls.instances[0].conversations[0][0]["content"]
@@ -134,7 +134,7 @@ def test_synthesis_retries_once_when_model_forgets_citation(monkeypatch) -> None
         model="local-model",
         max_tokens=256,
         temperature=0.1,
-        settings=Settings(),
+        settings=Settings(agent_open_chat=False),
     )
 
     client = client_cls.instances[0]
@@ -164,7 +164,7 @@ def test_symptom_answer_still_walls_when_citation_missing_after_retry(
         model="local-model",
         max_tokens=256,
         temperature=0.1,
-        settings=Settings(),
+        settings=Settings(agent_open_chat=False),
     )
 
     assert len(client_cls.instances[0].conversations) == 2
@@ -202,7 +202,7 @@ def test_general_answer_keeps_uncited_reply_with_optional_knowledge(
         model="local-model",
         max_tokens=256,
         temperature=0.1,
-        settings=Settings(),
+        settings=Settings(agent_open_chat=False),
     )
 
     assert result["degraded"] is False
@@ -232,7 +232,7 @@ def test_general_answer_can_cite_optional_knowledge(monkeypatch) -> None:
         model="local-model",
         max_tokens=256,
         temperature=0.1,
-        settings=Settings(),
+        settings=Settings(agent_open_chat=False),
     )
 
     assert result["degraded"] is False
