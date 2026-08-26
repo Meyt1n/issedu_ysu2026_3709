@@ -117,7 +117,7 @@ from app.file_upload import (
     validate_magic,
     validate_size,
 )
-from app.knowledge import KnowledgeDocument, RetrievalQuery
+from app.knowledge import KnowledgeChunk, KnowledgeDocument, RetrievalQuery
 from app.knowledge_audit_pagination import (
     decode_knowledge_audit_cursor,
     encode_knowledge_audit_cursor,
@@ -195,7 +195,9 @@ from app.schemas import (
     HouseholdCreate,
     HouseholdRead,
     HouseholdUpdate,
+    KnowledgeChunkRead,
     KnowledgeDocumentCreate,
+    KnowledgeDocumentDetailRead,
     KnowledgeDocumentRead,
     KnowledgeQueryAuditPageRead,
     KnowledgeQueryAuditRead,
@@ -3355,12 +3357,17 @@ def list_knowledge_documents(
     ]
 
 
-@router.get("/knowledge/documents/{doc_id}", response_model=KnowledgeDocumentRead)
+@router.get("/knowledge/documents/{doc_id}", response_model=KnowledgeDocumentDetailRead)
 def get_knowledge_document(
     doc_id: str,
     actor_id: str = Depends(get_actor_id),
     session: Session = Depends(get_session),
-) -> KnowledgeDocumentRead:
+) -> KnowledgeDocumentDetailRead:
+    """Read-only document detail with full text and chunk previews.
+
+    Permission gate is identical to the list endpoint; unauthorised callers
+    get the same 404 as a missing document (no existence leak).
+    """
     from app.knowledge import _check_permission
 
     doc = session.get(KnowledgeDocument, doc_id)
@@ -3373,7 +3380,18 @@ def get_knowledge_document(
         knowledge_admin_ids=get_settings().knowledge_admin_actor_set,
     ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="DOCUMENT_NOT_FOUND")
-    return doc
+    chunks = session.scalars(
+        select(KnowledgeChunk)
+        .where(KnowledgeChunk.document_id == doc_id)
+        .order_by(KnowledgeChunk.chunk_index)
+    ).all()
+    base = KnowledgeDocumentRead.model_validate(doc)
+    return KnowledgeDocumentDetailRead(
+        **base.model_dump(),
+        content=doc.full_text or "",
+        chunk_count=len(chunks),
+        chunks=[KnowledgeChunkRead.model_validate(chunk) for chunk in chunks],
+    )
 
 
 @router.post("/demo/formal-health-seed")
@@ -3460,6 +3478,27 @@ def list_knowledge_staging(actor_id: str = Depends(get_actor_id)) -> dict:
     }
 
 
+@router.get("/knowledge/crawl/staging/{source_id}")
+def get_knowledge_staging_detail(
+    source_id: str,
+    actor_id: str = Depends(get_actor_id),
+) -> dict:
+    """Read-only staging draft detail (markdown body, hash, review trail).
+
+    Steward-gated like every other crawl endpoint; the payload states that a
+    staging draft is never formal retrieval evidence.
+    """
+    from app.knowledge_crawl import get_staging_detail
+
+    _require_knowledge_steward(actor_id)
+    try:
+        return get_staging_detail(source_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="STAGING_NOT_FOUND"
+        ) from exc
+
+
 @router.get("/knowledge/crawl/status")
 def knowledge_crawl_status(actor_id: str = Depends(get_actor_id)) -> dict:
     from app.knowledge_crawl import crawl_ops_status
@@ -3467,6 +3506,26 @@ def knowledge_crawl_status(actor_id: str = Depends(get_actor_id)) -> dict:
     _require_knowledge_steward(actor_id)
     try:
         return crawl_ops_status()
+    except FileNotFoundError as exc:
+        raise _crawl_config_missing_error(exc) from exc
+
+
+@router.post("/knowledge/crawl/simulate-update")
+def simulate_knowledge_fixture_update(
+    actor_id: str = Depends(get_actor_id),
+    reset: bool = False,
+) -> dict:
+    """Teaching demo: overlay fixture sources with a clearly marked update.
+
+    Fixture-only and offline — remote sources are never touched. The next
+    crawl sees changed content, resets drafts to ``draft`` and requires
+    review again; nothing is ever auto-ingested.
+    """
+    from app.knowledge_crawl import simulate_fixture_update
+
+    _require_knowledge_steward(actor_id)
+    try:
+        return simulate_fixture_update(actor_id=actor_id, reset=reset)
     except FileNotFoundError as exc:
         raise _crawl_config_missing_error(exc) from exc
 

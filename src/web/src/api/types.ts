@@ -823,6 +823,48 @@ export interface KnowledgeDocument {
   created_at: string
 }
 
+export interface KnowledgeChunk {
+  id: string
+  document_id: string
+  chunk_index: number
+  text: string
+  locator: string | null
+}
+
+/** 只读详情：列表字段 + 正文与分块预览（GET /knowledge/documents/{id}）。 */
+export interface KnowledgeDocumentDetail extends KnowledgeDocument {
+  content: string
+  chunk_count: number
+  chunks: KnowledgeChunk[]
+}
+
+/** 只读 staging 草稿详情（GET /knowledge/crawl/staging/{source_id}）。 */
+export interface KnowledgeStagingDetail {
+  source_id: string
+  title?: string
+  url?: string
+  license?: string
+  topics?: string[]
+  status?: string
+  content_sha256?: string
+  document_path?: string
+  fetched_at?: string
+  unchanged?: boolean
+  first_fetch?: boolean
+  demo_override?: boolean
+  review_notes?: string
+  approved_by?: string | null
+  approved_at?: string | null
+  rejected_by?: string | null
+  rejected_at?: string | null
+  promoted_by?: string | null
+  promoted_at?: string | null
+  content_markdown: string
+  content_available: boolean
+  is_formal_evidence: boolean
+  disclaimer?: string
+}
+
 export interface CreateKnowledgeDocumentInput {
   title: string
   content: string

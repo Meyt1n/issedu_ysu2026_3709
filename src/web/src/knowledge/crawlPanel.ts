@@ -46,3 +46,61 @@ export function teachingLoopSummary(
     '下一步在终端执行 dry-run 预检查（仍不会自动入库）。'
   )
 }
+
+/**
+ * 每条 staging 草稿的变更类型：首次抓取（新来源）、内容哈希变化（有更新，
+ * 已重置为 draft 待审）或哈希一致（未变更，保留原审核状态）。
+ */
+export type StagingChangeKind = 'new' | 'changed' | 'unchanged'
+
+export function stagingChangeKind(item: Record<string, unknown>): StagingChangeKind {
+  if (item.first_fetch) return 'new'
+  return item.unchanged ? 'unchanged' : 'changed'
+}
+
+export const STAGING_CHANGE_LABELS: Record<StagingChangeKind, string> = {
+  new: '新来源',
+  changed: '有更新',
+  unchanged: '未变更',
+}
+
+/**
+ * 抓取结果摘要：区分新来源 / 有更新 / 未变更 / 失败。全部未变更时解释这是
+ * 内容哈希一致的正常现象，并指向「模拟来源更新」教学路径，避免用户误以为
+ * 抓取坏了或“永远是同一批”。
+ */
+export function crawlRunSummary(report: Record<string, unknown>): string {
+  const fetched = Number(report.fetched ?? 0)
+  const changed = Number(report.changed ?? 0)
+  const unchanged = Number(report.unchanged ?? 0)
+  const newSources = Number(report.new_sources ?? 0)
+  const updated = Math.max(0, changed - newSources)
+  const errors = Array.isArray(report.errors) ? report.errors.length : 0
+  let text = `抓取完成：共 ${fetched} 条 · 新来源 ${newSources} · 有更新 ${updated} · 未变更 ${unchanged}`
+  if (errors > 0) text += ` · 失败 ${errors}`
+  text += '（不会自动入库）'
+  if (fetched > 0 && unchanged === fetched) {
+    text +=
+      '。全部「未变更」表示来源内容哈希与上次一致，属正常现象；' +
+      '可用「模拟来源更新（教学演示）」体验变更检测与重新审核。'
+  } else if (newSources > 0 || updated > 0) {
+    text += '。新来源与有更新的草稿已重置为 draft，请在下方点「查看」核对正文后重新审核。'
+  }
+  return text
+}
+
+/** 「模拟来源更新（教学演示）」的结果摘要。 */
+export function simulateUpdateSummary(report: Record<string, unknown>): string {
+  if (report.reset) {
+    const cleared = Array.isArray(report.cleared) ? report.cleared.length : 0
+    return (
+      `已清除 ${cleared} 个教学演示 overlay；` +
+      '下次抓取将回到仓库夹具原文（同样会显示「有更新」并重置为 draft）。'
+    )
+  }
+  const bumped = Array.isArray(report.bumped) ? report.bumped.length : 0
+  return (
+    `已为 ${bumped} 个本地夹具来源叠加清晰标注的教学演示更新（不出网、不改仓库文件）。` +
+    '现在点「全量抓取」或「到期刷新」，即可看到「有更新」草稿并重新审核；仍不会自动入库。'
+  )
+}
