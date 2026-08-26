@@ -14,6 +14,7 @@ import {
   setView,
   signOut,
 } from './store'
+import { overridePortalEntryModeForTest } from './ui/portalEntry'
 
 describe('session expiry handling', () => {
   beforeEach(() => {
@@ -263,6 +264,114 @@ describe('portal view guards (HCT-439)', () => {
     expect(session.portal).toBe('admin')
     setView('member-capture')
     expect(session.currentView).toBe('overview')
+  })
+})
+
+describe('portal entry lock (HCT-453)', () => {
+  const household = {
+    id: 'household-entry',
+    name: '入口测试家庭',
+    created_by: 'parent-admin',
+    created_at: '2026-08-25T00:00:00Z',
+  }
+  const grandma = {
+    id: 'member-grandma',
+    household_id: household.id,
+    display_name: '奶奶',
+    role: 'DEPENDENT' as const,
+    actor_id: 'grandma-account',
+    created_at: '2026-08-25T00:00:00Z',
+  }
+
+  beforeEach(() => {
+    vi.spyOn(apiClient, 'listHouseholds').mockResolvedValue([household])
+    vi.spyOn(apiClient, 'listMembers').mockResolvedValue([grandma])
+    vi.spyOn(apiClient, 'listReviewTasks').mockResolvedValue([])
+    vi.spyOn(apiClient, 'getCapabilities').mockResolvedValue({
+      phase: 'local',
+      available: ['api'],
+      unavailable: [],
+    })
+    vi.spyOn(apiClient, 'logout').mockResolvedValue({ status: 'logged_out' })
+  })
+
+  afterEach(() => {
+    overridePortalEntryModeForTest(null)
+    signOut()
+    vi.restoreAllMocks()
+  })
+
+  it('signs an owner out of the member entry and points to the admin entry', async () => {
+    overridePortalEntryModeForTest('member')
+    vi.spyOn(apiClient, 'login').mockResolvedValue({
+      actor_id: 'parent-admin',
+      session_token: 'o'.repeat(48),
+      expires_at: (Date.now() + 60_000) / 1000,
+    })
+
+    await connectWithPassword('parent-admin', 'password-123', 'family-care')
+
+    expect(session.status).toBe('signed-out')
+    expect(session.sessionToken).toBe('')
+    expect(session.entryConflict).toBe('need-admin-entry')
+    expect(session.error).toContain('管理后台')
+    expect(apiClient.logout).toHaveBeenCalled()
+  })
+
+  it('signs a plain member out of the admin entry and points to the member entry', async () => {
+    overridePortalEntryModeForTest('admin')
+    vi.spyOn(apiClient, 'loginWithPin').mockResolvedValue({
+      actor_id: 'grandma-account',
+      household_id: household.id,
+      session_token: 'm'.repeat(48),
+      expires_at: (Date.now() + 60_000) / 1000,
+    })
+
+    await connectWithPin('grandma-account', household.id, '135790', 'family-care')
+
+    expect(session.status).toBe('signed-out')
+    expect(session.sessionToken).toBe('')
+    expect(session.entryConflict).toBe('need-member-entry')
+    expect(session.error).toContain('成员前台')
+  })
+
+  it('lets matching accounts through on their own entry', async () => {
+    overridePortalEntryModeForTest('member')
+    await connect('grandma-account', 'family-care')
+    expect(session.status).toBe('ready')
+    expect(session.portal).toBe('member')
+    expect(session.entryConflict).toBeNull()
+    signOut()
+
+    overridePortalEntryModeForTest('admin')
+    await connect('parent-admin', 'family-care')
+    expect(session.status).toBe('ready')
+    expect(session.portal).toBe('admin')
+    expect(session.entryConflict).toBeNull()
+  })
+
+  it('keeps the legacy auto entry role-based (HCT-439 behaviour)', async () => {
+    overridePortalEntryModeForTest('auto')
+    await connect('parent-admin', 'family-care')
+    expect(session.status).toBe('ready')
+    expect(session.portal).toBe('admin')
+    expect(session.entryConflict).toBeNull()
+  })
+
+  it('clears the conflict once a matching login succeeds', async () => {
+    overridePortalEntryModeForTest('admin')
+    vi.spyOn(apiClient, 'loginWithPin').mockResolvedValue({
+      actor_id: 'grandma-account',
+      household_id: household.id,
+      session_token: 'm'.repeat(48),
+      expires_at: (Date.now() + 60_000) / 1000,
+    })
+    await connectWithPin('grandma-account', household.id, '135790', 'family-care')
+    expect(session.entryConflict).toBe('need-member-entry')
+
+    await connect('parent-admin', 'family-care')
+    expect(session.status).toBe('ready')
+    expect(session.entryConflict).toBeNull()
   })
 })
 

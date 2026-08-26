@@ -13,7 +13,8 @@ class Settings(BaseSettings):
     api_port: int = 8000
     log_level: str = "INFO"
     allow_dev_actor_header: bool = True
-    cors_origins: str = "http://localhost:5173"
+    # HCT-453：成员前台（5173）与管理后台（5174）两个开发入口共用一个 API。
+    cors_origins: str = "http://localhost:5173,http://localhost:5174"
     database_url: str = "sqlite+pysqlite:///./homecare-dev.sqlite3"
     request_id_header: str = "X-Request-ID"
     cursor_signing_key: str = "dev-only-change-me"

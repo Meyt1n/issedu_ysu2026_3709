@@ -27,6 +27,14 @@ case "$target" in
   web)
     npm run dev:web
     ;;
+  web-member)
+    # HCT-453 成员前台入口（默认 http://127.0.0.1:5173，可用 HCT_WEB_PORT 覆盖）
+    npm run dev:web:member
+    ;;
+  web-admin)
+    # HCT-453 管理后台入口（默认 http://127.0.0.1:5174，可用 HCT_ADMIN_WEB_PORT 覆盖）
+    npm run dev:web:admin
+    ;;
   migrate)
     uv run alembic upgrade head
     ;;
@@ -77,7 +85,7 @@ case "$target" in
     echo "Compose 服务已停止（profile=${compose_profile}）；默认保留 mysql_data 卷。"
     ;;
   *)
-    echo "用法: ./scripts/start.sh [setup|api|web|migrate|check|up|health|down]" >&2
+    echo "用法: ./scripts/start.sh [setup|api|web|web-member|web-admin|migrate|check|up|health|down]" >&2
     exit 2
     ;;
 esac

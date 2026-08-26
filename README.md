@@ -38,13 +38,16 @@ scripts/start.ps1 health
 
 | 入口 | 地址 |
 |---|---|
-| 网页 | http://localhost:8080 |
+| 成员前台（家人：人脸 / PIN） | http://localhost:8080 |
+| 管理后台（管理员：账号密码） | http://localhost:8081 |
 | API 健康检查 | http://localhost:8000/health |
 | OpenAPI | http://localhost:8000/docs |
 
+前台/后台是同一容器、同一构建产物的两个监听端口（HCT-453），共用同一个 API 和授权真相；账号与入口不匹配时会被登出并指引到另一入口。
+
 开发身份：页面填写 Actor ID，或请求头 `X-Actor-ID`（仅 `ALLOW_DEV_ACTOR_HEADER=true` 时可用）。生产前必须换成真实认证。
 
-端口冲突时改 `.env` 的 `API_PORT`、`WEB_PORT`、`MYSQL_PORT` 后重新 `up`。
+端口冲突时改 `.env` 的 `API_PORT`、`WEB_PORT`、`ADMIN_WEB_PORT`、`MYSQL_PORT` 后重新 `up`。
 
 ```powershell
 scripts/start.ps1 down          # 停服务，默认保留 mysql_data 卷
@@ -73,16 +76,23 @@ scripts/start.ps1 migrate
 # 终端 1
 scripts/start.ps1 api
 
-# 终端 2
-scripts/start.ps1 web
+# 终端 2（成员前台，或调试用单入口 scripts/start.ps1 web）
+scripts/start.ps1 web-member
+
+# 终端 3（可选：管理后台入口）
+scripts/start.ps1 web-admin
 ```
 
 | 入口 | 地址 |
 |---|---|
-| Vite 开发页 | http://127.0.0.1:5173 |
+| 成员前台（`web-member`） | http://127.0.0.1:5173 |
+| 管理后台（`web-admin`） | http://127.0.0.1:5174 |
+| 调试单入口（`web`，按账号角色进门户） | http://127.0.0.1:5173 |
 | API | http://127.0.0.1:8000 |
 
-本机代理固定走 `127.0.0.1`，避免 `localhost` 解析到 IPv6。多人联调可设 `HCT_API_PROXY`（后端）和 `HCT_WEB_PORT`（前端端口）。
+两个前端进程共用同一个 API（HCT-453）。等价命令：`npm run dev:web:member` / `npm run dev:web:admin`，或 `HCT_WEB_PORT=5174 VITE_PORTAL_MODE=admin npm run dev:web`。
+
+本机代理固定走 `127.0.0.1`，避免 `localhost` 解析到 IPv6。多人联调可设 `HCT_API_PROXY`（后端）、`HCT_WEB_PORT`（前台端口）和 `HCT_ADMIN_WEB_PORT`（后台端口）。
 
 ### 可选：复刻本机视觉与助手闭环
 

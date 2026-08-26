@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("setup", "api", "web", "migrate", "check", "up", "health", "down")]
+    [ValidateSet("setup", "api", "web", "web-member", "web-admin", "migrate", "check", "up", "health", "down")]
     [string]$Target = "api"
 )
 
@@ -89,6 +89,14 @@ switch ($Target) {
     }
     "web" {
         Invoke-CheckedCommand { npm run dev:web }
+    }
+    "web-member" {
+        # HCT-453 成员前台入口（默认 http://127.0.0.1:5173，可用 HCT_WEB_PORT 覆盖）
+        Invoke-CheckedCommand { npm run dev:web:member }
+    }
+    "web-admin" {
+        # HCT-453 管理后台入口（默认 http://127.0.0.1:5174，可用 HCT_ADMIN_WEB_PORT 覆盖）
+        Invoke-CheckedCommand { npm run dev:web:admin }
     }
     "migrate" {
         Invoke-CheckedCommand { uv run alembic upgrade head }

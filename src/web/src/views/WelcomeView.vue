@@ -21,6 +21,13 @@ import {
   session,
 } from '../store'
 import { SHOW_DEV_LOGIN } from '../ui/featureFlags'
+import {
+  activePortalEntryMode,
+  crossPortalPortsHint,
+  crossPortalUrl,
+  portalEntryBranding,
+  portalEntryConflictNotice,
+} from '../ui/portalEntry'
 import { THEMES, applyTheme, currentTheme } from '../ui/themes'
 import { faceBindingSummary } from '../ui/welcomeFaceBinding'
 
@@ -50,9 +57,51 @@ const faceFrames = ref<File[]>([])
 // 开发演示入口默认只在开发环境出现；本地教学 Compose 构建通过
 // VITE_SHOW_DEV_LOGIN=true 显式保留（与后端 ALLOW_DEV_ACTOR_HEADER 对齐）。
 const showDevelopmentEntry = SHOW_DEV_LOGIN
-const authMode = ref<'development' | 'session'>(showDevelopmentEntry ? session.authMode : 'session')
+
+// HCT-453：成员前台 / 管理后台分端口入口。auto 表示裸开发入口，
+// 保持原欢迎页；member/admin 使用各自品牌文案与凭据默认值。
+const entryMode = activePortalEntryMode()
+const entryBranding = portalEntryBranding(entryMode)
+
+const authMode = ref<'development' | 'session'>(
+  entryBranding ? 'session' : showDevelopmentEntry ? session.authMode : 'session',
+)
 const credentialMode = ref<'password' | 'pin' | 'face'>(
-  initialBoundFaceHouseholdId ? 'face' : 'password',
+  entryBranding
+    ? initialBoundFaceHouseholdId && entryBranding.credentialOrder[0] === 'face'
+      ? 'face'
+      : entryBranding.defaultCredential
+    : initialBoundFaceHouseholdId
+      ? 'face'
+      : 'password',
+)
+
+const CREDENTIAL_LABELS: Record<'face' | 'password' | 'pin', string> = {
+  face: '人脸识别',
+  password: '账号密码',
+  pin: '家庭 PIN',
+}
+const credentialTabs = computed(() =>
+  (entryBranding?.credentialOrder ?? (['face', 'password', 'pin'] as const)).map(mode => ({
+    mode,
+    label: CREDENTIAL_LABELS[mode],
+  })),
+)
+
+const crossEntryLink = computed(() => {
+  if (!entryBranding?.crossLinkTarget) return null
+  return {
+    label: entryBranding.crossLinkLabel,
+    target: entryBranding.crossLinkTarget,
+    url: crossPortalUrl(entryBranding.crossLinkTarget),
+  }
+})
+
+const entryConflictNotice = computed(() =>
+  session.entryConflict ? portalEntryConflictNotice(session.entryConflict) : null,
+)
+const entryConflictUrl = computed(() =>
+  entryConflictNotice.value ? crossPortalUrl(entryConflictNotice.value.crossLinkTarget) : '',
 )
 const registerMode = ref(false)
 const connecting = ref(false)
@@ -295,15 +344,17 @@ async function submitCreate(): Promise<void> {
       <section class="welcome-intro">
         <span class="welcome-badge">
           <AppIcon name="lock" :size="15" />
-          健康信息默认只保存在家里
+          {{ entryBranding ? entryBranding.badge : '健康信息默认只保存在家里' }}
         </span>
-        <h1 class="welcome-title">
+        <h1 v-if="entryBranding" class="welcome-title">{{ entryBranding.heroTitle }}</h1>
+        <h1 v-else class="welcome-title">
           把家人的健康变化，<br />
           <span class="accent">温柔而可靠</span>地记下来
         </h1>
         <p class="welcome-lede">
-          家健镜帮家人记下用药和提醒，发现需要核对的情况，
-          再用清楚明白的方式告诉每一位照护者。
+          {{ entryBranding
+            ? entryBranding.heroLede
+            : '家健镜帮家人记下用药和提醒，发现需要核对的情况，再用清楚明白的方式告诉每一位照护者。' }}
         </p>
         <div class="welcome-art" :style="{ '--par-rx': artRx, '--par-ry': artRy }">
           <img :src="welcomeHero" alt="温馨的家庭照护插画：家人围坐在洒满阳光的窗边" />
@@ -323,7 +374,17 @@ async function submitCreate(): Promise<void> {
         class="welcome-form-card"
         :class="{ 'welcome-form-card--face': authMode === 'session' && credentialMode === 'face' }"
       >
-        <h2>进入家庭空间</h2>
+        <h2>{{ entryBranding ? entryBranding.formTitle : '进入家庭空间' }}</h2>
+        <div v-if="entryConflictNotice" class="notice warn entry-conflict" role="alert">
+          <AppIcon name="info" :size="16" />
+          <span>{{ entryConflictNotice.message }}</span>
+          <a v-if="entryConflictUrl" class="btn btn-primary btn-small" :href="entryConflictUrl">
+            {{ entryConflictNotice.crossLinkLabel }}
+          </a>
+          <span v-else class="entry-conflict-hint">
+            {{ entryConflictNotice.crossLinkLabel }}（{{ crossPortalPortsHint(entryConflictNotice.crossLinkTarget) }}）
+          </span>
+        </div>
         <div class="segmented-control" role="group" aria-label="选择登录方式">
           <button v-if="showDevelopmentEntry" type="button" :class="{ active: authMode === 'development' }" @click="authMode = 'development'">开发演示</button>
           <button type="button" :class="{ active: authMode === 'session' }" @click="authMode = 'session'">正式账号登录</button>
@@ -347,7 +408,7 @@ async function submitCreate(): Promise<void> {
             />
             <small id="purpose-format-hint">照护者访问被授权数据时，需要与授权中登记的用途一致；格式为小写字母、数字和连字符。</small>
           </label>
-          <p v-if="session.error" class="notice error" role="alert">
+          <p v-if="session.error && !session.entryConflict" class="notice error" role="alert">
             <AppIcon name="alert" :size="16" />
             {{ session.error }}
           </p>
@@ -358,10 +419,19 @@ async function submitCreate(): Promise<void> {
         </form>
         <form v-else class="section-stack" @submit.prevent="submitSession">
           <div class="segmented-control" role="group" aria-label="选择账号登录凭据">
-            <button type="button" :class="{ active: credentialMode === 'face' }" @click="credentialMode = 'face'">人脸识别</button>
-            <button type="button" :class="{ active: credentialMode === 'password' }" @click="credentialMode = 'password'">账号密码</button>
-            <button type="button" :class="{ active: credentialMode === 'pin' }" @click="credentialMode = 'pin'">家庭 PIN</button>
+            <button
+              v-for="tab in credentialTabs"
+              :key="tab.mode"
+              type="button"
+              :class="{ active: credentialMode === tab.mode }"
+              @click="credentialMode = tab.mode"
+            >
+              {{ tab.label }}
+            </button>
           </div>
+          <p v-if="entryMode === 'admin'" class="form-sub">
+            管理员推荐使用账号密码；家庭 PIN 和人脸识别主要供家人在成员前台使用。
+          </p>
           <label v-if="credentialMode === 'password'" class="field">
             本地账号
             <input v-model="actorId" autocomplete="username" placeholder="例如 parent-1" required />
@@ -445,7 +515,7 @@ async function submitCreate(): Promise<void> {
             <small>使用小写字母开头，例如 family-care。</small>
           </label>
           <p v-if="credentialMode === 'pin'" class="form-sub">PIN 只用于当前家庭和所选身份，连续输错会暂时锁定。</p>
-          <p v-if="localError || session.error" class="notice error" role="alert">
+          <p v-if="(localError || session.error) && !session.entryConflict" class="notice error" role="alert">
             <AppIcon name="alert" :size="16" />
             {{ localError || session.error }}
           </p>
@@ -457,6 +527,10 @@ async function submitCreate(): Promise<void> {
             {{ registerMode ? '已有账号？返回登录' : '首次使用？注册本地账号' }}
           </button>
         </form>
+        <p v-if="crossEntryLink" class="welcome-cross-entry">
+          <a v-if="crossEntryLink.url" :href="crossEntryLink.url">{{ crossEntryLink.label }}</a>
+          <span v-else>{{ crossEntryLink.label }}（{{ crossPortalPortsHint(crossEntryLink.target) }}）</span>
+        </p>
         <p class="welcome-disclaimer">
           家庭健康记录仅供日常参考，不提供诊断、处方或用药决策；紧急情况请联系医生或当地急救服务。
         </p>

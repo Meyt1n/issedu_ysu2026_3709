@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev:web": "vite --config src/web/vite.config.ts",
+    "dev:web:member": "vite --config src/web/vite.config.ts --mode member",
+    "dev:web:admin": "vite --config src/web/vite.config.ts --mode admin",
     "build:web": "vite build --config src/web/vite.config.ts",
     "preview:web": "vite preview --config src/web/vite.config.ts",
     "check:web": "tsc --noEmit --project src/web/tsconfig.json",
