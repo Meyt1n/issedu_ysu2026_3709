@@ -23,7 +23,7 @@ import {
   validateWakePhrase,
   WAKE_PHRASE_PRESETS,
 } from './wakePhrase'
-import { createAutoSendScheduler, matchVoiceCommand } from './commands'
+import { couldBeVoiceCommandPrefix, createAutoSendScheduler, matchVoiceCommand } from './commands'
 
 describe('shared voice recognition', () => {
   it('uses 小燕小燕 as the default wake phrase', () => {
@@ -113,11 +113,67 @@ describe('hotwords and chat session', () => {
       key: (index: number) => [...store.keys()][index] ?? null,
       get length() { return store.size },
     })
+    // 决策 1A：默认句末静音 15 秒；语音回复偏好默认关闭、音色默认自动优选。
+    expect(DEFAULT_VOICE_PREFERENCES.silenceMs).toBe(15_000)
+    expect(loadVoicePreferences().silenceMs).toBe(15_000)
+    expect(loadVoicePreferences().autoSpeakReplies).toBe(false)
+    expect(loadVoicePreferences().preferredVoiceName).toBe('')
     expect(loadVoicePreferences().doubleWake).toBe(DEFAULT_VOICE_PREFERENCES.doubleWake)
-    const saved = saveVoicePreferences({ confirmSound: false, doubleWake: false, silenceMs: 3000 })
+    const saved = saveVoicePreferences({
+      confirmSound: false,
+      doubleWake: false,
+      silenceMs: 3000,
+      autoSpeakReplies: true,
+      preferredVoiceName: 'Microsoft Xiaoxiao (Natural)',
+    })
     expect(saved.confirmSound).toBe(false)
     expect(saved.doubleWake).toBe(false)
     expect(loadVoicePreferences().silenceMs).toBe(3000)
+    expect(loadVoicePreferences().autoSpeakReplies).toBe(true)
+    expect(loadVoicePreferences().preferredVoiceName).toBe('Microsoft Xiaoxiao (Natural)')
+    vi.unstubAllGlobals()
+  })
+
+  it('migrates v1 preferences to v2 and upgrades the stock 2.2s silence to 15s', () => {
+    const store = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => { store.set(key, value) },
+      removeItem: (key: string) => { store.delete(key) },
+      clear: () => store.clear(),
+      key: (index: number) => [...store.keys()][index] ?? null,
+      get length() { return store.size },
+    })
+    store.set('hct-voice-prefs:v1', JSON.stringify({
+      silenceMs: 2200,
+      continuationSilenceMs: 3200,
+      confirmSound: false,
+      wakePhrase: '家健镜',
+    }))
+    const migrated = loadVoicePreferences()
+    expect(migrated.silenceMs).toBe(15_000)
+    expect(migrated.continuationSilenceMs).toBe(18_000)
+    expect(migrated.confirmSound).toBe(false)
+    expect(migrated.wakePhrase).toBe('家健镜')
+    expect(store.has('hct-voice-prefs:v1')).toBe(false)
+    expect(store.has('hct-voice-prefs:v2')).toBe(true)
+    vi.unstubAllGlobals()
+  })
+
+  it('keeps deliberately customised v1 silence values during migration', () => {
+    const store = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => { store.set(key, value) },
+      removeItem: (key: string) => { store.delete(key) },
+      clear: () => store.clear(),
+      key: (index: number) => [...store.keys()][index] ?? null,
+      get length() { return store.size },
+    })
+    store.set('hct-voice-prefs:v1', JSON.stringify({ silenceMs: 3000, continuationSilenceMs: 4200 }))
+    const migrated = loadVoicePreferences()
+    expect(migrated.silenceMs).toBe(3000)
+    expect(migrated.continuationSilenceMs).toBe(4200)
     vi.unstubAllGlobals()
   })
 
@@ -207,7 +263,7 @@ describe('hotwords and chat session', () => {
   })
 
   it('dictation silence timeout finishes utterance into ready mode', () => {
-    expect(DICTATION_SILENCE_MS).toBe(1600)
+    expect(DICTATION_SILENCE_MS).toBe(15_000)
     vi.useFakeTimers()
     const instances: Array<{
       onstart: (() => void) | null
@@ -286,6 +342,146 @@ describe('hotwords and chat session', () => {
   })
 })
 
+describe('dictation continuation (决策 1A / 根因 B)', () => {
+  interface FakeInstance {
+    onstart: (() => void) | null
+    onresult: ((event: SpeechRecognitionEventLike) => void) | null
+    onend: (() => void) | null
+    start: () => void
+    stop: () => void
+    abort: () => void
+  }
+
+  function setupFakeRecognition(): { instances: FakeInstance[]; restore: () => void } {
+    const instances: FakeInstance[] = []
+    class FakeRecognition {
+      lang = ''
+      continuous = false
+      interimResults = false
+      maxAlternatives = 0
+      onstart: (() => void) | null = null
+      onresult: ((event: SpeechRecognitionEventLike) => void) | null = null
+      onerror: ((event: { error?: string }) => void) | null = null
+      onend: (() => void) | null = null
+      constructor() {
+        instances.push(this)
+      }
+      start = () => {
+        this.onstart?.()
+      }
+      stop = () => {
+        this.onend?.()
+      }
+      abort = () => {
+        this.onend?.()
+      }
+    }
+    const previous = (globalThis as { window?: unknown }).window
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: { SpeechRecognition: FakeRecognition },
+    })
+    return {
+      instances,
+      restore: () => {
+        if (previous === undefined) delete (globalThis as { window?: unknown }).window
+        else Object.defineProperty(globalThis, 'window', { configurable: true, value: previous })
+      },
+    }
+  }
+
+  function resultEvent(transcript: string): SpeechRecognitionEventLike {
+    return {
+      resultIndex: 0,
+      results: [{ isFinal: true, length: 1, 0: { transcript, confidence: 1 } }],
+    } as unknown as SpeechRecognitionEventLike
+  }
+
+  it('a 10s pause does not finish the utterance; follow-up speech accumulates', () => {
+    vi.useFakeTimers()
+    const { instances, restore } = setupFakeRecognition()
+    const modes: string[] = []
+    let draft = ''
+    try {
+      const controller = createDictationController({
+        onModeChange: (mode) => modes.push(mode),
+        onDraft: (text) => {
+          draft = text
+        },
+      }, {
+        getPreferences: () => ({
+          ...DEFAULT_VOICE_PREFERENCES,
+          doubleWake: false,
+          silenceMs: 15_000,
+          continuationSilenceMs: 18_000,
+        }),
+      })
+      controller.startWake()
+      const active = instances[0]!
+      active.onresult?.(resultEvent('小燕小燕今天血压有点高'))
+      expect(modes).toContain('active')
+      vi.advanceTimersByTime(10_000)
+      expect(modes.at(-1)).toBe('active')
+      active.onresult?.(resultEvent('小燕小燕今天血压有点高 还需要复测吗'))
+      vi.advanceTimersByTime(10_000)
+      expect(modes.at(-1)).toBe('active')
+      expect(draft).toContain('还需要复测吗')
+      vi.advanceTimersByTime(5100)
+      expect(modes.at(-1)).toBe('ready')
+      controller.dispose()
+    } finally {
+      vi.useRealTimers()
+      restore()
+    }
+  })
+
+  it('open-domain speech during command listening returns to active and accumulates the draft', () => {
+    vi.useFakeTimers()
+    const { instances, restore } = setupFakeRecognition()
+    const modes: string[] = []
+    let draft = ''
+    const commands: string[] = []
+    try {
+      const controller = createDictationController({
+        onModeChange: (mode) => modes.push(mode),
+        onDraft: (text) => {
+          draft = text
+        },
+        onCommand: (command) => commands.push(command),
+      }, {
+        getPreferences: () => ({
+          ...DEFAULT_VOICE_PREFERENCES,
+          doubleWake: false,
+          voiceCommands: true,
+          silenceMs: 15_000,
+          continuationSilenceMs: 18_000,
+        }),
+      })
+      controller.startWake()
+      instances[0]!.onresult?.(resultEvent('小燕小燕查询用药提醒'))
+      vi.advanceTimersByTime(15_050)
+      expect(modes.at(-1)).toBe('ready')
+      // 400ms 后进入指令聆听
+      vi.advanceTimersByTime(450)
+      expect(modes.at(-1)).toBe('command')
+      const commandSession = instances.at(-1)!
+      // 疑似指令前缀：继续等待，不回流
+      commandSession.onresult?.(resultEvent('上一条再说'))
+      expect(modes.at(-1)).toBe('command')
+      // 开放域语音：回到听写态并累加进草稿，不丢弃
+      commandSession.onresult?.(resultEvent('另外血压药还要吃几天'))
+      expect(modes.at(-1)).toBe('active')
+      expect(draft).toContain('查询用药提醒')
+      expect(draft).toContain('另外血压药还要吃几天')
+      expect(commands).toEqual([])
+      controller.dispose()
+    } finally {
+      vi.useRealTimers()
+      restore()
+    }
+  })
+})
+
 describe('wake phrase and voice commands', () => {
   it('validates custom wake phrase length and accepts presets', () => {
     expect(validateWakePhrase('家健镜').ok).toBe(true)
@@ -306,6 +502,15 @@ describe('wake phrase and voice commands', () => {
     expect(matchVoiceCommand('帮我查一下血压')).toBe(null)
     expect(matchVoiceCommand('打开药盒拍照')).toBe(null)
     expect(matchVoiceCommand('今天天气怎么样')).toBe(null)
+  })
+
+  it('detects possible command prefixes so half-spoken commands are not hijacked into the draft', () => {
+    expect(couldBeVoiceCommandPrefix('上一条再说')).toBe(true)
+    expect(couldBeVoiceCommandPrefix('发')).toBe(true)
+    expect(couldBeVoiceCommandPrefix('停止')).toBe(true)
+    expect(couldBeVoiceCommandPrefix('血压')).toBe(false)
+    expect(couldBeVoiceCommandPrefix('另外我想问')).toBe(false)
+    expect(couldBeVoiceCommandPrefix('')).toBe(false)
   })
 
   it('createAutoSendScheduler sends after quiet delay and can cancel', () => {

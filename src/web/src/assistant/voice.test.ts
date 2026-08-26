@@ -10,6 +10,7 @@ import {
   pickBestAlternative,
   pickPreferredChineseVoice,
   prepareSpeechText,
+  resolveSpeechVoice,
   speakText,
   splitSpeechSegments,
   stopSpeaking,
@@ -202,6 +203,15 @@ describe('chinese voice preference', () => {
     expect(pickPreferredChineseVoice([voice({ name: 'Samantha', lang: 'en-US' })])).toBeNull()
     expect(pickPreferredChineseVoice([])).toBeNull()
   })
+
+  it('resolveSpeechVoice prefers the exact named voice and falls back to auto pick', () => {
+    const natural = voice({ name: 'Microsoft Xiaoxiao (Natural)' })
+    const google = voice({ name: 'Google 普通话（中国大陆）', localService: false })
+    expect(resolveSpeechVoice([natural, google], 'Google 普通话（中国大陆）')).toBe(google)
+    expect(resolveSpeechVoice([natural, google], '不存在的音色')).toBe(natural)
+    expect(resolveSpeechVoice([natural, google], '')).toBe(natural)
+    expect(resolveSpeechVoice([natural, google], null)).toBe(natural)
+  })
 })
 
 describe('speech text preparation', () => {
@@ -339,5 +349,39 @@ describe('speakText output pipeline', () => {
     await Promise.resolve()
     expect(synth.spoken).toHaveLength(1)
     expect(synth.spoken[0]!.voice?.name).toBe('Tingting')
+  })
+
+  it('honours an explicit voiceName override for this utterance', () => {
+    vi.stubGlobal('SpeechSynthesisUtterance', FakeUtterance)
+    const synth = fakeSynth([
+      voice({ name: 'Microsoft Xiaoxiao (Natural)' }),
+      voice({ name: 'Google 普通话（中国大陆）', localService: false }),
+    ])
+    stubWindow({ speechSynthesis: synth })
+
+    expect(speakText('用指定音色播报。', { voiceName: 'Google 普通话（中国大陆）' })).toBe(true)
+    expect(synth.spoken[0]!.voice?.name).toBe('Google 普通话（中国大陆）')
+  })
+
+  it('reads the persisted preferredVoiceName preference when no override is given', () => {
+    vi.stubGlobal('SpeechSynthesisUtterance', FakeUtterance)
+    const store = new Map<string, string>()
+    store.set('hct-voice-prefs:v2', JSON.stringify({ preferredVoiceName: 'Google 普通话（中国大陆）' }))
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => { store.set(key, value) },
+      removeItem: (key: string) => { store.delete(key) },
+      clear: () => store.clear(),
+      key: (index: number) => [...store.keys()][index] ?? null,
+      get length() { return store.size },
+    })
+    const synth = fakeSynth([
+      voice({ name: 'Microsoft Xiaoxiao (Natural)' }),
+      voice({ name: 'Google 普通话（中国大陆）', localService: false }),
+    ])
+    stubWindow({ speechSynthesis: synth })
+
+    expect(speakText('按本机偏好播报。')).toBe(true)
+    expect(synth.spoken[0]!.voice?.name).toBe('Google 普通话（中国大陆）')
   })
 })

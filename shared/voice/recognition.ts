@@ -66,8 +66,8 @@ export function isSpeechOutputSupported(): boolean {
 /** 识别会话结束后的快速重启间隔。 */
 export const VOICE_RESTART_DELAY_MS = 30
 
-/** 听写态静音多久视为说完（停麦，保留草稿待发送）。 */
-export const DICTATION_SILENCE_MS = 1600
+/** 听写态静音多久视为说完（停麦，保留草稿待发送）；与偏好默认值保持一致的兜底。 */
+export const DICTATION_SILENCE_MS = 15_000
 
 /** 默认唤醒词：连呼两声名字即可。 */
 export const DEFAULT_WAKE_PHRASE = '小燕小燕'
