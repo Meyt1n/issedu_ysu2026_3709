@@ -67,31 +67,40 @@ describe('portalEntryConflict', () => {
 describe('crossPortalUrl', () => {
   const noEnv = { memberUrl: null, adminUrl: null }
 
-  it('prefers explicitly configured public urls', () => {
+  it('prefers explicitly configured public urls and adds the portal override', () => {
     expect(
       crossPortalUrl('admin', { protocol: 'http:', hostname: 'localhost', port: '5173' }, {
         memberUrl: null,
         adminUrl: 'https://admin.example.test/',
       }),
-    ).toBe('https://admin.example.test/')
+    ).toBe('https://admin.example.test/?portal=admin')
   })
 
-  it('swaps the vite dev ports 5173/5174', () => {
+  it('keeps an already-present portal override on configured urls untouched', () => {
+    expect(
+      crossPortalUrl('member', { protocol: 'http:', hostname: 'localhost', port: '5174' }, {
+        memberUrl: 'https://family.example.test/?portal=member',
+        adminUrl: null,
+      }),
+    ).toBe('https://family.example.test/?portal=member')
+  })
+
+  it('swaps the vite dev ports 5173/5174 with an explicit portal override', () => {
     expect(
       crossPortalUrl('admin', { protocol: 'http:', hostname: '127.0.0.1', port: '5173' }, noEnv),
-    ).toBe('http://127.0.0.1:5174/')
+    ).toBe('http://127.0.0.1:5174/?portal=admin')
     expect(
       crossPortalUrl('member', { protocol: 'http:', hostname: '127.0.0.1', port: '5174' }, noEnv),
-    ).toBe('http://127.0.0.1:5173/')
+    ).toBe('http://127.0.0.1:5173/?portal=member')
   })
 
-  it('swaps the compose ports 8080/8081', () => {
+  it('swaps the compose ports 8080/8081 with an explicit portal override', () => {
     expect(
       crossPortalUrl('admin', { protocol: 'http:', hostname: 'localhost', port: '8080' }, noEnv),
-    ).toBe('http://localhost:8081/')
+    ).toBe('http://localhost:8081/?portal=admin')
     expect(
       crossPortalUrl('member', { protocol: 'http:', hostname: 'localhost', port: '8081' }, noEnv),
-    ).toBe('http://localhost:8080/')
+    ).toBe('http://localhost:8080/?portal=member')
   })
 
   it('returns empty for unknown ports so the UI can degrade to text', () => {
@@ -107,20 +116,39 @@ describe('portalEntryBranding', () => {
     expect(portalEntryBranding('auto')).toBeNull()
   })
 
-  it('brands the member entry around face/PIN', () => {
+  it('brands the member entry as a personal front door around face/PIN', () => {
     const branding = portalEntryBranding('member')!
-    expect(branding.formTitle).toContain('家庭成员前台')
+    expect(branding.formTitle).toContain('我的健康日常')
+    expect(branding.heroTitle).toContain('我的健康日常')
+    expect(branding.formIdentityHint).toContain('自己的身份')
     expect(branding.credentialOrder[0]).toBe('face')
     expect(branding.defaultCredential).toBe('pin')
+    expect(branding.passwordBehindOtherWays).toBe(true)
+    expect(branding.ctaLabel).toBe('进入我的前台')
     expect(branding.crossLinkTarget).toBe('admin')
   })
 
-  it('brands the admin entry around account password', () => {
+  it('brands the admin entry around whole-family management with password first', () => {
     const branding = portalEntryBranding('admin')!
     expect(branding.formTitle).toContain('家庭管理后台')
+    expect(branding.formIdentityHint).toContain('整个家庭')
     expect(branding.credentialOrder[0]).toBe('password')
     expect(branding.defaultCredential).toBe('password')
+    expect(branding.passwordBehindOtherWays).toBe(false)
+    expect(branding.ctaLabel).toBe('进入管理后台')
     expect(branding.crossLinkTarget).toBe('member')
+  })
+
+  it('gives the two entries different rail copy so they cannot look alike', () => {
+    const member = portalEntryBranding('member')!
+    const admin = portalEntryBranding('admin')!
+    expect(member.heroTitle).not.toBe(admin.heroTitle)
+    expect(member.badge).not.toBe(admin.badge)
+    expect(member.ctaLabel).not.toBe(admin.ctaLabel)
+    const memberChipTexts = member.chips.map(chip => chip.text)
+    for (const chip of admin.chips) {
+      expect(memberChipTexts).not.toContain(chip.text)
+    }
   })
 })
 

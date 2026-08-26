@@ -81,12 +81,39 @@ const CREDENTIAL_LABELS: Record<'face' | 'password' | 'pin', string> = {
   password: '账号密码',
   pin: '家庭 PIN',
 }
+// 成员前台把账号密码收进「其他方式」：tab 只保留人脸 / 家庭 PIN，
+// 强调这是家人自己的个人前台，不是后台账号系统。
 const credentialTabs = computed(() =>
-  (entryBranding?.credentialOrder ?? (['face', 'password', 'pin'] as const)).map(mode => ({
-    mode,
-    label: CREDENTIAL_LABELS[mode],
-  })),
+  (entryBranding?.credentialOrder ?? (['face', 'password', 'pin'] as const))
+    .filter(mode => !(entryBranding?.passwordBehindOtherWays && mode === 'password'))
+    .map(mode => ({
+      mode,
+      label: CREDENTIAL_LABELS[mode],
+    })),
 )
+
+const passwordBehindOtherWays = computed(() => entryBranding?.passwordBehindOtherWays ?? false)
+
+function useOtherWaysPassword(): void {
+  faceFrames.value = []
+  localError.value = ''
+  registerMode.value = false
+  credentialMode.value = 'password'
+}
+
+function backToPrimaryCredentials(): void {
+  faceFrames.value = []
+  localError.value = ''
+  registerMode.value = false
+  credentialMode.value = entryBranding?.defaultCredential ?? 'pin'
+}
+
+const submitLabel = computed(() => {
+  if (connecting.value) return '正在进入…'
+  if (credentialMode.value === 'password' && registerMode.value) return '注册并登录'
+  if (entryBranding) return entryBranding.ctaLabel
+  return credentialMode.value === 'pin' ? '使用 PIN 登录' : '登录'
+})
 
 const crossEntryLink = computed(() => {
   if (!entryBranding?.crossLinkTarget) return null
@@ -336,6 +363,10 @@ async function submitCreate(): Promise<void> {
 <template>
   <div
     class="welcome-stage"
+    :class="{
+      'welcome-stage--member': entryMode === 'member',
+      'welcome-stage--admin': entryMode === 'admin',
+    }"
     style="align-content: center; gap: 26px"
     @pointermove="onStageMove"
     @pointerleave="onStageLeave"
@@ -343,7 +374,7 @@ async function submitCreate(): Promise<void> {
     <div class="welcome-inner">
       <section class="welcome-intro">
         <span class="welcome-badge">
-          <AppIcon name="lock" :size="15" />
+          <AppIcon :name="entryMode === 'member' ? 'heart' : 'lock'" :size="15" />
           {{ entryBranding ? entryBranding.badge : '健康信息默认只保存在家里' }}
         </span>
         <h1 v-if="entryBranding" class="welcome-title">{{ entryBranding.heroTitle }}</h1>
@@ -360,12 +391,19 @@ async function submitCreate(): Promise<void> {
           <img :src="welcomeHero" alt="温馨的家庭照护插画：家人围坐在洒满阳光的窗边" />
           <span class="art-caption">本地家庭插画 · 不上传原图</span>
           <span class="art-float f1"><AppIcon name="lock" :size="13" />数据不出网</span>
-          <span class="art-float f2"><AppIcon name="heart" :size="13" />记错了也能改</span>
+          <span class="art-float f2"><AppIcon name="heart" :size="13" />{{ entryMode === 'member' ? '刷脸就能进' : '记错了也能改' }}</span>
         </div>
         <div class="welcome-chip-row">
-          <span class="welcome-chip"><AppIcon name="timeline" :size="14" />记错了也能改</span>
-          <span class="welcome-chip"><AppIcon name="scan" :size="14" />拍药盒，家人核对后才保存</span>
-          <span class="welcome-chip"><AppIcon name="key" :size="14" />谁能看什么，家人说了算</span>
+          <template v-if="entryBranding">
+            <span v-for="chip in entryBranding.chips" :key="chip.text" class="welcome-chip">
+              <AppIcon :name="chip.icon" :size="14" />{{ chip.text }}
+            </span>
+          </template>
+          <template v-else>
+            <span class="welcome-chip"><AppIcon name="timeline" :size="14" />记错了也能改</span>
+            <span class="welcome-chip"><AppIcon name="scan" :size="14" />拍药盒，家人核对后才保存</span>
+            <span class="welcome-chip"><AppIcon name="key" :size="14" />谁能看什么，家人说了算</span>
+          </template>
         </div>
       </section>
 
@@ -374,7 +412,16 @@ async function submitCreate(): Promise<void> {
         class="welcome-form-card"
         :class="{ 'welcome-form-card--face': authMode === 'session' && credentialMode === 'face' }"
       >
+        <span v-if="entryMode === 'member'" class="portal-mark member">
+          <AppIcon name="members" :size="14" />
+          成员前台 · 个人身份
+        </span>
+        <span v-else-if="entryMode === 'admin'" class="portal-mark admin">
+          <AppIcon name="key" :size="14" />
+          管理后台 · 全家管理
+        </span>
         <h2>{{ entryBranding ? entryBranding.formTitle : '进入家庭空间' }}</h2>
+        <p v-if="entryBranding" class="portal-identity-hint">{{ entryBranding.formIdentityHint }}</p>
         <div v-if="entryConflictNotice" class="notice warn entry-conflict" role="alert">
           <AppIcon name="info" :size="16" />
           <span>{{ entryConflictNotice.message }}</span>
@@ -390,6 +437,7 @@ async function submitCreate(): Promise<void> {
           <button type="button" :class="{ active: authMode === 'session' }" @click="authMode = 'session'">正式账号登录</button>
         </div>
         <p v-if="authMode === 'development'" class="form-sub">仅用于非生产本地演示，使用开发身份标识；不会建立正式会话。</p>
+        <p v-else-if="entryBranding" class="form-sub">登录信息只留在当前页面，关掉后需要重新登录。</p>
         <p v-else class="form-sub">用家里的账号进入。登录信息只留在当前页面，关掉后需要重新登录。</p>
         <form v-if="authMode === 'development'" class="section-stack" @submit.prevent="submitConnect">
           <label class="field">
@@ -431,6 +479,9 @@ async function submitCreate(): Promise<void> {
           </div>
           <p v-if="entryMode === 'admin'" class="form-sub">
             管理员推荐使用账号密码；家庭 PIN 和人脸识别主要供家人在成员前台使用。
+          </p>
+          <p v-if="passwordBehindOtherWays && credentialMode === 'password'" class="form-sub">
+            账号密码主要供管理员或特殊情况使用；家人日常推荐刷脸或家庭 PIN。
           </p>
           <label v-if="credentialMode === 'password'" class="field">
             本地账号
@@ -520,11 +571,27 @@ async function submitCreate(): Promise<void> {
             {{ localError || session.error }}
           </p>
           <button v-if="credentialMode !== 'face'" type="submit" class="btn btn-primary" :disabled="!accessPurposeValid || !actorId.trim() || (credentialMode === 'password' ? password.length < 8 : !householdId.trim() || !/^\d{6}$/.test(pin)) || connecting">
-            {{ connecting ? '正在进入…' : credentialMode === 'pin' ? '使用 PIN 登录' : registerMode ? '注册并登录' : '登录' }}
+            {{ submitLabel }}
             <AppIcon v-if="!connecting" name="arrow-right" :size="17" />
           </button>
           <button v-if="credentialMode === 'password'" type="button" class="btn btn-ghost btn-small" @click="registerMode = !registerMode">
             {{ registerMode ? '已有账号？返回登录' : '首次使用？注册本地账号' }}
+          </button>
+          <button
+            v-if="passwordBehindOtherWays && credentialMode !== 'password'"
+            type="button"
+            class="portal-other-ways"
+            @click="useOtherWaysPassword"
+          >
+            其他方式：用账号密码登录
+          </button>
+          <button
+            v-else-if="passwordBehindOtherWays"
+            type="button"
+            class="portal-other-ways"
+            @click="backToPrimaryCredentials"
+          >
+            回到人脸 / 家庭 PIN 登录
           </button>
         </form>
         <p v-if="crossEntryLink" class="welcome-cross-entry">
