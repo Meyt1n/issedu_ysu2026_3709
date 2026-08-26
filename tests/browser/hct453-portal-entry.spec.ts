@@ -45,8 +45,10 @@ async function installEntryApi(page: Page): Promise<void> {
     })
 
     if (request.method() === 'POST' && path === '/api/v1/auth/login') {
+      const submitted = request.postDataJSON() as { actor_id?: string } | null
+      const actorId = submitted?.actor_id ?? 'parent-admin'
       return respond({
-        actor_id: 'parent-admin',
+        actor_id: actorId,
         session_token: 'o'.repeat(48),
         expires_at: (Date.now() + 1_800_000) / 1000,
       })
@@ -134,9 +136,11 @@ test('管理后台入口展示全家管理品牌，账号密码为主', async ({
 
   const credentialGroup = page.getByRole('group', { name: '选择账号登录凭据' })
   const tabs = credentialGroup.getByRole('button')
-  await expect(tabs).toHaveCount(3)
+  await expect(tabs).toHaveCount(1)
   await expect(tabs.nth(0)).toHaveText('账号密码')
   await expect(credentialGroup.getByRole('button', { name: '账号密码' })).toHaveClass(/active/)
+  await expect(credentialGroup.getByRole('button', { name: '家庭 PIN' })).toHaveCount(0)
+  await expect(credentialGroup.getByRole('button', { name: '人脸识别' })).toHaveCount(0)
   await expect(page.getByLabel('本地账号')).toBeVisible()
   await expect(page.getByText('管理员推荐使用账号密码')).toBeVisible()
   await expect(page.getByRole('button', { name: '进入管理后台' })).toBeVisible()
@@ -186,12 +190,9 @@ test('管理后台入口拦截成员账号：登出并指向成员前台，不�
   await installEntryApi(page)
   await page.goto('/?portal=admin')
 
-  await page.getByRole('button', { name: '家庭 PIN' }).click()
-  await page.getByRole('textbox', { name: /你的登录名/ }).fill(grandmaMember.actor_id)
-  const householdSelect = page.locator('select').filter({ has: page.locator(`option[value="${household.id}"]`) })
-  await expect(householdSelect).toBeVisible({ timeout: 5000 })
-  await householdSelect.selectOption(household.id)
-  await page.getByLabel('六位数字 PIN').fill('135790')
+  // 管理后台不再提供家人使用的 PIN / 人脸入口；用成员账号密码验证入口锁仍会拒绝。
+  await page.getByLabel('本地账号').fill(grandmaMember.actor_id)
+  await page.getByLabel('密码').fill('synthetic-password-123')
   await page.getByRole('button', { name: '进入管理后台' }).click()
 
   await expect(page.getByRole('alert')).toContainText('这是家庭管理后台入口')

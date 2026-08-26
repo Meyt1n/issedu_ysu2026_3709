@@ -55,6 +55,12 @@ export type SessionStatus = 'signed-out' | 'loading' | 'ready' | 'empty' | 'erro
 
 export const HEALTH_DATA_REFRESH_EVENT = 'hct:health-data-refresh'
 export const FACE_FAMILY_STORAGE_KEY = 'hct:face-family-household'
+// localStorage is partitioned by port.  The member front door and the admin
+// door intentionally use different ports, so keep the same non-secret device
+// binding in a same-host cookie as a cross-port fallback.  The server still
+// verifies the household and face credential; this value only selects the
+// household whose gallery may be searched.
+const FACE_FAMILY_COOKIE_KEY = 'hct-face-family-household'
 
 interface BoundFaceHousehold {
   id: string
@@ -399,21 +405,63 @@ export async function connect(actorId: string, accessPurpose: string): Promise<v
   }
 }
 
-function readBoundFaceHousehold(): BoundFaceHousehold | null {
+function parseBoundFaceHousehold(raw: string): BoundFaceHousehold | null {
+  const value = raw.trim()
+  if (!value) return null
   try {
-    const raw = globalThis.localStorage?.getItem(FACE_FAMILY_STORAGE_KEY)?.trim() ?? ''
-    if (!raw) return null
-    if (raw.startsWith('{')) {
-      const parsed = JSON.parse(raw) as Partial<BoundFaceHousehold>
+    if (value.startsWith('{')) {
+      const parsed = JSON.parse(value) as Partial<BoundFaceHousehold>
       if (typeof parsed.id === 'string' && parsed.id.trim()) {
         return { id: parsed.id.trim(), name: typeof parsed.name === 'string' ? parsed.name.trim() : '' }
       }
     }
     // Keep old plain household ids readable after upgrading the web client.
-    return { id: raw, name: '' }
+    return { id: value, name: '' }
   } catch {
     return null
   }
+}
+
+function readFaceBindingCookie(): BoundFaceHousehold | null {
+  try {
+    const cookie = globalThis.document?.cookie ?? ''
+    const pair = cookie
+      .split(';')
+      .map(item => item.trim())
+      .find(item => item.startsWith(`${FACE_FAMILY_COOKIE_KEY}=`))
+    if (!pair) return null
+    const encoded = pair.slice(FACE_FAMILY_COOKIE_KEY.length + 1)
+    return parseBoundFaceHousehold(decodeURIComponent(encoded))
+  } catch {
+    return null
+  }
+}
+
+function writeFaceBindingCookie(value: string): void {
+  try {
+    if (globalThis.document) {
+      globalThis.document.cookie = `${FACE_FAMILY_COOKIE_KEY}=${encodeURIComponent(value)}; Path=/; SameSite=Lax`
+    }
+  } catch {
+    // A single-origin deployment can continue to use localStorage.
+  }
+}
+
+function readBoundFaceHousehold(): BoundFaceHousehold | null {
+  try {
+    const raw = globalThis.localStorage?.getItem(FACE_FAMILY_STORAGE_KEY)?.trim() ?? ''
+    const local = parseBoundFaceHousehold(raw)
+    if (local) {
+      // Upgrade an existing 5174/5184-only binding without asking the family
+      // to register again.  Reloading the bound portal mirrors it to the
+      // same-host cookie, which the 5173/5183 member portal can then read.
+      writeFaceBindingCookie(JSON.stringify(local))
+      return local
+    }
+  } catch {
+    // Fall through to the same-host cookie when storage is unavailable.
+  }
+  return readFaceBindingCookie()
 }
 
 export function getBoundFaceHouseholdId(): string {
@@ -427,15 +475,17 @@ export function getBoundFaceHouseholdName(): string {
 export function bindFaceHousehold(householdId: string, householdName = ''): void {
   const id = householdId.trim()
   if (!id) return
+  const previous = readBoundFaceHousehold()
+  const value = JSON.stringify({
+    id,
+    name: householdName.trim() || (previous?.id === id ? previous.name : ''),
+  })
   try {
-    const previous = readBoundFaceHousehold()
-    globalThis.localStorage?.setItem(
-      FACE_FAMILY_STORAGE_KEY,
-      JSON.stringify({ id, name: householdName.trim() || (previous?.id === id ? previous.name : '') }),
-    )
+    globalThis.localStorage?.setItem(FACE_FAMILY_STORAGE_KEY, value)
   } catch {
-    // Private browsing may disable storage; the API still supports manual entry.
+    // Private browsing may disable storage; the same-host cookie remains available.
   }
+  writeFaceBindingCookie(value)
 }
 
 export function clearBoundFaceHousehold(): void {
@@ -443,6 +493,13 @@ export function clearBoundFaceHousehold(): void {
     globalThis.localStorage?.removeItem(FACE_FAMILY_STORAGE_KEY)
   } catch {
     // Ignore storage cleanup failures; no authentication state is persisted here.
+  }
+  try {
+    if (globalThis.document) {
+      globalThis.document.cookie = `${FACE_FAMILY_COOKIE_KEY}=; Max-Age=0; Path=/; SameSite=Lax`
+    }
+  } catch {
+    // Ignore cookie cleanup failures for the same reason as localStorage above.
   }
 }
 
