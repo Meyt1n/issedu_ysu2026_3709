@@ -121,7 +121,15 @@ scripts/start.ps1 api
 - 走错入口不会泄露或损坏任何数据：登录成功后系统发现账号与入口不匹配，会立刻退出本次登录，并在页面上给出「去管理后台登录 / 回成员前台登录」按钮。
 - 入口只是界面锁；谁能看什么、谁能改什么仍完全由服务端授权（HCT-439/HCT-102）决定。
 - 端口自定义：本地进程 `HCT_WEB_PORT`（前台）/ `HCT_ADMIN_WEB_PORT`（后台）；Compose `.env` 的 `WEB_PORT` / `ADMIN_WEB_PORT`。非默认端口部署可在构建时设置 `VITE_MEMBER_PORTAL_URL` / `VITE_ADMIN_PORTAL_URL` 让跨端按钮指向正确公开地址。
-- 调试用单入口 `scripts/start web`（5173，不设入口模式）保持旧行为：登录后按账号角色自动进前台或后台。
+- 调试用单入口 `scripts/start web`（5173，不设入口模式）保持旧行为：登录后按账号角色自动进前台或后台。**产品演示请用 `web-member`，不要用 `web` 冒充成员前台。**
+
+#### 正确进入成员前台三步清单（HCT-456）
+
+1. `scripts/start.ps1|sh api` + `scripts/start.ps1|sh web-member`
+2. 打开 `http://127.0.0.1:5173`（Compose：`http://localhost:8080`）
+3. 用**成员**账号刷脸或 PIN（演示如 `grandma-demo`）；管理员 `demo-parent` 请用 `web-admin` → 5174/8081
+
+欢迎页在成员入口会显示同一清单；用管理员账号误进成员前台会被登出，并提示改去管理后台或换成员账号。
 
 ## 2. 三档运行目标
 

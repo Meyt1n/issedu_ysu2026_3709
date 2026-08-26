@@ -92,6 +92,14 @@ scripts/start.ps1 web-admin
 
 两个前端进程共用同一个 API（HCT-453）。等价命令：`npm run dev:web:member` / `npm run dev:web:admin`，或 `HCT_WEB_PORT=5174 VITE_PORTAL_MODE=admin npm run dev:web`。
 
+#### 正确进入「成员前台」（HCT-456）
+
+1. 终端 1：`scripts/start.ps1 api`（或 `scripts/start.sh api`）
+2. 终端 2：`scripts/start.ps1 web-member`（**不要**只用 `web`；`web` 是调试单入口）
+3. 浏览器打开 http://127.0.0.1:5173（Compose 则用 http://localhost:8080）
+4. 用**家庭成员**账号登录（人脸 / 家庭 PIN；演示身份如 `grandma-demo` / `grandpa-demo`）
+5. **不要**用家庭管理员（创建家庭的人，如 `demo-parent`）进成员前台——会被入口锁登出并指引去管理后台 5174/8081
+
 本机代理固定走 `127.0.0.1`，避免 `localhost` 解析到 IPv6。多人联调可设 `HCT_API_PROXY`（后端）、`HCT_WEB_PORT`（前台端口）和 `HCT_ADMIN_WEB_PORT`（后台端口）。
 
 ### 可选：复刻本机视觉与助手闭环

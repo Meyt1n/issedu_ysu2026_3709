@@ -734,7 +734,14 @@ export async function createHouseholdAndEnter(
   state.households = await apiClient.listHouseholds(requestOptions.value)
   state.selectedHouseholdId = created.id
   await loadHouseholdScope()
-  if (sessionIsSignedOut()) return
+  if (sessionIsSignedOut()) {
+    // 成员前台建家后创建者即 owner，入口锁会登出——改写提示，避免误以为「建家失败」。
+    if (state.entryConflict === 'need-admin-entry') {
+      const notice = portalEntryConflictNotice('need-admin-entry', { afterCreate: true })
+      state.error = notice.message
+    }
+    return
+  }
   state.status = 'ready'
 }
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   crossPortalUrl,
+  MEMBER_PORTAL_ENTRY_STEPS,
   portalEntryBranding,
   portalEntryConflict,
   portalEntryConflictNotice,
@@ -168,6 +169,14 @@ describe('portalEntryConflictNotice', () => {
     const notice = portalEntryConflictNotice('need-admin-entry')
     expect(notice.message).toContain('家庭成员前台')
     expect(notice.message).toContain('管理员')
+    expect(notice.message).toContain('grandma-demo')
+    expect(notice.crossLinkTarget).toBe('admin')
+  })
+
+  it('explains creating a household on the member entry then switching to admin', () => {
+    const notice = portalEntryConflictNotice('need-admin-entry', { afterCreate: true })
+    expect(notice.message).toContain('家庭已创建')
+    expect(notice.message).toContain('管理后台')
     expect(notice.crossLinkTarget).toBe('admin')
   })
 
@@ -175,6 +184,14 @@ describe('portalEntryConflictNotice', () => {
     const notice = portalEntryConflictNotice('need-member-entry')
     expect(notice.message).toContain('管理后台')
     expect(notice.message).toContain('成员前台')
+    expect(notice.message).toContain('web-member')
     expect(notice.crossLinkTarget).toBe('member')
+  })
+
+  it('lists the three steps for entering the member portal', () => {
+    expect(MEMBER_PORTAL_ENTRY_STEPS).toHaveLength(3)
+    expect(MEMBER_PORTAL_ENTRY_STEPS[0]).toContain('web-member')
+    expect(MEMBER_PORTAL_ENTRY_STEPS[1]).toContain('5173')
+    expect(MEMBER_PORTAL_ENTRY_STEPS[2]).toContain('demo-parent')
   })
 })
