@@ -82,6 +82,7 @@ interface ChatEntry {
   role: 'user' | 'assistant'
   content: string
   revealed: number
+  openChat?: boolean
   sources?: string[]
   citations?: AssistantCitation[]
   confidence?: string
@@ -1059,6 +1060,7 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
     const alreadyStreamed = entry.content.length > 0 && entry.content === reply.answer
     entry.content = reply.answer
     entry.revealed = alreadyStreamed ? reply.answer.length : 0
+    entry.openChat = reply.open_chat
     entry.sources = reply.sources
     entry.citations = reply.citations
     entry.confidence = reply.confidence
@@ -1392,7 +1394,7 @@ onBeforeUnmount(() => {
           {{ entry.role === 'assistant' ? entry.content.slice(0, entry.revealed) : entry.content
           }}<span v-if="isStreaming(entry)" class="stream-caret" aria-hidden="true" />
           <div
-            v-if="entry.role === 'assistant' && !isStreaming(entry) && (entry.degraded || entry.escalate || entry.riskNotice || entry.queryType || entry.routeExplanation || (entry.sources?.length ?? 0) > 0 || entry.confidence || (entry.agentTrace?.length ?? 0) > 0 || (entry.externalSources?.length ?? 0) > 0)"
+            v-if="entry.role === 'assistant' && !entry.openChat && !isStreaming(entry) && (entry.degraded || entry.escalate || entry.riskNotice || entry.queryType || entry.routeExplanation || (entry.sources?.length ?? 0) > 0 || entry.confidence || (entry.agentTrace?.length ?? 0) > 0 || (entry.externalSources?.length ?? 0) > 0)"
             class="chat-sources"
           >
             <span v-if="isKnowledgeGapDegrade(entry)" class="chat-evidence-summary">
@@ -1467,7 +1469,7 @@ onBeforeUnmount(() => {
             </details>
           </div>
           <div
-            v-if="entry.role === 'assistant' && !isStreaming(entry) && index === history.length - 1 && (entry.suggestedQuestions?.length ?? 0) > 0"
+            v-if="entry.role === 'assistant' && !entry.openChat && !isStreaming(entry) && index === history.length - 1 && (entry.suggestedQuestions?.length ?? 0) > 0"
             class="chat-follow-ups"
             aria-label="相关追问"
           >

@@ -154,6 +154,36 @@ TEACHING_REMINDER = (
     "【教学提醒】以上内容仅供居家照护教学演示，不能替代医生或药师的诊断与个体用药指导。"
 )
 
+# A refusal or safety disclaimer is not itself a prohibited medical directive.
+# Check the short phrase immediately before a matched noun so text such as
+# “不诊断、不开处方” remains answerable while “建议开处方” is blocked.
+_MEDICAL_NEGATION_PREFIXES: tuple[str, ...] = (
+    "不",
+    "不要",
+    "无需",
+    "不用",
+    "禁止",
+    "请勿",
+    "不能",
+    "无法",
+    "不得",
+    "避免",
+    "不提供",
+    "不建议",
+    "不构成",
+    "不开",
+    "不要开",
+    "不能开",
+    "不得开",
+)
+
+
+def _is_negated_medical_term(text: str, start: int) -> bool:
+    prefix = text[max(0, start - 24):start]
+    return any(prefix.endswith(marker) for marker in _MEDICAL_NEGATION_PREFIXES) or any(
+        marker in prefix for marker in ("不能替代", "不可作为", "不应作为", "不构成")
+    )
+
 
 def medical_boundary_hits(text: str) -> list[str]:
     """Return boundary terms that appear in ``text`` (case-insensitive for Latin)."""
@@ -165,10 +195,21 @@ def medical_boundary_hits(text: str) -> list[str]:
         if term == "处方":
             # Teaching answers often mention OTC「非处方」资料; that must not
             # trip the prescription boundary.
-            if re.search(r"(?<!非)处方", text):
+            if any(
+                not text[max(0, match.start() - 8):match.start()].endswith("非")
+                and not _is_negated_medical_term(text, match.start())
+                for match in re.finditer("处方", text)
+            ):
                 hits.append(term)
             continue
         needle = term.casefold()
+        if needle not in lowered and term not in text:
+            continue
+        start = lowered.find(needle)
+        if start >= 0 and _is_negated_medical_term(text, start):
+            continue
+        if term in text and _is_negated_medical_term(text, text.find(term)):
+            continue
         if needle in lowered or term in text:
             hits.append(term)
     return hits

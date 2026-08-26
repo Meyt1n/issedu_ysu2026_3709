@@ -3,6 +3,7 @@ import type { AssistantCitation } from '../api/types'
 export interface StoredChatEntry {
   role: 'user' | 'assistant'
   content: string
+  openChat?: boolean
   sources?: string[]
   citations?: AssistantCitation[]
   confidence?: string
@@ -324,6 +325,7 @@ export function clearChatSessionsForActor(actorId: string): void {
 export function sessionEntryToStored(entry: {
   role: StoredChatEntry['role']
   content: string
+  openChat?: boolean
   sources?: string[]
   citations?: AssistantCitation[]
   confidence?: string
@@ -339,6 +341,7 @@ export function sessionEntryToStored(entry: {
   return {
     role: entry.role,
     content: entry.content,
+    openChat: entry.openChat,
     sources: entry.sources,
     citations: entry.citations,
     confidence: entry.confidence,

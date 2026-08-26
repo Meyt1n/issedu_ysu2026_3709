@@ -151,6 +151,10 @@ class TestMedicalSafety:
         violations = _check_medical_boundary("您可以查看已保存的健康记录")
         assert len(violations) == 0
 
+    def test_safety_disclaimer_is_not_a_directive(self):
+        violations = _check_medical_boundary("我不能诊断，也不开处方；这只是一般信息。")
+        assert violations == []
+
 
 # ── Structured output ─────────────────────────────────────────────────
 

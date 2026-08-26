@@ -453,7 +453,11 @@ def capabilities() -> CapabilityResponse:
         "llm",
         "risk-acknowledgement",
     ]
-    unavailable = ["vision-inference", "llm-cloud"]
+    unavailable = ["llm-cloud"]
+    if settings.ocr_version.strip().casefold() == "unavailable":
+        unavailable.append("vision-inference")
+    else:
+        available.append("vision-inference")
     # Keep the global capability sidebar aligned with the assistant catalog.
     # ``external-web`` is available only after the configured provider passes
     # the egress checks and is not an offline teaching fixture.
@@ -4105,6 +4109,7 @@ def assistant_chat(
                 "all_agents_local": True,
             }
         )
+    result["open_chat"] = bool(settings.agent_open_chat)
     session.commit()
     return AssistantResponse(**result)
 
@@ -4186,6 +4191,7 @@ def assistant_chat_stream(
                 event_queue.put(("cancelled", {"code": "CANCELLED"}))
             else:
                 worker_session.commit()
+                result["open_chat"] = bool(settings.agent_open_chat)
                 event_queue.put(("done", {"response": result}))
         except OrchestrationCancelled:
             worker_session.rollback()

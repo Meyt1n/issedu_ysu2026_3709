@@ -18,7 +18,7 @@
 
 需要 [Git](https://git-scm.com/)、[uv](https://docs.astral.sh/uv/)（Python 3.11）、[Node.js 22+](https://nodejs.org/) 和 [Docker Desktop](https://www.docker.com/products/docker-desktop/)（Compose 路径）。Windows 用 PowerShell，Linux/macOS 把 `scripts/start.ps1` 换成 `scripts/start.sh`。
 
-更细的端口、探针、质量 Demo 和故障说明见[本地部署与 Demo 操作指南](docs/本地部署与Demo操作指南.md)。干净环境复现证据见 [HCT-101 记录](docs/reviews/HCT-101-工程骨架干净环境复现记录.md)。部署起来后想按功能逐项「点亮」，请看下方[功能与 API 启动指南（按功能开启）](#功能与-api-启动指南按功能开启)。
+更细的端口、探针、质量 Demo 和故障说明见[本地部署与 Demo 操作指南](docs/本地部署与Demo操作指南.md)。干净环境复现证据见 [HCT-101 记录](docs/reviews/HCT-101-工程骨架干净环境复现记录.md)。部署起来后想按功能逐项「点亮」，请看下方[功能与 API 启动指南（按功能开启）](#功能与-api-启动指南按功能开启)；**本机已有 Ollama / PaddleOCR / YOLO 时，优先看 [路径 C：本机全功能演示栈](#路径-c本机全功能演示栈windowsstart-demops1)**。
 
 ### 路径 A：Docker Compose 基础档（推荐干净机器）
 
@@ -102,6 +102,225 @@ scripts/start.ps1 web-admin
 
 本机代理固定走 `127.0.0.1`，避免 `localhost` 解析到 IPv6。多人联调可设 `HCT_API_PROXY`（后端）、`HCT_WEB_PORT`（前台端口）和 `HCT_ADMIN_WEB_PORT`（后台端口）。
 
+### 路径 C：本机全功能演示栈（Windows，`start-demo.ps1`）
+
+适合**已经自备本机 Ollama 模型、PaddleOCR 环境、YOLO 权重**的研发/演示机：一条脚本拉起 MySQL + API + outbox/care-plan worker + 成员前台 + 视觉 worker，再另开管理后台。权重与 OCR 环境**不进 Git**，路径需按本机填写。
+
+#### 前置条件
+
+| 组件 | 是否必须 | 说明 |
+|---|---|---|
+| Docker Desktop | 必须 | 仅用于 MySQL（`scripts/start-demo.ps1` 会 `docker compose up db`） |
+| [uv](https://docs.astral.sh/uv/) + Node.js 22+ | 必须 | 脚本内会跑迁移与 `npm run dev:web` |
+| 本机 Ollama + 已登记模型 | 必须（助手真实生成） | 例：`ollama list` 能看到 `hct402-qlora-v5` 或 `qwen3:4b` |
+| 独立 PaddleOCR Python | 必须（视觉推理） | 与项目 `.venv` **分开**；须能 `import paddleocr` |
+| YOLO `best.pt` | 推荐 | 仓库外绝对路径；没有则 OCR/条码仍可用，capabilities 中 YOLO 相关能力降级 |
+| `.env` | 必须 | 从 `.env.example` 复制后按下方「全功能 `.env` 模板」补全 |
+
+#### 一次性准备
+
+```powershell
+cd issedu_ysu2026_3709
+Copy-Item .env.example .env    # 若已有 .env，对照模板补项即可
+
+scripts/start.ps1 setup
+uv run python scripts/setup_vision_demo.py      # 教学主数据 demo-cn-en-v1
+uv run python scripts/ensure_face_models.py     # YuNet + SFace（人脸登录）
+```
+
+确认 Docker Desktop 已运行。若本机 **3307** 被其他容器占用（常见于其它 worktree 的 MySQL），先释放端口或改 `.env` 的 `MYSQL_PORT` 与 `DATABASE_URL` 保持一致。
+
+#### 全功能 `.env` 模板（本地演示推荐）
+
+下列片段写入根目录 `.env`（密码仍用 `change-me` 即可，**勿提交**）。改任何项后须**重启 API** 才生效。
+
+```dotenv
+# ── 基础 / 双入口（HCT-453）──
+ALLOW_DEV_ACTOR_HEADER=true
+CORS_ORIGINS=http://localhost:5173,http://localhost:5174,http://localhost:8080,http://localhost:8081
+MYSQL_PORT=3307
+DATABASE_URL=mysql+pymysql://homecare:change-me@127.0.0.1:3307/homecare?charset=utf8mb4
+
+# ── 视觉推理 vision-inference（API 声明 + worker 实际执行）──
+# API：OCR_VERSION 非 unavailable 时 capabilities 会出现 vision-inference
+OCR_VERSION=paddleocr-2.7.3-ppocrv4-ch
+VISION_MODEL_VERSION=hct-yolo11n-box-assist-experimental-v1.2
+VISION_ADAPTER_SIGNING_KEY=dev-only-change-me
+VISION_ADAPTER_ALLOWLIST=homecare-local-vision
+MASTER_DATA_APPROVED_VERSIONS=demo-cn-en-v1
+MASTER_DATA_ROOT=./data/master-data
+
+# ── 本机 Ollama + 开放演示（HCT-451）──
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=hct402-qlora-v5
+OLLAMA_TIMEOUT_SECONDS=120
+AGENT_OPEN_CHAT=true
+AGENT_OPEN_MAX_TOKENS=4096
+
+# ── 联网搜索 external-web（二选一，见下节）──
+AGENT_WEB_SEARCH_ENABLED=true
+# 路线 1：课堂夹具（不出网，capabilities 无 external-web）
+# AGENT_WEB_SEARCH_PROVIDER=fixture
+# 路线 2：真实白名单出口（capabilities 出现 external-web）
+AGENT_WEB_SEARCH_PROVIDER=duckduckgo_html
+AGENT_WEB_SEARCH_URL=https://html.duckduckgo.com/html/
+AGENT_WEB_SEARCH_ALLOWED_DOMAINS=html.duckduckgo.com
+
+# ── 天气 / 健康资讯 ──
+WEATHER_ADAPTER=enabled
+WEATHER_PROVIDER=uapis
+WEATHER_API_URL=https://uapis.cn/api/v1/misc/weather
+WEATHER_DEFAULT_CITY_CODE=130600
+WEATHER_LOCATION_WHITELIST=130600,130629
+EGRESS_WEATHER_WHITELIST=uapis.cn
+HEALTH_NEWS_ADAPTER=enabled
+HEALTH_NEWS_ALLOWED_DOMAINS=www.who.int,www.nhc.gov.cn,www.chinacdc.cn
+
+# ── 人脸登录 ──
+FACE_MODEL_DIR=./models/face
+FACE_MODEL_AUTO_DOWNLOAD=true
+BIOMETRIC_ENCRYPTION_KEY=dev-only-biometric-key-change-me
+```
+
+Worker 侧环境变量在**启动终端**设置（与 API 的 `VISION_ADAPTER_SIGNING_KEY` 必须一致）：
+
+```powershell
+$env:HCT_VISION_WEIGHTS = "<仓库外 YOLO 权重>\best.pt"
+$env:HCT_VISION_WORKER_PYTHON = "<PaddleOCR 环境>\python.exe"
+$env:HCT_VISION_DEVICE = "0"          # 无 GPU 可改为 cpu
+$env:HCT_VISION_CONF = "0.25"
+$env:HCT_ADAPTER_SIGNING_KEY = "dev-only-change-me"
+$env:HCT_MASTER_DATA_VERSION = "demo-cn-en-v1"
+$env:HCT_OCR_LANG = "ch"
+$env:NO_PROXY = "127.0.0.1,localhost"
+```
+
+#### 一键启动（成员前台 + API + Worker）
+
+```powershell
+# 1. 停止上一轮（保留 MySQL 数据卷）
+.\scripts\stop-demo.ps1 -KeepDatabase
+Start-Sleep -Seconds 3
+
+# 2. 设置本机视觉 worker 环境（路径改成你的）
+$env:HCT_VISION_WEIGHTS = "<仓库外 YOLO 权重>\best.pt"
+$env:HCT_VISION_WORKER_PYTHON = "<PaddleOCR 环境>\python.exe"
+$env:HCT_VISION_DEVICE = "0"
+$env:HCT_VISION_CONF = "0.25"
+$env:HCT_ADAPTER_SIGNING_KEY = "dev-only-change-me"
+$env:HCT_MASTER_DATA_VERSION = "demo-cn-en-v1"
+$env:HCT_OCR_LANG = "ch"
+
+# 3. 启动：Ollama（若未运行）+ MySQL + API + outbox + care-plan + 5173 + vision worker
+.\scripts\start-demo.ps1 `
+  -Model "hct402-qlora-v5" `
+  -MysqlPort 3307 `
+  -ApiPort 8000 `
+  -WebPort 5173 `
+  -ActorId "demo-parent,parent-1" `
+  -VisionWorkerPython $env:HCT_VISION_WORKER_PYTHON `
+  -IncludeVisionWorker `
+  -Visible
+```
+
+成功时终端会打印：
+
+```text
+HomeCare Twin Demo is running.
+Web: http://127.0.0.1:5173
+API: http://127.0.0.1:8000/docs
+Ollama: http://127.0.0.1:11434
+```
+
+#### 管理后台（5174，需另开终端）
+
+`start-demo.ps1` 默认只起成员前台。管理后台需**第二个终端**：
+
+```powershell
+cd issedu_ysu2026_3709
+scripts/start.ps1 web-admin
+# 等价：npm run dev:web:admin
+```
+
+| 入口 | 地址 | 适用身份 |
+|---|---|---|
+| 成员前台 | http://127.0.0.1:5173 | 家庭成员：人脸 / PIN（如 `grandma-demo`） |
+| 管理后台 | http://127.0.0.1:5174 | 家庭管理员：账号密码（如 `demo-parent`） |
+| API | http://127.0.0.1:8000/docs | — |
+
+#### 停止
+
+```powershell
+.\scripts\stop-demo.ps1 -KeepDatabase   # 保留 MySQL；Ollama 模型不删
+# 手动关闭 5174 的 npm 窗口（若开了 web-admin）
+```
+
+#### 验证「全部点亮」
+
+```powershell
+curl.exe http://127.0.0.1:8000/api/v1/meta/capabilities
+curl.exe http://127.0.0.1:8000/api/v1/assistant/agents -H "X-Actor-ID: demo-parent"
+```
+
+全功能配置下，`available` 应包含（节选）：
+
+| capability | 含义 | 关键条件 |
+|---|---|---|
+| `vision-inference` | OCR/条码/YOLO 推理已配置 | `.env` 中 `OCR_VERSION` ≠ `unavailable`；且 vision worker 在跑 |
+| `external-web` | 真实联网搜索出口就绪 | `AGENT_WEB_SEARCH_PROVIDER=duckduckgo_html` 且白名单通过；**不是** `fixture` |
+| `master-data-teaching-demo` | 教学主数据已批准 | `MASTER_DATA_APPROVED_VERSIONS=demo-cn-en-v1` + 已跑 `setup_vision_demo.py` |
+| `face-recognition-local` | 人脸模型就绪 | `ensure_face_models.py` 成功 |
+| `llm` | 本地 Ollama 可用 | `OLLAMA_MODEL` 指向本机已安装模型 |
+
+助手目录接口期望（真实联网时）：
+
+- `open_chat`: `true`，`open_max_tokens`: `4096`
+- `web_search_provider`: `duckduckgo_html`，`web_search_offline_fixture`: `false`
+- 页面仍需每次勾选「补充联网参考」（双重开关）
+
+视觉 worker 日志（`tmp/demo-artifacts/demo-logs/vision-worker.out.log`）应类似：
+
+```text
+engines ready: {"yolo": true, "ocr": true, "barcode": true, "llm": false}
+watching queued tasks ... api=http://127.0.0.1:8000/api/v1
+```
+
+上传合成药盒见 [`docs/demo/vision-samples/`](docs/demo/vision-samples/README.md)。
+
+#### 分项启动说明（对照表）
+
+| 功能 | `.env` / 环境 | 启动动作 | 页面验证 |
+|---|---|---|---|
+| **基础档 + Worker** | `DATABASE_URL` 指向 MySQL | `start-demo.ps1`（含 outbox/care-plan） | `/health`、`/api/v1/health/db` |
+| **vision-inference** | 上表 OCR/VISION + worker 环境变量 | `-IncludeVisionWorker` 或手动 `scripts/vision_worker.py` | capabilities 含 `vision-inference`；扫描页上传药盒后进四态/复核 |
+| **external-web（真实）** | `duckduckgo_html` + 白名单域名 | 重启 API | capabilities 含 `external-web`；助手勾选联网，徽标为「真实联网 · 白名单出口」 |
+| **external-web（夹具）** | `AGENT_WEB_SEARCH_PROVIDER=fixture` | 重启 API | `web_search_ready=true` 但 capabilities **无** `external-web`；徽标「教学夹具 · 不出网」 |
+| **开放演示助手** | `AGENT_OPEN_CHAT=true` | 重启 API | agents 中 `open_chat=true`；可问「今天几号」 |
+| **本地 LLM** | `OLLAMA_MODEL=<本机模型名>` | 本机 `ollama serve` + 重启 API | 助手真实回答，非结构化降级 |
+| **人脸登录** | `FACE_MODEL_*` | `ensure_face_models.py` | capabilities 含 `face-recognition-local` |
+| **天气行动卡** | `WEATHER_ADAPTER=enabled` + 白名单 | 重启 API | `GET /api/v1/weather/action-cards?city_code=130600` |
+| **健康资讯出网** | `HEALTH_NEWS_ADAPTER=enabled` + 域名白名单 | 重启 API | `GET /api/v1/health-news` → `status=ok` |
+| **知识爬虫** | `KNOWLEDGE_ADMIN_ACTORS`（可选） | 无需额外进程 | 知识文档页「一键教学闭环」；详见[联网搜索与知识库刷新启用指南](docs/demo/联网搜索与知识库刷新启用指南.md) |
+
+#### 常见排障（路径 C）
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| MySQL 启动失败 `port 3307 already allocated` | 其他 Docker 项目占用 3307 | `docker ps` 找到占用容器并 `docker stop …`，或改 `.env` 的 `MYSQL_PORT` |
+| capabilities 仍无 `vision-inference` | `OCR_VERSION=unavailable` 或 API 未重启 | 改 `.env` 后**重启 API 进程**（不是只改 worker） |
+| capabilities 仍无 `external-web` | 仍为 `fixture` 或白名单未过 | 改用 `duckduckgo_html` 并设 `AGENT_WEB_SEARCH_ALLOWED_DOMAINS=html.duckduckgo.com` |
+| 视觉任务一直 queued | worker 未跑 / Actor 不匹配 / 签名密钥不一致 | 确认 worker 日志里 `api=…8000`；`--actors` 含页面 Actor；`HCT_ADAPTER_SIGNING_KEY` = `VISION_ADAPTER_SIGNING_KEY` |
+| worker 日志 `yolo: false` | 未设 `HCT_VISION_WEIGHTS` 或路径错误 | 启动前 export 权重绝对路径 |
+| 助手仍像「夹具联网」 | API 未加载新 `.env` | 结束占用 8000 的进程后重启 API |
+| 改 `.env` 不生效 | Compose/uvicorn 进程未重启 | `stop-demo.ps1` 后再 `start-demo.ps1`，或 kill 8000 端口后重启 API |
+
+更细的视觉 / Ollama / 联网分步说明：
+
+- 视觉闭环 → [视觉演示说明](docs/demo/vision-samples/README.md)
+- 本地模型 → [本地大模型闭环](docs/demo/local-llm-v5.md)
+- 联网与知识库 → [联网搜索与知识库刷新启用指南](docs/demo/联网搜索与知识库刷新启用指南.md)
+- 开放演示助手 → [助手开放演示模式](docs/助手开放演示模式.md)
+
 ### 可选：复刻本机视觉与助手闭环
 
 权重、PaddleOCR 环境和微调 GGUF **不进 Git**，别人必须在自己机器上准备，不要拷贝他人盘符或 SQLite。没有它们时，质量门控、建任务、人工复核和助手降级仍然可用。
@@ -159,10 +378,12 @@ scripts/start.ps1 health
 curl http://localhost:8000/api/v1/meta/capabilities
 ```
 
-`/api/v1/meta/capabilities` 是唯一的能力事实接口，诚实区分「可用 / 不可用」。默认配置下：
+`/api/v1/meta/capabilities` 是唯一的能力事实接口，诚实区分「可用 / 不可用」。**默认 `.env.example`（Compose 基础档）** 下：
 
 - **`available`（基础档默认点亮）**：`manual-health-event`、`household-member`、`field-authorization`、`audit-outbox`、`event-compensation-replay`、`outbox-recovery-worker`、`review-task`、`vision-task`、`vision-task-video`、`knowledge-store`、`local-assistant`、`llm`、`risk-acknowledgement`；
-- **`unavailable`（需额外准备或诚实关闭）**：`face-recognition-local`（未准备人脸模型）、`master-data-teaching-demo`（未批准教学主数据）、`vision-inference`、`llm-cloud`、`external-web`，以及**恒为不可用**的 `hct201-formal-drug-set`（正式药品固定集仍 UNRELEASED，属 fail-closed 诚实声明，不是故障）。
+- **`unavailable`（需额外准备或诚实关闭）**：`face-recognition-local`（未准备人脸模型）、`master-data-teaching-demo`（未批准教学主数据）、`vision-inference`（`OCR_VERSION=unavailable`）、`llm-cloud`、`external-web`（联网仍为 fixture 或未开白名单），以及**恒为不可用**的 `hct201-formal-drug-set`（正式药品固定集仍 UNRELEASED，属 fail-closed 诚实声明，不是故障）。
+
+按 [路径 C：本机全功能演示栈](#路径-c本机全功能演示栈windowsstart-demops1) 配齐 `.env` 并启动 vision worker 后，`vision-inference`、`external-web`（真实 DuckDuckGo）、`face-recognition-local`、`master-data-teaching-demo` 等会进入 `available`。
 
 页面身份有两种：开发身份（欢迎页填 Actor ID，或请求头 `X-Actor-ID`，仅 `ALLOW_DEV_ACTOR_HEADER=true` 时可用）和正式账号会话（欢迎页「正式账号登录」注册密码/PIN/人脸）。演示用 `demo-` / `test-` 前缀身份；生产必须关闭开发身份头（`APP_ENV=production` 时配置校验会强制 fail-closed）。
 
@@ -194,10 +415,10 @@ uv run python -m app.care_plan_worker --loop
 |---|---|---|---|---|
 | 正式账号 / PIN 登录 | 无（数据库会话已内置） | `CURSOR_SIGNING_KEY`（生产必须换） | 欢迎页「正式账号登录」注册后用密码或 PIN 登录 | 仍可用开发身份 |
 | 人脸登录与本机家庭绑定 | 本地 YuNet+SFace ONNX 模型：`uv run python scripts/ensure_face_models.py` | `FACE_MODEL_DIR`、`FACE_MODEL_AUTO_DOWNLOAD`、`FACE_MATCH_THRESHOLD_SFACE`、`BIOMETRIC_ENCRYPTION_KEY` | capabilities 出现 `face-recognition-local`；欢迎页人脸入口可用，本机家庭绑定卡仅人脸登录后显示 | 欢迎页提示改用 PIN/密码 |
-| 视觉识别闭环（OCR/条码/YOLO） | 独立 PaddleOCR Python 环境 + 本机 `scripts/vision_worker.py`（权重不进 Git） | `VISION_ADAPTER_SIGNING_KEY`（须与 worker 的 `HCT_ADAPTER_SIGNING_KEY` 一致）、`MASTER_DATA_APPROVED_VERSIONS` | 上传合成药盒后任务进入四态并转人工复核 | 任务保持排队/降级，质量门控与人工复核仍可用 |
+| 视觉识别闭环（OCR/条码/YOLO） | 独立 PaddleOCR Python + `scripts/vision_worker.py`（权重不进 Git） | `OCR_VERSION`（≠`unavailable` 时 capabilities 亮 `vision-inference`）、`VISION_ADAPTER_SIGNING_KEY`（= worker 的 `HCT_ADAPTER_SIGNING_KEY`）、`MASTER_DATA_APPROVED_VERSIONS` | 上传合成药盒后任务进入四态并转人工复核；worker 日志 `ocr:true` | 任务保持排队/降级，质量门控与人工复核仍可用 |
 | 教学演示主数据（HCT-201 教学路径） | `uv run python scripts/setup_vision_demo.py` 生成合成快照 | `MASTER_DATA_APPROVED_VERSIONS=demo-cn-en-v1` | capabilities 出现 `master-data-teaching-demo` | fail-closed 不加载；`hct201-formal-drug-set` 恒为 unavailable |
 | 本地助手真实生成（Ollama） | 本机 Ollama 及模型，或增强档容器（`$env:COMPOSE_PROFILE='enhanced'` 后 `up`，容器内仍需 `ollama pull`） | `OLLAMA_BASE_URL`、`OLLAMA_MODEL`；本地默认 `AGENT_OPEN_CHAT=true`（见 [助手开放演示模式](docs/助手开放演示模式.md)） | 助手页真实回答；开放模式下少被证据墙打断 | 结构化降级，档案/规则/知识链路不受影响 |
-| 可选联网搜索（HCT-430） | 无（夹具路线完全不出网） | `AGENT_WEB_SEARCH_ENABLED=true` + `AGENT_WEB_SEARCH_PROVIDER=fixture`（或真实白名单出口，见专文） | `GET /api/v1/assistant/agents` 中 `web_search_ready=true`、原因为 `OPT_IN_REQUIRED`；每次提问还需勾选「补充联网参考」 | 默认关闭（`DEPLOYMENT_DISABLED`），结果只是「外部参考」 |
+| 可选联网搜索（HCT-430） | 夹具：完全不出网；真实：HTTPS 白名单 | 夹具：`AGENT_WEB_SEARCH_PROVIDER=fixture`；真实：`duckduckgo_html` + `AGENT_WEB_SEARCH_URL` + `AGENT_WEB_SEARCH_ALLOWED_DOMAINS`（见[专文](docs/demo/联网搜索与知识库刷新启用指南.md)） | 夹具：`web_search_ready=true` 但 capabilities **无** `external-web`；真实：capabilities **有** `external-web`；每次提问还需勾选「补充联网参考」 | 默认关闭（`DEPLOYMENT_DISABLED`），结果只是「外部参考」 |
 | 知识入库与受控爬虫 | 知识管理员身份（`demo-` 前缀即可演示） | `KNOWLEDGE_ADMIN_ACTORS`（正式部署） | 「知识文档」页「一键教学闭环：抓取 → 批准 → 晋升」；`GET /api/v1/knowledge/crawl/status` | 爬虫默认离线夹具、**永不 auto_ingest**；非管理员看到明确提示 |
 | 演示造数与课堂剧本（HCT-452） | 演示身份 `demo-parent` | `ALLOW_DEV_ACTOR_HEADER=true`（或正式演示账号） | 「家庭与研发 → 演示造数」一键补种（幂等）；`POST /api/v1/demo/formal-health-seed`、`GET /api/v1/demo/classroom-scenarios` | 非演示身份被 403 `DEMO_SEED_FORBIDDEN` 拒绝（守卫生效，不是故障） |
 | 天气行动卡（HCT-305） | 白名单天气源 | `WEATHER_ADAPTER=enabled`、`WEATHER_API_URL`、`WEATHER_DEFAULT_CITY_CODE`、`WEATHER_LOCATION_WHITELIST`、`EGRESS_WEATHER_WHITELIST` | `GET /api/v1/weather/action-cards` | 默认 `disabled`，返回结构化空响应；只允许发送 6 位行政区划代码 |
