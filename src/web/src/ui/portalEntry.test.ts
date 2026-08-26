@@ -184,14 +184,15 @@ describe('portalEntryConflictNotice', () => {
     const notice = portalEntryConflictNotice('need-member-entry')
     expect(notice.message).toContain('管理后台')
     expect(notice.message).toContain('成员前台')
-    expect(notice.message).toContain('web-member')
+    expect(notice.message).toContain('数字密码')
     expect(notice.crossLinkTarget).toBe('member')
   })
 
   it('lists the three steps for entering the member portal', () => {
     expect(MEMBER_PORTAL_ENTRY_STEPS).toHaveLength(3)
-    expect(MEMBER_PORTAL_ENTRY_STEPS[0]).toContain('web-member')
+    expect(MEMBER_PORTAL_ENTRY_STEPS[0]).toContain('成员前台')
+    expect(MEMBER_PORTAL_ENTRY_STEPS[0]).not.toContain('scripts/')
     expect(MEMBER_PORTAL_ENTRY_STEPS[1]).toContain('5173')
-    expect(MEMBER_PORTAL_ENTRY_STEPS[2]).toContain('demo-parent')
+    expect(MEMBER_PORTAL_ENTRY_STEPS[2]).toContain('数字密码')
   })
 })

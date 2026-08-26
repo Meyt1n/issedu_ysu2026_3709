@@ -186,7 +186,7 @@ export interface PortalEntryBranding {
   /** 未绑定人脸时的默认凭据 tab。 */
   defaultCredential: 'face' | 'pin' | 'password'
   /**
-   * 账号密码是否收进「其他方式」：成员前台以人脸/家庭 PIN 为主，
+   * 账号密码是否收进「其他方式」：成员前台以刷脸/数字密码为主，
    * 密码不作为常驻 tab，避免长辈把个人前台当成后台账号系统。
    */
   passwordBehindOtherWays: boolean
@@ -199,15 +199,15 @@ export interface PortalEntryBranding {
 
 const MEMBER_BRANDING: PortalEntryBranding = {
   formTitle: '我的健康日常 · 家人登录',
-  formIdentityHint: '以家人自己的身份进入：刷一次脸或输入家庭 PIN，只看到自己的提醒、记录和帮助。',
+  formIdentityHint: '以家人自己的身份进入：刷一次脸或输入数字密码，只看到自己的提醒、记录和帮助。',
   badge: '成员前台 · 每位家人自己的健康日常',
   heroTitle: '我的健康日常，刷脸就能进',
   heroLede:
-    '这里是每位家人自己的个人前台：刷脸或输入家庭 PIN，以自己的身份进门，看今天的提醒、拍药盒交给家人核对。管理档案和授权的事，交给家庭管理后台。',
+    '这里是每位家人自己的个人前台：刷脸或输入数字密码，以自己的身份进门，看今天的提醒、拍药盒交给家人核对。管理档案和授权的事，交给家庭管理后台。',
   chips: [
     { icon: 'sun', text: '今天的提醒，一眼看到' },
     { icon: 'scan', text: '拍个药盒，家人核对' },
-    { icon: 'heart', text: '不用记密码，刷脸或 PIN' },
+    { icon: 'heart', text: '不用记复杂密码，刷脸或数字密码' },
   ],
   credentialOrder: ['face', 'pin', 'password'],
   defaultCredential: 'pin',
@@ -233,7 +233,7 @@ const ADMIN_BRANDING: PortalEntryBranding = {
   defaultCredential: 'password',
   passwordBehindOtherWays: false,
   ctaLabel: '进入管理后台',
-  crossLinkLabel: '我是家庭成员，回成员前台（人脸 / PIN）',
+  crossLinkLabel: '我是家庭成员，回成员前台（刷脸 / 数字密码）',
   crossLinkTarget: 'member',
 }
 
@@ -246,9 +246,9 @@ export function portalEntryBranding(mode: PortalEntryMode): PortalEntryBranding 
 
 /** 欢迎页「正确进入成员前台」短清单（HCT-456）。 */
 export const MEMBER_PORTAL_ENTRY_STEPS: ReadonlyArray<string> = [
-  '先启动 API，再执行 scripts/start.sh|ps1 web-member（不要只用 web）',
+  '先启动本地服务，再打开成员前台（开发端口 5173，或 Compose 的 8080）',
   '打开 http://127.0.0.1:5173（Compose 用 http://localhost:8080）',
-  '用家庭成员账号刷脸或 PIN 进入；管理员（创建家庭的人，如 demo-parent）请改去管理后台 5174/8081',
+  '用家庭成员账号刷脸或数字密码进入；管理员请改去管理后台 5174/8081',
 ]
 
 /** 入口/门户不匹配时的用户可读提示。 */
@@ -264,21 +264,21 @@ export function portalEntryConflictNotice(
     if (context.afterCreate) {
       return {
         message:
-          '家庭已创建。创建者是家庭管理员，成员前台不会停留在管理界面。请改用管理后台（5174/8081）完成配置；家人日常再用成员账号（如 grandma-demo）在成员前台刷脸或 PIN 进入。',
+          '家庭已创建。创建者是家庭管理员，成员前台不会停留在管理界面。请改用管理后台（5174/8081）完成配置；家人日常再用成员登录名在成员前台刷脸或用数字密码进入。',
         crossLinkLabel: '去管理后台登录',
         crossLinkTarget: 'admin',
       }
     }
     return {
       message:
-        '这是家庭成员前台。当前账号是家庭管理员（创建家庭的人）。请改用管理后台（5174/8081）登录；若要进本页，请换家庭成员账号（演示可用 grandma-demo / grandpa-demo）刷脸或 PIN。',
+        '这是家庭成员前台。当前账号是家庭管理员（创建家庭的人）。请改用管理后台（5174/8081）登录；若要进本页，请换家庭成员登录名刷脸或用数字密码进入。',
       crossLinkLabel: '去管理后台登录',
       crossLinkTarget: 'admin',
     }
   }
   return {
     message:
-      '这是家庭管理后台。当前账号是家庭成员。请先启动 web-member，打开成员前台（5173/8080），用人脸或家庭 PIN 登录；不要用管理员账号进成员前台。',
+      '这是家庭管理后台。当前账号是家庭成员。请打开成员前台（5173/8080），用刷脸或数字密码登录；不要用管理员账号进成员前台。',
     crossLinkLabel: '回成员前台登录',
     crossLinkTarget: 'member',
   }

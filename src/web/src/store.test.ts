@@ -548,12 +548,13 @@ describe('formatError timeout vs unavailability (HCT-424)', () => {
       code: 'DEPENDENCY_UNAVAILABLE',
     }))
 
-    expect(message).toContain('本地 API 服务不可用')
+    expect(message).toContain('暂时连不上')
+    expect(message).not.toContain('scripts/')
   })
 
-  it('503 FACE_DETECTOR_UNAVAILABLE 给出模型排查指引，绝不透出本机路径', () => {
+  it('503 FACE_DETECTOR_UNAVAILABLE 给出家用回退，绝不透出本机路径或运维脚本', () => {
     // Windows 中文路径导致的 ONNX 加载失败已由后端译为该稳定错误码；
-    // 前端必须提示模型缺失/加载失败与预下载方式，而不是 OpenCV C++ 堆栈。
+    // 前端必须提示模型缺失/加载失败，而不是 OpenCV C++ 堆栈或 scripts/。
     const message = formatError(new ApiClientError('FACE_DETECTOR_UNAVAILABLE', {
       status: 503,
       code: 'HTTP_ERROR',
@@ -561,7 +562,9 @@ describe('formatError timeout vs unavailability (HCT-424)', () => {
 
     expect(message).toContain('人脸功能暂时不可用')
     expect(message).toContain('没有改变任何数据')
-    expect(message).toContain('ensure_face_models')
+    expect(message).toContain('数字密码')
+    expect(message).not.toContain('ensure_face_models')
+    expect(message).not.toContain('scripts/')
     expect(message).not.toContain('ONNX')
     expect(message).not.toContain('C:\\')
   })
@@ -575,8 +578,20 @@ describe('formatError face login failure buckets (HCT-425)', () => {
     }))
 
     expect(message).toContain('转头')
-    expect(message).toContain('保持姿势')
+    expect(message).toContain('数字密码')
     expect(message).not.toContain('匹配失败')
+  })
+
+  it('maps FACE_AUTH_FAILED / NO_MATCH to a neutral retry tip', () => {
+    for (const code of ['FACE_AUTH_FAILED', 'NO_MATCH'] as const) {
+      const message = formatError(new ApiClientError(code, {
+        status: 401,
+        code: 'HTTP_ERROR',
+      }))
+      expect(message).toContain('这次没有认出来')
+      expect(message).toContain('数字密码')
+      expect(message).not.toContain('没匹配到人')
+    }
   })
 
   it('maps AMBIGUOUS_MATCH on 401 to a distinct-template tip', () => {
@@ -585,6 +600,23 @@ describe('formatError face login failure buckets (HCT-425)', () => {
       code: 'HTTP_ERROR',
     }))
 
-    expect(message).toContain('太相似')
+    expect(message).toContain('太像')
+  })
+
+  it('does not leak 422 English codes or 500 detail to family UI', () => {
+    const validation = formatError(new ApiClientError('SOME_UNKNOWN_CODE', {
+      status: 422,
+      code: 'HTTP_ERROR',
+    }))
+    expect(validation).not.toContain('SOME_UNKNOWN_CODE')
+    expect(validation).toContain('不符合要求')
+
+    const server = formatError(new ApiClientError('OpenCV path C:\\\\secret\\\\face.onnx', {
+      status: 500,
+      code: 'HTTP_ERROR',
+    }))
+    expect(server).not.toContain('OpenCV')
+    expect(server).not.toContain('face.onnx')
+    expect(server).toContain('没有改变任何数据')
   })
 })
