@@ -8,6 +8,7 @@ from queue import Queue
 from threading import Event, Thread
 from typing import Any, NoReturn
 
+import cv2
 from ai.vision.candidate_fusion import (
     FusionRequest,
     fuse_evidence,
@@ -2083,8 +2084,9 @@ async def auth_face_login(
             match_score = await run_face_pipeline(_match_frames_against_credential)
         except _FaceAuthRejected as exc:
             failed(exc.reason)
-        except (HTTPException, RuntimeError) as exc:
-            # Template decrypt failure or local face service unavailable.
+        except (HTTPException, RuntimeError, cv2.error) as exc:
+            # Template decrypt failure or local face service unavailable
+            # (including any raw OpenCV error — never leak the C++ message).
             _record_authentication_audit(
                 session,
                 household_id=household_id,
@@ -2289,7 +2291,9 @@ async def auth_family_face_login(
             best_actor_id = await run_face_pipeline(_identify_household_member)
         except _FaceAuthRejected as exc:
             failed(exc.reason)
-        except RuntimeError as exc:
+        except (RuntimeError, cv2.error) as exc:
+            # Face service unavailable, including raw OpenCV errors — never
+            # leak the C++ message or a local filesystem path to the client.
             _record_authentication_audit(
                 session,
                 household_id=household_id,
@@ -2643,6 +2647,15 @@ async def register_face_credential(
         # /health and every other request stay responsive while the user waits
         # on 「正在保存…」 (HCT-424 root-cause fix for false 「本地 API 不可用」).
         packed_template, metadata = await run_face_pipeline(_process_registration_frames)
+    except cv2.error as exc:
+        # A raw OpenCV C++ error (e.g. "Can't read ONNX file: C:\...\多模态医疗
+        # \...") must never surface as an HTTP 500 with the full local path in
+        # the toast; the loaders already map load failures, this catches any
+        # residual inference-time failure (HCT-424 Windows Unicode-path fix).
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="FACE_DETECTOR_UNAVAILABLE",
+        ) from exc
     except RuntimeError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

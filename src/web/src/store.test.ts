@@ -462,4 +462,19 @@ describe('formatError timeout vs unavailability (HCT-424)', () => {
 
     expect(message).toContain('本地 API 服务不可用')
   })
+
+  it('503 FACE_DETECTOR_UNAVAILABLE 给出模型排查指引，绝不透出本机路径', () => {
+    // Windows 中文路径导致的 ONNX 加载失败已由后端译为该稳定错误码；
+    // 前端必须提示模型缺失/加载失败与预下载方式，而不是 OpenCV C++ 堆栈。
+    const message = formatError(new ApiClientError('FACE_DETECTOR_UNAVAILABLE', {
+      status: 503,
+      code: 'HTTP_ERROR',
+    }))
+
+    expect(message).toContain('人脸功能暂时不可用')
+    expect(message).toContain('没有改变任何数据')
+    expect(message).toContain('ensure_face_models')
+    expect(message).not.toContain('ONNX')
+    expect(message).not.toContain('C:\\')
+  })
 })
