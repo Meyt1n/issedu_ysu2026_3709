@@ -52,6 +52,24 @@
       "enabled": true
     },
     {
+      "id": "fixture-seasonal-home-care",
+      "title": "换季与流感季居家照护教学摘录（本地夹具）",
+      "url": "fixture://knowledge/seasonal-home-care.html",
+      "license": "internal-demo",
+      "refresh_hours": 72,
+      "topics": ["换季", "通风", "观察", "照护交接"],
+      "enabled": true
+    },
+    {
+      "id": "fixture-med-disposal",
+      "title": "过期药品清理与回收教学摘录（本地夹具）",
+      "url": "fixture://knowledge/med-disposal.html",
+      "license": "internal-demo",
+      "refresh_hours": 168,
+      "topics": ["过期", "回收", "药箱盘点"],
+      "enabled": true
+    },
+    {
       "id": "example-cdc-med-safety",
       "title": "示例：公开用药安全科普（需 --live 且域名放行）",
       "url": "https://www.cdc.gov/medication-safety/about/index.html",

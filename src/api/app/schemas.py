@@ -784,6 +784,14 @@ class KnowledgeChunkRead(BaseModel):
     locator: str | None = None
 
 
+class KnowledgeDocumentDetailRead(KnowledgeDocumentRead):
+    """Read-only document detail: metadata plus full text and chunk previews."""
+
+    content: str = ""
+    chunk_count: int = 0
+    chunks: list[KnowledgeChunkRead] = Field(default_factory=list)
+
+
 class KnowledgeRetrieveRequest(BaseModel):
     query: str = Field(min_length=1, max_length=1000)
     household_id: str | None = None

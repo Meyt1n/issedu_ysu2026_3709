@@ -1,4 +1,5 @@
 staging/documents/
 staging/meta/
 staging/crawl_runs.jsonl
+staging/fixture_overrides/
 approved/incoming/

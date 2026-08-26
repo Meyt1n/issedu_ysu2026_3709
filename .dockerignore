@@ -1,0 +1,24 @@
+# 构建上下文排除：本地运行产物与敏感文件不得进入任何镜像。
+.git
+.venv
+node_modules
+dist
+tmp
+data
+models
+logs
+uploads
+backups
+*.sqlite3
+*.db
+.env
+.env.*
+!.env.example
+
+# 受控知识爬虫的运行产物（staging 草稿 / 晋升清单 / 教学演示 overlay）
+# 只在运行时生成；镜像里只带白名单与仓库夹具。
+docs/knowledge/staging/documents/
+docs/knowledge/staging/meta/
+docs/knowledge/staging/crawl_runs.jsonl
+docs/knowledge/staging/fixture_overrides/
+docs/knowledge/approved/incoming/

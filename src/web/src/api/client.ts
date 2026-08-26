@@ -31,8 +31,10 @@ import type {
   DashboardSummary,
   Household,
   KnowledgeDocument,
+  KnowledgeDocumentDetail,
   KnowledgeIndexSnapshot,
   KnowledgeRetrieveResponse,
+  KnowledgeStagingDetail,
   Member,
   MemberState,
   ModelBindingComparison,
@@ -1070,6 +1072,14 @@ export class ApiClient {
     return this.request('/api/v1/knowledge/documents', undefined, options)
   }
 
+  getKnowledgeDocument(docId: string, options?: RequestOptions): Promise<KnowledgeDocumentDetail> {
+    return this.request(
+      `/api/v1/knowledge/documents/${encodeURIComponent(docId)}`,
+      undefined,
+      options,
+    )
+  }
+
   createKnowledgeDocument(
     input: CreateKnowledgeDocumentInput,
     options?: RequestOptions,
@@ -1325,6 +1335,30 @@ export class ApiClient {
 
   promoteKnowledgeStaging(options?: RequestOptions): Promise<Record<string, unknown>> {
     return this.request('/api/v1/knowledge/crawl/promote', { method: 'POST' }, options)
+  }
+
+  getKnowledgeStagingDetail(
+    sourceId: string,
+    options?: RequestOptions,
+  ): Promise<KnowledgeStagingDetail> {
+    return this.request(
+      `/api/v1/knowledge/crawl/staging/${encodeURIComponent(sourceId)}`,
+      undefined,
+      options,
+    )
+  }
+
+  /** 教学演示：给本地夹具来源叠加模拟更新（不出网、不改仓库文件、永不自动入库）。 */
+  simulateKnowledgeCrawlUpdate(
+    options?: RequestOptions,
+    params?: { reset?: boolean },
+  ): Promise<Record<string, unknown>> {
+    const query = params?.reset ? '?reset=true' : ''
+    return this.request(
+      `/api/v1/knowledge/crawl/simulate-update${query}`,
+      { method: 'POST' },
+      options,
+    )
   }
 }
 

@@ -1,16 +1,22 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 
 import { ApiClientError, apiClient } from '../api/client'
 import {
+  STAGING_CHANGE_LABELS,
   crawlAccessFromError,
+  crawlRunSummary,
   pendingTeachingDrafts,
+  simulateUpdateSummary,
+  stagingChangeKind,
   teachingLoopSummary,
 } from '../knowledge/crawlPanel'
 import type {
   AssistantTool,
   KnowledgeDocument,
+  KnowledgeDocumentDetail,
   KnowledgeRetrieveResponse,
+  KnowledgeStagingDetail,
   WebSearchOpsSnapshot,
 } from '../api/types'
 import AppIcon from '../components/AppIcon.vue'
@@ -56,6 +62,31 @@ const ingestHint = ref('')
 const dueCount = computed(() => Number(crawlStatus.value?.due_count ?? 0))
 const stagingApprovedCount = computed(
   () => stagingItems.value.filter((item) => item.status === 'approved').length,
+)
+const crawlSources = computed<Array<Record<string, unknown>>>(() =>
+  Array.isArray(crawlStatus.value?.sources)
+    ? (crawlStatus.value?.sources as Array<Record<string, unknown>>)
+    : [],
+)
+const showSources = ref(false)
+
+// 只读详情抽屉：在用文档 / staging 草稿共用一个模态。
+const detailKind = ref<'document' | 'staging' | null>(null)
+const detailLoading = ref(false)
+const detailErrorText = ref('')
+const docDetail = ref<KnowledgeDocumentDetail | null>(null)
+const stagingDetail = ref<KnowledgeStagingDetail | null>(null)
+const detailTitle = computed(() => {
+  if (detailKind.value === 'document') return docDetail.value?.title ?? '知识文档详情'
+  if (detailKind.value === 'staging') return stagingDetail.value?.title ?? 'Staging 草稿详情'
+  return '详情'
+})
+const stagingDetailChangeLabel = computed(() =>
+  stagingDetail.value
+    ? STAGING_CHANGE_LABELS[
+        stagingChangeKind(stagingDetail.value as unknown as Record<string, unknown>)
+      ]
+    : '',
 )
 
 const docDraft = reactive({
@@ -223,7 +254,7 @@ async function runCrawl(dueOnly = false): Promise<void> {
   crawlReport.value = ''
   try {
     const report = await apiClient.runKnowledgeCrawl(requestOptions.value, { dueOnly })
-    crawlReport.value = `抓取完成：${report.fetched ?? 0} 条，变更 ${report.changed ?? 0}，未变 ${report.unchanged ?? 0}（不会自动入库）`
+    crawlReport.value = crawlRunSummary(report)
     pushToast('success', dueOnly ? '到期白名单已刷新到 staging' : '白名单来源已刷新到 staging')
     await loadStaging()
   } catch (cause) {
@@ -231,6 +262,63 @@ async function runCrawl(dueOnly = false): Promise<void> {
   } finally {
     crawlBusy.value = false
   }
+}
+
+/** 教学演示：给夹具来源叠加模拟更新，让下一次抓取显示「有更新」。 */
+async function simulateUpdate(): Promise<void> {
+  if (crawlBusy.value) return
+  crawlBusy.value = true
+  try {
+    const report = await apiClient.simulateKnowledgeCrawlUpdate(requestOptions.value)
+    crawlReport.value = simulateUpdateSummary(report)
+    pushToast('success', '教学演示更新已就绪；点「全量抓取」查看「有更新」草稿。')
+  } catch (cause) {
+    pushToast('error', formatError(cause))
+  } finally {
+    crawlBusy.value = false
+  }
+}
+
+function closeDetail(): void {
+  detailKind.value = null
+  docDetail.value = null
+  stagingDetail.value = null
+  detailErrorText.value = ''
+}
+
+async function openDocumentDetail(doc: KnowledgeDocument): Promise<void> {
+  detailKind.value = 'document'
+  detailLoading.value = true
+  detailErrorText.value = ''
+  docDetail.value = null
+  try {
+    docDetail.value = await apiClient.getKnowledgeDocument(doc.id, requestOptions.value)
+  } catch (cause) {
+    detailErrorText.value = formatError(cause)
+  } finally {
+    detailLoading.value = false
+  }
+}
+
+async function openStagingDetail(sourceId: string): Promise<void> {
+  detailKind.value = 'staging'
+  detailLoading.value = true
+  detailErrorText.value = ''
+  stagingDetail.value = null
+  try {
+    stagingDetail.value = await apiClient.getKnowledgeStagingDetail(
+      sourceId,
+      requestOptions.value,
+    )
+  } catch (cause) {
+    detailErrorText.value = formatError(cause)
+  } finally {
+    detailLoading.value = false
+  }
+}
+
+function onDetailKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape' && detailKind.value) closeDetail()
 }
 
 async function approveStaging(sourceId: string): Promise<void> {
@@ -311,10 +399,13 @@ async function runTeachingLoop(): Promise<void> {
 }
 
 onMounted(() => {
+  window.addEventListener('keydown', onDetailKeydown)
   void loadKnowledge()
   void loadWebSearchOps()
   void loadStaging()
 })
+
+onBeforeUnmount(() => window.removeEventListener('keydown', onDetailKeydown))
 </script>
 
 <template>
@@ -360,7 +451,14 @@ onMounted(() => {
           <li v-for="doc in visibleDocuments" :key="doc.id" class="row-card">
             <div class="row-top">
               <span class="row-title">
-                {{ doc.title }}
+                <button
+                  type="button"
+                  class="doc-title-link"
+                  :title="`查看《${doc.title}》详情`"
+                  @click="openDocumentDetail(doc)"
+                >
+                  {{ doc.title }}
+                </button>
                 <span class="pill sage">v{{ doc.version }}</span>
               </span>
               <span class="text-faint" style="font-size: 12.5px">{{ formatDateTime(doc.created_at) }}</span>
@@ -370,6 +468,9 @@ onMounted(() => {
               <span class="mono">{{ doc.content_hash.slice(0, 12) }}…</span>
             </p>
             <div class="row-actions">
+              <button type="button" class="btn btn-ghost btn-small" @click="openDocumentDetail(doc)">
+                查看详情
+              </button>
               <button type="button" class="btn btn-danger btn-small" :disabled="busy" @click="removeDocument(doc)">
                 下线文档
               </button>
@@ -440,6 +541,15 @@ onMounted(() => {
             <button type="button" class="btn btn-ghost btn-small" :disabled="crawlBusy" @click="runCrawl(false)">
               全量抓取
             </button>
+            <button
+              type="button"
+              class="btn btn-ghost btn-small"
+              :disabled="crawlBusy"
+              title="仅本地夹具：叠加清晰标注的模拟更新，让下一次抓取显示「有更新」；不出网、不改仓库文件、永不自动入库。"
+              @click="simulateUpdate"
+            >
+              模拟来源更新（教学演示）
+            </button>
           </div>
         </div>
         <div v-if="crawlForbidden" class="notice warn" role="status">
@@ -459,7 +569,48 @@ onMounted(() => {
           <p v-if="crawlStatus" class="row-meta" style="margin: 0 0 8px">
             白名单 {{ crawlStatus.source_count ?? 0 }} 源 · 到期 {{ dueCount }} · staging {{ stagingItems.length }} ·
             已批准待晋升 {{ stagingApprovedCount }} · auto_ingest 关闭
+            <button
+              v-if="crawlSources.length > 0"
+              type="button"
+              class="doc-title-link"
+              style="font-size: 12.5px"
+              @click="showSources = !showSources"
+            >
+              {{ showSources ? '收起来源列表' : '为什么总是这几个来源？查看白名单' }}
+            </button>
           </p>
+          <div v-if="showSources && crawlSources.length > 0" class="source-list">
+            <p class="row-meta" style="margin: 0 0 6px; line-height: 1.65">
+              抓取范围只来自这份白名单。网页端抓取<strong>只运行本地夹具（fixture）来源</strong>，服务端不出网；
+              远程 HTTPS 来源需在 <span class="mono">docs/knowledge/crawl/allowlist.json</span> 中
+              <span class="mono">enabled: true</span> 且域名命中 <span class="mono">allowed_hosts</span>，
+              再由管理员在终端执行：
+            </p>
+            <pre class="mono ingest-hint-block"><code>uv run python scripts/crawl_knowledge_sources.py --live --due-only</code></pre>
+            <ul class="list-plain" style="gap: 6px">
+              <li
+                v-for="source in crawlSources"
+                :key="String(source.source_id)"
+                class="row-card"
+                style="padding: 9px 12px"
+              >
+                <span class="row-title" style="font-size: 13.5px">{{ source.title }}</span>
+                <span class="row-meta" style="margin: 0">
+                  <span class="pill" :class="source.is_fixture ? 'sage' : 'gold'">
+                    {{ source.is_fixture ? '本地夹具' : '远程 HTTPS' }}
+                  </span>
+                  <span v-if="!source.is_fixture" class="pill" :class="source.enabled ? 'sage' : ''">
+                    {{ source.enabled ? '已启用（仅 CLI --live）' : '未启用' }}
+                  </span>
+                  <span v-if="source.due" class="pill gold">到期待刷新</span>
+                  <span v-if="source.demo_override" class="pill clay">含教学演示更新</span>
+                  · 每 {{ source.refresh_hours ?? '—' }} 小时到期
+                  <template v-if="source.staging_status"> · staging：{{ source.staging_status }}</template>
+                  <template v-if="source.fetched_at"> · 上次抓取 {{ formatDateTime(String(source.fetched_at)) }}</template>
+                </span>
+              </li>
+            </ul>
+          </div>
           <p v-if="crawlReport" class="notice info" role="status">{{ crawlReport }}</p>
           <pre v-if="ingestHint" class="mono ingest-hint-block"><code>{{ ingestHint }}</code></pre>
           <div v-if="stagingItems.length === 0 && !crawlLoadErrorText" class="empty-state">
@@ -468,12 +619,52 @@ onMounted(() => {
           </div>
           <ul v-else class="list-plain" style="gap: 8px">
             <li v-for="item in stagingItems" :key="String(item.source_id)" class="row-card" style="padding: 11px 14px">
-              <strong>{{ item.title }}</strong>
+              <button
+                type="button"
+                class="doc-title-link"
+                style="font-weight: 600"
+                :title="`查看《${item.title}》抓取正文与审核信息`"
+                @click="openStagingDetail(String(item.source_id))"
+              >
+                {{ item.title }}
+              </button>
               <span class="row-meta">
-                {{ item.status }} · {{ item.unchanged ? '未变更' : '有更新' }} ·
-                {{ String(item.content_sha256 || '').slice(0, 12) }}…
+                {{ item.status }} ·
+                <span
+                  class="pill"
+                  :class="{
+                    sage: stagingChangeKind(item) === 'new',
+                    gold: stagingChangeKind(item) === 'changed',
+                  }"
+                >
+                  {{ STAGING_CHANGE_LABELS[stagingChangeKind(item)] }}
+                </span>
+                <span v-if="item.demo_override" class="pill clay">教学演示更新</span>
+                · {{ String(item.content_sha256 || '').slice(0, 12) }}…
+                <template v-if="item.fetched_at"> · {{ formatDateTime(String(item.fetched_at)) }}</template>
+              </span>
+              <span
+                v-if="stagingChangeKind(item) === 'unchanged'"
+                class="text-faint"
+                style="font-size: 12px; line-height: 1.55"
+              >
+                内容哈希与上次一致，属正常；审核状态保持不变。
+              </span>
+              <span
+                v-else-if="stagingChangeKind(item) === 'changed'"
+                class="text-faint"
+                style="font-size: 12px; line-height: 1.55"
+              >
+                内容有更新，已重置为 draft，请点标题查看正文后重新审核。
               </span>
               <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap">
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-small"
+                  @click="openStagingDetail(String(item.source_id))"
+                >
+                  查看
+                </button>
                 <button
                   type="button"
                   class="btn btn-ghost btn-small"
@@ -641,6 +832,94 @@ onMounted(() => {
       </section>
     </div>
   </div>
+
+  <Teleport to="body">
+    <Transition name="modal">
+      <div
+        v-if="detailKind"
+        class="modal-backdrop"
+        role="dialog"
+        aria-modal="true"
+        :aria-label="detailTitle"
+        @click.self="closeDetail"
+      >
+        <div class="modal-card knowledge-detail-card">
+          <div class="detail-head">
+            <h3 class="modal-title" style="margin: 0">{{ detailTitle }}</h3>
+            <button type="button" class="btn btn-ghost btn-small" @click="closeDetail">关闭</button>
+          </div>
+
+          <div v-if="detailLoading" class="inline-loading" role="status">
+            <span class="loading-dots"><span /><span /><span /></span>
+            正在读取详情
+          </div>
+          <p v-else-if="detailErrorText" class="notice warn" style="margin: 0">
+            详情读取失败：{{ detailErrorText }}
+          </p>
+
+          <template v-else-if="detailKind === 'document' && docDetail">
+            <dl class="detail-meta">
+              <div><dt>来源</dt><dd>{{ docDetail.source }}</dd></div>
+              <div><dt>版本</dt><dd>v{{ docDetail.version }}</dd></div>
+              <div><dt>许可</dt><dd>{{ docDetail.license }}</dd></div>
+              <div><dt>状态</dt><dd>{{ docDetail.status }}</dd></div>
+              <div><dt>登记人</dt><dd class="mono">{{ docDetail.created_by }}</dd></div>
+              <div><dt>登记时间</dt><dd>{{ formatDateTime(docDetail.created_at) }}</dd></div>
+              <div><dt>分块数</dt><dd>{{ docDetail.chunk_count }}</dd></div>
+              <div><dt>内容哈希</dt><dd class="mono">{{ docDetail.content_hash.slice(0, 16) }}…</dd></div>
+              <div v-if="docDetail.effective_until">
+                <dt>有效期至</dt><dd>{{ formatDateTime(docDetail.effective_until) }}</dd>
+              </div>
+            </dl>
+            <p class="eyebrow" style="margin: 4px 0 0">正文（只读）</p>
+            <pre class="detail-body mono">{{ docDetail.content || '（该文档未保存正文，仅有分块索引）' }}</pre>
+            <template v-if="docDetail.chunks.length > 0">
+              <p class="eyebrow" style="margin: 4px 0 0">检索分块预览（助手引用的最小单元）</p>
+              <ul class="list-plain" style="gap: 6px; max-height: 180px; overflow: auto">
+                <li v-for="chunk in docDetail.chunks" :key="chunk.id" class="row-card" style="padding: 8px 10px">
+                  <span class="row-meta" style="margin: 0">
+                    #{{ chunk.chunk_index }}<template v-if="chunk.locator"> · {{ chunk.locator }}</template>
+                  </span>
+                  <span style="font-size: 13px; line-height: 1.6">{{ chunk.text }}</span>
+                </li>
+              </ul>
+            </template>
+          </template>
+
+          <template v-else-if="detailKind === 'staging' && stagingDetail">
+            <p class="notice warn" style="margin: 0">
+              staging 草稿仅供审核，<strong>不是正式检索证据</strong>；批准晋升并 dry-run 入库后才参与检索。
+            </p>
+            <dl class="detail-meta">
+              <div><dt>来源 URL</dt><dd class="mono" style="word-break: break-all">{{ stagingDetail.url }}</dd></div>
+              <div><dt>许可意图</dt><dd>{{ stagingDetail.license }}</dd></div>
+              <div><dt>审核状态</dt><dd>{{ stagingDetail.status }}</dd></div>
+              <div><dt>抓取时间</dt><dd>{{ stagingDetail.fetched_at ? formatDateTime(stagingDetail.fetched_at) : '—' }}</dd></div>
+              <div><dt>SHA-256</dt><dd class="mono" style="word-break: break-all">{{ stagingDetail.content_sha256 }}</dd></div>
+              <div>
+                <dt>本次变更</dt>
+                <dd>{{ stagingDetailChangeLabel }}</dd>
+              </div>
+              <div v-if="stagingDetail.review_notes"><dt>审核备注</dt><dd>{{ stagingDetail.review_notes }}</dd></div>
+              <div v-if="stagingDetail.approved_by">
+                <dt>批准人</dt>
+                <dd>{{ stagingDetail.approved_by }}<template v-if="stagingDetail.approved_at">（{{ formatDateTime(stagingDetail.approved_at) }}）</template></dd>
+              </div>
+              <div v-if="stagingDetail.rejected_by">
+                <dt>拒绝人</dt>
+                <dd>{{ stagingDetail.rejected_by }}<template v-if="stagingDetail.rejected_at">（{{ formatDateTime(stagingDetail.rejected_at) }}）</template></dd>
+              </div>
+            </dl>
+            <p v-if="stagingDetail.demo_override" class="notice info" style="margin: 0">
+              本内容包含「模拟来源更新」叠加的教学演示段落，仅用于课堂演示变更检测，不是真实来源更新。
+            </p>
+            <p class="eyebrow" style="margin: 4px 0 0">抓取正文（Markdown 原文）</p>
+            <pre class="detail-body mono">{{ stagingDetail.content_available ? stagingDetail.content_markdown : '（正文文件缺失，请重新抓取）' }}</pre>
+          </template>
+        </div>
+      </div>
+    </Transition>
+  </Teleport>
 </template>
 
 <style scoped>
@@ -655,5 +934,81 @@ onMounted(() => {
   user-select: all;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+.doc-title-link {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--ink) 30%, transparent);
+  text-underline-offset: 3px;
+}
+
+.doc-title-link:hover,
+.doc-title-link:focus-visible {
+  text-decoration-color: currentcolor;
+}
+
+.source-list {
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  margin: 0 0 10px;
+  padding: 10px 12px;
+}
+
+.knowledge-detail-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 84vh;
+  max-width: 720px;
+  overflow-y: auto;
+  text-align: left;
+}
+
+.detail-head {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.detail-meta {
+  display: grid;
+  gap: 6px 16px;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  margin: 0;
+  width: 100%;
+}
+
+.detail-meta dt {
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.detail-meta dd {
+  font-size: 13px;
+  line-height: 1.55;
+  margin: 2px 0 0;
+}
+
+.detail-body {
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+  border-radius: 10px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 12px 14px;
+  white-space: pre-wrap;
+  width: 100%;
+  word-break: break-word;
 }
 </style>

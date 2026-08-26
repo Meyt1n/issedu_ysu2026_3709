@@ -63,8 +63,25 @@
 - 文档：[联网搜索与知识库刷新启用指南](../demo/联网搜索与知识库刷新启用指南.md) 排障表补「无法连接本地 API / 响应超时 / 需要知识管理员 / 爬虫配置缺失」四行。
 - 回滚：还原 `docker/api.Dockerfile` 的 COPY 行与本次前端/路由提交即可；不涉及数据迁移。
 
+## 2026-08-26 增量（爬虫/知识库实用化：详情查看与变更演示）
+
+针对「资料点不开看不到正文、全量抓取永远是同一批未变更夹具」的用户反馈补齐产品可用性，安全默认不变（API 强制离线夹具、staging ≠ 正式证据、永不 auto_ingest）：
+
+- **可点击查看详情**：
+  - `GET /knowledge/documents/{id}` 升级为详情契约（`KnowledgeDocumentDetailRead`）：在列表字段之外返回 `content` 正文、`chunk_count` 与检索分块预览；权限过滤与列表一致，越权仍返回同样的 404（不泄露存在性）。「在用文档」列表点标题或「查看详情」打开只读模态，不影响登记/下线。
+  - 新增 `GET /knowledge/crawl/staging/{source_id}`（steward 权限）：返回抓取正文 Markdown、来源 URL、SHA-256、状态、fetched_at、审核备注与批准/拒绝轨迹，响应固定携带 `is_formal_evidence: false` 与免责声明；source_id 做白名单校验防路径穿越。Web 端草稿标题/「查看」按钮打开详情。
+- **变更可见**：抓取 meta 新增 `first_fetch`，报告新增 `new_sources`；Web 报告与草稿徽标区分「新来源 / 有更新 / 未变更」，全部未变更时明确解释“内容哈希未变属正常”并指向教学演示路径；内容变化仍重置为 draft 待重新审核。
+- **模拟来源更新（教学演示）**：新增 `POST /knowledge/crawl/simulate-update`（steward 权限，`?reset=true` 可清除）。仅对 `fixture://` 来源写入 gitignore 的 `docs/knowledge/staging/fixture_overrides/` 运行时 overlay（仓库夹具不被修改），追加清晰标注的「教学演示模拟更新 vN」段落；下一次抓取显示「有更新」并重置 draft。meta/status 详情携带 `demo_override` 透明标记；不出网、仍进 staging、永不 auto_ingest。
+- **来源可解释**：`crawl status` 的 sources 增补 `demo_override`；Web 端新增只读「白名单来源」折叠列表（夹具/远程、启用状态、refresh_hours、到期、上次抓取），并展示添加真实 HTTPS 源 + CLI `--live` 的说明与可复制命令，回答“为什么总是这几个”。
+- **可演示来源扩充**：新增 2 个合成教学夹具 `seasonal-home-care.html`（换季与流感季居家照护）与 `med-disposal.html`（过期药品清理与回收），登记进 allowlist（白名单 7 源，其中夹具 6）；夹具头部带 `fixture-version` 注释供开发者演示变更。
+- **部署**：新增仓库 `.dockerignore`，确保 API 镜像 `COPY docs/knowledge` 时排除 staging/approved 运行产物与教学 overlay。
+- 文档：crawl README（详情查看、为何未变更、三条“看到更新”路径、白名单面板）、启用指南（详情/模拟更新/排障行）。
+
 ## 测试证据
 
+- `tests/unit/test_knowledge_crawl.py`：staging 详情（正文/标志/404/穿越 id）、模拟更新（changed→draft、demo_override、二次 bump 递增、reset 恢复、仓库夹具零改动）、新夹具登记、详情与模拟更新 API 契约（steward 403、404、reset）
+- `tests/unit/test_hct401_knowledge.py::TestDocumentDetailApi`：详情返回正文+分块、越权 404 不泄露
+- `src/web/src/knowledge/crawlPanel.test.ts`：新来源/有更新/未变更徽标、抓取摘要（全未变更解释 + 失败计数）、模拟更新摘要
 - `tests/unit/test_hct401_knowledge.py`（含 IDF 负权重回归、覆盖度排序、章节分块定位三项新增用例）
 - `tests/unit/test_local_knowledge_ingest.py`（含仓库清单入库与主题检索断言）
 - `tests/unit/test_hct401_knowledge_gold.py`（金标集、同义词扩展、正式知识 example 哈希）

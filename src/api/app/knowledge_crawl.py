@@ -25,6 +25,15 @@ FIXTURES_ROOT = REPO_ROOT / "docs" / "knowledge" / "crawl" / "fixtures"
 STAGING_ROOT = REPO_ROOT / "docs" / "knowledge" / "staging"
 RUNS_PATH = STAGING_ROOT / "crawl_runs.jsonl"
 
+# Source ids double as staging file names; reject anything that could escape
+# the staging tree (path traversal) or hide files.
+_SOURCE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
+
+STAGING_DISCLAIMER = (
+    "staging 草稿仅供人工审核，不是正式检索证据；"
+    "批准晋升并 dry-run 入库后才会参与本地 RAG 检索。"
+)
+
 
 class _TextExtractor(HTMLParser):
     def __init__(self) -> None:
@@ -98,10 +107,27 @@ def _host_allowed(
         raise ValueError("HOST_NOT_ALLOWLISTED")
 
 
+def _fixture_overrides_root() -> Path:
+    """Runtime overlays produced by the classroom "simulate update" helper.
+
+    Lives under the gitignored staging tree so repository fixtures stay
+    pristine while the next crawl still observes changed content.
+    """
+    return STAGING_ROOT / "fixture_overrides"
+
+
+def _fixture_override_path(url: str) -> Path | None:
+    if not url.startswith("fixture://"):
+        return None
+    relative = url.removeprefix("fixture://knowledge/")
+    path = _fixture_overrides_root() / relative
+    return path if path.is_file() else None
+
+
 def _fetch_bytes(url: str, *, user_agent: str, max_bytes: int, live: bool) -> bytes:
     if url.startswith("fixture://"):
         relative = url.removeprefix("fixture://knowledge/")
-        path = FIXTURES_ROOT / relative
+        path = _fixture_override_path(url) or (FIXTURES_ROOT / relative)
         if not path.is_file():
             raise FileNotFoundError(f"FIXTURE_NOT_FOUND:{relative}")
         data = path.read_bytes()
@@ -202,6 +228,7 @@ def crawl_source(
     if meta_path.is_file():
         previous = json.loads(meta_path.read_text(encoding="utf-8"))
 
+    first_fetch = previous is None
     unchanged = bool(previous and previous.get("content_sha256") == content_hash)
     doc_path = _staging_doc_path(source_id)
     if not unchanged:
@@ -218,6 +245,10 @@ def crawl_source(
         "document_path": _relpath(doc_path),
         "fetched_at": stamp.isoformat(),
         "unchanged": unchanged,
+        "first_fetch": first_fetch,
+        # Transparency flag: content came from a classroom "simulate update"
+        # overlay, not from the pristine repository fixture.
+        "demo_override": _fixture_override_path(url) is not None,
         "review_notes": (previous or {}).get("review_notes", ""),
         "approved_by": (previous or {}).get("approved_by"),
         "approved_at": (previous or {}).get("approved_at"),
@@ -298,6 +329,7 @@ def run_crawl(
         "fetched": len(results),
         "unchanged": sum(1 for item in results if item.get("unchanged")),
         "changed": sum(1 for item in results if not item.get("unchanged")),
+        "new_sources": sum(1 for item in results if item.get("first_fetch")),
         "errors": errors,
         "results": results,
         "auto_ingest": False,
@@ -348,6 +380,7 @@ def crawl_ops_status(*, live_preview: bool = False) -> dict[str, Any]:
                 "fetched_at": (meta or {}).get("fetched_at"),
                 "content_sha256": (meta or {}).get("content_sha256"),
                 "unchanged": (meta or {}).get("unchanged"),
+                "demo_override": bool((meta or {}).get("demo_override")),
             }
         )
     recent_runs: list[dict[str, Any]] = []
@@ -384,6 +417,129 @@ def list_staging() -> list[dict[str, Any]]:
     return items
 
 
+def _validate_source_id(source_id: str) -> None:
+    if not _SOURCE_ID_RE.match(source_id or ""):
+        raise FileNotFoundError("STAGING_NOT_FOUND")
+
+
+def get_staging_detail(source_id: str) -> dict[str, Any]:
+    """Read-only staging draft detail: metadata plus the fetched markdown body.
+
+    Staging content is review material only — the response says so explicitly
+    so callers cannot mistake a draft for approved retrieval evidence.
+    """
+    _validate_source_id(source_id)
+    meta_path = _staging_meta_path(source_id)
+    if not meta_path.is_file():
+        raise FileNotFoundError("STAGING_NOT_FOUND")
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    doc_path = _staging_doc_path(source_id)
+    content_available = doc_path.is_file()
+    return {
+        **meta,
+        "content_markdown": (
+            doc_path.read_text(encoding="utf-8") if content_available else ""
+        ),
+        "content_available": content_available,
+        "is_formal_evidence": False,
+        "disclaimer": STAGING_DISCLAIMER,
+    }
+
+
+def simulate_fixture_update(
+    *,
+    actor_id: str,
+    source_ids: list[str] | None = None,
+    reset: bool = False,
+    allowlist_path: Path | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Teaching-demo only: overlay fixture sources with a clearly marked update.
+
+    Writes runtime overlays under the gitignored staging tree (repository
+    fixtures are never modified) so the next crawl detects a content change,
+    resets the draft to ``draft`` and requires review again. Fixture-only —
+    remote sources are never touched, nothing goes over the network, and
+    nothing is auto-ingested.
+    """
+    stamp = now or datetime.now(UTC)
+    overrides = _fixture_overrides_root()
+
+    if reset:
+        cleared: list[str] = []
+        if overrides.is_dir():
+            for path in sorted(overrides.glob("*.html")):
+                path.unlink()
+                cleared.append(path.name)
+        return {
+            "ok": True,
+            "teaching_demo": True,
+            "reset": True,
+            "cleared": cleared,
+            "auto_ingest": False,
+            "next_step": "再次抓取将回到仓库夹具原文（同样会被识别为「有更新」并重置为 draft）。",
+            "disclaimer": (
+                "模拟更新仅影响本地运行时 overlay，不修改仓库夹具，不触网，永不自动入库。"
+            ),
+        }
+
+    allowlist = load_allowlist(allowlist_path)
+    bumped: list[dict[str, Any]] = []
+    skipped: list[dict[str, str]] = []
+    overrides.mkdir(parents=True, exist_ok=True)
+    for source in allowlist.get("sources") or []:
+        if not isinstance(source, dict):
+            continue
+        sid = str(source.get("id") or "")
+        url = str(source.get("url") or "")
+        if source_ids and sid not in source_ids:
+            continue
+        if not url.startswith("fixture://"):
+            if source_ids:
+                skipped.append({"source_id": sid, "reason": "REMOTE_SOURCE_NOT_SIMULATED"})
+            continue
+        relative = url.removeprefix("fixture://knowledge/")
+        original = FIXTURES_ROOT / relative
+        if not original.is_file():
+            skipped.append({"source_id": sid, "reason": "FIXTURE_NOT_FOUND"})
+            continue
+        override_path = overrides / relative
+        bump = 1
+        if override_path.is_file():
+            match = re.search(r"demo-bump: (\d+)", override_path.read_text(encoding="utf-8"))
+            bump = int(match.group(1)) + 1 if match else 2
+        note = (
+            f"<section data-demo-update=\"true\"><!-- demo-bump: {bump} -->"
+            f"<h2>教学演示模拟更新 v{bump}</h2>"
+            f"<p>本段由「模拟来源更新」教学功能于 {stamp.isoformat()} 追加，"
+            "用于课堂演示变更检测与重新审核流程；不是真实来源更新，"
+            "不构成任何诊断、处方或剂量建议。</p></section>"
+        )
+        text = original.read_text(encoding="utf-8")
+        if "</body>" in text:
+            text = text.replace("</body>", f"{note}\n</body>", 1)
+        else:
+            text = f"{text}\n{note}"
+        override_path.write_text(text, encoding="utf-8")
+        bumped.append({"source_id": sid, "demo_bump": bump})
+
+    return {
+        "ok": True,
+        "teaching_demo": True,
+        "reset": False,
+        "requested_by": actor_id,
+        "bumped": bumped,
+        "skipped": skipped,
+        "auto_ingest": False,
+        "next_step": (
+            "点击「全量抓取」或「到期刷新」，这些来源会显示「有更新」并重置为 draft 待审。"
+        ),
+        "disclaimer": (
+            "模拟更新仅影响本地运行时 overlay，不修改仓库夹具，不触网，永不自动入库。"
+        ),
+    }
+
+
 def mark_staging_reviewed(
     source_id: str,
     *,
@@ -394,6 +550,7 @@ def mark_staging_reviewed(
 ) -> dict[str, Any]:
     if approve and reject:
         raise ValueError("APPROVE_REJECT_CONFLICT")
+    _validate_source_id(source_id)
     path = _staging_meta_path(source_id)
     if not path.is_file():
         raise FileNotFoundError("STAGING_NOT_FOUND")

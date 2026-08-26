@@ -357,3 +357,53 @@ class TestTokenizer:
         tokens = _query_tokens("阿莫西林")
         assert "阿莫西林" in tokens
         assert any(len(token) == 3 for token in tokens)
+
+
+# ── Document detail API（可点击查看详情的服务端契约） ────────────────────
+class TestDocumentDetailApi:
+    def test_detail_returns_content_and_chunks(self, client):
+        headers = {"X-Actor-Id": "detail-owner"}
+        created = client.post(
+            "/api/v1/knowledge/documents",
+            headers=headers,
+            json={
+                "title": "详情测试文档",
+                "content": "## 存放\n合成教学正文，用于详情接口。\n\n## 盘点\n定期检查有效期。",
+                "source": "unit-test",
+                "version": "1.2",
+            },
+        )
+        assert created.status_code == 201, created.text
+        doc_id = created.json()["id"]
+
+        detail = client.get(f"/api/v1/knowledge/documents/{doc_id}", headers=headers)
+        assert detail.status_code == 200, detail.text
+        body = detail.json()
+        assert body["title"] == "详情测试文档"
+        assert "合成教学正文" in body["content"]
+        assert body["chunk_count"] == len(body["chunks"]) >= 1
+        first = body["chunks"][0]
+        assert first["document_id"] == doc_id
+        assert first["text"]
+
+    def test_detail_denies_non_authorised_actor_with_404(self, client):
+        created = client.post(
+            "/api/v1/knowledge/documents",
+            headers={"X-Actor-Id": "detail-owner"},
+            json={
+                "title": "越权详情",
+                "content": "仅创建者可见的正文",
+                "source": "unit-test",
+                "permission_scope": {},
+            },
+        )
+        assert created.status_code == 201, created.text
+        doc_id = created.json()["id"]
+
+        denied = client.get(
+            f"/api/v1/knowledge/documents/{doc_id}",
+            headers={"X-Actor-Id": "detail-stranger"},
+        )
+        # Same 404 as a missing document: no existence leak, no content leak.
+        assert denied.status_code == 404
+        assert denied.json()["detail"] == "DOCUMENT_NOT_FOUND"
