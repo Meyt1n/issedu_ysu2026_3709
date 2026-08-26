@@ -132,6 +132,7 @@ class _CacheEntry:
     fetched_at: datetime
     sources_attempted: list[str]
     stored_at: float
+    scope_key: str
 
 
 _cache: _CacheEntry | None = None
@@ -153,18 +154,22 @@ def health_news_ops_snapshot(settings=None) -> dict[str, Any]:
     mode = (settings.health_news_adapter or "local").strip().casefold()
     allowed = settings.health_news_allowed_domain_set
     sources = resolve_active_sources(settings)
+    scope_key = _cache_scope_key(settings)
     cache = _cache
     age_seconds: float | None = None
     cache_status = "empty"
     cached_item_count = 0
     cached_fetched_at: datetime | None = None
     cached_sources_attempted: list[str] = []
+    cache_scope_matches = cache is not None and cache.scope_key == scope_key
     if cache is not None:
         age_seconds = max(0.0, monotonic() - cache.stored_at)
         cached_item_count = len(cache.items)
         cached_fetched_at = cache.fetched_at
         cached_sources_attempted = list(cache.sources_attempted)
-        if age_seconds <= settings.health_news_cache_ttl_seconds:
+        if not cache_scope_matches:
+            cache_status = "config_mismatch"
+        elif age_seconds <= settings.health_news_cache_ttl_seconds:
             cache_status = "fresh"
         elif age_seconds <= settings.health_news_stale_ttl_seconds:
             cache_status = "stale"
@@ -177,6 +182,7 @@ def health_news_ops_snapshot(settings=None) -> dict[str, Any]:
         "active_source_ids": [source.id for source in sources],
         "active_source_count": len(sources),
         "cache_status": cache_status,
+        "cache_scope_matches": cache_scope_matches,
         "cache_age_seconds": round(age_seconds, 3) if age_seconds is not None else None,
         "cached_item_count": cached_item_count,
         "cached_fetched_at": cached_fetched_at.isoformat() if cached_fetched_at else None,
@@ -456,6 +462,25 @@ def resolve_active_sources(settings=None) -> list[HealthNewsSourceProfile]:
     return active
 
 
+def _cache_scope_key(settings=None) -> str:
+    """Fingerprint all configuration that can change remote cache meaning."""
+    settings = settings or get_settings()
+    sources = resolve_active_sources(settings)
+    source_scope = "|".join(
+        f"{source.id}:{source.list_url}:{source.kind}:{source.link_path_contains}:{source.max_items}"
+        for source in sources
+    )
+    raw = "\n".join(
+        (
+            (settings.health_news_adapter or "local").strip().casefold(),
+            ",".join(sorted(settings.health_news_allowed_domain_set)),
+            source_scope,
+            str(settings.health_news_max_items),
+        )
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 def _local_response(
     *,
     status: StatusLiteral,
@@ -626,10 +651,11 @@ async def fetch_health_news(*, when: datetime | None = None) -> dict[str, Any]:
             degraded_reason="health_news_no_active_sources",
         )
 
+    cache_scope = _cache_scope_key(settings)
     global _cache, _last_request_at
     async with _lock:
         now_mono = monotonic()
-        if _cache is not None:
+        if _cache is not None and _cache.scope_key == cache_scope:
             age = now_mono - _cache.stored_at
             if age <= settings.health_news_cache_ttl_seconds:
                 return _local_response(
@@ -647,6 +673,7 @@ async def fetch_health_news(*, when: datetime | None = None) -> dict[str, Any]:
             stale_ok = (
                 _cache is not None
                 and (now_mono - _cache.stored_at) <= settings.health_news_stale_ttl_seconds
+                and _cache.scope_key == cache_scope
             )
             if stale_ok:
                 return _local_response(
@@ -713,6 +740,7 @@ async def fetch_health_news(*, when: datetime | None = None) -> dict[str, Any]:
                 fetched_at=fetched_at,
                 sources_attempted=attempted,
                 stored_at=monotonic(),
+                scope_key=cache_scope,
             )
             return _local_response(
                 status="ok",
@@ -726,6 +754,7 @@ async def fetch_health_news(*, when: datetime | None = None) -> dict[str, Any]:
 
         stale_age_ok = (
             _cache is not None
+            and _cache.scope_key == cache_scope
             and (monotonic() - _cache.stored_at) <= settings.health_news_stale_ttl_seconds
         )
         if stale_age_ok:
