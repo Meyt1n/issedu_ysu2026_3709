@@ -23,6 +23,16 @@ from app.main import app  # noqa: E402
 from app.models import Base  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _close_open_chat_in_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep FR-08 evidence walls on in tests even though demos default open.
+
+    Individual tests may re-enable ``agent_open_chat`` with monkeypatch.
+    """
+    settings = get_settings()
+    monkeypatch.setattr(settings, "agent_open_chat", False)
+
+
 @pytest.fixture()
 def db_session() -> Generator[Session, None, None]:
     engine = create_engine(

@@ -216,6 +216,14 @@ Windows 本地开发代理固定使用 `127.0.0.1`，避免 `localhost` 解析�
 
 联网搜索默认关闭（`AGENT_WEB_SEARCH_ENABLED=false`），且必须**双重开启**：部署开关 + 每次请求在助手页勾选「补充联网参考」。未启用时助手页会显示不可用原因与本节指引；`/api/v1/assistant/agents` 返回 `web_search_ready` 与 `web_search_unavailable_reason`（`DEPLOYMENT_DISABLED` / `EGRESS_BLOCKED` / `OPT_IN_REQUIRED`）供排查。
 
+### 4.2.1 助手开放演示模式（默认开启）
+
+本地 Demo **默认** `AGENT_OPEN_CHAT=true`，便于直接看本机模型真实回复（跳过证据/引用硬墙与空库季节短接，并注入本机日期）。完整说明、自检步骤与生产强制关闭规则见专文：
+
+→ [助手开放演示模式（HCT-451）](./助手开放演示模式.md)
+
+若需恢复教学证据墙：`.env` 设 `AGENT_OPEN_CHAT=false` 后重启 API。
+
 **路线 A：离线教学夹具（推荐课堂/无网演示，完全不出网）**
 
 在 `.env` 中设置并重启 API：

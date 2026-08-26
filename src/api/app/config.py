@@ -98,10 +98,9 @@ class Settings(BaseSettings):
     # Session-scoped in-process cache for authorised local retrieval results.
     agent_retrieval_cache_ttl_seconds: float = Field(default=120.0, ge=0, le=3600)
     # HCT-451: open-chat demo — skip evidence/citation walls so operators can
-    # evaluate the raw local model.  Default off so unit tests keep hard walls;
-    # local demos should set AGENT_OPEN_CHAT=true (see .env.example).
-    # Production must keep this false.
-    agent_open_chat: bool = False
+    # evaluate the raw local model.  Default ON for local demos; unit tests
+    # force it off via tests/conftest.py.  Production must keep this false.
+    agent_open_chat: bool = True
     agent_open_max_tokens: int = Field(default=4096, ge=512, le=16384)
     weather_adapter: str = "disabled"
     weather_provider: str = "generic"

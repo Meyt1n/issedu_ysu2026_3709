@@ -726,7 +726,7 @@ def test_synthesis_degrade_mentions_retrieved_evidence(monkeypatch) -> None:
         model="local-model",
         max_tokens=64,
         temperature=0.1,
-        settings=Settings(),
+        settings=Settings(agent_open_chat=False),
     )
 
     assert result["degraded"] is True
@@ -899,7 +899,7 @@ def test_synthesis_streams_only_validated_answer(monkeypatch) -> None:
         model="local-model",
         max_tokens=128,
         temperature=0.1,
-        settings=Settings(),
+        settings=Settings(agent_open_chat=False),
         on_token=tokens.append,
         on_status=statuses.append,
     )
@@ -934,7 +934,7 @@ def test_synthesis_emits_validating_status(monkeypatch) -> None:
         model="local-model",
         max_tokens=64,
         temperature=0.1,
-        settings=Settings(),
+        settings=Settings(agent_open_chat=False),
         on_status=phases.append,
     )
     assert phases == ["generating", "validating"]

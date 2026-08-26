@@ -1,9 +1,10 @@
 """Open-chat demo mode helpers (HCT-451).
 
-When ``AGENT_OPEN_CHAT=true``, the assistant behaves more like a normal
-local LLM chat: evidence/citation walls and short template fallbacks are
-skipped so operators can evaluate the model's raw reply quality.  Local
-clock context is always available so calendar questions are answerable.
+When ``AGENT_OPEN_CHAT`` is enabled (default for local demos), the assistant
+behaves more like a normal local LLM chat: evidence/citation walls and short
+template fallbacks are skipped so operators can evaluate the model's raw
+reply quality.  Local clock context is always available so calendar questions
+are answerable.  Production must set ``AGENT_OPEN_CHAT=false``.
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ OPEN_CHAT_SYSTEM_PROMPT = (
 
 def is_open_chat(settings=None) -> bool:
     settings = settings or get_settings()
-    return bool(getattr(settings, "agent_open_chat", False))
+    return bool(getattr(settings, "agent_open_chat", True))
 
 
 def local_clock_context(*, when: datetime | None = None) -> str:
