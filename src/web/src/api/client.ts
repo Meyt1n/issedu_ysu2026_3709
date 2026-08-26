@@ -193,8 +193,9 @@ export class ApiClient {
       })
     } catch (cause) {
       if (options.signal?.aborted) throw cause
-      // 超时和「连不上」必须区分：超时说明服务端可能仍在处理（例如人脸
-      // 首次推理），不能对用户宣称「API 不可用/没有改变任何数据」（HCT-424）。
+      // 超时（API 可能只是慢或正在重启）与连接失败（API 未启动 / 端口不对）
+      // 必须区分：超时说明服务端可能仍在处理（例如人脸首次推理，HCT-424），
+      // 不能把一切失败都说成「API 不可用/没有改变任何数据」。
       if (timeoutSignal.aborted) {
         throw new ApiClientError(`API request timed out after ${timeoutMs}ms`, {
           status: 0,

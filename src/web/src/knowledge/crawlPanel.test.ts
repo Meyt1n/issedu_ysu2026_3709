@@ -19,6 +19,30 @@ describe('crawlAccessFromError', () => {
     expect(CRAWL_FORBIDDEN_GUIDANCE).toContain('KNOWLEDGE_ADMIN_ACTORS')
   })
 
+  it('distinguishes an unreachable API (network) from a steward rejection', () => {
+    const cause = new ApiClientError('API service is unavailable', {
+      status: 0,
+      code: 'DEPENDENCY_UNAVAILABLE',
+    })
+    expect(crawlAccessFromError(cause)).toBe('network')
+  })
+
+  it('distinguishes a request timeout from an unreachable API', () => {
+    const cause = new ApiClientError('API request timed out after 15000ms', {
+      status: 0,
+      code: 'REQUEST_TIMEOUT',
+    })
+    expect(crawlAccessFromError(cause)).toBe('timeout')
+  })
+
+  it('flags a deployment missing the crawl allowlist as config-missing', () => {
+    const cause = new ApiClientError('KNOWLEDGE_CRAWL_CONFIG_MISSING', {
+      status: 503,
+      code: 'HTTP_ERROR',
+    })
+    expect(crawlAccessFromError(cause)).toBe('config-missing')
+  })
+
   it('keeps other failures as generic errors', () => {
     const serverError = new ApiClientError('boom', { status: 500, code: 'INTERNAL' })
     expect(crawlAccessFromError(serverError)).toBe('error')

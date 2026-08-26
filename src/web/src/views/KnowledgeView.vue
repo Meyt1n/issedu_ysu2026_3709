@@ -43,13 +43,14 @@ const snapshotResult = ref('')
 const webSearchOps = ref<WebSearchOpsSnapshot | null>(null)
 const webSearchOpsLoading = ref(false)
 const webSearchOpsForbidden = ref(false)
-const webSearchOpsError = ref(false)
+const webSearchOpsErrorText = ref('')
 const stagingItems = ref<Array<Record<string, unknown>>>([])
 const crawlStatus = ref<Record<string, unknown> | null>(null)
 const crawlBusy = ref(false)
 const crawlReport = ref('')
 const crawlForbidden = ref(false)
-const crawlLoadError = ref(false)
+const crawlLoadErrorText = ref('')
+const docsLoadErrorText = ref('')
 const ingestHint = ref('')
 
 const dueCount = computed(() => Number(crawlStatus.value?.due_count ?? 0))
@@ -81,6 +82,9 @@ async function loadKnowledge(): Promise<void> {
       apiClient.listAssistantTools(requestOptions.value),
     ])
     documents.value = docsResult.status === 'fulfilled' ? docsResult.value : []
+    // 读取失败与「真的 0 篇」必须区分：否则连接/鉴权故障会被误读成空知识库。
+    docsLoadErrorText.value =
+      docsResult.status === 'rejected' ? formatError(docsResult.reason) : ''
     tools.value = toolsResult.status === 'fulfilled' ? toolsResult.value.tools : []
   } finally {
     loading.value = false
@@ -90,7 +94,7 @@ async function loadKnowledge(): Promise<void> {
 async function loadWebSearchOps(): Promise<void> {
   webSearchOpsLoading.value = true
   webSearchOpsForbidden.value = false
-  webSearchOpsError.value = false
+  webSearchOpsErrorText.value = ''
   try {
     webSearchOps.value = await apiClient.getAssistantWebSearchOps(requestOptions.value)
   } catch (cause) {
@@ -98,7 +102,7 @@ async function loadWebSearchOps(): Promise<void> {
     if (cause instanceof ApiClientError && cause.status === 403) {
       webSearchOpsForbidden.value = true
     } else {
-      webSearchOpsError.value = true
+      webSearchOpsErrorText.value = formatError(cause)
     }
   } finally {
     webSearchOpsLoading.value = false
@@ -192,7 +196,7 @@ async function createSnapshot(): Promise<void> {
 
 async function loadStaging(): Promise<void> {
   crawlForbidden.value = false
-  crawlLoadError.value = false
+  crawlLoadErrorText.value = ''
   try {
     const [staging, status] = await Promise.all([
       apiClient.listKnowledgeStaging(requestOptions.value),
@@ -204,11 +208,12 @@ async function loadStaging(): Promise<void> {
     stagingItems.value = []
     crawlStatus.value = null
     // KNOWLEDGE_STEWARD_REQUIRED must surface as guidance, not a silent
-    // empty panel that looks like "no drafts yet".
+    // empty panel that looks like "no drafts yet".  Every other failure
+    // shows its real cause (连不上 API / 超时 / 部署缺配置 / 服务端错误)。
     if (crawlAccessFromError(cause) === 'forbidden') {
       crawlForbidden.value = true
     } else {
-      crawlLoadError.value = true
+      crawlLoadErrorText.value = formatError(cause)
     }
   }
 }
@@ -342,6 +347,10 @@ onMounted(() => {
           <span class="loading-dots"><span /><span /><span /></span>
           正在读取知识库
         </div>
+        <div v-else-if="docsLoadErrorText" class="notice warn" role="status">
+          <strong>知识库读取失败（不代表知识库为空）</strong>
+          <p style="margin: 6px 0 0; line-height: 1.65">{{ docsLoadErrorText }}</p>
+        </div>
         <div v-else-if="documents.length === 0" class="empty-state">
           <AppIcon class="empty-art" name="review" :size="38" />
           <strong>知识库还是空的</strong>
@@ -444,8 +453,8 @@ onMounted(() => {
           <p class="card-note" style="margin-top: 0">
             只抓白名单来源并写入 staging 草稿，<strong>不会自动入库</strong>；批准晋升后仍需人工 dry-run 才入库。
           </p>
-          <p v-if="crawlLoadError" class="card-note" style="margin: 0 0 8px">
-            爬虫状态暂时不可用，可稍后刷新。
+          <p v-if="crawlLoadErrorText" class="notice warn" role="status" style="margin: 0 0 8px">
+            爬虫状态读取失败：{{ crawlLoadErrorText }}
           </p>
           <p v-if="crawlStatus" class="row-meta" style="margin: 0 0 8px">
             白名单 {{ crawlStatus.source_count ?? 0 }} 源 · 到期 {{ dueCount }} · staging {{ stagingItems.length }} ·
@@ -453,7 +462,7 @@ onMounted(() => {
           </p>
           <p v-if="crawlReport" class="notice info" role="status">{{ crawlReport }}</p>
           <pre v-if="ingestHint" class="mono ingest-hint-block"><code>{{ ingestHint }}</code></pre>
-          <div v-if="stagingItems.length === 0" class="empty-state">
+          <div v-if="stagingItems.length === 0 && !crawlLoadErrorText" class="empty-state">
             <strong>暂无 staging 草稿</strong>
             <p>点击「全量抓取」或「到期刷新」生成本地夹具草稿，或用「一键教学闭环」演示完整流程。</p>
           </div>
@@ -520,8 +529,8 @@ onMounted(() => {
         <p v-else-if="webSearchOpsForbidden" class="text-faint" style="margin: 0">
           当前账号无权查看运维指标
         </p>
-        <p v-else-if="webSearchOpsError" class="card-note" style="margin: 0">
-          运行指标暂时不可用，可稍后刷新。
+        <p v-else-if="webSearchOpsErrorText" class="card-note" style="margin: 0">
+          运行指标读取失败：{{ webSearchOpsErrorText }}
         </p>
         <template v-else-if="webSearchOps">
           <div class="ops-status-line">

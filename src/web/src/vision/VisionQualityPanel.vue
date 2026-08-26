@@ -145,7 +145,7 @@ function explainError(cause: unknown): string {
     if (cause.code === 'DEPENDENCY_UNAVAILABLE') {
       return isMemberView.value
         ? '家里的服务暂时连不上，请让家人帮忙看一下。'
-        : '本地服务不可用，请启动 API 后重试。'
+        : '本地服务连不上，请确认 API 已启动后重试。'
     }
     if (cause.status === 413) {
       return isMemberView.value ? '照片太大了，请换一张小一点的再试。' : '图片过大，请缩小图片后重试。'

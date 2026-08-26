@@ -3432,6 +3432,20 @@ def _require_knowledge_steward(actor_id: str) -> None:
         )
 
 
+def _crawl_config_missing_error(exc: FileNotFoundError) -> HTTPException:
+    """Translate a missing allowlist/fixture tree into an actionable 503.
+
+    Containerised deployments that ship without ``docs/knowledge/crawl/`` used
+    to surface this as a bare 500, which the web UI could only render as a
+    vague "爬虫状态暂时不可用".  A stable reason code lets the UI say exactly
+    what is wrong instead of blaming API availability.
+    """
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="KNOWLEDGE_CRAWL_CONFIG_MISSING",
+    )
+
+
 @router.get("/knowledge/crawl/staging")
 def list_knowledge_staging(actor_id: str = Depends(get_actor_id)) -> dict:
     from app.knowledge_crawl import list_staging
@@ -3451,7 +3465,10 @@ def knowledge_crawl_status(actor_id: str = Depends(get_actor_id)) -> dict:
     from app.knowledge_crawl import crawl_ops_status
 
     _require_knowledge_steward(actor_id)
-    return crawl_ops_status()
+    try:
+        return crawl_ops_status()
+    except FileNotFoundError as exc:
+        raise _crawl_config_missing_error(exc) from exc
 
 
 @router.post("/knowledge/crawl/run")
@@ -3462,8 +3479,11 @@ def run_knowledge_crawl(
     from app.knowledge_crawl import run_crawl
 
     _require_knowledge_steward(actor_id)
-    # API 强制离线夹具，避免服务端意外出网；远程刷新只走 CLI/CI --live。
-    return run_crawl(live=False, due_only=due_only)
+    try:
+        # API 强制离线夹具，避免服务端意外出网；远程刷新只走 CLI/CI --live。
+        return run_crawl(live=False, due_only=due_only)
+    except FileNotFoundError as exc:
+        raise _crawl_config_missing_error(exc) from exc
 
 
 @router.post("/knowledge/crawl/staging/{source_id}/review")

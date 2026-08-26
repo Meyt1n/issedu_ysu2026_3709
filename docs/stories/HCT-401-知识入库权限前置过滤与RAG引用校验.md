@@ -52,6 +52,17 @@
 - **文档**：crawl README 新增「谁可以操作」权限表；本地部署指南新增 §4.3「如何刷新知识库」；README 新增快速短节。
 - 对应测试：`tests/unit/test_knowledge_crawl.py`（403 原因契约、`KNOWLEDGE_ADMIN_ACTORS` 放行）、`src/web/src/knowledge/crawlPanel.test.ts`（403 → 引导、待批草稿筛选、闭环摘要文案）。
 
+## 2026-08-25 增量（爬虫失败原因区分与 Compose 部署修复）
+
+针对「知识页所有卡片一律显示 API 不可用 / 暂时不可用」的反馈修复两层根因，安全默认不变（API 强制离线夹具、永不 auto_ingest）：
+
+- **Compose 部署缺配置（后端根因）**：`docker/api.Dockerfile` 此前不拷贝 `docs/knowledge/`，容器内 `knowledge_crawl.py` 的 allowlist/夹具路径（`/app/docs/knowledge/crawl/...`）不存在，`/knowledge/crawl/status|run` 以裸 500 失败。现镜像携带 `docs/knowledge/`，且这两个端点把 `FileNotFoundError` 译为结构化 503 `KNOWLEDGE_CRAWL_CONFIG_MISSING`（`routes.py::_crawl_config_missing_error`），旧镜像也能给出「重建镜像」指引而不是含糊文案。
+- **前端错误合并（前端根因）**：`api/client.ts` 此前把「连接失败」与「15 秒超时」都归为 `DEPENDENCY_UNAVAILABLE`，`formatError` 一律译成「本地 API 服务不可用」。现超时独立为 `REQUEST_TIMEOUT`；`formatError` 对连接失败给出启动/端口//health 排查指引，对 403 `KNOWLEDGE_STEWARD_REQUIRED` 给出知识管理员指引（绝不再说成 API 不可用），对 503 `KNOWLEDGE_CRAWL_CONFIG_MISSING`、501 `REAL_AUTH_REQUIRED` 与其余 5xx 均展示真实原因。
+- **知识页文案**：爬虫面板、「联网搜索运行状态」卡与「在用文档」卡在读取失败时展示上述真实原因；「知识库读取失败」与「知识库还是空的」明确区分，staging 读取失败时不再显示「暂无 staging 草稿」。
+- 对应测试：`tests/unit/test_knowledge_crawl.py::test_knowledge_crawl_config_missing_is_structured_503`、`src/web/src/api/client.test.ts`（超时 → `REQUEST_TIMEOUT`、连接失败 → `DEPENDENCY_UNAVAILABLE`）、`src/web/src/store.test.ts`（`formatError` 六类原因映射）、`src/web/src/knowledge/crawlPanel.test.ts`（network/timeout/config-missing/forbidden 分类）。
+- 文档：[联网搜索与知识库刷新启用指南](../demo/联网搜索与知识库刷新启用指南.md) 排障表补「无法连接本地 API / 响应超时 / 需要知识管理员 / 爬虫配置缺失」四行。
+- 回滚：还原 `docker/api.Dockerfile` 的 COPY 行与本次前端/路由提交即可；不涉及数据迁移。
+
 ## 测试证据
 
 - `tests/unit/test_hct401_knowledge.py`（含 IDF 负权重回归、覆盖度排序、章节分块定位三项新增用例）
