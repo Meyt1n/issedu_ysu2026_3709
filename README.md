@@ -62,7 +62,7 @@ $env:COMPOSE_PROFILE = "enhanced"
 scripts/start.ps1 up
 ```
 
-容器内的 Ollama 仍需自行 `ollama pull` / `ollama create` 模型；未配置 `OLLAMA_MODEL` 时助手保持降级。HCT-408 三档备份恢复仍在进行中，不能把增强档当成已验收交付。
+容器内的 Ollama 仍需自行 `ollama pull` / `ollama create` 模型；未配置 `OLLAMA_MODEL` 时助手保持降级。HCT-408 三档备份恢复：可弃置 FILE_ROOT 备份→破坏→恢复已有自动演练（见 [演练记录](docs/reviews/HCT-408-可弃置备份恢复演练记录.md)）；Compose 实跑 MySQL DROP/IMPORT 与独立 R3 仍未完成，不能把增强档当成已验收交付。
 
 ### 路径 B：本地进程（调试 Vue / FastAPI）
 

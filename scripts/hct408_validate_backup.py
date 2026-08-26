@@ -31,6 +31,8 @@ FORBIDDEN_VALUES = {
     "change-me-root",
     "change-me",
 }
+FILES_ARCHIVE_NAME = "files.tar.gz"
+FILES_ARCHIVE_META_NAME = "files_archive.json"
 
 
 def _load_json(path: Path) -> Any:
@@ -202,6 +204,56 @@ def validate_backup(
                         "message": f"manifest={loaded['total_bytes']} entries={calculated_bytes}",
                     }
                 )
+            # When the inventory lists files, a restorable archive is mandatory.
+            # Older inventory-only backups cannot recover destroyed FILE_ROOT.
+            entry_count = len(entries) if isinstance(entries, list) else 0
+            if entry_count > 0:
+                archive_path = backup_path / FILES_ARCHIVE_NAME
+                if not archive_path.is_file() or archive_path.stat().st_size == 0:
+                    findings.append(
+                        {
+                            "code": "FILES_ARCHIVE_MISSING",
+                            "message": str(archive_path),
+                        }
+                    )
+                else:
+                    meta_path = backup_path / FILES_ARCHIVE_META_NAME
+                    if meta_path.is_file():
+                        try:
+                            archive_meta = _load_json(meta_path)
+                            if not isinstance(archive_meta, dict):
+                                raise ValueError("files_archive.json root must be an object")
+                            archived = archive_meta.get("files", [])
+                            if not isinstance(archived, list):
+                                raise ValueError("files_archive.files must be a list")
+                            if len(archived) != entry_count:
+                                findings.append(
+                                    {
+                                        "code": "FILES_ARCHIVE_COUNT_MISMATCH",
+                                        "message": (
+                                            f"manifest={entry_count} archive={len(archived)}"
+                                        ),
+                                    }
+                                )
+                            expected_hash = archive_meta.get("sha256")
+                            if (
+                                isinstance(expected_hash, str)
+                                and len(expected_hash) == 64
+                                and _sha256(archive_path) != expected_hash
+                            ):
+                                findings.append(
+                                    {
+                                        "code": "FILES_ARCHIVE_HASH_MISMATCH",
+                                        "message": str(archive_path),
+                                    }
+                                )
+                        except (OSError, ValueError, json.JSONDecodeError) as exc:
+                            findings.append(
+                                {
+                                    "code": "FILES_ARCHIVE_META_INVALID",
+                                    "message": str(exc),
+                                }
+                            )
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             findings.append({"code": "FILE_MANIFEST_INVALID", "message": str(exc)})
 
@@ -214,8 +266,9 @@ def validate_backup(
         "file_count": len((file_manifest or {}).get("files", [])),
         "findings": findings,
         "limitations": [
-            "Validation does not modify the database or restore file contents.",
-            "A successful manifest check does not replace a controlled restore drill.",
+            "Validation does not modify the database by itself.",
+            "MySQL restore still requires a running Compose db service.",
+            "A successful manifest check does not replace an independent R3 review.",
         ],
     }
 

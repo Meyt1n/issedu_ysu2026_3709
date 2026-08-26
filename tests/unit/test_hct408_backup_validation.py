@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from scripts.hct408_file_archive import create_files_archive  # noqa: E402
 from scripts.hct408_file_inventory import create_manifest  # noqa: E402
 from scripts.hct408_validate_backup import validate_backup  # noqa: E402
 
@@ -56,6 +57,7 @@ def _write_valid_backup(tmp_path: Path) -> tuple[Path, Path]:
         ),
         encoding="utf-8",
     )
+    create_files_archive(file_root, backup)
     return backup, file_root
 
 

@@ -77,6 +77,9 @@ if (-not $SkipFiles) {
     }
     $fileManifest | ConvertTo-Json -Depth 6 | Out-File -LiteralPath (Join-Path $backupPath "file_manifest.json") -Encoding utf8
     Write-Host "[HCT-408 backup] file manifest written ($($files.Count) files, $totalBytes bytes)"
+    Write-Host "[HCT-408 backup] archiving FILE_ROOT contents into files.tar.gz ..."
+    & uv run python (Join-Path $scriptDir "hct408_file_archive.py") create --root $resolvedFileRoot --backup $backupPath
+    if ($LASTEXITCODE -ne 0) { throw "FILE_ROOT archive failed." }
 }
 
 $skipRoot = Join-Path $fileRoot "backup-skip"
