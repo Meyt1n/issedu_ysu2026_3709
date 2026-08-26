@@ -147,6 +147,47 @@ def reset_health_news_state() -> None:
     _lock = asyncio.Lock()
 
 
+def health_news_ops_snapshot(settings=None) -> dict[str, Any]:
+    """Return query-free adapter diagnostics for local operator surfaces."""
+    settings = settings or get_settings()
+    mode = (settings.health_news_adapter or "local").strip().casefold()
+    allowed = settings.health_news_allowed_domain_set
+    sources = resolve_active_sources(settings)
+    cache = _cache
+    age_seconds: float | None = None
+    cache_status = "empty"
+    cached_item_count = 0
+    cached_fetched_at: datetime | None = None
+    cached_sources_attempted: list[str] = []
+    if cache is not None:
+        age_seconds = max(0.0, monotonic() - cache.stored_at)
+        cached_item_count = len(cache.items)
+        cached_fetched_at = cache.fetched_at
+        cached_sources_attempted = list(cache.sources_attempted)
+        if age_seconds <= settings.health_news_cache_ttl_seconds:
+            cache_status = "fresh"
+        elif age_seconds <= settings.health_news_stale_ttl_seconds:
+            cache_status = "stale"
+        else:
+            cache_status = "expired"
+    return {
+        "adapter_mode": mode,
+        "fetch_enabled": mode == "enabled",
+        "allowlist_configured": bool(allowed),
+        "active_source_ids": [source.id for source in sources],
+        "active_source_count": len(sources),
+        "cache_status": cache_status,
+        "cache_age_seconds": round(age_seconds, 3) if age_seconds is not None else None,
+        "cached_item_count": cached_item_count,
+        "cached_fetched_at": cached_fetched_at.isoformat() if cached_fetched_at else None,
+        "cached_sources_attempted": cached_sources_attempted,
+        "cache_ttl_seconds": float(settings.health_news_cache_ttl_seconds),
+        "stale_ttl_seconds": float(settings.health_news_stale_ttl_seconds),
+        "min_request_interval_seconds": float(settings.health_news_min_request_interval_seconds),
+        "max_items": int(settings.health_news_max_items),
+    }
+
+
 def builtin_source_catalog() -> list[dict[str, Any]]:
     return [source.model_dump() for source in BUILTIN_SOURCES]
 
