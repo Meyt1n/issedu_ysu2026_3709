@@ -125,11 +125,11 @@ scripts/start.ps1 api
 
 #### 正确进入成员前台三步清单（HCT-456）
 
-1. `scripts/start.ps1|sh api` + `scripts/start.ps1|sh web-member`
+1. `bash scripts/start.sh api` + `bash scripts/start.sh web-member`（Windows：`scripts/start.ps1 …`）
 2. 打开 `http://127.0.0.1:5173`（Compose：`http://localhost:8080`）
 3. 用**成员**账号刷脸或 PIN（演示如 `grandma-demo`）；管理员 `demo-parent` 请用 `web-admin` → 5174/8081
 
-欢迎页在成员入口会显示同一清单；用管理员账号误进成员前台会被登出，并提示改去管理后台或换成员账号。
+欢迎页在成员入口会显示同一清单；用管理员账号误进成员前台会被登出，并提示改去管理后台或换成员账号。Linux 若 `./scripts/start.sh` 报 Permission denied，用 `bash scripts/start.sh …`。
 
 ## 2. 三档运行目标
 

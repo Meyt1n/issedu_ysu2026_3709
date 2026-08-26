@@ -246,7 +246,7 @@ export function portalEntryBranding(mode: PortalEntryMode): PortalEntryBranding 
 
 /** 欢迎页「正确进入成员前台」短清单（HCT-456）。 */
 export const MEMBER_PORTAL_ENTRY_STEPS: ReadonlyArray<string> = [
-  '先启动 API，再执行 scripts/start.sh|ps1 web-member（不要只用 web）',
+  '先启动 API，再执行 bash scripts/start.sh web-member（Windows 用 start.ps1；不要只用 web）',
   '打开 http://127.0.0.1:5173（Compose 用 http://localhost:8080）',
   '用家庭成员账号刷脸或 PIN 进入；管理员（创建家庭的人，如 demo-parent）请改去管理后台 5174/8081',
 ]
