@@ -169,7 +169,8 @@ describe('portalEntryConflictNotice', () => {
     const notice = portalEntryConflictNotice('need-admin-entry')
     expect(notice.message).toContain('家庭成员前台')
     expect(notice.message).toContain('管理员')
-    expect(notice.message).toContain('grandma-demo')
+    expect(notice.message).toContain('数字密码')
+    expect(notice.message).not.toContain('demo-parent')
     expect(notice.crossLinkTarget).toBe('admin')
   })
 

@@ -464,16 +464,17 @@ describe('portal entry lock (HCT-453)', () => {
 })
 
 describe('formatError 区分真实失败原因（HCT-401 爬虫面板）', () => {
-  it('连接失败提示如何启动并验证 API，而不是含糊的“服务不可用”', () => {
+  it('连接失败用家用文案提示，不暴露运维脚本路径', () => {
     const message = formatError(
       new ApiClientError('API service is unavailable', {
         status: 0,
         code: 'DEPENDENCY_UNAVAILABLE',
       }),
     )
-    expect(message).toContain('无法连接本地 API')
-    expect(message).toContain('/health')
+    expect(message).toContain('暂时连不上')
     expect(message).toContain('没有改变任何数据')
+    expect(message).not.toContain('scripts/')
+    expect(message).not.toContain('/health')
   })
 
   it('请求超时与连接失败给出不同解释', () => {
@@ -512,19 +513,21 @@ describe('formatError 区分真实失败原因（HCT-401 爬虫面板）', () =>
     expect(message).not.toContain('无法连接')
   })
 
-  it('501 REAL_AUTH_REQUIRED 提示开发身份头已关闭', () => {
+  it('501 REAL_AUTH_REQUIRED 提示调试身份入口已关闭', () => {
     const message = formatError(
       new ApiClientError('REAL_AUTH_REQUIRED', { status: 501, code: 'HTTP_ERROR' }),
     )
-    expect(message).toContain('ALLOW_DEV_ACTOR_HEADER')
+    expect(message).toContain('调试身份')
+    expect(message).not.toContain('ALLOW_DEV_ACTOR_HEADER')
   })
 
-  it('未识别的 5xx 展示 HTTP 状态与服务端 detail 供定位', () => {
+  it('未识别的 5xx 不向家庭用户泄漏服务端 detail', () => {
     const message = formatError(
       new ApiClientError('SOMETHING_BROKE', { status: 500, code: 'HTTP_ERROR' }),
     )
-    expect(message).toContain('HTTP 500')
-    expect(message).toContain('SOMETHING_BROKE')
+    expect(message).toContain('没有改变任何数据')
+    expect(message).not.toContain('HTTP 500')
+    expect(message).not.toContain('SOMETHING_BROKE')
   })
 })
 

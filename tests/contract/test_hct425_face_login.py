@@ -137,10 +137,11 @@ def test_face_failures_are_rate_limited(client: TestClient) -> None:
     assert sixth_login.status_code == 429
 
 
-def test_successful_face_login_clears_challenge_rate_limit(client: TestClient) -> None:
+def test_successful_face_login_clears_challenge_rate_limit(
+    client: TestClient, db_session: Session
+) -> None:
     """Successful login must not leave the household challenge-locked."""
     from app.auth import MAX_LOGIN_ATTEMPTS, clear_face_challenge_rate_limit
-    from app.db import SessionLocal
 
     household_id = "challenge-clear-hh"
     actor_id = "challenge-clear-actor"
@@ -159,9 +160,12 @@ def test_successful_face_login_clears_challenge_rate_limit(client: TestClient) -
     )
     assert blocked.status_code == 429
 
-    with SessionLocal() as session:
-        clear_face_challenge_rate_limit(session, household_id=household_id)
-        session.commit()
+    clear_face_challenge_rate_limit(
+        db_session,
+        household_id=household_id,
+        client_key="testclient",
+    )
+    db_session.commit()
 
     recovered = client.post(
         "/api/v1/auth/face-challenge",

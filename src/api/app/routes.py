@@ -1976,6 +1976,7 @@ def auth_family_face_challenge(
 
 @router.post("/auth/face-login", response_model=AuthSessionRead)
 async def auth_face_login(
+    request: Request,
     household_id: str = Form(..., min_length=1, max_length=120),
     actor_id: str = Form(..., min_length=1, max_length=120),
     challenge_id: str = Form(..., min_length=16, max_length=128),
@@ -2126,7 +2127,10 @@ async def auth_face_login(
             frame_bytes[index] = b""
 
     clear_face_failures(rate_key, session)
-    clear_face_challenge_rate_limit(session, household_id=household_id)
+    client_host = request.client.host if request.client else None
+    clear_face_challenge_rate_limit(
+        session, household_id=household_id, client_key=client_host
+    )
     _record_authentication_audit(
         session,
         household_id=household_id,
@@ -2144,6 +2148,7 @@ async def auth_face_login(
 
 @router.post("/auth/family-face-login", response_model=AuthSessionRead)
 async def auth_family_face_login(
+    request: Request,
     household_id: str = Form(..., min_length=1, max_length=120),
     challenge_id: str = Form(..., min_length=16, max_length=128),
     frames: list[UploadFile] = File(...),
@@ -2337,7 +2342,10 @@ async def auth_family_face_login(
             frame_bytes[index] = b""
 
     clear_face_failures(rate_key, session)
-    clear_face_challenge_rate_limit(session, household_id=household_id)
+    client_host = request.client.host if request.client else None
+    clear_face_challenge_rate_limit(
+        session, household_id=household_id, client_key=client_host
+    )
     _record_authentication_audit(
         session,
         household_id=household_id,
