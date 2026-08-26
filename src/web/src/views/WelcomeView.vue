@@ -306,7 +306,7 @@ async function submitSession(): Promise<void> {
       return
     }
     if (faceFrames.value.length < 2) {
-      localError.value = '请先点击“开始动态采集”，完成采集后再进行人脸登录。'
+      localError.value = '人脸资料已经录入，但本次登录还没有采集动态画面；请点击“开始本次动态采集并登录”，按提示完成采集。'
       return
     }
   }
@@ -542,6 +542,9 @@ async function submitCreate(): Promise<void> {
             <div>
               <strong>{{ faceBinding.title }}</strong>
               <small>{{ faceBinding.detail }}</small>
+              <small v-if="faceBinding.bound" class="face-login-bound-hint">
+                人脸资料已录入；每次登录仍需点击下方按钮，现场采集动态画面完成比对。
+              </small>
               <button v-if="faceBinding.fallbackLabel" type="button" class="btn btn-ghost btn-small" @click="usePasswordFallback">
                 {{ faceBinding.fallbackLabel }}
               </button>

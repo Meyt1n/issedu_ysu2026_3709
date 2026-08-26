@@ -64,7 +64,9 @@ test('人脸模式已绑定时显示家庭名、不跨家说明和采集区', as
 
   await expect(page.locator('.face-family-summary')).toContainText(boundHousehold.name)
   await expect(page.getByText('只在这个家庭里认人，不会跨家搜索。')).toBeVisible()
+  await expect(page.getByText('人脸资料已录入；每次登录仍需点击下方按钮，现场采集动态画面完成比对。')).toBeVisible()
   await expect(page.getByRole('button', { name: '改用账号密码登录' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /开始本次动态采集并登录/ })).toBeVisible()
   await expect(page.locator('.face-capture')).toBeVisible()
 })
 
@@ -82,5 +84,6 @@ test('另一个本地端口写入的同主机家庭绑定可用于成员端人�
   await expect(page.locator('.face-family-summary')).toContainText(boundHousehold.name)
   await expect(page.getByText('只在这个家庭里认人，不会跨家搜索。')).toBeVisible()
   await expect(page.getByText('本机还没有开启人脸登录')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /开始本次动态采集并登录/ })).toBeVisible()
   await expect(page.locator('.face-capture')).toBeVisible()
 })
