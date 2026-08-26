@@ -110,6 +110,23 @@ describe('语音播报 composable', () => {
     expect(withVoices.spoken[0]!.lang).toBe('zh-CN')
   })
 
+  it('设置了首选音色时按名称精确匹配（与助手朗读共用同一偏好）', () => {
+    const natural = fakeVoice({ name: 'Xiaoxiao (Natural)' })
+    const remote = fakeVoice({ name: 'Google 普通话（中国大陆）', localService: false })
+    const withVoices = fakeSynth([remote, natural])
+    const speaker = createSpeaker(() => true, withVoices, () => 'Google 普通话（中国大陆）')
+    expect(speaker.speak('播报测试')).toBe(true)
+    expect(withVoices.spoken[0]!.voice).toBe(remote)
+  })
+
+  it('首选音色不存在时回退到自动优选', () => {
+    const natural = fakeVoice({ name: 'Xiaoxiao (Natural)' })
+    const withVoices = fakeSynth([natural])
+    const speaker = createSpeaker(() => true, withVoices, () => '已卸载的音色')
+    expect(speaker.speak('播报测试')).toBe(true)
+    expect(withVoices.spoken[0]!.voice).toBe(natural)
+  })
+
   it('长文本分段播报，播完最后一段才清空播报指示', () => {
     const speaker = createSpeaker(() => true, synth)
     const text = '这里是一段用于测试的较长中文播报内容。'.repeat(12)

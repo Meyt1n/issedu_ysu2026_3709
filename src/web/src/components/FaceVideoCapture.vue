@@ -84,10 +84,38 @@ function speak(text: string): void {
   speakText(text)
 }
 
-async function speakAndPause(text: string, pauseMs: number): Promise<void> {
-  speak(text)
-  const estimated = Math.min(5200, Math.max(pauseMs, text.length * 95))
-  await wait(estimated)
+// 看门狗：个别浏览器的 TTS 不回调 onend，按字数估个上限兜底继续流程。
+const SPEECH_WATCHDOG_BASE_MS = 1500
+const SPEECH_WATCHDOG_MS_PER_CHAR = 320
+const SPEECH_WATCHDOG_MAX_MS = 12_000
+
+function readingPauseMs(text: string): number {
+  return Math.min(2600, Math.max(700, text.length * 90))
+}
+
+/** 播完这一句才继续下一步（决策 5B）；语音关闭或启动失败时退化为短暂阅读停顿。 */
+function speakAndWait(text: string): Promise<void> {
+  const content = text.trim()
+  if (!content) return Promise.resolve()
+  if (!voiceOn.value) return wait(readingPauseMs(content))
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = () => {
+      if (settled) return
+      settled = true
+      clearTimeout(watchdog)
+      resolve()
+    }
+    const watchdog = setTimeout(
+      finish,
+      Math.min(SPEECH_WATCHDOG_MAX_MS, SPEECH_WATCHDOG_BASE_MS + content.length * SPEECH_WATCHDOG_MS_PER_CHAR),
+    )
+    const started = speakText(content, { onFinished: finish })
+    if (!started) {
+      clearTimeout(watchdog)
+      void wait(readingPauseMs(content)).then(finish)
+    }
+  })
 }
 
 async function waitForVideoReady(element: HTMLVideoElement): Promise<void> {
@@ -118,12 +146,9 @@ async function capture(): Promise<void> {
   const stepTotal = captureSteps.length
   try {
     if (!navigator.mediaDevices?.getUserMedia) throw new Error('CAMERA_UNAVAILABLE')
-    // Login compact path: shorter intro so bound members get to the camera faster.
-    if (props.mode === 'login' && props.compact) {
-      speak(intro.value.speech)
-      await wait(900)
-    } else {
-      await speakAndPause(intro.value.speech, 2200)
+    // 登录不再口播开场（说明并入第 1 步）；录入保留一句短开场并播完再继续。
+    if (props.mode === 'registration') {
+      await speakAndWait(intro.value.speech)
     }
 
     stream = await navigator.mediaDevices.getUserMedia({
@@ -169,14 +194,9 @@ async function capture(): Promise<void> {
       stepIndex.value = index
       const label = faceStepLabel(index, stepTotal)
       progress.value = `${label}：${step.title}`
-      const speakPause = props.mode === 'login' ? 1800 : 2600
-      await speakAndPause(`${label}。${step.speech}`, speakPause)
-      // Give elders time to actually turn before the shutter.
-      if (index > 0) {
-        progress.value = `${label}：请保持这个姿势…`
-        speak('请保持这个姿势')
-        await wait(props.mode === 'login' ? 900 : 1200)
-      }
+      // 一步一条短口播（屏幕仍显示「第N步」，口播不拼）；播完留一小段动作时间再倒计时。
+      await speakAndWait(step.speech)
+      await wait(index > 0 ? (props.mode === 'login' ? 700 : 1000) : 300)
       await runCountdown(props.mode === 'login' ? 2 : 3)
       progress.value = `${label}：正在拍照…`
       context.drawImage(video.value, 0, 0, width, height)
@@ -189,7 +209,8 @@ async function capture(): Promise<void> {
     progress.value = props.mode === 'registration'
       ? '采集完成，正在本地安全校验…'
       : '采集完成，正在识别，请稍等…'
-    await speakAndPause(faceCaptureDoneSpeech(props.mode), 1200)
+    // 完成口播是最后一句，不再阻塞后续识别/校验流程。
+    speak(faceCaptureDoneSpeech(props.mode))
     emit('captured', frames)
   } catch (cause) {
     stopSpeaking()
