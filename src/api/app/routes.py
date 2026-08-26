@@ -1996,6 +1996,7 @@ async def auth_face_login(
         raise
 
     def failed(reason: str = "FACE_AUTH_FAILED") -> NoReturn:
+        bucket = normalize_face_failure_reason(reason)
         record_face_failure(rate_key, session)
         _record_authentication_audit(
             session,
@@ -2003,77 +2004,22 @@ async def auth_face_login(
             actor_id=actor_id,
             method="FACE",
             outcome="FAILED",
-            reason=normalize_face_failure_reason(reason),
+            reason=bucket,
         )
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="FACE_AUTH_FAILED")
+        # Return the desensitized bucket (no scores/templates) so the UI can
+        # coach the user — collapsing everything to FACE_AUTH_FAILED made
+        # liveness / pose failures look like "never matches anyone".
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=bucket)
 
     try:
         consume_face_challenge(challenge_id, actor_id, household_id, session)
     except HTTPException:
         failed("CHALLENGE_INVALID")
 
-    if not _actor_belongs_to_household(session, household_id, actor_id):
-        failed("ACCOUNT_SCOPE_INVALID")
-    credential = session.scalar(
-        select(FaceCredential).where(
-            FaceCredential.household_id == household_id,
-            FaceCredential.actor_id == actor_id,
-            FaceCredential.status == "ACTIVE",
-        )
-    )
-    if credential is None or not credential.encrypted_template:
-        failed("CREDENTIAL_UNAVAILABLE")
-
+    # Validate capture completeness before credential lookup so an incomplete
+    # three-step sequence surfaces as FRAME_COUNT_INVALID (coachable) instead
+    # of CREDENTIAL_UNAVAILABLE / scope failures that look like "never matches".
     frame_bytes: list[bytes] = []
-
-    def _match_frames_against_credential() -> float:
-        """Gate/extract/liveness/match pipeline; runs off the event loop.
-
-        Raises ``_FaceAuthRejected`` with the desensitized reason bucket,
-        ``HTTPException`` when the stored template cannot be decrypted, or
-        ``RuntimeError`` when the local face service is unavailable.
-        """
-        templates: list[bytes] = []
-        yaws: list[float] = []
-        try:
-            for data in frame_bytes:
-                # Face-specific frame gate; the medicine-carton OCR gate falsely
-                # rejected valid guided webcam captures (HCT-424/HCT-425 fix).
-                try:
-                    ensure_face_frame_quality(data)
-                except ValueError as exc:
-                    raise _FaceAuthRejected("FRAME_QUALITY_INVALID") from exc
-                extractor = _face_extractor_for_algorithm(credential.algorithm_version)
-                if credential.algorithm_version.startswith("opencv-yunet-sface"):
-                    template, frame_meta = extractor(data)
-                    yaws.append(float(frame_meta.get("yaw", 0.0)))
-                else:
-                    template, _ = extractor(data)
-                templates.append(template)
-            try:
-                pose_yaws = yaws if settings.face_require_pose_liveness and yaws else None
-                check_face_liveness(templates, pose_yaws)
-            except ValueError as exc:
-                if str(exc) == "FACE_LIVENESS_FAILED":
-                    raise _FaceAuthRejected("LIVENESS_FAILED") from exc
-                raise _FaceAuthRejected("FACE_MATCH_FAILED") from exc
-            try:
-                stored_template = decrypt_template(credential.encrypted_template)
-                gallery = unpack_face_templates(stored_template)
-            except ValueError as exc:
-                raise _FaceAuthRejected("FACE_MATCH_FAILED") from exc
-            # Every frame must match the enrolled gallery (best angle per frame),
-            # then take the minimum across frames so one stolen photo cannot pass.
-            return aggregate_match_scores(
-                [score_probe_against_gallery(template, gallery) for template in templates]
-            )
-        except (_FaceAuthRejected, HTTPException, RuntimeError):
-            raise
-        except ValueError as exc:
-            raise _FaceAuthRejected("FACE_MATCH_FAILED") from exc
-        finally:
-            templates.clear()
-
     try:
         if len(frames) < 2 or len(frames) > 3:
             failed("FRAME_COUNT_INVALID")
@@ -2088,6 +2034,67 @@ async def auth_face_login(
             if upload.content_type == "image/png" and not data.startswith(b"\x89PNG\r\n\x1a\n"):
                 failed("FRAME_MAGIC_INVALID")
             frame_bytes.append(data)
+
+        if not _actor_belongs_to_household(session, household_id, actor_id):
+            failed("ACCOUNT_SCOPE_INVALID")
+        credential = session.scalar(
+            select(FaceCredential).where(
+                FaceCredential.household_id == household_id,
+                FaceCredential.actor_id == actor_id,
+                FaceCredential.status == "ACTIVE",
+            )
+        )
+        if credential is None or not credential.encrypted_template:
+            failed("CREDENTIAL_UNAVAILABLE")
+
+        def _match_frames_against_credential() -> float:
+            """Gate/extract/liveness/match pipeline; runs off the event loop.
+
+            Raises ``_FaceAuthRejected`` with the desensitized reason bucket,
+            ``HTTPException`` when the stored template cannot be decrypted, or
+            ``RuntimeError`` when the local face service is unavailable.
+            """
+            templates: list[bytes] = []
+            yaws: list[float] = []
+            try:
+                for data in frame_bytes:
+                    # Face-specific frame gate; the medicine-carton OCR gate falsely
+                    # rejected valid guided webcam captures (HCT-424/HCT-425 fix).
+                    try:
+                        ensure_face_frame_quality(data)
+                    except ValueError as exc:
+                        raise _FaceAuthRejected("FRAME_QUALITY_INVALID") from exc
+                    extractor = _face_extractor_for_algorithm(credential.algorithm_version)
+                    if credential.algorithm_version.startswith("opencv-yunet-sface"):
+                        template, frame_meta = extractor(data)
+                        yaws.append(float(frame_meta.get("yaw", 0.0)))
+                    else:
+                        template, _ = extractor(data)
+                    templates.append(template)
+                try:
+                    pose_yaws = yaws if settings.face_require_pose_liveness and yaws else None
+                    check_face_liveness(templates, pose_yaws)
+                except ValueError as exc:
+                    if str(exc) == "FACE_LIVENESS_FAILED":
+                        raise _FaceAuthRejected("LIVENESS_FAILED") from exc
+                    raise _FaceAuthRejected("FACE_MATCH_FAILED") from exc
+                try:
+                    stored_template = decrypt_template(credential.encrypted_template)
+                    gallery = unpack_face_templates(stored_template)
+                except ValueError as exc:
+                    raise _FaceAuthRejected("FACE_MATCH_FAILED") from exc
+                # Every frame must match the enrolled gallery (best angle per frame),
+                # then take the minimum across frames so one stolen photo cannot pass.
+                return aggregate_match_scores(
+                    [score_probe_against_gallery(template, gallery) for template in templates]
+                )
+            except (_FaceAuthRejected, HTTPException, RuntimeError):
+                raise
+            except ValueError as exc:
+                raise _FaceAuthRejected("FACE_MATCH_FAILED") from exc
+            finally:
+                templates.clear()
+
         # Run the heavy OpenCV/ONNX matching on the dedicated face worker so the
         # event loop (health checks, other logins) never hangs behind it.
         try:
@@ -2110,7 +2117,7 @@ async def auth_face_login(
                 detail="FACE_AUTH_UNAVAILABLE",
             ) from exc
         if match_score < match_threshold_for(credential.algorithm_version):
-            failed()
+            failed("NO_MATCH")
     finally:
         for index in range(len(frame_bytes)):
             frame_bytes[index] = b""
@@ -2154,6 +2161,7 @@ async def auth_family_face_login(
         raise
 
     def failed(reason: str = "FACE_AUTH_FAILED") -> NoReturn:
+        bucket = normalize_face_failure_reason(reason)
         record_face_failure(rate_key, session)
         _record_authentication_audit(
             session,
@@ -2161,33 +2169,17 @@ async def auth_family_face_login(
             actor_id=rate_actor,
             method="FACE",
             outcome="FAILED",
-            reason=normalize_face_failure_reason(reason),
+            reason=bucket,
         )
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="FACE_AUTH_FAILED")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=bucket)
 
     try:
         consume_family_face_challenge(challenge_id, household_id, session)
     except HTTPException:
         failed("CHALLENGE_INVALID")
 
-    credentials = list(
-        session.scalars(
-            select(FaceCredential).where(
-                FaceCredential.household_id == household_id,
-                FaceCredential.status == "ACTIVE",
-            )
-        ).all()
-    )
-    credentials = [
-        credential
-        for credential in credentials
-        if credential.encrypted_template
-        and _actor_belongs_to_household(session, household_id, credential.actor_id)
-    ]
-    if not credentials:
-        failed("CREDENTIAL_UNAVAILABLE")
-
     frame_bytes: list[bytes] = []
+    credentials: list[FaceCredential] = []
 
     def _identify_household_member() -> str:
         """Gate/extract/liveness/1:N match pipeline; runs off the event loop.
@@ -2295,6 +2287,24 @@ async def auth_family_face_login(
             if upload.content_type == "image/png" and not data.startswith(b"\x89PNG\r\n\x1a\n"):
                 failed("FRAME_MAGIC_INVALID")
             frame_bytes.append(data)
+
+        credentials = list(
+            session.scalars(
+                select(FaceCredential).where(
+                    FaceCredential.household_id == household_id,
+                    FaceCredential.status == "ACTIVE",
+                )
+            ).all()
+        )
+        credentials = [
+            credential
+            for credential in credentials
+            if credential.encrypted_template
+            and _actor_belongs_to_household(session, household_id, credential.actor_id)
+        ]
+        if not credentials:
+            failed("CREDENTIAL_UNAVAILABLE")
+
         # Run the heavy OpenCV/ONNX 1:N matching on the dedicated face worker so
         # the event loop (health checks, other logins) never hangs behind it.
         try:

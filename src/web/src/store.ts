@@ -184,6 +184,36 @@ export function formatError(cause: unknown): string {
       if (cause.message === 'SESSION_REQUIRED' || cause.message === 'AUTH_REQUIRED') {
         return '此操作需要正式账号会话，请切换到“正式账号登录”后重试。'
       }
+      // Face login returns desensitized buckets on 401 (not a generic FACE_AUTH_FAILED).
+      if (cause.message === 'LIVENESS_FAILED' || cause.message === 'FACE_LIVENESS_FAILED') {
+        return '动态采集没有形成有效转头变化，请正对镜头后按提示缓慢左右转动头部并保持姿势，再重新采集。'
+      }
+      if (cause.message === 'FRAME_QUALITY_INVALID' || cause.message === 'FACE_FRAME_LOW_QUALITY') {
+        return '摄像头画面太小或过暗过亮：请确认摄像头分辨率不低于 480×360，避免全黑画面或强逆光，然后重新采集。'
+      }
+      if (cause.message === 'NO_MATCH') {
+        return '没有认出这个家庭里已录入的人脸。请正对镜头、光线均匀后重试；确认本机绑定的是已录入人脸的家庭。'
+      }
+      if (cause.message === 'AMBIGUOUS_MATCH') {
+        return '家庭中有两张人脸太相似，无法自动确认是谁。请改用家庭 PIN 或账号密码登录。'
+      }
+      if (cause.message === 'CREDENTIAL_UNAVAILABLE') {
+        return '这个家庭还没有有效的人脸凭证。请管理员在「人脸凭证」页先录入，或改用 PIN/密码登录。'
+      }
+      if (cause.message === 'CHALLENGE_INVALID') {
+        return '本次人脸验证已过期或已使用，请重新点击开始采集。'
+      }
+      if (
+        cause.message === 'FRAME_COUNT_INVALID'
+        || cause.message === 'FRAME_TYPE_INVALID'
+        || cause.message === 'FRAME_SIZE_INVALID'
+        || cause.message === 'FRAME_MAGIC_INVALID'
+      ) {
+        return '本次采集的画面不完整，请重新开始动态采集（需要连续拍满提示的三步）。'
+      }
+      if (cause.message === 'FACE_AUTH_FAILED' || cause.message === 'FACE_MATCH_FAILED') {
+        return '人脸验证未通过。请按语音提示缓慢转头，保持光线均匀；也可以改用 PIN 或密码登录。'
+      }
       return state.authMode === 'session'
         ? '账号、密码或会话无效，请重新登录。'
         : '需要先填写开发身份才能继续这次请求。'
@@ -640,9 +670,7 @@ export async function connectWithFace(
     state.authMode = 'session'
     state.status = 'signed-out'
     if (sessionExpired) return
-    state.error = cause instanceof ApiClientError && cause.status === 401
-      ? '人脸验证未通过。请确认这个家庭账号已经绑定人脸，并保持正面、光线均匀；也可以改用 PIN 或密码登录。'
-      : formatError(cause)
+    state.error = formatError(cause)
   }
 }
 
@@ -679,9 +707,7 @@ export async function connectWithFamilyFace(
     state.authMode = 'session'
     state.status = 'signed-out'
     if (sessionExpired) return
-    state.error = cause instanceof ApiClientError && cause.status === 401
-      ? '没有在这个家庭中找到明确的人脸匹配。请重新采集，或改用 PIN/账号登录。'
-      : formatError(cause)
+    state.error = formatError(cause)
   }
 }
 

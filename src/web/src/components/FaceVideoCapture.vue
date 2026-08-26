@@ -149,6 +149,13 @@ async function capture(): Promise<void> {
       stepIndex.value = index
       progress.value = `${faceStepLabel(index)}：${step.title}`
       await speakAndPause(`${faceStepLabel(index)}。${step.speech}`, 2600)
+      // Give elders time to actually turn before the shutter; otherwise the
+      // server-side yaw-span liveness check fails and login looks "broken".
+      if (index > 0) {
+        progress.value = `${faceStepLabel(index)}：请保持这个姿势…`
+        speak('请保持这个姿势')
+        await wait(1200)
+      }
       await runCountdown(3)
       progress.value = `${faceStepLabel(index)}：正在拍照…`
       context.drawImage(video.value, 0, 0, width, height)

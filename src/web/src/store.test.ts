@@ -540,3 +540,25 @@ describe('formatError timeout vs unavailability (HCT-424)', () => {
     expect(message).not.toContain('C:\\')
   })
 })
+
+describe('formatError face login failure buckets (HCT-425)', () => {
+  it('maps LIVENESS_FAILED on 401 to pose coaching, not a generic match failure', () => {
+    const message = formatError(new ApiClientError('LIVENESS_FAILED', {
+      status: 401,
+      code: 'HTTP_ERROR',
+    }))
+
+    expect(message).toContain('转头')
+    expect(message).toContain('保持姿势')
+    expect(message).not.toContain('匹配失败')
+  })
+
+  it('maps AMBIGUOUS_MATCH on 401 to a distinct-template tip', () => {
+    const message = formatError(new ApiClientError('AMBIGUOUS_MATCH', {
+      status: 401,
+      code: 'HTTP_ERROR',
+    }))
+
+    expect(message).toContain('太相似')
+  })
+})
