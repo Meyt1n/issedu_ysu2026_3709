@@ -35,6 +35,7 @@ describe('resolvePortalEntryMode (HCT-453)', () => {
   it('falls back to known admin entry ports only', () => {
     expect(resolvePortalEntryMode({ port: '5174' })).toBe('admin')
     expect(resolvePortalEntryMode({ port: '8081' })).toBe('admin')
+    expect(resolvePortalEntryMode({ port: '5184' })).toBe('admin')
     expect(resolvePortalEntryMode({ port: '3000' })).toBe('auto')
   })
 
@@ -103,6 +104,15 @@ describe('crossPortalUrl', () => {
     ).toBe('http://localhost:8080/?portal=member')
   })
 
+  it('swaps the local demo ports 5183/5184 with an explicit portal override', () => {
+    expect(
+      crossPortalUrl('admin', { protocol: 'http:', hostname: '127.0.0.1', port: '5183' }, noEnv),
+    ).toBe('http://127.0.0.1:5184/?portal=admin')
+    expect(
+      crossPortalUrl('member', { protocol: 'http:', hostname: '127.0.0.1', port: '5184' }, noEnv),
+    ).toBe('http://127.0.0.1:5183/?portal=member')
+  })
+
   it('returns empty for unknown ports so the UI can degrade to text', () => {
     expect(
       crossPortalUrl('admin', { protocol: 'https:', hostname: 'family.lan', port: '443' }, noEnv),
@@ -133,6 +143,7 @@ describe('portalEntryBranding', () => {
     expect(branding.formTitle).toContain('家庭管理后台')
     expect(branding.formIdentityHint).toContain('整个家庭')
     expect(branding.credentialOrder[0]).toBe('password')
+    expect(branding.credentialOrder).toEqual(['password'])
     expect(branding.defaultCredential).toBe('password')
     expect(branding.passwordBehindOtherWays).toBe(false)
     expect(branding.ctaLabel).toBe('进入管理后台')

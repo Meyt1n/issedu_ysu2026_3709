@@ -157,6 +157,8 @@ const faceBindingReady = computed(() => householdId.value.trim().length > 0)
 const faceBinding = computed(() =>
   faceBindingSummary(credentialMode.value, householdId.value, boundFaceHouseholdName.value),
 )
+const faceCapabilityChecking = ref(false)
+const faceCapabilityProbeFailed = ref(false)
 const faceModelsReady = computed(
   () => session.capabilities?.available?.includes('face-recognition-local') ?? false,
 )
@@ -247,9 +249,28 @@ watch(
   },
 )
 
+async function probeFaceCapability(): Promise<void> {
+  if (faceCapabilityChecking.value) return
+  faceCapabilityChecking.value = true
+  faceCapabilityProbeFailed.value = false
+  try {
+    // 人脸 tab 依赖 /meta/capabilities 判断模型是否就绪；登录前也需要预取。
+    // 探测失败和“家庭没有录入人脸”是两件事，页面必须分开表达。
+    await refreshCapabilities()
+    faceCapabilityProbeFailed.value = !session.capabilities
+  } finally {
+    faceCapabilityChecking.value = false
+  }
+}
+
 onMounted(() => {
-  // 人脸 tab 依赖 /meta/capabilities 判断模型是否就绪；登录前也需要预取。
-  if (!session.capabilities) void refreshCapabilities()
+  if (!session.capabilities) void probeFaceCapability()
+})
+
+watch(credentialMode, mode => {
+  // 页面刚打开时能力请求可能还没返回；切到人脸 tab 时补一次探测，
+  // 避免短暂的 null 被当成“人脸不可用”并把采集组件藏掉。
+  if (mode === 'face' && !session.capabilities) void probeFaceCapability()
 })
 
 onBeforeUnmount(() => {
@@ -278,6 +299,16 @@ async function submitSession(): Promise<void> {
   if (!accessPurposeValid.value) {
     localError.value = '访问用途代码需使用小写字母开头，并只包含小写字母、数字和连字符。'
     return
+  }
+  if (credentialMode.value === 'face') {
+    if (!faceBindingReady.value) {
+      localError.value = '本机还没有绑定人脸登录家庭，请先绑定家庭或改用账号密码登录。'
+      return
+    }
+    if (faceFrames.value.length < 2) {
+      localError.value = '请先点击“开始动态采集”，完成采集后再进行人脸登录。'
+      return
+    }
   }
   connecting.value = true
   try {
@@ -316,7 +347,7 @@ async function onFaceCaptured(frames: File[]): Promise<void> {
     return
   }
   if (!faceModelsReady.value) {
-    localError.value = '人脸登录暂时不可用，请改用家庭 PIN 或账号密码。'
+    localError.value = '本地人脸识别服务还没有准备好，不代表家庭人脸凭证丢失；请先重新检查服务状态。'
     pushToast('error', localError.value)
     return
   }
@@ -531,20 +562,32 @@ async function submitCreate(): Promise<void> {
             <input v-model="pin" type="password" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required />
           </label>
           <div
-            v-if="credentialMode === 'face' && faceBindingReady && !faceModelsReady"
+            v-if="credentialMode === 'face' && faceBindingReady && (faceCapabilityChecking || (!session.capabilities && !faceCapabilityProbeFailed))"
+            class="welcome-face-unavailable"
+          >
+            <p class="notice" role="status" aria-live="polite">
+              <AppIcon name="info" :size="16" />
+              正在检查本地人脸识别服务，请稍等…
+            </p>
+          </div>
+          <div
+            v-else-if="credentialMode === 'face' && faceBindingReady && !faceModelsReady"
             class="welcome-face-unavailable"
           >
             <p class="notice warn" role="status">
               <AppIcon name="info" :size="16" />
-              人脸登录暂时不可用，请改用家庭 PIN 或账号密码。
+              {{ faceCapabilityProbeFailed
+                ? '暂时无法确认本地人脸服务状态。家庭绑定和已录入的人脸凭证不会因此丢失。'
+                : '本地人脸识别模型尚未就绪。家庭绑定和已录入的人脸凭证不会因此丢失。' }}
             </p>
             <div class="row-actions">
+              <button type="button" class="btn btn-primary" @click="probeFaceCapability">重新检查</button>
               <button type="button" class="btn btn-primary" @click="usePinFallback">改用 PIN 登录</button>
               <button type="button" class="btn btn-ghost" @click="usePasswordFallback">改用账号密码</button>
             </div>
           </div>
           <FaceVideoCapture
-            v-else-if="credentialMode === 'face' && faceBindingReady"
+            v-else-if="credentialMode === 'face' && faceBindingReady && faceModelsReady"
             compact
             :disabled="connecting || !accessPurposeValid"
             @captured="onFaceCaptured"

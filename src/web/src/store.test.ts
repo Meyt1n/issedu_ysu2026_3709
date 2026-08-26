@@ -6,7 +6,11 @@ import {
   connectWithFamilyFace,
   connectWithPassword,
   connectWithPin,
+  bindFaceHousehold,
+  clearBoundFaceHousehold,
   formatError,
+  getBoundFaceHouseholdId,
+  getBoundFaceHouseholdName,
   portalWelcomeMessage,
   refreshCapabilities,
   selectedMember,
@@ -192,6 +196,64 @@ describe('pre-login capability probe (HCT-425)', () => {
     await refreshCapabilities()
 
     expect(session.capabilities?.available).toContain('face-recognition-local')
+  })
+})
+
+describe('cross-portal face household binding (HCT-425)', () => {
+  afterEach(() => {
+    clearBoundFaceHousehold()
+    vi.restoreAllMocks()
+    Reflect.deleteProperty(globalThis, 'document')
+    Reflect.deleteProperty(globalThis, 'localStorage')
+  })
+
+  it('keeps the binding available to the other local port through a same-host cookie', () => {
+    let cookie = ''
+    Object.defineProperty(globalThis, 'document', {
+      configurable: true,
+      value: {
+        get cookie() {
+          return cookie
+        },
+        set cookie(value: string) {
+          cookie = value
+        },
+      },
+    })
+
+    bindFaceHousehold('household-family', '爷爷奶奶家')
+
+    // Node tests do not provide localStorage, so these reads exercise the
+    // cross-port cookie fallback used by 5173/5174 and 5183/5184.
+    expect(getBoundFaceHouseholdId()).toBe('household-family')
+    expect(getBoundFaceHouseholdName()).toBe('爷爷奶奶家')
+    expect(cookie).toContain('hct-face-family-household=')
+  })
+
+  it('automatically migrates an existing port-local binding to the shared cookie', () => {
+    let cookie = ''
+    Object.defineProperty(globalThis, 'document', {
+      configurable: true,
+      value: {
+        get cookie() {
+          return cookie
+        },
+        set cookie(value: string) {
+          cookie = value
+        },
+      },
+    })
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem: vi.fn(() => JSON.stringify({ id: 'household-old', name: '已有家庭' })),
+        setItem: vi.fn(),
+        removeItem: vi.fn(),
+      },
+    })
+
+    expect(getBoundFaceHouseholdId()).toBe('household-old')
+    expect(cookie).toContain(encodeURIComponent('household-old'))
   })
 })
 
