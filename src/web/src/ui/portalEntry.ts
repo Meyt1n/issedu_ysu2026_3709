@@ -112,6 +112,10 @@ export function portalEntryConflict(
  * `VITE_ADMIN_PORTAL_URL`）；否则按当前地址换算端口：开发端口互换
  * 5173↔5174，Compose 端口互换 8080↔8081；无法判断时返回空字符串，
  * 由界面只显示文字指引而不渲染链接。
+ *
+ * 换算出的地址总是带上 `?portal=member|admin` 显式覆盖：即使目标端口
+ * 的服务没有注入入口模式（配置不全的部署），落地页也按目标入口品牌
+ * 渲染，不会又露出另一端的登录面。
  */
 export function crossPortalUrl(
   target: 'member' | 'admin',
@@ -122,7 +126,7 @@ export function crossPortalUrl(
   },
 ): string {
   const configured = target === 'member' ? env.memberUrl : env.adminUrl
-  if (configured && configured.trim()) return configured.trim()
+  if (configured && configured.trim()) return withPortalQuery(configured.trim(), target)
 
   const location = currentLocation ?? globalThis.location ?? null
   if (!location?.hostname) return ''
@@ -135,7 +139,18 @@ export function crossPortalUrl(
   } else {
     return ''
   }
-  return `${location.protocol}//${location.hostname}:${targetPort}/`
+  return `${location.protocol}//${location.hostname}:${targetPort}/?portal=${target}`
+}
+
+/** 给显式配置的公开地址补上 `?portal=` 覆盖；已带该参数或非法地址时原样返回。 */
+function withPortalQuery(url: string, target: 'member' | 'admin'): string {
+  try {
+    const parsed = new URL(url)
+    if (!parsed.searchParams.has('portal')) parsed.searchParams.set('portal', target)
+    return parsed.toString()
+  } catch {
+    return url
+  }
 }
 
 /** 无法换算跨端 URL 时的纯文字端口提示。 */
@@ -149,38 +164,66 @@ export function crossPortalPortsHint(target: 'member' | 'admin'): string {
 export interface PortalEntryBranding {
   /** 表单卡标题。 */
   formTitle: string
+  /** 表单卡标题下方的一句身份说明。 */
+  formIdentityHint: string
   /** 顶部徽标文字。 */
   badge: string
   /** 首屏主标语（HTML 换行由视图控制，这里只给纯文本两段）。 */
   heroTitle: string
   heroLede: string
+  /** 左侧信息栏的三枚承诺胶囊（两端文案不同，避免两个入口长得一样）。 */
+  chips: ReadonlyArray<{ icon: string; text: string }>
   /** 凭据 tab 顺序（首个为默认推荐）。 */
   credentialOrder: ReadonlyArray<'face' | 'pin' | 'password'>
   /** 未绑定人脸时的默认凭据 tab。 */
   defaultCredential: 'face' | 'pin' | 'password'
+  /**
+   * 账号密码是否收进「其他方式」：成员前台以人脸/家庭 PIN 为主，
+   * 密码不作为常驻 tab，避免长辈把个人前台当成后台账号系统。
+   */
+  passwordBehindOtherWays: boolean
+  /** 主按钮文案（进入我的前台 / 进入管理后台）。 */
+  ctaLabel: string
   /** 跨端指引文字与目标入口；auto 模式为空。 */
   crossLinkLabel: string
   crossLinkTarget: 'member' | 'admin' | null
 }
 
 const MEMBER_BRANDING: PortalEntryBranding = {
-  formTitle: '家庭成员前台 · 进入家庭空间',
-  badge: '家庭成员前台 · 健康信息默认只保存在家里',
-  heroTitle: '家人的每一天，看得见、记得住',
-  heroLede: '刷脸或输入家庭 PIN 进入，看今天的服药提醒、拍药盒交给家人核对。这里不展示后台管理功能。',
+  formTitle: '我的健康日常 · 家人登录',
+  formIdentityHint: '以家人自己的身份进入：刷一次脸或输入家庭 PIN，只看到自己的提醒、记录和帮助。',
+  badge: '成员前台 · 每位家人自己的健康日常',
+  heroTitle: '我的健康日常，刷脸就能进',
+  heroLede:
+    '这里是每位家人自己的个人前台：刷脸或输入家庭 PIN，以自己的身份进门，看今天的提醒、拍药盒交给家人核对。管理档案和授权的事，交给家庭管理后台。',
+  chips: [
+    { icon: 'sun', text: '今天的提醒，一眼看到' },
+    { icon: 'scan', text: '拍个药盒，家人核对' },
+    { icon: 'heart', text: '不用记密码，刷脸或 PIN' },
+  ],
   credentialOrder: ['face', 'pin', 'password'],
   defaultCredential: 'pin',
+  passwordBehindOtherWays: true,
+  ctaLabel: '进入我的前台',
   crossLinkLabel: '我是家庭管理员，去管理后台',
   crossLinkTarget: 'admin',
 }
 
 const ADMIN_BRANDING: PortalEntryBranding = {
   formTitle: '家庭管理后台 · 管理员登录',
+  formIdentityHint: '以家庭管理员身份进入：管理的是整个家庭的档案、复核与授权，不是某位家人的个人前台。',
   badge: '家庭管理后台 · 成员档案 / 复核 / 授权',
   heroTitle: '管好一家人的健康档案与授权',
   heroLede: '使用管理员账号密码登录，处理成员档案、药品复核、用药安全与授权；家人日常请使用成员前台。',
+  chips: [
+    { icon: 'members', text: '成员档案，集中管理' },
+    { icon: 'review', text: '识别候选，复核后才入档' },
+    { icon: 'key', text: '谁能看什么，授权说了算' },
+  ],
   credentialOrder: ['password', 'pin', 'face'],
   defaultCredential: 'password',
+  passwordBehindOtherWays: false,
+  ctaLabel: '进入管理后台',
   crossLinkLabel: '我是家庭成员，回成员前台（人脸 / PIN）',
   crossLinkTarget: 'member',
 }

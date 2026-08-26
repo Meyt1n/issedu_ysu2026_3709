@@ -97,54 +97,79 @@ async function installEntryApi(page: Page): Promise<void> {
   })
 }
 
-test('成员前台入口展示前台品牌，人脸/PIN 为主', async ({ page }) => {
+test('成员前台入口展示个人前台品牌：人脸/PIN 为主，密码收进「其他方式」', async ({ page }) => {
   await installEntryApi(page)
   await page.goto('/?portal=member')
 
-  await expect(page.getByRole('heading', { name: /家庭成员前台/ })).toBeVisible()
-  await expect(page.getByText('家庭成员前台 · 健康信息默认只保存在家里')).toBeVisible()
+  // HCT-455：成员前台是「一位家人自己的个人前台」，不是后台账号系统。
+  await expect(page.getByRole('heading', { name: /我的健康日常/ }).first()).toBeVisible()
+  await expect(page.getByText('成员前台 · 每位家人自己的健康日常')).toBeVisible()
+  await expect(page.getByText('成员前台 · 个人身份')).toBeVisible()
+  await expect(page.getByText(/以家人自己的身份进入/)).toBeVisible()
 
-  // 凭据顺序：人脸识别在前，账号密码退居最后；默认选中家庭 PIN（本机未绑定人脸）。
+  // 凭据 tab 只保留人脸识别 / 家庭 PIN；账号密码退到「其他方式」次级入口。
   const credentialGroup = page.getByRole('group', { name: '选择账号登录凭据' })
   const tabs = credentialGroup.getByRole('button')
+  await expect(tabs).toHaveCount(2)
   await expect(tabs.nth(0)).toHaveText('人脸识别')
-  await expect(tabs.nth(2)).toHaveText('账号密码')
+  await expect(tabs.nth(1)).toHaveText('家庭 PIN')
   await expect(credentialGroup.getByRole('button', { name: '家庭 PIN' })).toHaveClass(/active/)
   await expect(page.getByLabel('六位数字 PIN')).toBeVisible()
+  await expect(page.getByRole('button', { name: '其他方式：用账号密码登录' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '进入我的前台' })).toBeVisible()
 
-  // 跨端指引指向管理后台端口。
+  // 跨端指引指向管理后台端口，并显式带上 ?portal=admin 覆盖。
   const crossLink = page.getByRole('link', { name: /我是家庭管理员，去管理后台/ })
   await expect(crossLink).toBeVisible()
-  await expect(crossLink).toHaveAttribute('href', 'http://127.0.0.1:5174/')
+  await expect(crossLink).toHaveAttribute('href', 'http://127.0.0.1:5174/?portal=admin')
 })
 
-test('管理后台入口展示后台品牌，账号密码为主', async ({ page }) => {
+test('管理后台入口展示全家管理品牌，账号密码为主', async ({ page }) => {
   await installEntryApi(page)
   await page.goto('/?portal=admin')
 
   await expect(page.getByRole('heading', { name: /家庭管理后台/ })).toBeVisible()
   await expect(page.getByText('家庭管理后台 · 成员档案 / 复核 / 授权')).toBeVisible()
+  await expect(page.getByText('管理后台 · 全家管理')).toBeVisible()
 
   const credentialGroup = page.getByRole('group', { name: '选择账号登录凭据' })
   const tabs = credentialGroup.getByRole('button')
+  await expect(tabs).toHaveCount(3)
   await expect(tabs.nth(0)).toHaveText('账号密码')
   await expect(credentialGroup.getByRole('button', { name: '账号密码' })).toHaveClass(/active/)
   await expect(page.getByLabel('本地账号')).toBeVisible()
   await expect(page.getByText('管理员推荐使用账号密码')).toBeVisible()
+  await expect(page.getByRole('button', { name: '进入管理后台' })).toBeVisible()
 
   const crossLink = page.getByRole('link', { name: /我是家庭成员，回成员前台/ })
   await expect(crossLink).toBeVisible()
-  await expect(crossLink).toHaveAttribute('href', 'http://127.0.0.1:5173/')
+  await expect(crossLink).toHaveAttribute('href', 'http://127.0.0.1:5173/?portal=member')
+})
+
+test('成员前台与管理后台的欢迎页明显不同（标语、徽标、主按钮互不出现）', async ({ page }) => {
+  await installEntryApi(page)
+
+  await page.goto('/?portal=member')
+  await expect(page.getByRole('heading', { name: /我的健康日常/ }).first()).toBeVisible()
+  await expect(page.getByRole('heading', { name: /管好一家人的健康档案/ })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '进入管理后台' })).toHaveCount(0)
+
+  await page.goto('/?portal=admin')
+  await expect(page.getByRole('heading', { name: /管好一家人的健康档案/ })).toBeVisible()
+  await expect(page.getByRole('heading', { name: /我的健康日常/ })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '进入我的前台' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '其他方式：用账号密码登录' })).toHaveCount(0)
 })
 
 test('成员前台入口拦截管理员账号：登出并指向管理后台，不渲染后台界面', async ({ page }) => {
   await installEntryApi(page)
   await page.goto('/?portal=member')
 
-  await page.getByRole('button', { name: '账号密码' }).click()
+  // 成员前台没有账号密码 tab：管理员只能通过「其他方式」找到密码登录。
+  await page.getByRole('button', { name: '其他方式：用账号密码登录' }).click()
   await page.getByLabel('本地账号').fill('parent-admin')
   await page.getByLabel('密码').fill('synthetic-password-123')
-  await page.getByRole('button', { name: '登录', exact: true }).click()
+  await page.getByRole('button', { name: '进入我的前台' }).click()
 
   // 不落在管理后台：无应用框架、无后台导航。
   await expect(page.getByRole('alert')).toContainText('这是家庭成员前台入口')
@@ -154,7 +179,7 @@ test('成员前台入口拦截管理员账号：登出并指向管理后台，�
 
   const crossLink = page.getByRole('link', { name: '去管理后台登录' })
   await expect(crossLink).toBeVisible()
-  await expect(crossLink).toHaveAttribute('href', 'http://127.0.0.1:5174/')
+  await expect(crossLink).toHaveAttribute('href', 'http://127.0.0.1:5174/?portal=admin')
 })
 
 test('管理后台入口拦截成员账号：登出并指向成员前台，不渲染前台界面', async ({ page }) => {
@@ -167,7 +192,7 @@ test('管理后台入口拦截成员账号：登出并指向成员前台，不�
   await expect(householdSelect).toBeVisible({ timeout: 5000 })
   await householdSelect.selectOption(household.id)
   await page.getByLabel('六位数字 PIN').fill('135790')
-  await page.getByRole('button', { name: '使用 PIN 登录' }).click()
+  await page.getByRole('button', { name: '进入管理后台' }).click()
 
   await expect(page.getByRole('alert')).toContainText('这是家庭管理后台入口')
   await expect(page.locator('.app-frame')).toHaveCount(0)
@@ -175,10 +200,10 @@ test('管理后台入口拦截成员账号：登出并指向成员前台，不�
 
   const crossLink = page.getByRole('link', { name: '回成员前台登录' })
   await expect(crossLink).toBeVisible()
-  await expect(crossLink).toHaveAttribute('href', 'http://127.0.0.1:5173/')
+  await expect(crossLink).toHaveAttribute('href', 'http://127.0.0.1:5173/?portal=member')
 })
 
-test('成员前台入口放行成员账号并进入成员门户', async ({ page }) => {
+test('成员前台入口放行成员账号并落在成员首页，只见成员导航', async ({ page }) => {
   await installEntryApi(page)
   await page.goto('/?portal=member')
 
@@ -187,20 +212,24 @@ test('成员前台入口放行成员账号并进入成员门户', async ({ page 
   await expect(householdSelect).toBeVisible({ timeout: 5000 })
   await householdSelect.selectOption(household.id)
   await page.getByLabel('六位数字 PIN').fill('135790')
-  await page.getByRole('button', { name: '使用 PIN 登录' }).click()
+  await page.getByRole('button', { name: '进入我的前台' }).click()
 
   await expect(page.locator('.app-frame')).toBeVisible()
   await expect(page.getByRole('heading', { name: '你好，奶奶' })).toBeVisible()
+  // 成员首页 + 成员导航（HCT-439）：不出现任何管理后台导航项。
+  await expect(page.locator('aside.sidebar').getByRole('button', { name: '我的家庭' })).toBeVisible()
   await expect(page.locator('aside.sidebar').getByRole('button', { name: '人工复核' })).toHaveCount(0)
+  await expect(page.locator('aside.sidebar').getByRole('button', { name: '家庭总览' })).toHaveCount(0)
+  await expect(page.locator('aside.sidebar').getByRole('button', { name: '授权管理' })).toHaveCount(0)
 })
 
-test('管理后台入口放行管理员账号并进入后台门户', async ({ page }) => {
+test('管理后台入口放行管理员账号并落在家庭总览', async ({ page }) => {
   await installEntryApi(page)
   await page.goto('/?portal=admin')
 
   await page.getByLabel('本地账号').fill('parent-admin')
   await page.getByLabel('密码').fill('synthetic-password-123')
-  await page.getByRole('button', { name: '登录', exact: true }).click()
+  await page.getByRole('button', { name: '进入管理后台' }).click()
 
   await expect(page.locator('.app-frame')).toBeVisible()
   await expect(page.locator('aside.sidebar').getByRole('button', { name: '家庭总览' })).toBeVisible()

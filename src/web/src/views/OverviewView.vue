@@ -472,7 +472,8 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
   <div class="grid-main-side" style="gap: 34px">
     <section aria-label="近期变化">
       <div class="sec-head">
-        <span class="sec-no">01</span>
+        <!-- 编号沿视觉阅读顺序递增：01 待确认 → 02 用药 → 03 识别 → 04 成员 → 05 近期变化。 -->
+        <span class="sec-no">05</span>
         <h3>近期变化</h3>
         <span class="sec-line" />
         <button type="button" class="btn btn-ghost btn-small" @click="setView('members')">
@@ -695,6 +696,12 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
 
 .home-dashboard-members {
   margin-top: 22px;
+  /*
+   * 图三修复：本卡是 .view-container（定高 grid）的直接子项。overflow:hidden
+   * 会把 grid 自动最小尺寸清零，视口不够高时整张卡被压成一条只剩标题的白条。
+   * 恢复 min-content 参与行高计算，成员格子才能完整渲染。
+   */
+  overflow: visible;
 }
 
 .home-dashboard-member-grid {
