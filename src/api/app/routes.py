@@ -5382,6 +5382,8 @@ def _risk_alert_read(
     member_id: str,
     alert: Any,
 ) -> RiskAlertRead:
+    from app.rules import deduplication_key
+
     current_version = settings.ruleset_version
     fingerprint = risk_fingerprint(
         rule_id=alert.rule_id,
@@ -5405,16 +5407,29 @@ def _risk_alert_read(
         rule_version=current_version,
         risk_fingerprint=fingerprint,
         acknowledgement=(acknowledgement_read(acknowledgement) if acknowledgement else None),
+        deduplication_key=deduplication_key(alert),
+        merged_count=max(int(getattr(alert, "merged_count", 1) or 1), 1),
+        budget_status=str(getattr(alert, "budget_status", None) or "VISIBLE"),
+        budget_reason=str(getattr(alert, "budget_reason", None) or ""),
+        next_visible_at=getattr(alert, "next_visible_at", None),
+        evidence_summary=(
+            f"{len(set(alert.source_event_ids))} 条脱敏来源事件"
+            if alert.source_event_ids
+            else "无可回显来源事件"
+        ),
     )
 
 
 def _current_risk_alert(session: Session, member_id: str, rule_id: str) -> Any | None:
     from app.projection import build_relationship_graph, get_timeline
-    from app.rules import run_rules
+    from app.rules import apply_daily_budget, dedup_alerts, run_rules
 
     events = get_timeline(session, member_id)
     facts = build_relationship_graph(events)
-    alerts = run_rules(facts, rule_ids=[rule_id])
+    alerts = dedup_alerts(run_rules(facts, rule_ids=[rule_id]))
+    # Annotate even a deferred signal so detail/acknowledgement remains
+    # explainable without making suppressed risks impossible to acknowledge.
+    apply_daily_budget(alerts, include_suppressed=True)
     return alerts[0] if alerts else None
 
 
@@ -5448,7 +5463,7 @@ def list_risks(
     facts = build_relationship_graph(events)
     raw = run_rules(facts)
     deduped = dedup_alerts(raw)
-    budgeted = apply_daily_budget(deduped)
+    budgeted = apply_daily_budget(deduped, include_suppressed=True)
 
     alerts = [
         _risk_alert_read(
@@ -5467,7 +5482,7 @@ def list_risks(
         warning_count=sum(1 for a in alerts if a.level == "WARNING"),
         ruleset_version=settings.ruleset_version,
         non_severe_budget=DEFAULT_DAILY_BUDGET,
-        suppressed_count=max(len(deduped) - len(budgeted), 0),
+        suppressed_count=sum(1 for a in budgeted if a.budget_status == "DEFERRED"),
     )
 
 
@@ -5496,11 +5511,12 @@ def get_risk_detail(
     ):
         _raise_resource_not_found()
     from app.projection import build_relationship_graph, get_timeline
-    from app.rules import run_rules
+    from app.rules import apply_daily_budget, dedup_alerts, run_rules
 
     events = get_timeline(session, member_id)
     facts = build_relationship_graph(events)
-    alerts = run_rules(facts, rule_ids=[rule_id])
+    alerts = dedup_alerts(run_rules(facts, rule_ids=[rule_id]))
+    apply_daily_budget(alerts, include_suppressed=True)
     if not alerts:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RISK_NOT_FOUND")
 

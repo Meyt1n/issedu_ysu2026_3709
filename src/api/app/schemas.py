@@ -514,6 +514,15 @@ class RiskAlertRead(BaseModel):
     rule_version: str
     risk_fingerprint: str
     acknowledgement: RiskAcknowledgementRead | None = None
+    # HCT-458: server-authoritative merge/budget explanation.  These fields
+    # contain only an opaque grouping key, counts, status and a redacted
+    # evidence summary; no event payload is exposed.
+    deduplication_key: str = Field(default="", max_length=64)
+    merged_count: int = Field(default=1, ge=1)
+    budget_status: Literal["VISIBLE", "DEFERRED"] = "VISIBLE"
+    budget_reason: str = Field(default="", max_length=160)
+    next_visible_at: datetime | None = None
+    evidence_summary: str = Field(default="", max_length=200)
 
 
 class RiskListResponse(BaseModel):
