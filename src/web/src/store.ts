@@ -213,7 +213,13 @@ export function formatError(cause: unknown): string {
       return `请求内容未通过校验：${cause.message}`
     }
     if (cause.status === 503 && cause.message === 'FACE_DETECTOR_UNAVAILABLE') {
-      return '人脸功能暂时不可用，请改用家庭 PIN 或账号密码登录。'
+      // 后端已把「本地人脸模型缺失 / ONNX 加载失败（含 Windows 中文路径）」
+      // 统一译为该稳定错误码，绝不透出 OpenCV C++ 堆栈或本机完整路径。
+      return (
+        '人脸功能暂时不可用：本地人脸模型缺失或加载失败，本次没有改变任何数据。'
+        + '登录请改用家庭 PIN 或账号密码；管理员可先运行 uv run python scripts/ensure_face_models.py '
+        + '预下载模型，再按《人脸凭证录入与登录操作手册》排查后重试。'
+      )
     }
     if (cause.status === 503 && cause.message === 'FACE_AUTH_UNAVAILABLE') {
       return '人脸识别暂时不可用，本次未进入家庭；请改用 PIN 或账号密码登录。'
