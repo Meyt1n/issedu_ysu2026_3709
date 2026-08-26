@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 
 import AppIcon from '@/components/AppIcon.vue'
@@ -8,11 +8,14 @@ import { createSpeaker } from '@/composables/useSpeech'
 import {
   AUTO_SEND_PRESETS,
   inspectChineseVoicePacks,
+  isSpeechOutputSupported,
+  listChineseVoices,
   loadVoicePreferences,
   saveVoicePreferences,
   SILENCE_PRESETS,
   validateWakePhrase,
   WAKE_PHRASE_PRESETS,
+  type SpeechVoiceLike,
   type VoicePackReport,
   type VoicePreferences,
 } from '@/composables/useVoiceInput'
@@ -40,6 +43,21 @@ const voiceChecking = ref(false)
 const voicePrefs = ref<VoicePreferences>(loadVoicePreferences())
 const wakePhraseDraft = ref(voicePrefs.value.wakePhrase)
 const wakePhraseError = ref('')
+const voiceOptions = ref<SpeechVoiceLike[]>([])
+const speechOutputSupported = isSpeechOutputSupported()
+
+async function refreshVoiceOptions(): Promise<void> {
+  if (!speechOutputSupported) return
+  voiceOptions.value = await listChineseVoices()
+}
+
+function applyPreferredVoice(name: string): void {
+  voicePrefs.value = saveVoicePreferences({ preferredVoiceName: name })
+}
+
+onMounted(() => {
+  void refreshVoiceOptions()
+})
 
 const silencePresetId = computed(() => {
   const match = SILENCE_PRESETS.find(
@@ -196,6 +214,20 @@ async function checkVoicePacks(): Promise<void> {
         :model-value="settings.voiceBroadcast"
         @update:model-value="onVoiceChange"
       />
+      <label class="pref-row">
+        <span>播报音色</span>
+        <select
+          :value="voicePrefs.preferredVoiceName"
+          :disabled="!speechOutputSupported"
+          aria-label="选择播报音色"
+          @change="applyPreferredVoice(($event.target as HTMLSelectElement).value)"
+        >
+          <option value="">自动优选（更自然的中文女声）</option>
+          <option v-for="voiceOption in voiceOptions" :key="voiceOption.name" :value="voiceOption.name">
+            {{ voiceOption.name }}（{{ voiceOption.lang }}{{ voiceOption.localService ? ' · 本地' : '' }}）
+          </option>
+        </select>
+      </label>
       <h3 class="subheading">助手听写偏好</h3>
       <label class="pref-row">
         <span>唤醒词</span>
