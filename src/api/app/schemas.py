@@ -514,6 +514,15 @@ class RiskAlertRead(BaseModel):
     rule_version: str
     risk_fingerprint: str
     acknowledgement: RiskAcknowledgementRead | None = None
+    # HCT-457: per-alert audit metadata so a client can explain merging and the
+    # daily budget instead of silently showing a shorter list.
+    deduplication_key: str | None = None
+    merged_count: int | None = None
+    budget_status: str | None = None
+    budget_reason: str | None = None
+    next_visible_at: datetime | None = None
+    # Desensitized: evidence count only, never health content.
+    evidence_summary: str | None = None
 
 
 class RiskListResponse(BaseModel):
@@ -527,6 +536,10 @@ class RiskListResponse(BaseModel):
     ruleset_version: str
     non_severe_budget: int
     suppressed_count: int
+    # HCT-457: the alerts the daily budget held back, each carrying why it was
+    # held and when it can reappear. Previously only their count was reported,
+    # so a client could not explain a short list.
+    suppressed_alerts: list[RiskAlertRead] = Field(default_factory=list)
 
 
 class RiskDetailResponse(BaseModel):

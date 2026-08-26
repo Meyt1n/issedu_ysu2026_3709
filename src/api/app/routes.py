@@ -5365,6 +5365,14 @@ def _risk_alert_read(
         rule_version=current_version,
         risk_fingerprint=fingerprint,
         acknowledgement=(acknowledgement_read(acknowledgement) if acknowledgement else None),
+        deduplication_key=getattr(alert, "deduplication_key", None),
+        merged_count=getattr(alert, "merged_count", None),
+        budget_status=getattr(alert, "budget_status", None),
+        budget_reason=getattr(alert, "budget_reason", None),
+        next_visible_at=getattr(alert, "next_visible_at", None),
+        # Count only: the number of confirmed evidence events behind this alert.
+        # Never the event payload, which may carry health content.
+        evidence_summary=f"{len(alert.source_event_ids)} 条已确认证据事件",
     )
 
 
@@ -5402,23 +5410,30 @@ def list_risks(
     ):
         _raise_resource_not_found()
     from app.projection import build_relationship_graph, get_timeline
-    from app.rules import DEFAULT_DAILY_BUDGET, apply_daily_budget, dedup_alerts, run_rules
+    from app.rules import (
+        DEFAULT_DAILY_BUDGET,
+        apply_daily_budget,
+        dedup_alerts,
+        run_rules,
+        suppressed_by_budget,
+    )
 
     events = get_timeline(session, member_id)
     facts = build_relationship_graph(events)
     raw = run_rules(facts)
     deduped = dedup_alerts(raw)
     budgeted = apply_daily_budget(deduped)
+    held_back = suppressed_by_budget(deduped)
 
-    alerts = [
-        _risk_alert_read(
+    def read(alert: Any) -> RiskAlertRead:
+        return _risk_alert_read(
             session,
             household_id=household_id,
             member_id=member_id,
-            alert=a,
+            alert=alert,
         )
-        for a in budgeted
-    ]
+
+    alerts = [read(a) for a in budgeted]
     return RiskListResponse(
         member_id=member_id,
         alerts=alerts,
@@ -5427,7 +5442,8 @@ def list_risks(
         warning_count=sum(1 for a in alerts if a.level == "WARNING"),
         ruleset_version=settings.ruleset_version,
         non_severe_budget=DEFAULT_DAILY_BUDGET,
-        suppressed_count=max(len(deduped) - len(budgeted), 0),
+        suppressed_count=len(held_back),
+        suppressed_alerts=[read(a) for a in held_back],
     )
 
 
