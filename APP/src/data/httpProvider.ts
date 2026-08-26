@@ -400,13 +400,34 @@ export function deriveTaskActionHistory(
 
 const TREND_WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六']
 
+/**
+ * 把服务端时间戳补成显式 UTC。
+ *
+ * 后端的 `occurred_at` / `created_at` 目前是不带时区标识的 naive 串
+ * （例如 `2026-08-26T01:56:09.853583`）。`Date.parse` 会把这种带时间的 ISO 串
+ * 按**浏览器本地时区**解释，于是同一条事件在 UTC+8 设备上会被提前 8 小时，
+ * 落到前一个业务日 —— 这正好抵消了 MOB-143「按家庭时区分日、不用浏览器时区」
+ * 的目的，而且不同国家的家人看到的趋势会互相矛盾。
+ *
+ * 服务端时间语义是 UTC，因此缺少时区标识时按 UTC 解释；已带 `Z` 或 `±HH:MM`
+ * 偏移的串保持原样，后端补上标识后本函数无需再改。
+ */
+export function normalizeServerTimestamp(value: string): string {
+  const trimmed = value.trim()
+  if (!trimmed) return trimmed
+  // 只有"日期+时间"才有本地时区歧义；纯日期串按 ISO 规范已按 UTC 处理。
+  if (!trimmed.includes('T') && !trimmed.includes(' ')) return trimmed
+  if (/(?:Z|[+-]\d{2}:?\d{2})$/i.test(trimmed)) return trimmed
+  return `${trimmed}Z`
+}
+
 function eventTime(event: HealthEvent): number {
   return parseHistoryTime(event.occurred_at ?? event.created_at)
 }
 
 /** 无效时间不能改变历史语义；统一排到有效服务端时间之后。 */
 function parseHistoryTime(value: string): number {
-  const time = Date.parse(value)
+  const time = Date.parse(normalizeServerTimestamp(value))
   return Number.isFinite(time) ? time : Number.POSITIVE_INFINITY
 }
 

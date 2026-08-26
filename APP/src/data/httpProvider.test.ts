@@ -4,7 +4,7 @@ import { ApiClient, ApiClientError } from '@/api/client'
 import type { HealthEvent } from '@/api/types'
 import type { CareTask } from './types'
 
-import { authorizationStatus, deriveTaskActionHistory, deriveTasksFromEvents, deriveWeeklyTrendFromEvents, environmentActionUnavailable, HttpDataProvider } from './httpProvider'
+import { authorizationStatus, deriveTaskActionHistory, deriveTasksFromEvents, deriveWeeklyTrendFromEvents, environmentActionUnavailable, HttpDataProvider, normalizeServerTimestamp } from './httpProvider'
 import { clearCapabilities, setCapabilities } from '@/stores/capabilities'
 
 let sequence = 0
@@ -969,4 +969,52 @@ describe('授权范围只读呈现（MOB-136）', () => {
     const client = (provider as unknown as { client: { listAuthorizations: ReturnType<typeof vi.fn> } }).client
     return client.listAuthorizations
   }
+})
+
+describe('服务端时间戳的时区语义（MOB-143）', () => {
+  it('缺时区标识的服务端串按 UTC 解释，不随浏览器时区漂移', () => {
+    // 后端当前返回 naive 串；Date.parse 会按本地时区解释它。
+    expect(normalizeServerTimestamp('2026-08-26T01:56:09.853583'))
+      .toBe('2026-08-26T01:56:09.853583Z')
+    expect(Date.parse(normalizeServerTimestamp('2026-08-26T01:56:09.853583')))
+      .toBe(Date.parse('2026-08-26T01:56:09.853Z'))
+  })
+
+  it('已带 Z 或偏移的串保持原样，后端补标识后无需再改本函数', () => {
+    expect(normalizeServerTimestamp('2026-08-26T01:56:09Z')).toBe('2026-08-26T01:56:09Z')
+    expect(normalizeServerTimestamp('2026-08-26T09:56:09+08:00')).toBe('2026-08-26T09:56:09+08:00')
+    expect(normalizeServerTimestamp('2026-08-26T09:56:09-0400')).toBe('2026-08-26T09:56:09-0400')
+  })
+
+  it('纯日期串不加标识（ISO 已按 UTC 处理），空串原样返回', () => {
+    expect(normalizeServerTimestamp('2026-08-26')).toBe('2026-08-26')
+    expect(normalizeServerTimestamp('')).toBe('')
+  })
+
+  it('趋势按家庭时区分日：同一 naive 时间戳在东八区不再被提前一天', () => {
+    const events = [
+      {
+        id: 'plan-1',
+        event_type: 'plan_created',
+        occurred_at: '2026-08-26T01:56:09.100000',
+        created_at: '2026-08-26T01:56:09',
+        payload: { drug: '演示药', schedule: '每日 1 次' },
+      },
+      {
+        id: 'confirm-1',
+        event_type: 'plan_confirmed',
+        occurred_at: '2026-08-26T01:56:09.800000',
+        created_at: '2026-08-26T01:56:09',
+        payload: { plan_event_id: 'plan-1' },
+      },
+    ] as unknown as HealthEvent[]
+
+    const now = new Date('2026-08-26T02:30:00Z')
+    const trend = deriveWeeklyTrendFromEvents(events, now, 'UTC')
+
+    expect(trend).toHaveLength(7)
+    // 事件发生在 UTC 08-26，因此必须计在窗口最后一天（今天），而不是前一天。
+    expect(trend[6]).toMatchObject({ label: '今', total: 1, done: 1 })
+    expect(trend[5]!.done).toBe(0)
+  })
 })
