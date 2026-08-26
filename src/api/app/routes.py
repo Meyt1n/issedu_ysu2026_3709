@@ -3779,6 +3779,24 @@ async def list_health_news(
     return await fetch_health_news()
 
 
+@router.get("/health-news/ops")
+def get_health_news_ops(
+    actor_id: str = Depends(get_actor_id),
+) -> dict[str, Any]:
+    """Return query-free health-news adapter diagnostics to local operators."""
+    current_settings = get_settings()
+    admins = current_settings.knowledge_admin_actor_set
+    production = current_settings.app_env.strip().casefold() in {"prod", "production"}
+    if (admins and actor_id not in admins) or (not admins and production):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="HEALTH_NEWS_OPS_FORBIDDEN",
+        )
+    from app.health_news_adapter import health_news_ops_snapshot
+
+    return health_news_ops_snapshot(current_settings)
+
+
 def _summarize_event_payload(payload: dict | None) -> str:
     if not payload:
         return ""

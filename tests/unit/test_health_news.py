@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
+from fastapi.testclient import TestClient
 
 import app.health_news_adapter as health_news_adapter
 from app.config import get_settings
@@ -17,10 +18,13 @@ from app.health_news import build_health_news
 from app.health_news_adapter import (
     HealthNewsSourceProfile,
     draft_to_item,
+    health_news_ops_snapshot,
     parse_html_list_payload,
     parse_rss_payload,
     reset_health_news_state,
 )
+from app.main import app
+from app.security import get_actor_id
 
 
 def test_health_news_summer_cards_are_actionable() -> None:
@@ -264,6 +268,14 @@ async def test_remote_ok_then_fresh_cache(
     assert second["cache_status"] == "fresh"
     assert client.calls == 1
 
+    snapshot = health_news_ops_snapshot(get_settings())
+    assert snapshot["cache_status"] == "fresh"
+    assert snapshot["cached_item_count"] == 1
+    assert snapshot["active_source_ids"] == ["who_news_en"]
+    assert "title" not in snapshot
+    assert "summary" not in snapshot
+    assert "household_id" not in snapshot
+
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
@@ -390,3 +402,52 @@ async def test_provider_failure_without_cache_keeps_seasonal(
     assert result["items"]
     assert all(item["source"] == "seasonal_calendar" for item in result["items"])
     assert "编造" in result["disclaimer"] or "教学" in result["disclaimer"]
+
+
+def test_health_news_ops_endpoint_honours_configured_admins(client: TestClient) -> None:
+    settings = get_settings()
+    previous = settings.knowledge_admin_actors
+    settings.knowledge_admin_actors = "health-news-ops-admin"
+    try:
+        denied = client.get(
+            "/api/v1/health-news/ops",
+            headers={"X-Actor-Id": "ordinary-actor"},
+        )
+        allowed = client.get(
+            "/api/v1/health-news/ops",
+            headers={"X-Actor-Id": "health-news-ops-admin"},
+        )
+    finally:
+        settings.knowledge_admin_actors = previous
+
+    assert denied.status_code == 403
+    assert denied.json()["detail"] == "HEALTH_NEWS_OPS_FORBIDDEN"
+    assert allowed.status_code == 200
+    body = allowed.json()
+    assert "adapter_mode" in body
+    assert "cached_item_count" in body
+    assert "title" not in body
+    assert "summary" not in body
+
+
+def test_health_news_ops_endpoint_fails_closed_in_production_without_admins(
+    client: TestClient,
+) -> None:
+    settings = get_settings()
+    previous_env = settings.app_env
+    previous_admins = settings.knowledge_admin_actors
+    settings.app_env = "production"
+    settings.knowledge_admin_actors = ""
+    app.dependency_overrides[get_actor_id] = lambda: "production-operator"
+    try:
+        response = client.get(
+            "/api/v1/health-news/ops",
+            headers={"X-Actor-Id": "production-operator"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_actor_id, None)
+        settings.app_env = previous_env
+        settings.knowledge_admin_actors = previous_admins
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "HEALTH_NEWS_OPS_FORBIDDEN"
