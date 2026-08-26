@@ -46,6 +46,7 @@ from app.auth import (
     authenticate,
     authenticate_with_pin,
     check_face_rate_limit,
+    clear_face_challenge_rate_limit,
     clear_face_failures,
     consume_face_challenge,
     consume_family_face_challenge,
@@ -1975,6 +1976,7 @@ def auth_family_face_challenge(
 
 @router.post("/auth/face-login", response_model=AuthSessionRead)
 async def auth_face_login(
+    request: Request,
     household_id: str = Form(..., min_length=1, max_length=120),
     actor_id: str = Form(..., min_length=1, max_length=120),
     challenge_id: str = Form(..., min_length=16, max_length=128),
@@ -2072,8 +2074,10 @@ async def auth_face_login(
                         template, _ = extractor(data)
                     templates.append(template)
                 try:
-                    pose_yaws = yaws if settings.face_require_pose_liveness and yaws else None
-                    check_face_liveness(templates, pose_yaws)
+                    pose_yaws = (
+                        yaws if settings.face_login_require_pose_liveness and yaws else None
+                    )
+                    check_face_liveness(templates, pose_yaws, purpose="login")
                 except ValueError as exc:
                     if str(exc) == "FACE_LIVENESS_FAILED":
                         raise _FaceAuthRejected("LIVENESS_FAILED") from exc
@@ -2123,6 +2127,10 @@ async def auth_face_login(
             frame_bytes[index] = b""
 
     clear_face_failures(rate_key, session)
+    client_host = request.client.host if request.client else None
+    clear_face_challenge_rate_limit(
+        session, household_id=household_id, client_key=client_host
+    )
     _record_authentication_audit(
         session,
         household_id=household_id,
@@ -2140,6 +2148,7 @@ async def auth_face_login(
 
 @router.post("/auth/family-face-login", response_model=AuthSessionRead)
 async def auth_family_face_login(
+    request: Request,
     household_id: str = Form(..., min_length=1, max_length=120),
     challenge_id: str = Form(..., min_length=16, max_length=128),
     frames: list[UploadFile] = File(...),
@@ -2213,8 +2222,10 @@ async def auth_family_face_login(
                     if algorithm_version.startswith("opencv-yunet-sface"):
                         yaws.append(float(frame_meta.get("yaw", 0.0)))
                 try:
-                    pose_yaws = yaws if settings.face_require_pose_liveness and yaws else None
-                    check_face_liveness(extracted, pose_yaws)
+                    pose_yaws = (
+                        yaws if settings.face_login_require_pose_liveness and yaws else None
+                    )
+                    check_face_liveness(extracted, pose_yaws, purpose="login")
                 except ValueError as exc:
                     if str(exc) == "FACE_LIVENESS_FAILED":
                         raise _FaceAuthRejected("LIVENESS_FAILED") from exc
@@ -2331,6 +2342,10 @@ async def auth_family_face_login(
             frame_bytes[index] = b""
 
     clear_face_failures(rate_key, session)
+    client_host = request.client.host if request.client else None
+    clear_face_challenge_rate_limit(
+        session, household_id=household_id, client_key=client_host
+    )
     _record_authentication_audit(
         session,
         household_id=household_id,
@@ -2466,7 +2481,16 @@ def _confirm_face_registration(
 
 
 def _face_credential_read(credential: FaceCredential) -> FaceCredentialRead:
-    template_count = 3 if "multi" in (credential.feature_version or "") else 1
+    template_count = 1
+    if credential.encrypted_template:
+        try:
+            packed = decrypt_template(credential.encrypted_template)
+            template_count = max(1, len(unpack_face_templates(packed)))
+        except (HTTPException, ValueError):
+            # Revoked/corrupt ciphertext: fall back without inventing a hard-coded 3.
+            template_count = 2 if "multi" in (credential.feature_version or "") else 1
+    elif "multi" in (credential.feature_version or ""):
+        template_count = 2
     return FaceCredentialRead(
         id=credential.id,
         household_id=credential.household_id,
@@ -2630,7 +2654,7 @@ async def register_face_credential(
                 frame_metadata = frame_meta
             try:
                 pose_yaws = yaws if settings.face_require_pose_liveness else None
-                check_face_liveness(templates, pose_yaws)
+                check_face_liveness(templates, pose_yaws, purpose="registration")
             except ValueError as exc:
                 raise ValueError("FACE_LIVENESS_FAILED") from exc
             # Keep every angle in an encrypted multi-template gallery so login can

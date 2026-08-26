@@ -159,9 +159,8 @@ export function formatError(cause: unknown): string {
     }
     if (cause.code === 'DEPENDENCY_UNAVAILABLE') {
       return (
-        '本地 API 服务不可用，本次没有改变任何数据。无法连接本地 API：'
-        + '请确认 API 已在 8000 端口运行（本地进程 scripts/start api，'
-        + '或 Docker Compose 的 api 服务处于 healthy），并用 /health 验证后重试。'
+        '本地服务暂时连不上，本次没有改变任何数据。'
+        + '请确认家里的服务已启动后重试；仍不行时请家人帮忙检查网络与本机服务。'
       )
     }
     if (cause.message === 'KNOWLEDGE_STEWARD_REQUIRED') {
@@ -178,30 +177,30 @@ export function formatError(cause: unknown): string {
       )
     }
     if (cause.message === 'REAL_AUTH_REQUIRED') {
-      return '当前部署已关闭开发身份头（ALLOW_DEV_ACTOR_HEADER=false），请改用正式账号登录。'
+      return '当前部署已关闭调试身份入口，请改用家庭账号登录。'
     }
     if (cause.status === 401) {
       if (cause.message === 'SESSION_REQUIRED' || cause.message === 'AUTH_REQUIRED') {
-        return '此操作需要正式账号会话，请切换到“正式账号登录”后重试。'
+        return '此操作需要已登录的家庭账号，请先登录后再试。'
       }
       // Face login returns desensitized buckets on 401 (not a generic FACE_AUTH_FAILED).
       if (cause.message === 'LIVENESS_FAILED' || cause.message === 'FACE_LIVENESS_FAILED') {
-        return '动态采集没有形成有效转头变化，请正对镜头后按提示缓慢左右转动头部并保持姿势，再重新采集。'
+        return '这次没有认出有效的转头变化。请正对镜头、按提示轻轻转一下头后重拍；也可以改用数字密码。'
       }
       if (cause.message === 'FRAME_QUALITY_INVALID' || cause.message === 'FACE_FRAME_LOW_QUALITY') {
-        return '摄像头画面太小或过暗过亮：请确认摄像头分辨率不低于 480×360，避免全黑画面或强逆光，然后重新采集。'
+        return '画面太暗、太亮或太小。请改善光线后重拍；也可以改用数字密码。'
       }
       if (cause.message === 'NO_MATCH') {
-        return '没有认出这个家庭里已录入的人脸。请正对镜头、光线均匀后重试；确认本机绑定的是已录入人脸的家庭。'
+        return '这次没有认出来。请正对镜头、光线均匀后重拍；也可以改用数字密码。'
       }
       if (cause.message === 'AMBIGUOUS_MATCH') {
-        return '家庭中有两张人脸太相似，无法自动确认是谁。请改用家庭 PIN 或账号密码登录。'
+        return '家里有两张脸太像，没法自动确认是谁。请改用数字密码或账号密码登录。'
       }
       if (cause.message === 'CREDENTIAL_UNAVAILABLE') {
-        return '这个家庭还没有有效的人脸凭证。请管理员在「人脸凭证」页先录入，或改用 PIN/密码登录。'
+        return '这个家庭还没有可用的人脸资料。请管理员先在「人脸凭证」页录入，或改用数字密码登录。'
       }
       if (cause.message === 'CHALLENGE_INVALID') {
-        return '本次人脸验证已过期或已使用，请重新点击开始采集。'
+        return '这次验证已过期或已使用，请重新点「刷脸进入」。'
       }
       if (
         cause.message === 'FRAME_COUNT_INVALID'
@@ -209,17 +208,17 @@ export function formatError(cause: unknown): string {
         || cause.message === 'FRAME_SIZE_INVALID'
         || cause.message === 'FRAME_MAGIC_INVALID'
       ) {
-        return '本次采集的画面不完整，请重新开始动态采集（需要连续拍满提示的三步）。'
+        return '这次采集不完整，请重新点「刷脸进入」完成短采集；也可以改用数字密码。'
       }
       if (cause.message === 'FACE_AUTH_FAILED' || cause.message === 'FACE_MATCH_FAILED') {
-        return '人脸验证未通过。请按语音提示缓慢转头，保持光线均匀；也可以改用 PIN 或密码登录。'
+        return '这次没有认出来。请重拍，或改用数字密码登录。'
       }
       return state.authMode === 'session'
         ? '账号、密码或会话无效，请重新登录。'
-        : '需要先填写开发身份才能继续这次请求。'
+        : '需要先填写登录身份才能继续这次请求。'
     }
     if (cause.status === 403) {
-      if (cause.message === 'CONFIRMATION_FAILED') return '二次确认失败，请检查当前账号的 PIN 或密码后重试。'
+      if (cause.message === 'CONFIRMATION_FAILED') return '二次确认失败，请检查当前账号的数字密码或登录密码后重试。'
       if (cause.message === 'STEP_UP_FAILED') return '二次确认未通过，请重新发起确认后重试。'
       return '当前账号没有执行此操作的权限。'
     }
@@ -228,8 +227,8 @@ export function formatError(cause: unknown): string {
       if (cause.message === 'FACE_CREDENTIAL_EXISTS') {
         return '当前身份已经有有效的人脸凭证；如需替换，请勾选“已有凭证时重新绑定”。'
       }
-      if (cause.message === 'ACCOUNT_ID_EXISTS') return '这个登录账号已经在当前家庭使用，请换一个账号 ID。'
-      if (cause.message === 'PIN_NOT_CONFIGURED') return '当前家庭账号尚未配置 PIN，请改用账号密码确认。'
+      if (cause.message === 'ACCOUNT_ID_EXISTS') return '这个登录名已经在当前家庭使用，请换一个。'
+      if (cause.message === 'PIN_NOT_CONFIGURED') return '当前家庭账号尚未配置数字密码，请改用账号密码确认。'
       if (cause.message === 'STEP_UP_EXPIRED' || cause.message === 'STEP_UP_REPLAY') {
         return '二次确认已过期或已使用，请重新发起确认。'
       }
@@ -237,43 +236,43 @@ export function formatError(cause: unknown): string {
     }
     if (cause.status === 422) {
       if (cause.message === 'FACE_FRAME_LOW_QUALITY') {
-        return '摄像头画面太小或过暗过亮：请确认摄像头分辨率不低于 480×360，避免全黑画面或强逆光，然后重新采集。'
+        return '摄像头画面太小或过暗过亮：请改善光线后重新采集；也可以改用数字密码。'
       }
       if (cause.message === 'FACE_TOO_SMALL') return '人脸在画面中太小，请靠近摄像头，让整张脸约占画面六分之一以上。'
       if (cause.message === 'FACE_TOO_LARGE') return '人脸在画面中过大或贴边，请稍退后，保证整张脸完整入画。'
       if (cause.message === 'FACE_POSE_EXTREME') return '头部偏转过大，请不要侧脸到接近侧面，按提示轻微转头即可。'
-      if (cause.message === 'FACE_BLURRY') return '人脸区域不够清晰，请稳住手机/摄像头并改善光线后重试。'
-      if (cause.message === 'FACE_NOT_FOUND') return '图片中没有检测到清晰人脸，请重新拍摄正面照片。'
-      if (cause.message === 'FACE_MULTIPLE_SUBJECTS') return '图片中检测到多张人脸，请只保留要绑定的一个人。'
-      if (cause.message === 'FACE_LIVENESS_FAILED') return '动态采集没有形成有效转头变化，请正对镜头后按提示缓慢左右转动头部，再重新采集。'
-      return `请求内容未通过校验：${cause.message}`
+      if (cause.message === 'FACE_BLURRY') return '人脸区域不够清晰，请稳住摄像头并改善光线后重试。'
+      if (cause.message === 'FACE_NOT_FOUND') return '没有检测到清晰人脸，请重新拍摄正面照片。'
+      if (cause.message === 'FACE_MULTIPLE_SUBJECTS') return '检测到多张人脸，请只保留要绑定的一个人。'
+      if (cause.message === 'FACE_LIVENESS_FAILED') {
+        return '没有形成有效的转头变化，请正对镜头后按提示轻轻转头，再重新采集；也可以改用数字密码。'
+      }
+      // Never dump raw English validation codes to family-facing UI.
+      return '这次提交的内容不符合要求，请按页面提示检查后重试。'
     }
     if (cause.status === 503 && cause.message === 'FACE_DETECTOR_UNAVAILABLE') {
-      // 后端已把「本地人脸模型缺失 / ONNX 加载失败（含 Windows 中文路径）」
-      // 统一译为该稳定错误码，绝不透出 OpenCV C++ 堆栈或本机完整路径。
       return (
-        '人脸功能暂时不可用：本地人脸模型缺失或加载失败，本次没有改变任何数据。'
-        + '登录请改用家庭 PIN 或账号密码；管理员可先运行 uv run python scripts/ensure_face_models.py '
-        + '预下载模型，再按《人脸凭证录入与登录操作手册》排查后重试。'
+        '人脸功能暂时不可用，本次没有改变任何数据。'
+        + '请改用数字密码或账号密码登录；需要恢复人脸时请家人按《人脸凭证录入与登录操作手册》排查。'
       )
     }
     if (cause.status === 503 && cause.message === 'FACE_AUTH_UNAVAILABLE') {
-      return '人脸识别暂时不可用，本次未进入家庭；请改用 PIN 或账号密码登录。'
+      return '人脸识别暂时不可用，本次未进入家庭；请改用数字密码或账号密码登录。'
     }
     if (cause.status === 429) {
       const lockMatch = /^LOCKED:(\d+)$/.exec(cause.message)
       if (lockMatch) {
         const waitMinutes = Math.max(1, Math.ceil(Number(lockMatch[1]) / 60))
-        return `连续失败次数过多，已临时锁定，请约 ${waitMinutes} 分钟后再试，或改用账号密码登录。`
+        return `连续失败次数过多，已临时锁定，请约 ${waitMinutes} 分钟后再试，或改用数字密码 / 账号密码登录。`
       }
-      return '尝试过于频繁，请稍后再试。'
+      if (cause.message === 'FACE_CHALLENGE_RATE_LIMITED') {
+        return '刷脸尝试过于频繁，请稍后再试，或改用数字密码登录。'
+      }
+      return '尝试过于频繁，请稍后再试，或改用数字密码登录。'
     }
     if (cause.status >= 500) {
-      // 开发部署会返回真实 detail；带上它比统一说“暂时不可用”更可诊断。
-      const detail = cause.message && !cause.message.startsWith('API request failed')
-        ? `：${cause.message}`
-        : ''
-      return `本地 API 处理该请求时出错（HTTP ${cause.status}${detail}），本次没有改变任何数据。`
+      // Do not leak raw server detail (paths, stack fragments) to family UI.
+      return `本地服务处理该请求时出错，本次没有改变任何数据。请稍后重试，或改用其他登录方式。`
     }
   }
   return '请求未能完成，页面不会显示未经授权的健康数据。'
@@ -614,7 +613,7 @@ export async function connectWithPin(
   state.accessPurpose = accessPurpose.trim()
   if (!state.actorId || !householdId.trim() || !/^\d{6}$/.test(pin)) {
     state.status = 'signed-out'
-    state.error = '请输入家庭、身份和六位数字 PIN。'
+    state.error = '请输入家庭、登录名和六位数字密码。'
     return
   }
 
@@ -684,7 +683,7 @@ export async function connectWithFamilyFace(
   state.accessPurpose = accessPurpose.trim()
   if (!householdId.trim() || frames.length < 2) {
     state.status = 'signed-out'
-    state.error = '需要先绑定家庭，并完成摄像头动态采集。'
+    state.error = '需要先绑定家庭，并完成刷脸采集。'
     return
   }
 

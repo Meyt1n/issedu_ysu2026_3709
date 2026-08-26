@@ -11,7 +11,8 @@ export interface FaceCaptureStep {
   hint: string
 }
 
-export const FACE_CAPTURE_STEPS: FaceCaptureStep[] = [
+/** Registration keeps a 3-frame multi-angle sequence. */
+export const FACE_CAPTURE_REGISTRATION_STEPS: FaceCaptureStep[] = [
   {
     title: '请把脸放进圆圈中间',
     speech: '请把整张脸放进画面中间的圆圈里，眼睛看着镜头，保持大约半米远。',
@@ -19,15 +20,36 @@ export const FACE_CAPTURE_STEPS: FaceCaptureStep[] = [
   },
   {
     title: '很好，头轻轻向左转一点',
-    speech: '很好。请把脑袋轻轻向左边转一点点，脸还要留在圆圈里，转好后保持住。',
-    hint: '慢慢转，保持姿势，不要离开圆圈',
+    speech: '很好。请把脑袋轻轻向左边转一点点，脸还要留在圆圈里。',
+    hint: '慢慢转，不要离开圆圈',
   },
   {
     title: '最后一步，头轻轻向右转一点',
-    speech: '最后一步。请把脑袋轻轻向右边转一点点，转好后看着镜头并保持住。',
-    hint: '转完后看镜头并保持，马上拍第三张',
+    speech: '最后一步。请把脑袋轻轻向右边转一点点，然后看着镜头。',
+    hint: '转完后看镜头，马上拍第三张',
   },
 ]
+
+/** Login uses a shorter 2-frame path (API still accepts 2–3). */
+export const FACE_CAPTURE_LOGIN_STEPS: FaceCaptureStep[] = [
+  {
+    title: '请把脸放进圆圈中间',
+    speech: '请把整张脸放进圆圈里，眼睛看着镜头。',
+    hint: '眼睛看镜头 · 光线均匀',
+  },
+  {
+    title: '头轻轻转一点',
+    speech: '很好。请把头轻轻向一边转一点点，脸还要留在圆圈里。',
+    hint: '轻轻转一下就好',
+  },
+]
+
+/** @deprecated Prefer faceCaptureSteps(mode); kept for older imports. */
+export const FACE_CAPTURE_STEPS = FACE_CAPTURE_REGISTRATION_STEPS
+
+export function faceCaptureSteps(mode: FaceCaptureMode): FaceCaptureStep[] {
+  return mode === 'registration' ? FACE_CAPTURE_REGISTRATION_STEPS : FACE_CAPTURE_LOGIN_STEPS
+}
 
 export function faceCaptureIntro(mode: FaceCaptureMode): { title: string; speech: string; bullets: string[] } {
   if (mode === 'registration') {
@@ -38,18 +60,18 @@ export function faceCaptureIntro(mode: FaceCaptureMode): { title: string; speech
         '请坐到光线明亮、正对摄像头的位置',
         '把整张脸放进中间圆圈，不要太近也不要太远',
         '听到提示后再慢慢转头，一共拍三张',
-        '不会了可以点“使用 PIN 登录”，家人可以帮忙',
+        '不会了可以点“改用数字密码”，家人可以帮忙',
       ],
     }
   }
   return {
-    title: '用脸登录：听提示，把脸放进圆圈',
-    speech: '请把脸放进圆圈，听语音提示慢慢转头。大约十几秒就能完成。也可以改用六位数字 PIN。',
+    title: '刷脸进入',
+    speech: '请把脸放进圆圈，听提示轻轻转一下头。也可以改用数字密码。',
     bullets: [
       '把脸放进中间圆圈，看着镜头',
-      '听到提示后轻轻转头，不要站太远',
-      '拍完三张会自动继续，请稍等',
-      '不方便时请点“使用 PIN 登录”',
+      '听到提示后轻轻转一下头',
+      '拍完两张会自动继续',
+      '不方便时请点“改用数字密码”',
     ],
   }
 }
@@ -66,4 +88,8 @@ export function faceCaptureDoneSpeech(mode: FaceCaptureMode): string {
 
 export function faceStepLabel(index: number, total = 3): string {
   return `第 ${index + 1} 步，共 ${total} 步`
+}
+
+export function faceCaptureStartLabel(mode: FaceCaptureMode): string {
+  return mode === 'registration' ? '开始录入（有语音提示）' : '刷脸进入'
 }

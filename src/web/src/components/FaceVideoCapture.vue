@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import { isSpeechOutputSupported, speakText, stopSpeaking } from '../assistant/voice'
 import {
-  FACE_CAPTURE_STEPS,
   faceCaptureDoneSpeech,
   faceCaptureIntro,
+  faceCaptureStartLabel,
+  faceCaptureSteps,
   faceStepLabel,
   type FaceCaptureMode,
 } from '../ui/faceCaptureGuidance'
@@ -18,11 +19,14 @@ const props = withDefaults(defineProps<{
   compact?: boolean
   /** Default on for elder-friendly coaching; user can mute. */
   voiceEnabled?: boolean
+  /** Bound welcome page: open the camera once without a second click. */
+  autoStart?: boolean
 }>(), {
   mode: 'login',
   showFallback: true,
   compact: false,
   voiceEnabled: true,
+  autoStart: false,
 })
 
 const emit = defineEmits<{
@@ -46,9 +50,11 @@ const countdown = ref(0)
 const voiceOn = ref(props.voiceEnabled && isSpeechOutputSupported())
 const voiceSupported = isSpeechOutputSupported()
 let stream: MediaStream | null = null
+let autoStartAttempted = false
 
+const steps = computed(() => faceCaptureSteps(props.mode))
 const intro = computed(() => faceCaptureIntro(props.mode))
-const activeStep = computed(() => (stepIndex.value >= 0 ? FACE_CAPTURE_STEPS[stepIndex.value] : null))
+const activeStep = computed(() => (stepIndex.value >= 0 ? steps.value[stepIndex.value] : null))
 const overlayLabel = computed(() => {
   if (countdown.value > 0) return String(countdown.value)
   if (activeStep.value) return activeStep.value.title
@@ -56,6 +62,12 @@ const overlayLabel = computed(() => {
   return '把脸放进圆圈'
 })
 const modeLabel = computed(() => (props.mode === 'registration' ? '录入人脸' : '刷脸登录'))
+const startLabel = computed(() => faceCaptureStartLabel(props.mode))
+const idleHint = computed(() => (
+  props.mode === 'login' && props.compact
+    ? '点「刷脸进入」，或稍等自动开摄'
+    : '坐稳后点下面的大按钮开始'
+))
 
 function stopCamera(): void {
   for (const track of stream?.getTracks() ?? []) track.stop()
@@ -102,9 +114,17 @@ async function capture(): Promise<void> {
   stepIndex.value = -1
   countdown.value = 0
   capturing.value = true
+  const captureSteps = steps.value
+  const stepTotal = captureSteps.length
   try {
     if (!navigator.mediaDevices?.getUserMedia) throw new Error('CAMERA_UNAVAILABLE')
-    await speakAndPause(intro.value.speech, 2200)
+    // Login compact path: shorter intro so bound members get to the camera faster.
+    if (props.mode === 'login' && props.compact) {
+      speak(intro.value.speech)
+      await wait(900)
+    } else {
+      await speakAndPause(intro.value.speech, 2200)
+    }
 
     stream = await navigator.mediaDevices.getUserMedia({
       video: {
@@ -144,25 +164,26 @@ async function capture(): Promise<void> {
     if (!context) throw new Error('CAMERA_UNAVAILABLE')
 
     const frames: File[] = []
-    for (let index = 0; index < FACE_CAPTURE_STEPS.length; index += 1) {
-      const step = FACE_CAPTURE_STEPS[index]
+    for (let index = 0; index < captureSteps.length; index += 1) {
+      const step = captureSteps[index]
       stepIndex.value = index
-      progress.value = `${faceStepLabel(index)}：${step.title}`
-      await speakAndPause(`${faceStepLabel(index)}。${step.speech}`, 2600)
-      // Give elders time to actually turn before the shutter; otherwise the
-      // server-side yaw-span liveness check fails and login looks "broken".
+      const label = faceStepLabel(index, stepTotal)
+      progress.value = `${label}：${step.title}`
+      const speakPause = props.mode === 'login' ? 1800 : 2600
+      await speakAndPause(`${label}。${step.speech}`, speakPause)
+      // Give elders time to actually turn before the shutter.
       if (index > 0) {
-        progress.value = `${faceStepLabel(index)}：请保持这个姿势…`
+        progress.value = `${label}：请保持这个姿势…`
         speak('请保持这个姿势')
-        await wait(1200)
+        await wait(props.mode === 'login' ? 900 : 1200)
       }
-      await runCountdown(3)
-      progress.value = `${faceStepLabel(index)}：正在拍照…`
+      await runCountdown(props.mode === 'login' ? 2 : 3)
+      progress.value = `${label}：正在拍照…`
       context.drawImage(video.value, 0, 0, width, height)
       const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.9))
       if (!blob) throw new Error('CAMERA_UNAVAILABLE')
       frames.push(new File([blob], `face-${props.mode}-${index + 1}.jpg`, { type: 'image/jpeg' }))
-      if (index < FACE_CAPTURE_STEPS.length - 1) await wait(500)
+      if (index < captureSteps.length - 1) await wait(500)
     }
 
     progress.value = props.mode === 'registration'
@@ -173,14 +194,14 @@ async function capture(): Promise<void> {
   } catch (cause) {
     stopSpeaking()
     error.value = cause instanceof DOMException && cause.name === 'NotAllowedError'
-      ? '摄像头权限被拒绝。请家人在浏览器地址栏点一下允许摄像头，或改用 PIN/密码登录。'
+      ? '摄像头权限被拒绝。请家人在浏览器地址栏点一下允许摄像头，或改用数字密码登录。'
       : cause instanceof DOMException && cause.name === 'NotFoundError'
-        ? '没有找到摄像头。请接好摄像头，或改用 PIN/密码登录。'
+        ? '没有找到摄像头。请接好摄像头，或改用数字密码登录。'
         : cause instanceof Error && cause.message === 'CAMERA_RESOLUTION_TOO_LOW'
-          ? '这个摄像头的画面太小，拍不清人脸。请换一个更清晰的摄像头，或改用 PIN/密码登录。'
+          ? '这个摄像头的画面太小，拍不清人脸。请换一个更清晰的摄像头，或改用数字密码登录。'
           : props.mode === 'registration'
             ? '摄像头打不开。请检查权限后重试，也可以让家人帮忙。'
-            : '摄像头打不开或画面不好，请改用 PIN 登录，也可以让家人帮忙。'
+            : '摄像头打不开或画面不好，请改用数字密码登录，也可以让家人帮忙。'
     speak(error.value)
     if (props.showFallback) emit('fallback')
   } finally {
@@ -207,6 +228,23 @@ function useFallback(): void {
   emit('fallback')
 }
 
+function maybeAutoStart(): void {
+  if (!props.autoStart || props.disabled || autoStartAttempted || capturing.value) return
+  autoStartAttempted = true
+  void capture()
+}
+
+onMounted(() => {
+  maybeAutoStart()
+})
+
+watch(
+  () => [props.autoStart, props.disabled] as const,
+  () => {
+    maybeAutoStart()
+  },
+)
+
 onBeforeUnmount(() => {
   stopSpeaking()
   stopCamera()
@@ -228,7 +266,7 @@ onBeforeUnmount(() => {
       </div>
       <p class="face-capture-intro-title">{{ intro.title }}</p>
       <p v-if="compact" class="face-capture-compact-hint">
-        人脸资料录入后，每次登录还要重新采集动态画面；听语音把脸放进圆圈，按提示轻轻转头。
+        把脸放进圆圈，听提示轻轻转一下头即可进入。
       </p>
       <ol v-else class="face-capture-bullets">
         <li v-for="item in intro.bullets" :key="item">
@@ -272,14 +310,13 @@ onBeforeUnmount(() => {
         {{ countdown }}
       </div>
 
-      <!-- 图十一：取消“1 正对 / 2 左转 / 3 右转”三个气泡；姿势提示由横幅文字与语音承担。 -->
       <div class="face-stage-banner" role="status" aria-live="polite">
         <p class="face-stage-kicker">
-          {{ activeStep ? faceStepLabel(stepIndex) : capturing ? '准备中' : '准备开始' }}
+          {{ activeStep ? faceStepLabel(stepIndex, steps.length) : capturing ? '准备中' : '准备开始' }}
         </p>
         <strong :class="{ 'is-count': countdown > 0 }">{{ overlayLabel }}</strong>
         <span v-if="activeStep && countdown === 0">{{ activeStep.hint }}</span>
-        <span v-else-if="!capturing">坐稳后点下面的大按钮开始</span>
+        <span v-else-if="!capturing">{{ idleHint }}</span>
       </div>
     </div>
 
@@ -293,7 +330,7 @@ onBeforeUnmount(() => {
         :disabled="disabled || capturing"
         @click="capture"
       >
-        {{ capturing ? '请按提示做，不要走开' : mode === 'registration' ? '开始录入（有语音提示）' : '开始本次动态采集并登录（有语音提示）' }}
+        {{ capturing ? '请按提示做，不要走开' : startLabel }}
       </button>
       <button
         v-if="voiceSupported"
@@ -311,13 +348,13 @@ onBeforeUnmount(() => {
         :disabled="capturing"
         @click="useFallback"
       >
-        使用 PIN 登录
+        改用数字密码
       </button>
     </div>
     <p class="face-capture-footnote">
       <template v-if="compact">画面只在本机处理，不会上传照片。</template>
       <template v-else>
-        画面只在本机内存里处理，不会上传人脸照片。听不清或不会操作时，请点“使用 PIN 登录”，让家人帮忙也可以。
+        画面只在本机内存里处理，不会上传人脸照片。听不清或不会操作时，请点“改用数字密码”，让家人帮忙也可以。
       </template>
     </p>
   </div>

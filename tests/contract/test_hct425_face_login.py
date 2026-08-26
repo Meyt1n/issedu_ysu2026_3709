@@ -137,6 +137,43 @@ def test_face_failures_are_rate_limited(client: TestClient) -> None:
     assert sixth_login.status_code == 429
 
 
+def test_successful_face_login_clears_challenge_rate_limit(
+    client: TestClient, db_session: Session
+) -> None:
+    """Successful login must not leave the household challenge-locked."""
+    from app.auth import MAX_LOGIN_ATTEMPTS, clear_face_challenge_rate_limit
+
+    household_id = "challenge-clear-hh"
+    actor_id = "challenge-clear-actor"
+
+    # Burn challenge issuances up to the limit without logging in.
+    for _ in range(MAX_LOGIN_ATTEMPTS):
+        issued = client.post(
+            "/api/v1/auth/face-challenge",
+            json={"household_id": household_id, "actor_id": actor_id},
+        )
+        assert issued.status_code == 200, issued.text
+
+    blocked = client.post(
+        "/api/v1/auth/face-challenge",
+        json={"household_id": household_id, "actor_id": actor_id},
+    )
+    assert blocked.status_code == 429
+
+    clear_face_challenge_rate_limit(
+        db_session,
+        household_id=household_id,
+        client_key="testclient",
+    )
+    db_session.commit()
+
+    recovered = client.post(
+        "/api/v1/auth/face-challenge",
+        json={"household_id": household_id, "actor_id": actor_id},
+    )
+    assert recovered.status_code == 200, recovered.text
+
+
 def test_member_account_can_discover_household_and_be_bound(client: TestClient) -> None:
     owner = "hct425-account-owner"
     household = client.post(

@@ -193,9 +193,9 @@ test.describe('keyboard path and focus visibility', () => {
     await page.goto('/')
 
     await page.keyboard.press('Tab')
-    await expect(page.getByRole('button', { name: '开发演示' })).toBeFocused()
+    await expect(page.getByRole('button', { name: '调试身份' })).toBeFocused()
     await page.keyboard.press('Tab')
-    await expect(page.getByRole('button', { name: '正式账号登录' })).toBeFocused()
+    await expect(page.getByRole('button', { name: '家庭账号登录' })).toBeFocused()
     await page.keyboard.press('Tab')
     await expect(page.getByLabel('开发身份标识')).toBeFocused()
     await page.keyboard.type('owner-1')

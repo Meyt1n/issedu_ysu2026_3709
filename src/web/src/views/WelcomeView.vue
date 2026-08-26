@@ -78,11 +78,11 @@ const credentialMode = ref<'password' | 'pin' | 'face'>(
 )
 
 const CREDENTIAL_LABELS: Record<'face' | 'password' | 'pin', string> = {
-  face: '人脸识别',
+  face: '刷脸进入',
   password: '账号密码',
-  pin: '家庭 PIN',
+  pin: '数字密码',
 }
-// 成员前台把账号密码收进「其他方式」：tab 只保留人脸 / 家庭 PIN，
+// 成员前台把账号密码收进「其他方式」：tab 只保留刷脸 / 数字密码，
 // 强调这是家人自己的个人前台，不是后台账号系统。
 const credentialTabs = computed(() =>
   (entryBranding?.credentialOrder ?? (['face', 'password', 'pin'] as const))
@@ -113,7 +113,7 @@ const submitLabel = computed(() => {
   if (connecting.value) return '正在进入…'
   if (credentialMode.value === 'password' && registerMode.value) return '注册并登录'
   if (entryBranding) return entryBranding.ctaLabel
-  return credentialMode.value === 'pin' ? '使用 PIN 登录' : '登录'
+  return credentialMode.value === 'pin' ? '用数字密码进入' : '登录'
 })
 
 const crossEntryLink = computed(() => {
@@ -307,7 +307,7 @@ async function submitSession(): Promise<void> {
       return
     }
     if (faceFrames.value.length < 2) {
-      localError.value = '人脸资料已经录入，但本次登录还没有采集动态画面；请点击“开始本次动态采集并登录”，按提示完成采集。'
+      localError.value = '请点「刷脸进入」完成短采集，或稍等摄像头自动打开。'
       return
     }
   }
@@ -479,18 +479,18 @@ async function submitCreate(): Promise<void> {
           </div>
         </div>
         <div class="segmented-control" role="group" aria-label="选择登录方式">
-          <button v-if="showDevelopmentEntry" type="button" :class="{ active: authMode === 'development' }" @click="authMode = 'development'">开发演示</button>
-          <button type="button" :class="{ active: authMode === 'session' }" @click="authMode = 'session'">正式账号登录</button>
+          <button v-if="showDevelopmentEntry" type="button" :class="{ active: authMode === 'development' }" @click="authMode = 'development'">调试身份</button>
+          <button type="button" :class="{ active: authMode === 'session' }" @click="authMode = 'session'">家庭账号登录</button>
         </div>
         <p v-if="authMode === 'development' && entryMode === 'member'" class="form-sub">
-          仅本地演示。请填<strong>家庭成员</strong>身份（如 grandma-demo）；创建家庭的管理员（如 demo-parent）会被引导去管理后台。
+          仅本机调试。请填<strong>家庭成员</strong>登录名（如 grandma-demo）；创建家庭的管理员会被引导去管理后台。
         </p>
-        <p v-else-if="authMode === 'development'" class="form-sub">仅用于非生产本地演示，使用开发身份标识；不会建立正式会话。</p>
+        <p v-else-if="authMode === 'development'" class="form-sub">仅用于本机调试身份；不会建立正式会话。</p>
         <p v-else-if="entryBranding" class="form-sub">登录信息只留在当前页面，关掉后需要重新登录。</p>
         <p v-else class="form-sub">用家里的账号进入。登录信息只留在当前页面，关掉后需要重新登录。</p>
         <form v-if="authMode === 'development'" class="section-stack" @submit.prevent="submitConnect">
-          <label class="field">
-            开发身份标识
+          <label v-if="authMode === 'development'" class="field">
+            调试身份标识
             <input
               v-model="actorId"
               autocomplete="off"
@@ -532,10 +532,10 @@ async function submitCreate(): Promise<void> {
             </button>
           </div>
           <p v-if="entryMode === 'admin'" class="form-sub">
-            管理员推荐使用账号密码；家庭 PIN 和人脸识别主要供家人在成员前台使用。
+            管理员推荐使用账号密码；数字密码和刷脸主要供家人在成员前台使用。
           </p>
           <p v-if="passwordBehindOtherWays && credentialMode === 'password'" class="form-sub">
-            账号密码主要供管理员或特殊情况使用；家人日常推荐刷脸或家庭 PIN。
+            账号密码主要供管理员或特殊情况使用；家人日常推荐刷脸或数字密码。
           </p>
           <label v-if="credentialMode === 'password'" class="field">
             本地账号
@@ -566,7 +566,7 @@ async function submitCreate(): Promise<void> {
               <strong>{{ faceBinding.title }}</strong>
               <small>{{ faceBinding.detail }}</small>
               <small v-if="faceBinding.bound" class="face-login-bound-hint">
-                人脸资料已录入；每次登录仍需点击下方按钮，现场采集动态画面完成比对。
+                本机已绑定这个家庭。点「刷脸进入」即可，也可以自动打开摄像头。
               </small>
               <button v-if="faceBinding.fallbackLabel" type="button" class="btn btn-ghost btn-small" @click="usePasswordFallback">
                 {{ faceBinding.fallbackLabel }}
@@ -584,7 +584,7 @@ async function submitCreate(): Promise<void> {
             <input v-model="password" type="password" autocomplete="current-password" minlength="8" required />
           </label>
           <label v-else-if="credentialMode === 'pin'" class="field">
-            六位数字 PIN
+            六位数字密码
             <input v-model="pin" type="password" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required />
           </label>
           <div
@@ -608,13 +608,15 @@ async function submitCreate(): Promise<void> {
             </p>
             <div class="row-actions">
               <button type="button" class="btn btn-primary" @click="probeFaceCapability">重新检查</button>
-              <button type="button" class="btn btn-primary" @click="usePinFallback">改用 PIN 登录</button>
+              <button type="button" class="btn btn-primary" @click="usePinFallback">改用数字密码</button>
               <button type="button" class="btn btn-ghost" @click="usePasswordFallback">改用账号密码</button>
             </div>
           </div>
           <FaceVideoCapture
             v-else-if="credentialMode === 'face' && faceBindingReady && faceModelsReady"
             compact
+            mode="login"
+            :auto-start="faceBinding.bound"
             :disabled="connecting || !accessPurposeValid"
             @captured="onFaceCaptured"
             @fallback="usePinFallback"
@@ -634,7 +636,7 @@ async function submitCreate(): Promise<void> {
             />
             <small>使用小写字母开头，例如 family-care。</small>
           </label>
-          <p v-if="credentialMode === 'pin'" class="form-sub">PIN 只用于当前家庭和所选身份，连续输错会暂时锁定。</p>
+          <p v-if="credentialMode === 'pin'" class="form-sub">数字密码只用于当前家庭和所选登录名，连续输错会暂时锁定。</p>
           <p v-if="(localError || session.error) && !session.entryConflict" class="notice error" role="alert">
             <AppIcon name="alert" :size="16" />
             {{ localError || session.error }}
@@ -660,7 +662,7 @@ async function submitCreate(): Promise<void> {
             class="portal-other-ways"
             @click="backToPrimaryCredentials"
           >
-            回到人脸 / 家庭 PIN 登录
+            回到刷脸 / 数字密码登录
           </button>
         </form>
         <p v-if="crossEntryLink" class="welcome-cross-entry">
@@ -693,7 +695,7 @@ async function submitCreate(): Promise<void> {
           <label class="field">
             成员一登录账号
             <input v-model="householdDraft.members[0]!.actorId" autocomplete="username" placeholder="例如 parent-1" />
-            <small>这个账号用于密码、PIN 或人脸快速登录，默认填当前身份。</small>
+            <small>这个账号用于密码、数字密码或刷脸快速登录，默认填当前登录名。</small>
           </label>
           <label class="field">
             成员二（可选）
@@ -703,7 +705,7 @@ async function submitCreate(): Promise<void> {
             成员二登录账号（填写成员二时必填）
             <input v-model="householdDraft.members[1]!.actorId" autocomplete="username" placeholder="例如 grandma-1" />
           </label>
-          <p class="form-sub">后续到“人脸凭证”页面，为每个登录账号采集一段动态视频；系统只保存加密特征，不保存视频原片。</p>
+          <p class="form-sub">后续到“人脸凭证”页面，为每个登录名采集三张短画面；系统只保存加密特征，不保存照片原片。录入后请绑定本机家庭，成员前台即可直接刷脸进入。</p>
           <p v-if="createError" class="notice error" role="alert">
             <AppIcon name="alert" :size="16" />
             {{ createError }}
