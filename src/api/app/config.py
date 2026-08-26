@@ -97,6 +97,12 @@ class Settings(BaseSettings):
     agent_classifier_timeout_seconds: float = Field(default=3.0, gt=0, le=15)
     # Session-scoped in-process cache for authorised local retrieval results.
     agent_retrieval_cache_ttl_seconds: float = Field(default=120.0, ge=0, le=3600)
+    # HCT-451: open-chat demo — skip evidence/citation walls so operators can
+    # evaluate the raw local model.  Default off so unit tests keep hard walls;
+    # local demos should set AGENT_OPEN_CHAT=true (see .env.example).
+    # Production must keep this false.
+    agent_open_chat: bool = False
+    agent_open_max_tokens: int = Field(default=4096, ge=512, le=16384)
     weather_adapter: str = "disabled"
     weather_provider: str = "generic"
     weather_api_url: str = ""
@@ -192,6 +198,8 @@ class Settings(BaseSettings):
             problems.append(
                 "HEALTH_NEWS_ALLOWED_DOMAINS is required when HEALTH_NEWS_ADAPTER=enabled"
             )
+        if self.agent_open_chat:
+            problems.append("AGENT_OPEN_CHAT must be false in production")
         if problems:
             raise ValueError("PRODUCTION_CONFIGURATION_BLOCKED: " + "; ".join(problems))
         return self
