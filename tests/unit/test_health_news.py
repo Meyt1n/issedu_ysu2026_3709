@@ -385,6 +385,44 @@ async def test_provider_failure_uses_stale_cache(
 
 
 @pytest.mark.anyio
+async def test_source_configuration_change_invalidates_fresh_and_stale_cache(
+    enabled_news: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    url = "https://www.who.int/rss-feeds/news-english.xml"
+    client = SequenceClient(
+        [
+            _response(url, 200, SAMPLE_RSS),
+            httpx.TimeoutException("changed source offline"),
+        ]
+    )
+    monkeypatch.setattr(
+        health_news_adapter.httpx,
+        "AsyncClient",
+        lambda **_kwargs: client,
+    )
+    first = await health_news_adapter.fetch_health_news(
+        when=datetime(2026, 8, 25, tzinfo=ZoneInfo("Asia/Shanghai")),
+    )
+    assert first["status"] == "ok"
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "health_news_allowed_domains", "www.nhc.gov.cn")
+    monkeypatch.setattr(settings, "health_news_source_ids", "nhc_xwzx")
+    second = await health_news_adapter.fetch_health_news(
+        when=datetime(2026, 8, 25, tzinfo=ZoneInfo("Asia/Shanghai")),
+    )
+
+    assert second["status"] == "timeout"
+    assert second["cache_status"] == "none"
+    assert all(item["source"] == "seasonal_calendar" for item in second["items"])
+    assert client.calls == 2
+    snapshot = health_news_ops_snapshot(settings)
+    assert snapshot["cache_status"] == "config_mismatch"
+    assert snapshot["cache_scope_matches"] is False
+
+
+@pytest.mark.anyio
 async def test_provider_failure_without_cache_keeps_seasonal(
     enabled_news: object,
     monkeypatch: pytest.MonkeyPatch,
