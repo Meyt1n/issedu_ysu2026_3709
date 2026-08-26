@@ -9,6 +9,7 @@ are answerable.  Production must set ``AGENT_OPEN_CHAT=false``.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 from app.config import get_settings
@@ -74,6 +75,19 @@ def coerce_open_model_answer(raw_content: str) -> dict[str, object] | None:
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
         text = "\n".join(lines).strip()
+    # A JSON object that failed the strict assistant contract must not be
+    # re-labelled as natural-language prose.  In particular, ``{"answer":
+    # "route"}`` is an internal control response and belongs in the degraded
+    # path, not in the user-visible answer field.
+    if text.startswith(("{", "[")):
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict) and any(
+            key in parsed for key in ("answer", "response", "content", "route")
+        ):
+            return None
     return {
         "answer": text[:8000],
         "sources": [],

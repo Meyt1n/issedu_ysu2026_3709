@@ -44,6 +44,9 @@ export function webSearchModeBadge(state: WebSearchAvailability): string | null 
 
 /** Copy for the disabled checkbox, keyed on the machine-readable reason. */
 export function webSearchDisabledLabel(state: WebSearchAvailability): string {
+  if (state.reason === 'PROVIDER_UNAVAILABLE') {
+    return '联网参考已配置，但最近一次搜索提供方不可达；请检查出口或切换到获批 SearXNG。'
+  }
   if (state.reason === 'EGRESS_BLOCKED') {
     return '联网参考已在部署开启，但搜索地址未通过出口白名单校验，暂不可用。'
   }
@@ -53,6 +56,9 @@ export function webSearchDisabledLabel(state: WebSearchAvailability): string {
 /** Detail line for the skipped web-search stage in the workflow panel. */
 export function webSearchSkipDetail(state: WebSearchAvailability): string {
   if (state.available === false) {
+    if (state.reason === 'PROVIDER_UNAVAILABLE') {
+      return '最近一次搜索提供方不可达'
+    }
     return state.reason === 'EGRESS_BLOCKED'
       ? '搜索地址未通过出口白名单校验'
       : '当前部署未启用联网参考'

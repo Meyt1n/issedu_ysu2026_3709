@@ -36,10 +36,10 @@
     "vue-router": "^4.5.0"
   },
   "devDependencies": {
-    "@capacitor/cli": "^8.5.0",
+    "@capacitor/cli": "8.4.2",
     "@types/node": "22.15.30",
     "@vitejs/plugin-vue": "5.2.1",
-    "happy-dom": "^17.4.4",
+    "happy-dom": "20.11.6",
     "typescript": "5.7.3",
     "vite": "6.4.3",
     "vitest": "^3.2.6",

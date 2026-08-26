@@ -54,6 +54,9 @@ _METRICS = {
     "cache_misses": 0,
     "rate_limited": 0,
     "searches": 0,
+    "last_outcome": None,
+    "last_error": None,
+    "last_config": None,
 }
 
 
@@ -290,7 +293,19 @@ def search_ops_snapshot(settings: Settings | None = None) -> dict[str, Any]:
         misses = int(_METRICS["cache_misses"])
         rate_limited = int(_METRICS["rate_limited"])
         searches = int(_METRICS["searches"])
+        last_outcome = _METRICS["last_outcome"]
+        last_error = _METRICS["last_error"]
+        last_config = _METRICS["last_config"]
         cache_entries = len(_SEARCH_CACHE)
+    # Configuration/allowlist checks alone are not proof that the provider is
+    # reachable.  Once a real request fails, expose that observed state to the
+    # UI and capability catalog until a subsequent request succeeds.
+    current_config = "|".join([
+        (cfg.agent_web_search_provider or "").strip().casefold(),
+        cfg.agent_web_search_url.strip(),
+    ])
+    if last_outcome == "failure" and last_config == current_config:
+        ready = False
     total_lookups = hits + misses
     hit_rate = (hits / total_lookups) if total_lookups else 0.0
     return {
@@ -305,13 +320,15 @@ def search_ops_snapshot(settings: Settings | None = None) -> dict[str, Any]:
         "cache_hit_rate": round(hit_rate, 4),
         "rate_limited_hits": rate_limited,
         "searches": searches,
+        "last_search_status": last_outcome,
+        "last_search_error": last_error,
     }
 
 
 def reset_search_ops_metrics() -> None:
     with _CACHE_LOCK:
         for key in _METRICS:
-            _METRICS[key] = 0
+            _METRICS[key] = None if key.startswith("last_") else 0
 
 
 class DuckDuckGoHtmlProvider:
@@ -452,13 +469,39 @@ def execute_web_search(query: str, *, settings: Settings) -> list[dict[str, str]
             query, cached, max_results=settings.agent_web_search_max_results
         )
 
-    # The rate limiter protects external endpoints; fixtures never leave the
-    # process, so classroom demos are not throttled.
-    if not is_fixture_search_provider(settings):
-        _enforce_min_interval(settings)
+    try:
+        # The rate limiter protects external endpoints; fixtures never leave
+        # the process, so classroom demos are not throttled.
+        if not is_fixture_search_provider(settings):
+            _enforce_min_interval(settings)
+        with _CACHE_LOCK:
+            _METRICS["searches"] += 1
+        raw = get_search_provider(settings).search(query, settings=settings)
+    except SearchRateLimited:
+        with _CACHE_LOCK:
+            _METRICS["last_outcome"] = "failure"
+            _METRICS["last_error"] = "RATE_LIMITED"
+            _METRICS["last_config"] = "|".join([
+                (settings.agent_web_search_provider or "").strip().casefold(),
+                settings.agent_web_search_url.strip(),
+            ])
+        raise
+    except Exception as exc:
+        with _CACHE_LOCK:
+            _METRICS["last_outcome"] = "failure"
+            _METRICS["last_error"] = type(exc).__name__[:80]
+            _METRICS["last_config"] = "|".join([
+                (settings.agent_web_search_provider or "").strip().casefold(),
+                settings.agent_web_search_url.strip(),
+            ])
+        raise
     with _CACHE_LOCK:
-        _METRICS["searches"] += 1
-    raw = get_search_provider(settings).search(query, settings=settings)
+        _METRICS["last_outcome"] = "success"
+        _METRICS["last_error"] = None
+        _METRICS["last_config"] = "|".join([
+            (settings.agent_web_search_provider or "").strip().casefold(),
+            settings.agent_web_search_url.strip(),
+        ])
     ranked = rank_search_results(
         query, raw, max_results=settings.agent_web_search_max_results
     )
