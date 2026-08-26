@@ -136,7 +136,7 @@ from app.models import (
     VisionTask,
 )
 from app.request_context import current_request_id
-from app.retrieval_cache import clear_actor_session
+from app.retrieval_cache import clear_actor_session, session_cache_snapshot
 from app.review import (
     FusionStatus as ReviewFusionStatus,
 )
@@ -3781,6 +3781,25 @@ def clear_assistant_session_cache(
         "assistant_session_id": assistant_session_id,
         "cleared_entries": removed,
     }
+
+
+@router.get("/assistant/session-cache/ops")
+def get_assistant_session_cache_ops(
+    assistant_session_id: str = Query(min_length=1, max_length=64),
+    actor_id: str = Depends(get_actor_id),
+) -> dict[str, Any]:
+    """Return privacy-safe cache metrics for the caller's opaque session."""
+    snapshot = session_cache_snapshot(
+        assistant_session_id=assistant_session_id,
+        actor_id=actor_id,
+    )
+    snapshot.update({
+        "assistant_session_id": assistant_session_id,
+        "cache_ttl_seconds": float(
+            get_settings().agent_retrieval_cache_ttl_seconds or 0
+        ),
+    })
+    return snapshot
 
 
 @router.get("/health-news")

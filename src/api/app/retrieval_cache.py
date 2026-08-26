@@ -85,12 +85,75 @@ def clear_session(session_key: str) -> int:
 
 def clear_actor_session(*, assistant_session_id: str, actor_id: str) -> int:
     """Drop every household/member scope for one actor-owned assistant session."""
-    prefix = f"{_digest(assistant_session_id.strip() or 'anon', actor_id)}:"
+    prefix = _actor_session_prefix(
+        assistant_session_id=assistant_session_id,
+        actor_id=actor_id,
+    )
     with _LOCK:
         keys = [key for key in _CACHE if key.startswith(prefix)]
         for key in keys:
             _CACHE.pop(key, None)
         return len(keys)
+
+
+def _actor_session_prefix(*, assistant_session_id: str, actor_id: str) -> str:
+    """Return the opaque prefix shared by one actor-owned assistant session."""
+    return f"{_digest(assistant_session_id.strip() or 'anon', actor_id)}:"
+
+
+def session_cache_snapshot(
+    *,
+    assistant_session_id: str,
+    actor_id: str,
+) -> dict[str, Any]:
+    """Return privacy-safe metrics for one actor/session and purge its expiry.
+
+    Cache keys contain only digests, but even those keys are intentionally not
+    returned.  The response exposes counts and remaining TTLs so operators can
+    troubleshoot cache behaviour without seeing questions, household/member
+    identifiers, or cached health payloads.
+    """
+    prefix = _actor_session_prefix(
+        assistant_session_id=assistant_session_id,
+        actor_id=actor_id,
+    )
+    now = time.monotonic()
+    agent_counts: dict[str, int] = {}
+    scope_digests: set[str] = set()
+    remaining_ttls: list[float] = []
+    expired_entries_removed = 0
+    with _LOCK:
+        for key, (expires_at, _payload) in list(_CACHE.items()):
+            if not key.startswith(prefix):
+                continue
+            if expires_at <= now:
+                _CACHE.pop(key, None)
+                expired_entries_removed += 1
+                continue
+            remaining_ttls.append(max(0.0, expires_at - now))
+            # Entry layout is <actor-session>:<scope>:<agent>:<query-digest>.
+            # Only aggregate labels are returned; no opaque key is exposed.
+            suffix = key[len(prefix):]
+            parts = suffix.split(":", 2)
+            if len(parts) == 3:
+                scope_digest, agent, _query_digest = parts
+                scope_digests.add(scope_digest)
+                agent_counts[agent] = agent_counts.get(agent, 0) + 1
+
+    remaining_ttls.sort()
+    return {
+        "entries": len(remaining_ttls),
+        "alive_entries": len(remaining_ttls),
+        "scope_count": len(scope_digests),
+        "agent_entries": dict(sorted(agent_counts.items())),
+        "expired_entries_removed": expired_entries_removed,
+        "min_remaining_ttl_seconds": (
+            round(remaining_ttls[0], 3) if remaining_ttls else None
+        ),
+        "max_remaining_ttl_seconds": (
+            round(remaining_ttls[-1], 3) if remaining_ttls else None
+        ),
+    }
 
 
 def clear_all() -> None:
@@ -101,5 +164,10 @@ def clear_all() -> None:
 def stats() -> dict[str, int]:
     now = time.monotonic()
     with _LOCK:
-        alive = sum(1 for expires_at, _ in _CACHE.values() if expires_at > now)
-        return {"entries": len(_CACHE), "alive": alive}
+        expired_keys = [
+            key for key, (expires_at, _payload) in _CACHE.items()
+            if expires_at <= now
+        ]
+        for key in expired_keys:
+            _CACHE.pop(key, None)
+        return {"entries": len(_CACHE), "alive": len(_CACHE)}
