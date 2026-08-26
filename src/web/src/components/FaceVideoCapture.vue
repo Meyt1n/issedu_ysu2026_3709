@@ -221,7 +221,7 @@ onBeforeUnmount(() => {
       </div>
       <p class="face-capture-intro-title">{{ intro.title }}</p>
       <p v-if="compact" class="face-capture-compact-hint">
-        听语音把脸放进圆圈，按提示轻轻转头；不会时请改用 PIN。
+        人脸资料录入后，每次登录还要重新采集动态画面；听语音把脸放进圆圈，按提示轻轻转头。
       </p>
       <ol v-else class="face-capture-bullets">
         <li v-for="item in intro.bullets" :key="item">
@@ -286,7 +286,7 @@ onBeforeUnmount(() => {
         :disabled="disabled || capturing"
         @click="capture"
       >
-        {{ capturing ? '请按提示做，不要走开' : mode === 'registration' ? '开始录入（有语音提示）' : '开始刷脸（有语音提示）' }}
+        {{ capturing ? '请按提示做，不要走开' : mode === 'registration' ? '开始录入（有语音提示）' : '开始本次动态采集并登录（有语音提示）' }}
       </button>
       <button
         v-if="voiceSupported"
