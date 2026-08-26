@@ -375,6 +375,71 @@ describe('portal entry lock (HCT-453)', () => {
   })
 })
 
+describe('formatError 区分真实失败原因（HCT-401 爬虫面板）', () => {
+  it('连接失败提示如何启动并验证 API，而不是含糊的“服务不可用”', () => {
+    const message = formatError(
+      new ApiClientError('API service is unavailable', {
+        status: 0,
+        code: 'DEPENDENCY_UNAVAILABLE',
+      }),
+    )
+    expect(message).toContain('无法连接本地 API')
+    expect(message).toContain('/health')
+    expect(message).toContain('没有改变任何数据')
+  })
+
+  it('请求超时与连接失败给出不同解释', () => {
+    const message = formatError(
+      new ApiClientError('API request timed out after 15000ms', {
+        status: 0,
+        code: 'REQUEST_TIMEOUT',
+      }),
+    )
+    expect(message).toContain('超时')
+    expect(message).not.toContain('无法连接本地 API')
+  })
+
+  it('403 KNOWLEDGE_STEWARD_REQUIRED 显示知识管理员指引，绝不误报 API 不可用', () => {
+    const message = formatError(
+      new ApiClientError('KNOWLEDGE_STEWARD_REQUIRED', {
+        status: 403,
+        code: 'FORBIDDEN_MEMBER',
+      }),
+    )
+    expect(message).toContain('知识管理员')
+    expect(message).toContain('demo-parent')
+    expect(message).toContain('KNOWLEDGE_ADMIN_ACTORS')
+    expect(message).not.toContain('API 服务不可用')
+    expect(message).not.toContain('无法连接')
+  })
+
+  it('503 KNOWLEDGE_CRAWL_CONFIG_MISSING 指出部署缺少 allowlist 与夹具', () => {
+    const message = formatError(
+      new ApiClientError('KNOWLEDGE_CRAWL_CONFIG_MISSING', {
+        status: 503,
+        code: 'HTTP_ERROR',
+      }),
+    )
+    expect(message).toContain('allowlist.json')
+    expect(message).not.toContain('无法连接')
+  })
+
+  it('501 REAL_AUTH_REQUIRED 提示开发身份头已关闭', () => {
+    const message = formatError(
+      new ApiClientError('REAL_AUTH_REQUIRED', { status: 501, code: 'HTTP_ERROR' }),
+    )
+    expect(message).toContain('ALLOW_DEV_ACTOR_HEADER')
+  })
+
+  it('未识别的 5xx 展示 HTTP 状态与服务端 detail 供定位', () => {
+    const message = formatError(
+      new ApiClientError('SOMETHING_BROKE', { status: 500, code: 'HTTP_ERROR' }),
+    )
+    expect(message).toContain('HTTP 500')
+    expect(message).toContain('SOMETHING_BROKE')
+  })
+})
+
 describe('formatError timeout vs unavailability (HCT-424)', () => {
   it('explains a timeout as possibly still processing, never as API down', () => {
     // 人脸注册首次推理/模型下载超过超时上限时，服务端可能仍在保存；

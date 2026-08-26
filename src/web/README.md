@@ -39,7 +39,7 @@
 
 网络不可用时客户端返回 `ApiClientError`，错误码为 `DEPENDENCY_UNAVAILABLE`；HTTP 错误同时兼容当前 FastAPI 的 `detail` 和目标契约的 `error.code/message/details/request_id` 结构。`X-Actor-Id` 仅用于开发环境演示，不能视为生产认证方案。
 
-每个请求默认带 15 秒超时（`RequestOptions.timeoutMs` 可按请求覆盖）：本地 API 或 dev 代理偶发丢失响应时，挂起请求会被中止并归类为 `DEPENDENCY_UNAVAILABLE`，界面提示可恢复错误而不是永远停在“正在保存”；写请求均携带幂等键，超时后重试不会重复写入。调用方主动传入的 `signal` 中止则按原样抛出，不会被误报为服务不可用。dev 代理侧同样配置了 30 秒转发超时（`vite.config.ts`）。
+每个请求默认带 15 秒超时（`RequestOptions.timeoutMs` 可按请求覆盖）：本地 API 或 dev 代理偶发丢失响应时，挂起请求会被中止并归类为 `REQUEST_TIMEOUT`（与「连不上 API」的 `DEPENDENCY_UNAVAILABLE` 区分，界面据此给出不同的排障提示），而不是永远停在“正在保存”；写请求均携带幂等键，超时后重试不会重复写入。调用方主动传入的 `signal` 中止则按原样抛出，不会被误报为服务不可用。dev 代理侧同样配置了 30 秒转发超时（`vite.config.ts`）。
 
 ## 图片质量采集 Demo
 

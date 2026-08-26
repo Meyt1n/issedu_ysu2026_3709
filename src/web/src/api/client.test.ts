@@ -347,7 +347,7 @@ describe('ApiClient authorization contract', () => {
 
   it('converts a hung request into REQUEST_TIMEOUT instead of pending forever', async () => {
     // 复现 dev 代理丢失响应的场景：fetch 永不 resolve，只能被超时信号中止。
-    // 超时必须区别于「服务不可用」：服务端可能仍在处理（HCT-424 误报根因）。
+    // 超时必须与「连不上 API」区分：服务端可能仍在处理（HCT-424 误报根因）。
     const fetcher: typeof fetch = (_input, init) =>
       new Promise<Response>((_resolve, reject) => {
         init?.signal?.addEventListener('abort', () => {

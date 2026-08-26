@@ -3,14 +3,25 @@ import { ApiClientError } from '../api/client'
 /**
  * Access state for the controlled knowledge-crawl panel.  A 403 from the crawl
  * endpoints means the actor is not a knowledge steward and must see explicit
- * guidance instead of a silent empty list.
+ * guidance instead of a silent empty list.  Other failures are classified so
+ * the panel can show the real cause instead of a blanket "API 不可用"：
+ * `network`（连不上 API）、`timeout`（API 挂起/重启中）、`config-missing`
+ * （部署缺少 allowlist/夹具）与其余 `error`。
  */
-export type CrawlPanelAccess = 'ok' | 'forbidden' | 'error'
+export type CrawlPanelAccess =
+  | 'ok'
+  | 'forbidden'
+  | 'network'
+  | 'timeout'
+  | 'config-missing'
+  | 'error'
 
 export function crawlAccessFromError(cause: unknown): CrawlPanelAccess {
-  if (cause instanceof ApiClientError && cause.status === 403) {
-    return 'forbidden'
-  }
+  if (!(cause instanceof ApiClientError)) return 'error'
+  if (cause.status === 403) return 'forbidden'
+  if (cause.code === 'DEPENDENCY_UNAVAILABLE') return 'network'
+  if (cause.code === 'REQUEST_TIMEOUT') return 'timeout'
+  if (cause.message === 'KNOWLEDGE_CRAWL_CONFIG_MISSING') return 'config-missing'
   return 'error'
 }
 

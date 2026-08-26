@@ -18,7 +18,7 @@
 
 需要 [Git](https://git-scm.com/)、[uv](https://docs.astral.sh/uv/)（Python 3.11）、[Node.js 22+](https://nodejs.org/) 和 [Docker Desktop](https://www.docker.com/products/docker-desktop/)（Compose 路径）。Windows 用 PowerShell，Linux/macOS 把 `scripts/start.ps1` 换成 `scripts/start.sh`。
 
-更细的端口、探针、质量 Demo 和故障说明见[本地部署与 Demo 操作指南](docs/本地部署与Demo操作指南.md)。干净环境复现证据见 [HCT-101 记录](docs/reviews/HCT-101-工程骨架干净环境复现记录.md)。
+更细的端口、探针、质量 Demo 和故障说明见[本地部署与 Demo 操作指南](docs/本地部署与Demo操作指南.md)。干净环境复现证据见 [HCT-101 记录](docs/reviews/HCT-101-工程骨架干净环境复现记录.md)。部署起来后想按功能逐项「点亮」，请看下方[功能与 API 启动指南（按功能开启）](#功能与-api-启动指南按功能开启)。
 
 ### 路径 A：Docker Compose 基础档（推荐干净机器）
 
@@ -27,8 +27,7 @@
 ```powershell
 git clone https://github.com/Meyt1n/issedu_ysu2026_3709.git
 cd issedu_ysu2026_3709
-# 视觉/助手闭环尚未合入 master 时，请用功能分支才能对齐当前演示代码
-git switch feature/hct-local-model-adapter
+# 所有已交付能力（含视觉质量门控、人工复核、助手接口）均以 master 为准
 Copy-Item .env.example .env
 # 把 .env 里的 change-me 密码换成自己的本地口令，不要提交该文件
 
@@ -129,6 +128,7 @@ AGENT_WEB_SEARCH_PROVIDER=fixture
 3. 同一身份打开「知识文档」→「一键教学闭环：抓取 → 批准 → 晋升」→ 按页面提示做 dry-run 入库。
 
 外部结果只作为「外部参考（非本地审核证据）」；爬虫**永不 auto_ingest**。
+
 ### 提交前检查
 
 ```powershell
@@ -136,6 +136,75 @@ scripts/start.ps1 check
 ```
 
 等价于 Ruff、pytest、前端类型检查/构建和 Compose 配置校验。无法运行的检查要在 PR 里如实说明。
+
+## 功能与 API 启动指南（按功能开启）
+
+本节教新用户按功能域把系统「点亮」：先一键起基础档，再按需要开启可选能力。命令以 Windows PowerShell 为例，Linux/macOS 把 `scripts/start.ps1` 换成 `scripts/start.sh`（`$env:X='y'` 换成 `export X=y`）。每一项都以 master 上真实可运行代码为准；细节和排障见[本地部署与 Demo 操作指南](docs/本地部署与Demo操作指南.md)。
+
+### 第 0 步：一键起基础档并确认能力清单
+
+```powershell
+Copy-Item .env.example .env      # Linux/macOS: cp .env.example .env
+scripts/start.ps1 setup
+scripts/start.ps1 up             # MySQL + API + outbox worker + care-plan worker + Web
+scripts/start.ps1 health
+curl http://localhost:8000/api/v1/meta/capabilities
+```
+
+`/api/v1/meta/capabilities` 是唯一的能力事实接口，诚实区分「可用 / 不可用」。默认配置下：
+
+- **`available`（基础档默认点亮）**：`manual-health-event`、`household-member`、`field-authorization`、`audit-outbox`、`event-compensation-replay`、`outbox-recovery-worker`、`review-task`、`vision-task`、`vision-task-video`、`knowledge-store`、`local-assistant`、`llm`、`risk-acknowledgement`；
+- **`unavailable`（需额外准备或诚实关闭）**：`face-recognition-local`（未准备人脸模型）、`master-data-teaching-demo`（未批准教学主数据）、`vision-inference`、`llm-cloud`、`external-web`，以及**恒为不可用**的 `hct201-formal-drug-set`（正式药品固定集仍 UNRELEASED，属 fail-closed 诚实声明，不是故障）。
+
+页面身份有两种：开发身份（欢迎页填 Actor ID，或请求头 `X-Actor-ID`，仅 `ALLOW_DEV_ACTOR_HEADER=true` 时可用）和正式账号会话（欢迎页「正式账号登录」注册密码/PIN/人脸）。演示用 `demo-` / `test-` 前缀身份；生产必须关闭开发身份头（`APP_ENV=production` 时配置校验会强制 fail-closed）。
+
+### 基础档默认可用（不需要额外配置）
+
+| 功能 | 页面入口 | 如何验证 |
+|---|---|---|
+| 工程骨架与健康检查 | — | `GET /health`、`GET /api/v1/health/db`、`scripts/start.ps1 health` |
+| 家庭、成员与字段授权 | 成员档案、授权管理 | `GET /api/v1/households`、`POST …/authorizations`；越权读取返回结构化拒绝 |
+| 健康事件、投影与 outbox | 家庭总览、我的记录 | `POST …/events` 追加不可覆盖事件；`GET …/outbox` 看补偿队列（Compose 已内置 outbox worker） |
+| 规则风险与确认 | 用药安全 | `POST …/rules/run` 重算，`GET …/members/{id}/risks` 看风险卡与确认入口 |
+| 照护计划与漏服升级 | 健康计划、服药提醒 | `…/plans/confirm`（另有 defer/skip/missed）；care-plan worker（HCT-308）已随基础档启动，每 30 秒评估一次（`CARE_PLAN_POLL_SECONDS`） |
+| 视觉质量门控（图片/短视频） | 视觉扫描 | `POST /api/v1/vision-quality/check`；`RETAKE` 时必须重拍，不会继续入库 |
+| 人工复核 | 人工复核 | 复核任务接口 `…/review-tasks/{id}/confirm`（另有 correct/skip） |
+| 本地知识检索（RAG 接口） | 知识文档 | `GET /api/v1/knowledge/documents`、`POST /api/v1/knowledge/retrieve` |
+| 助手接口与多智能体编排 | 健康助手 | `GET /api/v1/assistant/agents`；未配置 Ollama 模型时回答为**结构化降级**，不冒充生成 |
+| 健康资讯（默认 local） | 家庭总览 | `GET /api/v1/health-news` 返回 `status=local_only` 季节提醒，不出网 |
+
+本地进程路径（路径 B）不自动启动两个 worker，需要时手动运行（PYTHONPATH 含 `src/api` 与 `src`）：
+
+```powershell
+uv run python -m app.outbox_worker --loop
+uv run python -m app.care_plan_worker --loop
+```
+
+### 有条件开启（照着做即可点亮）
+
+| 功能 | 需要准备 | 关键 `.env` 项 | 如何验证 | 未配置时行为 |
+|---|---|---|---|---|
+| 正式账号 / PIN 登录 | 无（数据库会话已内置） | `CURSOR_SIGNING_KEY`（生产必须换） | 欢迎页「正式账号登录」注册后用密码或 PIN 登录 | 仍可用开发身份 |
+| 人脸登录与本机家庭绑定 | 本地 YuNet+SFace ONNX 模型：`uv run python scripts/ensure_face_models.py` | `FACE_MODEL_DIR`、`FACE_MODEL_AUTO_DOWNLOAD`、`FACE_MATCH_THRESHOLD_SFACE`、`BIOMETRIC_ENCRYPTION_KEY` | capabilities 出现 `face-recognition-local`；欢迎页人脸入口可用，本机家庭绑定卡仅人脸登录后显示 | 欢迎页提示改用 PIN/密码 |
+| 视觉识别闭环（OCR/条码/YOLO） | 独立 PaddleOCR Python 环境 + 本机 `scripts/vision_worker.py`（权重不进 Git） | `VISION_ADAPTER_SIGNING_KEY`（须与 worker 的 `HCT_ADAPTER_SIGNING_KEY` 一致）、`MASTER_DATA_APPROVED_VERSIONS` | 上传合成药盒后任务进入四态并转人工复核 | 任务保持排队/降级，质量门控与人工复核仍可用 |
+| 教学演示主数据（HCT-201 教学路径） | `uv run python scripts/setup_vision_demo.py` 生成合成快照 | `MASTER_DATA_APPROVED_VERSIONS=demo-cn-en-v1` | capabilities 出现 `master-data-teaching-demo` | fail-closed 不加载；`hct201-formal-drug-set` 恒为 unavailable |
+| 本地助手真实生成（Ollama） | 本机 Ollama 及模型，或增强档容器（`$env:COMPOSE_PROFILE='enhanced'` 后 `up`，容器内仍需 `ollama pull`） | `OLLAMA_BASE_URL`、`OLLAMA_MODEL` | 助手页真实回答并带引用；`GET /api/v1/assistant/agents` | 结构化降级，档案/规则/知识链路不受影响 |
+| 可选联网搜索（HCT-430） | 无（夹具路线完全不出网） | `AGENT_WEB_SEARCH_ENABLED=true` + `AGENT_WEB_SEARCH_PROVIDER=fixture`（或真实白名单出口，见专文） | `GET /api/v1/assistant/agents` 中 `web_search_ready=true`、原因为 `OPT_IN_REQUIRED`；每次提问还需勾选「补充联网参考」 | 默认关闭（`DEPLOYMENT_DISABLED`），结果只是「外部参考」 |
+| 知识入库与受控爬虫 | 知识管理员身份（`demo-` 前缀即可演示） | `KNOWLEDGE_ADMIN_ACTORS`（正式部署） | 「知识文档」页「一键教学闭环：抓取 → 批准 → 晋升」；`GET /api/v1/knowledge/crawl/status` | 爬虫默认离线夹具、**永不 auto_ingest**；非管理员看到明确提示 |
+| 演示造数与课堂剧本（HCT-452） | 演示身份 `demo-parent` | `ALLOW_DEV_ACTOR_HEADER=true`（或正式演示账号） | 「家庭与研发 → 演示造数」一键补种（幂等）；`POST /api/v1/demo/formal-health-seed`、`GET /api/v1/demo/classroom-scenarios` | 非演示身份被 403 `DEMO_SEED_FORBIDDEN` 拒绝（守卫生效，不是故障） |
+| 天气行动卡（HCT-305） | 白名单天气源 | `WEATHER_ADAPTER=enabled`、`WEATHER_API_URL`、`WEATHER_DEFAULT_CITY_CODE`、`WEATHER_LOCATION_WHITELIST`、`EGRESS_WEATHER_WHITELIST` | `GET /api/v1/weather/action-cards` | 默认 `disabled`，返回结构化空响应；只允许发送 6 位行政区划代码 |
+| 健康资讯真实抓取（HCT-445） | 白名单资讯域名 | `HEALTH_NEWS_ADAPTER=enabled`、`HEALTH_NEWS_ALLOWED_DOMAINS` | `GET /api/v1/health-news` 返回白名单来源条目 | 默认 `local` 仅季节提醒，不出网 |
+
+联网搜索与知识爬虫的分步教程（含排障表）见[联网搜索与知识库刷新启用指南](docs/demo/联网搜索与知识库刷新启用指南.md)；视觉识别闭环见[视觉演示说明](docs/demo/vision-samples/README.md)；Ollama 模型准备见[本地大模型闭环](docs/demo/local-llm-v5.md)。改任何 `.env` 项后都必须重启 API（Compose：`down` 再 `up`）才生效。
+
+### 仍需额外准备或尚未交付（诚实边界）
+
+- `hct201-formal-drug-set`：正式药品固定集 **UNRELEASED**，`scripts/hct201_fixed_set_gate.py` 保持 fail-closed；教学路径只能指向合成的 `demo-cn-en-v1`。
+- 人脸默认阈值来自公开样例，正式演示前须在本机用 `scripts/calibrate_face_thresholds.py` 按家庭摄像头标定（云端无法代采真人脸）。
+- 微调 GGUF（v5）未完成正式评估，输出仅教学演示；HCT-408 三档部署/备份恢复演练仍在进行中。
+- 随身版 Android APP 在 [`APP/`](APP/README.md) 独立维护，联机同一 FastAPI 后端；构建与验收以其自述文档为准。
+
+**安全提醒：** 不提交 `.env`、真实健康数据、密钥、模型权重与运行日志；`change-me` / `dev-only-*` 占位密钥仅限本机开发；开发身份头是教学便利，不是生产认证——生产部署必须关闭 `ALLOW_DEV_ACTOR_HEADER` 并替换全部签名/加密密钥。
 
 ## 核心价值
 

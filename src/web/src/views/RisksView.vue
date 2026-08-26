@@ -174,8 +174,8 @@ async function acknowledge(alert: RiskAlert): Promise<void> {
   } catch (cause) {
     let status: 'offline' | 'unauthorized' | 'conflict' | 'error' = 'error'
     if (
-      cause instanceof ApiClientError &&
-      (cause.code === 'DEPENDENCY_UNAVAILABLE' || cause.code === 'REQUEST_TIMEOUT')
+      cause instanceof ApiClientError
+      && (cause.code === 'DEPENDENCY_UNAVAILABLE' || cause.code === 'REQUEST_TIMEOUT')
     ) status = 'offline'
     else if (cause instanceof ApiClientError && cause.status === 404) status = 'unauthorized'
     else if (cause instanceof ApiClientError && cause.status === 409) status = 'conflict'

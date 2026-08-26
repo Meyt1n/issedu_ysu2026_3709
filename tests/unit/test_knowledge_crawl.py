@@ -141,6 +141,36 @@ def test_knowledge_crawl_api_steward_only(client: TestClient) -> None:
     assert rejected.json()["status"] == "rejected"
 
 
+def test_knowledge_crawl_config_missing_is_structured_503(
+    client: TestClient, tmp_path: Path, monkeypatch
+) -> None:
+    """Deployments without docs/knowledge/crawl must not degrade to a bare 500.
+
+    The reason code is a UI contract: the web panel shows a rebuild-the-image
+    hint for ``KNOWLEDGE_CRAWL_CONFIG_MISSING`` instead of claiming the whole
+    API is unavailable.
+    """
+    from app import knowledge_crawl as crawl
+
+    monkeypatch.setattr(crawl, "ALLOWLIST_PATH", tmp_path / "absent" / "allowlist.json")
+
+    headers = {"X-Actor-Id": "demo-parent", "X-Access-Purpose": "family-care"}
+    status = client.get("/api/v1/knowledge/crawl/status", headers=headers)
+    assert status.status_code == 503, status.text
+    assert status.json()["detail"] == "KNOWLEDGE_CRAWL_CONFIG_MISSING"
+
+    run = client.post("/api/v1/knowledge/crawl/run", headers=headers)
+    assert run.status_code == 503, run.text
+    assert run.json()["detail"] == "KNOWLEDGE_CRAWL_CONFIG_MISSING"
+
+    # Steward gating still applies before any config diagnostics leak out.
+    denied = client.get(
+        "/api/v1/knowledge/crawl/status", headers={"X-Actor-Id": "stranger"}
+    )
+    assert denied.status_code == 403
+    assert denied.json()["detail"] == "KNOWLEDGE_STEWARD_REQUIRED"
+
+
 def test_knowledge_crawl_api_allows_configured_admin(client: TestClient) -> None:
     """Actors in KNOWLEDGE_ADMIN_ACTORS are stewards without a demo prefix."""
     from app.config import get_settings

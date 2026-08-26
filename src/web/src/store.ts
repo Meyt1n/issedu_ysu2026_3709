@@ -153,9 +153,26 @@ export function formatError(cause: unknown): string {
     }
     if (cause.code === 'DEPENDENCY_UNAVAILABLE') {
       return (
-        '本地 API 服务不可用，本次没有改变任何数据。' +
-        '请确认 API 已在 8000 端口运行（本地进程 scripts/start api，或 Docker Compose 的 api 服务处于 healthy）后重试。'
+        '本地 API 服务不可用，本次没有改变任何数据。无法连接本地 API：'
+        + '请确认 API 已在 8000 端口运行（本地进程 scripts/start api，'
+        + '或 Docker Compose 的 api 服务处于 healthy），并用 /health 验证后重试。'
       )
+    }
+    if (cause.message === 'KNOWLEDGE_STEWARD_REQUIRED') {
+      return (
+        '需要知识管理员身份：请把 Actor 切换为 demo-parent / knowledge-steward'
+        + '（或任意 demo- 演示账号），或由负责人把账号加入 .env 的 '
+        + 'KNOWLEDGE_ADMIN_ACTORS 后重启 API。'
+      )
+    }
+    if (cause.message === 'KNOWLEDGE_CRAWL_CONFIG_MISSING') {
+      return (
+        '爬虫配置缺失：API 运行目录里找不到 docs/knowledge/crawl/allowlist.json 与夹具。'
+        + 'Compose 部署请重新构建 api 镜像（docker compose build api）后再试。'
+      )
+    }
+    if (cause.message === 'REAL_AUTH_REQUIRED') {
+      return '当前部署已关闭开发身份头（ALLOW_DEV_ACTOR_HEADER=false），请改用正式账号登录。'
     }
     if (cause.status === 401) {
       if (cause.message === 'SESSION_REQUIRED' || cause.message === 'AUTH_REQUIRED') {
@@ -208,6 +225,13 @@ export function formatError(cause: unknown): string {
         return `连续失败次数过多，已临时锁定，请约 ${waitMinutes} 分钟后再试，或改用账号密码登录。`
       }
       return '尝试过于频繁，请稍后再试。'
+    }
+    if (cause.status >= 500) {
+      // 开发部署会返回真实 detail；带上它比统一说“暂时不可用”更可诊断。
+      const detail = cause.message && !cause.message.startsWith('API request failed')
+        ? `：${cause.message}`
+        : ''
+      return `本地 API 处理该请求时出错（HTTP ${cause.status}${detail}），本次没有改变任何数据。`
     }
   }
   return '请求未能完成，页面不会显示未经授权的健康数据。'
