@@ -184,6 +184,7 @@ def is_dose_decision_query(text: str) -> bool:
 FOLLOW_UP_RISK_TERMS: tuple[str, ...] = (
     MEDICATION_SAFETY_ROUTE_TERMS
     + DOSE_DECISION_ROUTE_TERMS
+    + _DOSE_BARE_QUANTITY_TERMS
     + (
         "几粒",
         "几片",

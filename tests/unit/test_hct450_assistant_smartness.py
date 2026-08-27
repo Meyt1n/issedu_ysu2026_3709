@@ -146,11 +146,11 @@ def test_synthesis_retries_once_when_model_forgets_citation(monkeypatch) -> None
     assert result["citations"][0]["chunk_id"] == "chunk-cold-1"
 
 
-def test_symptom_answer_still_walls_when_citation_missing_after_retry(
+def test_symptom_answer_keeps_uncited_reply_with_risk_note_after_retry(
     monkeypatch,
 ) -> None:
-    """补正重试失败后，症状用药问题旁边有真实证据却引用不上时，
-    仍然如实降级为 EVIDENCE_REQUIRED，而不是放行无引用回答或谎报空库。"""
+    """决策 2B：补正重试仍未引用时，不再整段降级为 EVIDENCE_REQUIRED——
+    回答保留，由服务端附加「未命中已审核资料」的风险说明与教学提醒。"""
     client_cls = _install_scripted_client(
         monkeypatch, [_uncited_answer(), _uncited_answer()]
     )
@@ -167,9 +167,13 @@ def test_symptom_answer_still_walls_when_citation_missing_after_retry(
         settings=Settings(agent_open_chat=False),
     )
 
+    # The citation-correction retry still runs once before acceptance.
     assert len(client_cls.instances[0].conversations) == 2
-    assert result["degraded"] is True
-    assert result["degrade_reason"] == "EVIDENCE_REQUIRED"
+    assert result["degraded"] is False
+    assert result["degrade_reason"] is None
+    assert result["citations"] == []
+    assert "风险说明" in result["answer"]
+    assert "教学提醒" in result["answer"]
 
 
 # ── 3. GENERAL 教学问的可选知识使用 ──────────────────────────────────

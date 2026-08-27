@@ -6,12 +6,18 @@ from app.config import Settings
 from app.search_providers import (
     DuckDuckGoHtmlProvider,
     FixtureSearchProvider,
+    SearchRedirected,
     SearXNGProvider,
     clear_search_cache,
+    enrich_results_with_pages,
     execute_web_search,
+    fetch_result_page_excerpt,
+    filter_referral_results,
     get_search_provider,
     is_fixture_search_provider,
+    parse_search_results,
     rank_search_results,
+    strip_referral_sentences,
 )
 
 
@@ -207,3 +213,169 @@ def test_execute_web_search_enforces_min_interval(monkeypatch) -> None:
     except SearchRateLimited:
         raised = True
     assert raised is True
+
+
+# ── Audit-5 P0: DuckDuckGo snippet parsing ───────────────────────────────
+
+_DDG_RESULT_PAGE = """
+<div class="result results_links results_links_deep web-result">
+  <h2 class="result__title">
+    <a rel="nofollow" class="result__a"
+       href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.example.org%2Fflu-care&amp;rut=a1">
+      流感季家庭护理要点</a>
+  </h2>
+  <a class="result__snippet"
+     href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.example.org%2Fflu-care&amp;rut=a1">
+    <b>流感</b>季节注意休息补水，出现高热持续不退请及时就医。</a>
+</div>
+<div class="result">
+  <h2 class="result__title">
+    <a rel="nofollow" class="result__a"
+       href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fhealth.example.net%2Fcold&amp;rut=b2">
+      感冒居家观察指引</a>
+  </h2>
+  <a class="result__snippet"
+     href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fhealth.example.net%2Fcold&amp;rut=b2">
+    多数感冒可居家观察，注意补水与休息。</a>
+</div>
+"""
+
+
+def test_duckduckgo_snippet_anchor_with_uddg_is_not_a_new_result() -> None:
+    """P0 (audit-5): snippet anchors carry uddg= hrefs; they must be captured
+    as snippets instead of starting a new (empty) result — the old behaviour
+    lost 100% of abstracts."""
+    results = parse_search_results(_DDG_RESULT_PAGE, 5)
+    assert len(results) == 2
+    assert results[0]["url"] == "https://www.example.org/flu-care"
+    assert "休息补水" in results[0]["snippet"]
+    assert "居家观察" in results[1]["snippet"]
+
+
+def test_redirect_response_is_a_failure_not_an_empty_success(monkeypatch) -> None:
+    """3xx ≠ empty success: the provider raises and metrics record a failure."""
+
+    class RedirectResponse:
+        status_code = 302
+        headers = {"location": "https://elsewhere.example/"}
+        text = ""
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url, params):
+            return RedirectResponse()
+
+    monkeypatch.setattr("app.search_providers.httpx.Client", FakeClient)
+    clear_search_cache()
+    settings = Settings(
+        agent_web_search_cache_ttl_seconds=0,
+        agent_web_search_min_interval_seconds=0,
+    )
+    try:
+        DuckDuckGoHtmlProvider().search("查询", settings=settings)
+        raised = False
+    except SearchRedirected:
+        raised = True
+    assert raised is True
+
+
+def test_empty_results_use_short_cache_ttl(monkeypatch) -> None:
+    """An empty result page must not suppress retries for the whole TTL."""
+    calls = {"count": 0}
+
+    class _EmptyProvider:
+        def search(self, query: str, *, settings: Settings):
+            calls["count"] += 1
+            return []
+
+    monkeypatch.setattr(
+        "app.search_providers.get_search_provider",
+        lambda settings: _EmptyProvider(),
+    )
+    clear_search_cache()
+    settings = Settings(
+        agent_web_search_cache_ttl_seconds=300,
+        agent_web_search_empty_cache_ttl_seconds=0,
+        agent_web_search_min_interval_seconds=0,
+    )
+    assert execute_web_search("空结果查询", settings=settings) == []
+    assert execute_web_search("空结果查询", settings=settings) == []
+    # empty TTL 0 → empty result not cached, provider called again.
+    assert calls["count"] == 2
+
+
+def test_referral_and_ad_results_are_filtered() -> None:
+    results = [
+        {
+            "title": "布洛芬使用注意事项",
+            "url": "https://www.nih.gov/ibu",
+            "snippet": "公开科普内容",
+            "domain": "www.nih.gov",
+        },
+        {
+            "title": "立即购买特效药 限时优惠",
+            "url": "https://shop.example.com/buy",
+            "snippet": "加微信咨询，药房直送。",
+            "domain": "shop.example.com",
+        },
+        {
+            "title": "在线问诊一分钟开药",
+            "url": "https://consult.example.com/x",
+            "snippet": "在线问诊，快速购药。",
+            "domain": "consult.example.com",
+        },
+    ]
+    kept = filter_referral_results(results)
+    assert [item["title"] for item in kept] == ["布洛芬使用注意事项"]
+
+
+def test_strip_referral_sentences_keeps_normal_content() -> None:
+    text = "这是正常科普内容。立即购买特效药！另一句正常说明。"
+    cleaned = strip_referral_sentences(text)
+    assert "立即购买" not in cleaned
+    assert "正常科普内容" in cleaned
+    assert "另一句正常说明" in cleaned
+
+
+def test_open_mode_page_fetch_requires_public_https(monkeypatch) -> None:
+    """SSRF guard: non-public hosts are never fetched in open mode."""
+    monkeypatch.setattr(
+        "app.egress_guard.is_public_https_url", lambda url: False
+    )
+    settings = Settings(agent_web_search_egress_mode="open")
+    assert fetch_result_page_excerpt("https://internal.lan/x", settings=settings) is None
+
+
+def test_enrich_results_with_pages_only_in_open_mode(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.search_providers.fetch_result_page_excerpt",
+        lambda url, settings: "页面正文摘录",
+    )
+    results = [{
+        "title": "公开科普",
+        "url": "https://www.example.org/a",
+        "snippet": "摘要",
+        "domain": "www.example.org",
+        "source": "external_web_search",
+    }]
+    allowlist_settings = Settings(agent_web_search_egress_mode="allowlist")
+    assert "page_excerpt" not in enrich_results_with_pages(
+        [dict(results[0])], settings=allowlist_settings
+    )[0]
+    open_settings = Settings(
+        agent_web_search_egress_mode="open",
+        agent_web_search_fetch_page_count=2,
+    )
+    enriched = enrich_results_with_pages([dict(results[0])], settings=open_settings)
+    assert enriched[0]["page_excerpt"] == "页面正文摘录"

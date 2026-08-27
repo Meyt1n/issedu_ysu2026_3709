@@ -734,12 +734,21 @@ def test_synthesis_degrade_mentions_retrieved_evidence(monkeypatch) -> None:
     assert "1 条外部参考" in result["answer"]
 
 
-def test_medication_safety_short_circuits_without_knowledge(monkeypatch) -> None:
-    class _ForbiddenOllama:
+def test_medication_safety_without_knowledge_answers_with_risk_note(monkeypatch) -> None:
+    """Decision 2B: the EVIDENCE_REQUIRED short-circuit is gone — the model
+    answers and the server appends the low-evidence risk statement."""
+    class _AnsweringOllama:
         def __init__(self, *args, **kwargs):
-            raise AssertionError("no model")
+            pass
 
-    monkeypatch.setattr("app.local_agents.OllamaClient", _ForbiddenOllama)
+        def chat_stream(self, **kwargs):
+            yield (
+                '{"answer":"两种药是否可以同服，本机资料未覆盖，无法替你判断，'
+                '建议咨询医生或药师。","sources":[],"confidence":"low","escalate":false}'
+            )
+
+    monkeypatch.setattr("app.local_agents.OllamaClient", _AnsweringOllama)
+    monkeypatch.setattr("app.local_agents.is_loopback_ollama_url", lambda url: True)
 
     def fake_database(session, **kwargs):
         return {"get_member_state": {"sources": []}}, {
@@ -766,26 +775,30 @@ def test_medication_safety_short_circuits_without_knowledge(monkeypatch) -> None
         member_id="member",
     )
 
-    assert result["degraded"] is True
-    assert result["degrade_reason"] == "EVIDENCE_REQUIRED"
-    assert result["escalate"] is True
+    assert result["query_type"] == "MEDICATION_SAFETY"
+    assert result["degraded"] is False
+    assert result["degrade_reason"] is None
+    assert "风险说明" in result["answer"]
+    assert "教学提醒" in result["answer"]
+    assert result["risk_notice"]
     synthesis = next(trace for trace in result["agent_trace"] if trace["agent_id"] == "synthesis")
-    assert synthesis["status"] == "degraded"
-    assert "跳过模型" in synthesis["summary"]
+    assert synthesis["status"] == "completed"
 
 
-def test_symptom_medication_without_knowledge_gets_friendly_fallback(monkeypatch) -> None:
-    """HCT-448: an empty teaching library on a symptom-material question must
-    not raise the EVIDENCE_REQUIRED + escalate "beyond system boundary" wall.
-
-    The deterministic fallback keeps the hard limits (no model call, no
-    fabricated drug evidence) but stays a normal, friendly teaching turn.
-    """
-    class _ForbiddenOllama:
+def test_symptom_medication_model_down_keeps_friendly_fallback(monkeypatch) -> None:
+    """When the model itself is unavailable and the library is empty, the
+    symptom question still gets the deterministic friendly fallback rather
+    than the generic MODEL_UNAVAILABLE wall."""
+    class _DownOllama:
         def __init__(self, *args, **kwargs):
-            raise AssertionError("no model may be called for the fallback")
+            pass
 
-    monkeypatch.setattr("app.local_agents.OllamaClient", _ForbiddenOllama)
+        def chat_stream(self, **kwargs):
+            raise RuntimeError("OLLAMA_UNAVAILABLE: connection refused")
+            yield  # pragma: no cover
+
+    monkeypatch.setattr("app.local_agents.OllamaClient", _DownOllama)
+    monkeypatch.setattr("app.local_agents.is_loopback_ollama_url", lambda url: True)
 
     def fake_database(session, **kwargs):
         return {"get_member_state": {"sources": []}}, {
@@ -819,7 +832,6 @@ def test_symptom_medication_without_knowledge_gets_friendly_fallback(monkeypatch
     assert result["degraded"] is True
     assert result["degrade_reason"] == "KNOWLEDGE_UNAVAILABLE"
     assert result["escalate"] is False
-    assert "暂时没有" in result["answer"]
     assert "医生或药师" in result["answer"]
     # The friendly fallback must not read like the harsh evidence wall.
     assert "缺少可核验的本地知识引用" not in result["answer"]
@@ -828,6 +840,86 @@ def test_symptom_medication_without_knowledge_gets_friendly_fallback(monkeypatch
     assert statuses["knowledge"] == "degraded"
     synthesis = next(trace for trace in result["agent_trace"] if trace["agent_id"] == "synthesis")
     assert "一般照护提示" in synthesis["summary"]
+
+
+def test_dose_decision_fast_path_refuses_without_model(monkeypatch) -> None:
+    """Decision 1A: 「一天几粒」refuses deterministically — no retrieval, no
+    model call, escalate + fixed copy."""
+    class _ForbiddenOllama:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("no model may be called for DOSE_DECISION")
+
+    monkeypatch.setattr("app.local_agents.OllamaClient", _ForbiddenOllama)
+
+    result = run_local_multi_agent(
+        None,
+        messages=[{"role": "user", "content": "布洛芬一天吃几粒？"}],
+        actor_id="actor",
+        household_id="household",
+        member_id="member",
+    )
+
+    assert result["query_type"] == "DOSE_DECISION"
+    assert result["degraded"] is True
+    assert result["degrade_reason"] == "DOSE_DECISION_REFUSED"
+    assert result["escalate"] is True
+    assert "医生或药师" in result["answer"]
+    statuses = {trace["agent_id"]: trace["status"] for trace in result["agent_trace"]}
+    assert statuses["database"] == "skipped"
+    assert statuses["knowledge"] == "skipped"
+    assert statuses["web_search"] == "skipped"
+    assert statuses["synthesis"] == "completed"
+
+
+def test_context_binding_drops_cross_member_history() -> None:
+    """One assistant session switching member must not keep the previous
+    member's turns (context binding)."""
+    from app.local_agents import bind_session_member_context, reset_session_member_bindings
+
+    reset_session_member_bindings()
+    history = [
+        {"role": "system", "content": "server context"},
+        {"role": "user", "content": "爷爷的用药记录"},
+        {"role": "assistant", "content": "……"},
+        {"role": "user", "content": "那他的过敏史呢"},
+    ]
+    bound, switched = bind_session_member_context(
+        history,
+        assistant_session_id="session-1",
+        actor_id="actor",
+        household_id="h1",
+        member_id="grandpa",
+    )
+    assert not switched and bound == history
+
+    bound, switched = bind_session_member_context(
+        history,
+        assistant_session_id="session-1",
+        actor_id="actor",
+        household_id="h1",
+        member_id="child",
+    )
+    assert switched
+    roles = [message["role"] for message in bound]
+    assert roles == ["system", "user"]
+    assert bound[-1]["content"] == "那他的过敏史呢"
+    reset_session_member_bindings()
+
+
+def test_anaphoric_follow_up_inherits_medication_safety_type() -> None:
+    """「那饭后呢」after a co-administration question keeps the safety route."""
+    from ai.safety.classifier import inherit_query_type_from_history
+
+    query_type, inherited = inherit_query_type_from_history(
+        [
+            {"role": "user", "content": "布洛芬和阿莫西林能一起吃吗"},
+            {"role": "assistant", "content": "……"},
+            {"role": "user", "content": "那饭后呢"},
+        ],
+        current_type="GENERAL",
+    )
+    assert inherited is True
+    assert query_type == "MEDICATION_SAFETY"
 
 
 def test_compact_local_evidence_keeps_query_relevant_fields() -> None:

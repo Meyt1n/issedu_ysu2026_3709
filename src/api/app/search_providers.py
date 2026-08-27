@@ -394,8 +394,9 @@ def reset_search_ops_metrics() -> None:
 
 def _reject_redirect(response: httpx.Response) -> None:
     """A 3xx answer is a provider failure, never a successful empty page."""
-    if 300 <= response.status_code < 400:
-        raise SearchRedirected(f"HTTP_{response.status_code}")
+    status = getattr(response, "status_code", None)
+    if isinstance(status, int) and 300 <= status < 400:
+        raise SearchRedirected(f"HTTP_{status}")
 
 
 class DuckDuckGoHtmlProvider:
