@@ -8,6 +8,7 @@ from queue import Queue
 from threading import Event, Thread
 from typing import Any, NoReturn
 
+import cv2
 from ai.vision.candidate_fusion import (
     FusionRequest,
     fuse_evidence,
@@ -45,6 +46,7 @@ from app.auth import (
     authenticate,
     authenticate_with_pin,
     check_face_rate_limit,
+    clear_face_challenge_rate_limit,
     clear_face_failures,
     consume_face_challenge,
     consume_family_face_challenge,
@@ -136,7 +138,7 @@ from app.models import (
     VisionTask,
 )
 from app.request_context import current_request_id
-from app.retrieval_cache import clear_actor_session
+from app.retrieval_cache import clear_actor_session, session_cache_snapshot
 from app.review import (
     FusionStatus as ReviewFusionStatus,
 )
@@ -451,7 +453,19 @@ def capabilities() -> CapabilityResponse:
         "llm",
         "risk-acknowledgement",
     ]
-    unavailable = ["vision-inference", "llm-cloud", "external-web"]
+    unavailable = ["llm-cloud"]
+    if settings.ocr_version.strip().casefold() == "unavailable":
+        unavailable.append("vision-inference")
+    else:
+        available.append("vision-inference")
+    # Keep the global capability sidebar aligned with the assistant catalog.
+    # ``external-web`` is available only after the configured provider passes
+    # the egress checks and is not an offline teaching fixture.
+    agent_catalog = get_agent_catalog(settings)
+    if agent_catalog["web_search_ready"] and not agent_catalog["web_search_offline_fixture"]:
+        available.append("external-web")
+    else:
+        unavailable.append("external-web")
     # HCT-414-D2 (DEMO_ONLY until the HCT-201 fixed quality set is signed off):
     # the video task capability is declarative so mobile clients can hide the
     # video entry when the server does not provide it.
@@ -1966,6 +1980,7 @@ def auth_family_face_challenge(
 
 @router.post("/auth/face-login", response_model=AuthSessionRead)
 async def auth_face_login(
+    request: Request,
     household_id: str = Form(..., min_length=1, max_length=120),
     actor_id: str = Form(..., min_length=1, max_length=120),
     challenge_id: str = Form(..., min_length=16, max_length=128),
@@ -1987,6 +2002,7 @@ async def auth_face_login(
         raise
 
     def failed(reason: str = "FACE_AUTH_FAILED") -> NoReturn:
+        bucket = normalize_face_failure_reason(reason)
         record_face_failure(rate_key, session)
         _record_authentication_audit(
             session,
@@ -1994,77 +2010,22 @@ async def auth_face_login(
             actor_id=actor_id,
             method="FACE",
             outcome="FAILED",
-            reason=normalize_face_failure_reason(reason),
+            reason=bucket,
         )
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="FACE_AUTH_FAILED")
+        # Return the desensitized bucket (no scores/templates) so the UI can
+        # coach the user — collapsing everything to FACE_AUTH_FAILED made
+        # liveness / pose failures look like "never matches anyone".
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=bucket)
 
     try:
         consume_face_challenge(challenge_id, actor_id, household_id, session)
     except HTTPException:
         failed("CHALLENGE_INVALID")
 
-    if not _actor_belongs_to_household(session, household_id, actor_id):
-        failed("ACCOUNT_SCOPE_INVALID")
-    credential = session.scalar(
-        select(FaceCredential).where(
-            FaceCredential.household_id == household_id,
-            FaceCredential.actor_id == actor_id,
-            FaceCredential.status == "ACTIVE",
-        )
-    )
-    if credential is None or not credential.encrypted_template:
-        failed("CREDENTIAL_UNAVAILABLE")
-
+    # Validate capture completeness before credential lookup so an incomplete
+    # three-step sequence surfaces as FRAME_COUNT_INVALID (coachable) instead
+    # of CREDENTIAL_UNAVAILABLE / scope failures that look like "never matches".
     frame_bytes: list[bytes] = []
-
-    def _match_frames_against_credential() -> float:
-        """Gate/extract/liveness/match pipeline; runs off the event loop.
-
-        Raises ``_FaceAuthRejected`` with the desensitized reason bucket,
-        ``HTTPException`` when the stored template cannot be decrypted, or
-        ``RuntimeError`` when the local face service is unavailable.
-        """
-        templates: list[bytes] = []
-        yaws: list[float] = []
-        try:
-            for data in frame_bytes:
-                # Face-specific frame gate; the medicine-carton OCR gate falsely
-                # rejected valid guided webcam captures (HCT-424/HCT-425 fix).
-                try:
-                    ensure_face_frame_quality(data)
-                except ValueError as exc:
-                    raise _FaceAuthRejected("FRAME_QUALITY_INVALID") from exc
-                extractor = _face_extractor_for_algorithm(credential.algorithm_version)
-                if credential.algorithm_version.startswith("opencv-yunet-sface"):
-                    template, frame_meta = extractor(data)
-                    yaws.append(float(frame_meta.get("yaw", 0.0)))
-                else:
-                    template, _ = extractor(data)
-                templates.append(template)
-            try:
-                pose_yaws = yaws if settings.face_require_pose_liveness and yaws else None
-                check_face_liveness(templates, pose_yaws)
-            except ValueError as exc:
-                if str(exc) == "FACE_LIVENESS_FAILED":
-                    raise _FaceAuthRejected("LIVENESS_FAILED") from exc
-                raise _FaceAuthRejected("FACE_MATCH_FAILED") from exc
-            try:
-                stored_template = decrypt_template(credential.encrypted_template)
-                gallery = unpack_face_templates(stored_template)
-            except ValueError as exc:
-                raise _FaceAuthRejected("FACE_MATCH_FAILED") from exc
-            # Every frame must match the enrolled gallery (best angle per frame),
-            # then take the minimum across frames so one stolen photo cannot pass.
-            return aggregate_match_scores(
-                [score_probe_against_gallery(template, gallery) for template in templates]
-            )
-        except (_FaceAuthRejected, HTTPException, RuntimeError):
-            raise
-        except ValueError as exc:
-            raise _FaceAuthRejected("FACE_MATCH_FAILED") from exc
-        finally:
-            templates.clear()
-
     try:
         if len(frames) < 2 or len(frames) > 3:
             failed("FRAME_COUNT_INVALID")
@@ -2079,14 +2040,78 @@ async def auth_face_login(
             if upload.content_type == "image/png" and not data.startswith(b"\x89PNG\r\n\x1a\n"):
                 failed("FRAME_MAGIC_INVALID")
             frame_bytes.append(data)
+
+        if not _actor_belongs_to_household(session, household_id, actor_id):
+            failed("ACCOUNT_SCOPE_INVALID")
+        credential = session.scalar(
+            select(FaceCredential).where(
+                FaceCredential.household_id == household_id,
+                FaceCredential.actor_id == actor_id,
+                FaceCredential.status == "ACTIVE",
+            )
+        )
+        if credential is None or not credential.encrypted_template:
+            failed("CREDENTIAL_UNAVAILABLE")
+
+        def _match_frames_against_credential() -> float:
+            """Gate/extract/liveness/match pipeline; runs off the event loop.
+
+            Raises ``_FaceAuthRejected`` with the desensitized reason bucket,
+            ``HTTPException`` when the stored template cannot be decrypted, or
+            ``RuntimeError`` when the local face service is unavailable.
+            """
+            templates: list[bytes] = []
+            yaws: list[float] = []
+            try:
+                for data in frame_bytes:
+                    # Face-specific frame gate; the medicine-carton OCR gate falsely
+                    # rejected valid guided webcam captures (HCT-424/HCT-425 fix).
+                    try:
+                        ensure_face_frame_quality(data)
+                    except ValueError as exc:
+                        raise _FaceAuthRejected("FRAME_QUALITY_INVALID") from exc
+                    extractor = _face_extractor_for_algorithm(credential.algorithm_version)
+                    if credential.algorithm_version.startswith("opencv-yunet-sface"):
+                        template, frame_meta = extractor(data)
+                        yaws.append(float(frame_meta.get("yaw", 0.0)))
+                    else:
+                        template, _ = extractor(data)
+                    templates.append(template)
+                try:
+                    pose_yaws = (
+                        yaws if settings.face_login_require_pose_liveness and yaws else None
+                    )
+                    check_face_liveness(templates, pose_yaws, purpose="login")
+                except ValueError as exc:
+                    if str(exc) == "FACE_LIVENESS_FAILED":
+                        raise _FaceAuthRejected("LIVENESS_FAILED") from exc
+                    raise _FaceAuthRejected("FACE_MATCH_FAILED") from exc
+                try:
+                    stored_template = decrypt_template(credential.encrypted_template)
+                    gallery = unpack_face_templates(stored_template)
+                except ValueError as exc:
+                    raise _FaceAuthRejected("FACE_MATCH_FAILED") from exc
+                # Every frame must match the enrolled gallery (best angle per frame),
+                # then take the minimum across frames so one stolen photo cannot pass.
+                return aggregate_match_scores(
+                    [score_probe_against_gallery(template, gallery) for template in templates]
+                )
+            except (_FaceAuthRejected, HTTPException, RuntimeError):
+                raise
+            except ValueError as exc:
+                raise _FaceAuthRejected("FACE_MATCH_FAILED") from exc
+            finally:
+                templates.clear()
+
         # Run the heavy OpenCV/ONNX matching on the dedicated face worker so the
         # event loop (health checks, other logins) never hangs behind it.
         try:
             match_score = await run_face_pipeline(_match_frames_against_credential)
         except _FaceAuthRejected as exc:
             failed(exc.reason)
-        except (HTTPException, RuntimeError) as exc:
-            # Template decrypt failure or local face service unavailable.
+        except (HTTPException, RuntimeError, cv2.error) as exc:
+            # Template decrypt failure or local face service unavailable
+            # (including any raw OpenCV error — never leak the C++ message).
             _record_authentication_audit(
                 session,
                 household_id=household_id,
@@ -2100,12 +2125,16 @@ async def auth_face_login(
                 detail="FACE_AUTH_UNAVAILABLE",
             ) from exc
         if match_score < match_threshold_for(credential.algorithm_version):
-            failed()
+            failed("NO_MATCH")
     finally:
         for index in range(len(frame_bytes)):
             frame_bytes[index] = b""
 
     clear_face_failures(rate_key, session)
+    client_host = request.client.host if request.client else None
+    clear_face_challenge_rate_limit(
+        session, household_id=household_id, client_key=client_host
+    )
     _record_authentication_audit(
         session,
         household_id=household_id,
@@ -2123,6 +2152,7 @@ async def auth_face_login(
 
 @router.post("/auth/family-face-login", response_model=AuthSessionRead)
 async def auth_family_face_login(
+    request: Request,
     household_id: str = Form(..., min_length=1, max_length=120),
     challenge_id: str = Form(..., min_length=16, max_length=128),
     frames: list[UploadFile] = File(...),
@@ -2144,6 +2174,7 @@ async def auth_family_face_login(
         raise
 
     def failed(reason: str = "FACE_AUTH_FAILED") -> NoReturn:
+        bucket = normalize_face_failure_reason(reason)
         record_face_failure(rate_key, session)
         _record_authentication_audit(
             session,
@@ -2151,33 +2182,17 @@ async def auth_family_face_login(
             actor_id=rate_actor,
             method="FACE",
             outcome="FAILED",
-            reason=normalize_face_failure_reason(reason),
+            reason=bucket,
         )
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="FACE_AUTH_FAILED")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=bucket)
 
     try:
         consume_family_face_challenge(challenge_id, household_id, session)
     except HTTPException:
         failed("CHALLENGE_INVALID")
 
-    credentials = list(
-        session.scalars(
-            select(FaceCredential).where(
-                FaceCredential.household_id == household_id,
-                FaceCredential.status == "ACTIVE",
-            )
-        ).all()
-    )
-    credentials = [
-        credential
-        for credential in credentials
-        if credential.encrypted_template
-        and _actor_belongs_to_household(session, household_id, credential.actor_id)
-    ]
-    if not credentials:
-        failed("CREDENTIAL_UNAVAILABLE")
-
     frame_bytes: list[bytes] = []
+    credentials: list[FaceCredential] = []
 
     def _identify_household_member() -> str:
         """Gate/extract/liveness/1:N match pipeline; runs off the event loop.
@@ -2211,8 +2226,10 @@ async def auth_family_face_login(
                     if algorithm_version.startswith("opencv-yunet-sface"):
                         yaws.append(float(frame_meta.get("yaw", 0.0)))
                 try:
-                    pose_yaws = yaws if settings.face_require_pose_liveness and yaws else None
-                    check_face_liveness(extracted, pose_yaws)
+                    pose_yaws = (
+                        yaws if settings.face_login_require_pose_liveness and yaws else None
+                    )
+                    check_face_liveness(extracted, pose_yaws, purpose="login")
                 except ValueError as exc:
                     if str(exc) == "FACE_LIVENESS_FAILED":
                         raise _FaceAuthRejected("LIVENESS_FAILED") from exc
@@ -2285,13 +2302,33 @@ async def auth_family_face_login(
             if upload.content_type == "image/png" and not data.startswith(b"\x89PNG\r\n\x1a\n"):
                 failed("FRAME_MAGIC_INVALID")
             frame_bytes.append(data)
+
+        credentials = list(
+            session.scalars(
+                select(FaceCredential).where(
+                    FaceCredential.household_id == household_id,
+                    FaceCredential.status == "ACTIVE",
+                )
+            ).all()
+        )
+        credentials = [
+            credential
+            for credential in credentials
+            if credential.encrypted_template
+            and _actor_belongs_to_household(session, household_id, credential.actor_id)
+        ]
+        if not credentials:
+            failed("CREDENTIAL_UNAVAILABLE")
+
         # Run the heavy OpenCV/ONNX 1:N matching on the dedicated face worker so
         # the event loop (health checks, other logins) never hangs behind it.
         try:
             best_actor_id = await run_face_pipeline(_identify_household_member)
         except _FaceAuthRejected as exc:
             failed(exc.reason)
-        except RuntimeError as exc:
+        except (RuntimeError, cv2.error) as exc:
+            # Face service unavailable, including raw OpenCV errors — never
+            # leak the C++ message or a local filesystem path to the client.
             _record_authentication_audit(
                 session,
                 household_id=household_id,
@@ -2309,6 +2346,10 @@ async def auth_family_face_login(
             frame_bytes[index] = b""
 
     clear_face_failures(rate_key, session)
+    client_host = request.client.host if request.client else None
+    clear_face_challenge_rate_limit(
+        session, household_id=household_id, client_key=client_host
+    )
     _record_authentication_audit(
         session,
         household_id=household_id,
@@ -2444,7 +2485,16 @@ def _confirm_face_registration(
 
 
 def _face_credential_read(credential: FaceCredential) -> FaceCredentialRead:
-    template_count = 3 if "multi" in (credential.feature_version or "") else 1
+    template_count = 1
+    if credential.encrypted_template:
+        try:
+            packed = decrypt_template(credential.encrypted_template)
+            template_count = max(1, len(unpack_face_templates(packed)))
+        except (HTTPException, ValueError):
+            # Revoked/corrupt ciphertext: fall back without inventing a hard-coded 3.
+            template_count = 2 if "multi" in (credential.feature_version or "") else 1
+    elif "multi" in (credential.feature_version or ""):
+        template_count = 2
     return FaceCredentialRead(
         id=credential.id,
         household_id=credential.household_id,
@@ -2608,7 +2658,7 @@ async def register_face_credential(
                 frame_metadata = frame_meta
             try:
                 pose_yaws = yaws if settings.face_require_pose_liveness else None
-                check_face_liveness(templates, pose_yaws)
+                check_face_liveness(templates, pose_yaws, purpose="registration")
             except ValueError as exc:
                 raise ValueError("FACE_LIVENESS_FAILED") from exc
             # Keep every angle in an encrypted multi-template gallery so login can
@@ -2645,6 +2695,15 @@ async def register_face_credential(
         # /health and every other request stay responsive while the user waits
         # on 「正在保存…」 (HCT-424 root-cause fix for false 「本地 API 不可用」).
         packed_template, metadata = await run_face_pipeline(_process_registration_frames)
+    except cv2.error as exc:
+        # A raw OpenCV C++ error (e.g. "Can't read ONNX file: C:\...\多模态医疗
+        # \...") must never surface as an HTTP 500 with the full local path in
+        # the toast; the loaders already map load failures, this catches any
+        # residual inference-time failure (HCT-424 Windows Unicode-path fix).
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="FACE_DETECTOR_UNAVAILABLE",
+        ) from exc
     except RuntimeError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -3842,6 +3901,25 @@ def clear_assistant_session_cache(
     }
 
 
+@router.get("/assistant/session-cache/ops")
+def get_assistant_session_cache_ops(
+    assistant_session_id: str = Query(min_length=1, max_length=64),
+    actor_id: str = Depends(get_actor_id),
+) -> dict[str, Any]:
+    """Return privacy-safe cache metrics for the caller's opaque session."""
+    snapshot = session_cache_snapshot(
+        assistant_session_id=assistant_session_id,
+        actor_id=actor_id,
+    )
+    snapshot.update({
+        "assistant_session_id": assistant_session_id,
+        "cache_ttl_seconds": float(
+            get_settings().agent_retrieval_cache_ttl_seconds or 0
+        ),
+    })
+    return snapshot
+
+
 @router.get("/health-news")
 async def list_health_news(
     actor_id: str = Depends(get_actor_id),
@@ -4031,6 +4109,7 @@ def assistant_chat(
                 "all_agents_local": True,
             }
         )
+    result["open_chat"] = bool(settings.agent_open_chat)
     session.commit()
     return AssistantResponse(**result)
 
@@ -4112,6 +4191,7 @@ def assistant_chat_stream(
                 event_queue.put(("cancelled", {"code": "CANCELLED"}))
             else:
                 worker_session.commit()
+                result["open_chat"] = bool(settings.agent_open_chat)
                 event_queue.put(("done", {"response": result}))
         except OrchestrationCancelled:
             worker_session.rollback()

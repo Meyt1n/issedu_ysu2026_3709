@@ -1,5 +1,7 @@
 import { readonly, ref } from 'vue'
 
+import { loadVoicePreferences } from '@hct/voice'
+
 import { useA11y } from '@/stores/accessibility'
 
 export interface SpeechLike {
@@ -87,6 +89,19 @@ export function pickChineseVoice(voices: readonly SpeechSynthesisVoice[]): Speec
   return bestScore >= 0 ? best : null
 }
 
+/** 与助手朗读读同一份本机偏好：首选音色按名称精确匹配，否则自动优选。 */
+export function resolveBroadcastVoice(
+  voices: readonly SpeechSynthesisVoice[],
+  preferredName: string,
+): SpeechSynthesisVoice | null {
+  const wanted = preferredName.trim()
+  if (wanted) {
+    const match = voices.find((voice) => voice.name === wanted)
+    if (match) return match
+  }
+  return pickChineseVoice(voices)
+}
+
 /** 长文本按句切分：规避长 utterance 中途静音，也让“点按停止”更及时。 */
 export function splitSpeechSegments(text: string, maxLength = 120): string[] {
   const content = text.trim()
@@ -160,10 +175,19 @@ function showGuidance(message: string): void {
 
 const RETRY_GUIDANCE = '语音暂时无法播放。请先轻触页面后重试；若仍无声音，请检查系统“文字转语音”设置。'
 
-/** 工厂函数便于测试注入假的 speechSynthesis 与开关读取函数。 */
+function preferredVoiceNameSafe(): string {
+  try {
+    return loadVoicePreferences().preferredVoiceName
+  } catch {
+    return ''
+  }
+}
+
+/** 工厂函数便于测试注入假的 speechSynthesis、开关读取函数与首选音色读取函数。 */
 export function createSpeaker(
   isEnabled: () => boolean,
   synth: SpeechLike | null = resolveSynth(),
+  getPreferredVoiceName: () => string = preferredVoiceNameSafe,
 ): Speaker {
   // 提前触发一次语音列表加载：部分浏览器首次 getVoices() 才开始异步加载。
   if (synth) getVoicesSafe(synth)
@@ -234,13 +258,14 @@ export function createSpeaker(
       token += 1
       const currentToken = token
       const segments = splitSpeechSegments(text.trim())
+      const preferredName = getPreferredVoiceName()
       speakingText.value = text
       if (loadedVoices.length > 0 || typeof synth.addEventListener !== 'function') {
-        speakSegments(synth, text, segments, pickChineseVoice(loadedVoices), currentToken, 0)
+        speakSegments(synth, text, segments, resolveBroadcastVoice(loadedVoices, preferredName), currentToken, 0)
       } else {
         void waitForVoices(synth).then((voices) => {
           if (currentToken !== token) return
-          speakSegments(synth, text, segments, pickChineseVoice(voices), currentToken, 0)
+          speakSegments(synth, text, segments, resolveBroadcastVoice(voices, preferredName), currentToken, 0)
         })
       }
       return true

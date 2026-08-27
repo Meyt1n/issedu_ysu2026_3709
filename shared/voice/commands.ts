@@ -58,6 +58,30 @@ const COMMAND_PATTERNS: ReadonlyArray<{ id: VoiceCommandId; patterns: RegExp[] }
   },
 ]
 
+/**
+ * 白名单指令的完整口语形态（规范化后），用于判断「还在说指令的前半句」。
+ * 与 COMMAND_PATTERNS 保持同源语料；只做前缀判断，不解析开放域意图。
+ */
+const COMMAND_PHRASES: readonly string[] = [
+  '发送', '发送吧', '请发送', '请确认发送吧', '确认发送', '发出去', '发出吧', '好了发送', '现在发送',
+  '取消', '取消吧', '不要发送', '先不发', '不发了', '算了', '等等',
+  '再说一遍', '再读一遍', '重复', '重复一下', '重复回答', '重复朗读', '再读一次', '再听一遍',
+  '上一条再说一遍', '上一条再读一遍', '把上一条再说一遍', '再朗读',
+  '停止朗读', '别读了', '不要读了', '安静', '停',
+  '重说', '重新说', '再说一遍问题', '重说一遍', '我重说',
+  '继续说', '接着说', '我还有',
+]
+
+/**
+ * 判断文本是否可能是白名单指令的未说完前缀（如「上一条再说」）。
+ * 用于指令聆听期：可能是指令就再等等，否则应把这段话累加回口述草稿，避免丢字。
+ */
+export function couldBeVoiceCommandPrefix(text: string): boolean {
+  const compact = normalizeVoiceText(text)
+  if (!compact) return false
+  return COMMAND_PHRASES.some((phrase) => phrase.startsWith(compact))
+}
+
 /** 匹配白名单指令；无法识别则返回 null（忽略，不执行开放意图）。 */
 export function matchVoiceCommand(text: string): VoiceCommandId | null {
   const compact = normalizeVoiceText(text)

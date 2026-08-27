@@ -1467,6 +1467,20 @@ button:focus-visible, a:focus-visible {
 }
 .entry-conflict .btn { flex: none; }
 
+/* HCT-456：成员前台「正确进入」清单 */
+.entry-guide {
+  align-items: flex-start;
+  display: flex;
+  gap: 10px;
+  line-height: 1.55;
+}
+.entry-guide strong { display: block; margin-bottom: 4px; }
+.entry-guide ol {
+  margin: 0;
+  padding-left: 1.2em;
+}
+.entry-guide li { margin: 2px 0; }
+
 /* ---------- HCT-455：成员前台 / 管理后台双入口视觉区分 ----------
    成员前台是「一位家人自己的个人前台」，管理后台是「管理整个家庭」。
    两个入口共用一套模板，但徽标、表单顶签、主色调必须一眼可分。 */

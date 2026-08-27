@@ -905,6 +905,7 @@ class AssistantSessionCacheClearRequest(BaseModel):
 
 class AssistantResponse(BaseModel):
     answer: str
+    open_chat: bool = False
     sources: list[str] = Field(default_factory=list)
     citations: list[AssistantCitation] = Field(default_factory=list)
     suggested_questions: list[str] = Field(default_factory=list)

@@ -179,6 +179,24 @@ def enforce_face_challenge_rate_limit(
     )
 
 
+def clear_face_challenge_rate_limit(
+    db: Session,
+    *,
+    household_id: str,
+    client_key: str | None = None,
+) -> None:
+    """Drop challenge-issuance counters after a successful face login.
+
+    Issuance still counts toward flood protection; a completed login must not
+    leave the household locked out of the next legitimate challenge.
+    """
+    keys = [f"face-challenge:{household_id}"]
+    if client_key:
+        keys.append(f"face-challenge-client:{client_key}")
+    for rate_key in keys:
+        _clear_failures(db, rate_key)
+
+
 def _enforce_attempt_keys(
     db: Session,
     keys: list[str],

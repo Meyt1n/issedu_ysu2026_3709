@@ -161,7 +161,7 @@ MATCHED/CONFLICT/UNKNOWN/REVIEW -> CONFIRMED | CORRECTED | REJECTED
 
 `POST /assistant/chat` 只执行白名单只读工具。`retrieve_knowledge` 必须使用请求中的 `household_id`/`member_id`，模型不得改写范围。最终 `citations` 只能引用本次工具返回的 `document_id`/`version`/`chunk_id`；伪造来源返回 `CITATION_NOT_FOUND`，无授权文档返回 `NO_AUTHORISED_DOCUMENTS`。降级响应的 `sources` 和 `citations` 必须为空。
 
-HCT-430 多智能体请求可携带受限枚举 `query_type_override`、最长 64 位的 `assistant_session_id` 和 `clear_session_cache`。响应增加 `route_explanation`、不含思考链的分类通道结果、只列工具名/资料标题/数量的 `evidence_preview` 及 `retrieval_cache_hit`；流式接口在合成前发送 `evidence_preview`，取消时发送 `cancelled`。缓存按 actor/会话/家庭/成员隔离，命中前重新核验当前授权；`POST /assistant/session-cache/clear` 只能清理当前 actor 的会话范围。`GET /assistant/web-search/ops` 只返回不含查询正文的计数；配置了知识管理员时仅允许名单 actor，名单为空时只在非生产环境允许已认证 actor。
+HCT-430 多智能体请求可携带受限枚举 `query_type_override`、最长 64 位的 `assistant_session_id` 和 `clear_session_cache`。响应增加 `route_explanation`、不含思考链的分类通道结果、只列工具名/资料标题/数量的 `evidence_preview` 及 `retrieval_cache_hit`；流式接口在合成前发送 `evidence_preview`，取消时发送 `cancelled`。缓存按 actor/会话/家庭/成员隔离，命中前重新核验当前授权；`POST /assistant/session-cache/clear` 只能清理当前 actor 的会话范围，`GET /assistant/session-cache/ops` 只返回当前 actor/opaque 会话的匿名条目、作用域、代理和 TTL 统计，并在读取时清理该范围的过期项，不返回问题、标识或缓存内容。`GET /assistant/web-search/ops` 只返回不含查询正文的计数；配置了知识管理员时仅允许名单 actor，名单为空时只在非生产环境允许已认证 actor。
 
 助手响应中的引用展示字段（标题、片段正文、定位）只能从同一轮已授权检索结果透传，不能由模型生成或由前端补猜；它们用于解释展示，不改变引用的身份校验。前端只在当前标签页保存按身份/家庭/成员隔离的临时会话，不新增服务端会话存储。
 

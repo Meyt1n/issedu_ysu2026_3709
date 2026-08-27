@@ -4,6 +4,8 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY src/web ./src/web
+# Web 助手朗读依赖仓库根 shared/voice（@hct/voice），构建镜像必须一并打入。
+COPY shared ./shared
 # 本地教学 Compose 档默认保留「开发演示」登录入口（与 compose 默认的
 # ALLOW_DEV_ACTOR_HEADER=true 对齐）；正式部署请用 --build-arg 关闭，
 # 「模型实验室」等研发入口默认在生产构建中隐藏（HCT-439）。

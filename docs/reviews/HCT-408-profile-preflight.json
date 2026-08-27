@@ -1,0 +1,48 @@
+{
+  "schema_version": "hct408-profile-preflight/v1",
+  "passed": true,
+  "decision": "PROFILES_STATIC_OK",
+  "compose_path": "/workspace/docker-compose.yml",
+  "profiles": {
+    "basic": {
+      "services": [
+        "api",
+        "care-plan-worker",
+        "db",
+        "outbox-worker",
+        "web"
+      ],
+      "missing": [],
+      "forbidden_present": []
+    },
+    "enhanced": {
+      "services": [
+        "api",
+        "care-plan-worker",
+        "db",
+        "ollama",
+        "outbox-worker",
+        "web"
+      ],
+      "missing": [],
+      "forbidden_present": []
+    },
+    "dev": {
+      "services": [
+        "api",
+        "care-plan-worker",
+        "db",
+        "ollama",
+        "outbox-worker",
+        "web"
+      ],
+      "missing": [],
+      "forbidden_present": []
+    }
+  },
+  "findings": [],
+  "limitations": [
+    "Static YAML parse only; does not execute docker compose config/up.",
+    "Live health probes still require Docker and an operator-run drill."
+  ]
+}

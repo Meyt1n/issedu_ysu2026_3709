@@ -63,7 +63,10 @@ def test_open_chat_skips_symptom_short_circuit(monkeypatch: pytest.MonkeyPatch) 
 
         def chat_stream(self, **_kwargs):
             calls.append("stream")
-            yield '{"answer":"腹泻时先补水休息，外部参考仅供参考。","sources":[],"confidence":"medium","escalate":false}'
+            yield (
+                '{"answer":"腹泻时先补水休息，外部参考仅供参考。",'
+                '"sources":[],"confidence":"medium","escalate":false}'
+            )
 
     monkeypatch.setattr(local_agents, "OllamaClient", FakeClient)
     monkeypatch.setattr(local_agents, "is_loopback_ollama_url", lambda _url: True)
@@ -83,3 +86,37 @@ def test_open_chat_skips_symptom_short_circuit(monkeypatch: pytest.MonkeyPatch) 
     assert result["degraded"] is False
     assert "腹泻" in result["answer"]
     assert result.get("degrade_reason") is None
+
+
+def test_open_chat_rejects_router_control_label(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Internal ``route`` output must never be presented as a real answer."""
+    from app import local_agents
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "agent_open_chat", True)
+
+    class FakeClient:
+        def __init__(self, *_a, **_k) -> None:
+            pass
+
+        def chat_stream(self, **_kwargs):
+            yield '{"answer":"route","sources":[],"confidence":"low","escalate":false}'
+
+    monkeypatch.setattr(local_agents, "OllamaClient", FakeClient)
+    monkeypatch.setattr(local_agents, "is_loopback_ollama_url", lambda _url: True)
+
+    result = local_agents._synthesis_agent(
+        messages=[{"role": "user", "content": "普通问题"}],
+        query_type="GENERAL",
+        database={},
+        knowledge={"results": []},
+        external_sources=[],
+        model="demo",
+        max_tokens=64,
+        temperature=0.2,
+        settings=settings,
+    )
+
+    assert result["degraded"] is True
+    assert result["degrade_reason"] == "SCHEMA_VALIDATION_FAILED"
+    assert result["answer"] != "route"

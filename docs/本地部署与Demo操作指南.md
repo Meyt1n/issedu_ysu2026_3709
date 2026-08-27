@@ -61,6 +61,10 @@ uv run python scripts/ensure_face_models.py
 
 `/api/v1/meta/capabilities` 在模型就绪时会包含 `face-recognition-local`；未就绪时欢迎页会提示改用 PIN/密码。旧灰度 v1/v2 凭证仍可登录，管理员页会提示重新绑定升级。
 
+完整的录入/刷脸登录逐步操作、常见错误速查与排障请看专文：[人脸凭证录入与登录操作手册](demo/人脸凭证录入与登录操作手册.md)。
+
+**Windows 中文路径注意（2026-08-26 修复）**：此前仓库路径含中文（如 `C:\...\多模态医疗\...`）时，OpenCV 在 Windows 上无法读取 YuNet/SFace ONNX 文件，注册/登录报 HTTP 500 并把本机路径泄漏进提示。现已改为 Python 读取权重字节 + OpenCV 内存缓冲加载，中文路径可正常工作；残余加载失败只返回 503 `FACE_DETECTOR_UNAVAILABLE` 与中文指引。仍建议仓库使用纯英文路径（其它工具链如 Docker 卷挂载对中文路径的兼容性无法保证）；排查步骤见操作手册 §3。
+
 #### 真实家庭摄像头阈值标定（必须本机完成）
 
 默认阈值（`0.40` / margin `0.05`）来自公开样例，**不能代替你们家庭真实摄像头场景**。云端 Agent / CI **无法代采真人脸**，因此误拒/误识校准必须在维护者本机完成：
@@ -117,7 +121,15 @@ scripts/start.ps1 api
 - 走错入口不会泄露或损坏任何数据：登录成功后系统发现账号与入口不匹配，会立刻退出本次登录，并在页面上给出「去管理后台登录 / 回成员前台登录」按钮。
 - 入口只是界面锁；谁能看什么、谁能改什么仍完全由服务端授权（HCT-439/HCT-102）决定。
 - 端口自定义：本地进程 `HCT_WEB_PORT`（前台）/ `HCT_ADMIN_WEB_PORT`（后台）；Compose `.env` 的 `WEB_PORT` / `ADMIN_WEB_PORT`。非默认端口部署可在构建时设置 `VITE_MEMBER_PORTAL_URL` / `VITE_ADMIN_PORTAL_URL` 让跨端按钮指向正确公开地址。
-- 调试用单入口 `scripts/start web`（5173，不设入口模式）保持旧行为：登录后按账号角色自动进前台或后台。
+- 调试用单入口 `scripts/start web`（5173，不设入口模式）保持旧行为：登录后按账号角色自动进前台或后台。**产品演示请用 `web-member`，不要用 `web` 冒充成员前台。**
+
+#### 正确进入成员前台三步清单（HCT-456）
+
+1. `scripts/start.ps1|sh api` + `scripts/start.ps1|sh web-member`
+2. 打开 `http://127.0.0.1:5173`（Compose：`http://localhost:8080`）
+3. 用**成员**账号刷脸或 PIN（演示如 `grandma-demo`）；管理员 `demo-parent` 请用 `web-admin` → 5174/8081
+
+欢迎页在成员入口会显示同一清单；用管理员账号误进成员前台会被登出，并提示改去管理后台或换成员账号。
 
 ## 2. 三档运行目标
 

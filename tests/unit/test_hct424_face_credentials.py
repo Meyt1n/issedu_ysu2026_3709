@@ -151,9 +151,21 @@ def test_pose_liveness_requires_yaw_span() -> None:
         _pattern_template(flip_count=205),
         _pattern_template(flip_count=410),
     ]
-    check_face_liveness(frames, yaws=[-0.2, 0.0, 0.25])
+    check_face_liveness(frames, yaws=[-0.2, 0.0, 0.25], purpose="registration")
     with pytest.raises(ValueError, match="FACE_LIVENESS_FAILED"):
-        check_face_liveness(frames, yaws=[0.0, 0.01, -0.01])
+        check_face_liveness(frames, yaws=[0.0, 0.01, -0.01], purpose="registration")
+
+
+def test_login_liveness_accepts_two_frame_motion_without_yaw() -> None:
+    """Login short path: neighbor motion only; yaw is optional for purpose=login."""
+    frames = [
+        _pattern_template(),
+        _pattern_template(flip_count=205),
+    ]
+    check_face_liveness(frames, purpose="login")
+    check_face_liveness(frames, yaws=None, purpose="login")
+    with pytest.raises(ValueError, match="FACE_LIVENESS_FAILED"):
+        check_face_liveness([frames[0]], purpose="login")
 
 
 def test_match_threshold_for_uses_sface_gate_on_v3() -> None:

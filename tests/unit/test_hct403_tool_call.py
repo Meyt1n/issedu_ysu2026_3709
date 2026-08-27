@@ -151,6 +151,10 @@ class TestMedicalSafety:
         violations = _check_medical_boundary("您可以查看已保存的健康记录")
         assert len(violations) == 0
 
+    def test_safety_disclaimer_is_not_a_directive(self):
+        violations = _check_medical_boundary("我不能诊断，也不开处方；这只是一般信息。")
+        assert violations == []
+
 
 # ── Structured output ─────────────────────────────────────────────────
 
@@ -263,6 +267,36 @@ class TestOllamaClient:
                 messages=[{"role": "user", "content": "hello"}],
             )
         assert calls["count"] == 1
+
+    def test_chat_retries_tool_round_without_optional_format(self, monkeypatch):
+        """Older Ollama builds reject ``tools`` + JSON schema together."""
+        import httpx
+
+        payloads = []
+
+        def responses(_self, url, **kwargs):
+            payloads.append(dict(kwargs["json"]))
+            request = httpx.Request("POST", url)
+            if len(payloads) == 1:
+                return httpx.Response(400, request=request, json={"error": "format with tools"})
+            return httpx.Response(
+                200,
+                request=request,
+                json={"message": {"content": '{"answer":"可以继续回答。"}'}},
+            )
+
+        monkeypatch.setattr("app.tool_call.httpx.Client.post", responses)
+        result = OllamaClient().chat(
+            model="local-model",
+            messages=[{"role": "user", "content": "测试"}],
+            tools=[{"type": "function", "function": {"name": "read_only"}}],
+            response_format={"type": "object"},
+        )
+
+        assert result["message"]["content"]
+        assert len(payloads) == 2
+        assert "format" in payloads[0]
+        assert "format" not in payloads[1]
 
     def test_chat_still_retries_server_errors(self, monkeypatch):
         """5xx may be transient; the existing retry budget still applies."""

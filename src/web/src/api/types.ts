@@ -732,6 +732,7 @@ export interface AssistantAgentCatalogItem {
 export type WebSearchUnavailableReason =
   | 'DEPLOYMENT_DISABLED'
   | 'EGRESS_BLOCKED'
+  | 'PROVIDER_UNAVAILABLE'
   | 'OPT_IN_REQUIRED'
 
 export interface AssistantAgentCatalog {
@@ -739,7 +740,7 @@ export interface AssistantAgentCatalog {
   all_agents_local: boolean
   ollama_local_only: boolean
   web_search_enabled: boolean
-  /** True only when the deployment switch is on and the endpoint passes the allowlist. */
+  /** True only when configuration and the last observed provider request are healthy. */
   web_search_ready?: boolean
   web_search_provider?: string
   /** True when the provider serves offline teaching fixtures (no egress). */
@@ -773,10 +774,13 @@ export interface WebSearchOpsSnapshot {
   cache_hit_rate: number
   rate_limited_hits: number
   searches: number
+  last_search_status?: 'success' | 'failure' | null
+  last_search_error?: string | null
 }
 
 export interface AssistantResponse {
   answer: string
+  open_chat?: boolean
   sources: string[]
   citations?: AssistantCitation[]
   suggested_questions?: string[]

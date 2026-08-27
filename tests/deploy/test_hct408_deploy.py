@@ -45,19 +45,22 @@ def _docker_compose_config_ok(profile: str) -> bool:
     if not compose_path.exists():
         return True  # skip gracefully in CI without compose file
 
-    result = subprocess.run(
-        [
-            "docker", "compose",
-            "-f", str(compose_path),
-            "--profile", profile,
-            "config", "--quiet",
-        ],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=60,
-    )
+    try:
+        result = subprocess.run(
+            [
+                "docker", "compose",
+                "-f", str(compose_path),
+                "--profile", profile,
+                "config", "--quiet",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+        )
+    except FileNotFoundError:
+        return True  # docker binary missing: static preflight covers profiles
     return result.returncode == 0
 
 
@@ -66,19 +69,22 @@ def _docker_compose_config_json(profile: str) -> dict:
     compose_path = Path(__file__).resolve().parents[2] / "docker-compose.yml"
     if not compose_path.exists():
         return {}
-    result = subprocess.run(
-        [
-            "docker", "compose",
-            "-f", str(compose_path),
-            "--profile", profile,
-            "config", "--format", "json",
-        ],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=30,
-    )
+    try:
+        result = subprocess.run(
+            [
+                "docker", "compose",
+                "-f", str(compose_path),
+                "--profile", profile,
+                "config", "--format", "json",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+        )
+    except FileNotFoundError:
+        return {}
     if result.returncode != 0:
         return {}
     return json.loads(result.stdout)
@@ -118,6 +124,34 @@ def test_linux_backup_and_restore_scripts_are_shipped():
 def test_linux_restore_validates_before_database_drop():
     script = (BACKUP_SCRIPTS / "restore.sh").read_text(encoding="utf-8")
     assert script.index("hct408_validate_backup.py") < script.index("DROP DATABASE")
+
+
+def test_linux_backup_archives_file_root_contents():
+    """Inventory-only backups cannot recover destroyed files; archive is required."""
+    script = (BACKUP_SCRIPTS / "backup.sh").read_text(encoding="utf-8")
+    assert "hct408_file_archive.py create" in script
+
+
+def test_linux_restore_extracts_file_archive_before_hash_check():
+    script = (BACKUP_SCRIPTS / "restore.sh").read_text(encoding="utf-8")
+    assert "hct408_file_archive.py restore" in script
+    assert script.index("hct408_file_archive.py restore") < script.index(
+        "hct408_validate_backup.py --backup \"$backup_path\" --file-root"
+    )
+
+
+def test_powershell_backup_and_restore_archive_file_root():
+    backup = (BACKUP_SCRIPTS / "backup.ps1").read_text(encoding="utf-8")
+    restore = (BACKUP_SCRIPTS / "restore.ps1").read_text(encoding="utf-8")
+    assert "hct408_file_archive.py" in backup
+    assert "hct408_file_archive.py" in restore
+    assert "files.tar.gz" in restore
+
+
+def test_disposable_drill_and_profile_preflight_shipped():
+    assert (BACKUP_SCRIPTS / "hct408_disposable_restore_drill.py").exists()
+    assert (BACKUP_SCRIPTS / "hct408_profile_preflight.py").exists()
+    assert (BACKUP_SCRIPTS / "hct408_file_archive.py").exists()
 
 
 def test_version_manifest_schema():

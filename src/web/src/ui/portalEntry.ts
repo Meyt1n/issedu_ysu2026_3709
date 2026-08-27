@@ -14,7 +14,7 @@
  * 1. `?portal=member|admin` 查询参数（教学/测试用的显式覆盖）；
  * 2. `VITE_PORTAL_MODE` 构建/开发期 define（`npm run dev:web:member|admin`）；
  * 3. `window.__HCT_PORTAL_MODE__`（Compose Nginx 按监听端口注入）；
- * 4. 已知管理后台端口回退（5174 / 8081 → admin）；
+ * 4. 已知管理后台端口回退（5174 / 8081 / 5184 → admin）；
  * 5. 都没有 → `auto`：保持 HCT-439 的单入口行为（按账号角色进门户），
  *    供裸 `npm run dev:web` 调试和既有 e2e 使用，不是产品入口。
  */
@@ -22,7 +22,7 @@
 export type PortalEntryMode = 'member' | 'admin' | 'auto'
 
 /** 已知的管理后台端口：Vite dev 5174、Compose 8081。 */
-const ADMIN_ENTRY_PORTS = new Set(['5174', '8081'])
+const ADMIN_ENTRY_PORTS = new Set(['5174', '8081', '5184'])
 
 /** 每个入口的默认公开地址，用于跨端链接的兜底换算。 */
 const DEFAULT_DEV_PORTS: Record<'member' | 'admin', string> = {
@@ -32,6 +32,12 @@ const DEFAULT_DEV_PORTS: Record<'member' | 'admin', string> = {
 const DEFAULT_COMPOSE_PORTS: Record<'member' | 'admin', string> = {
   member: '8080',
   admin: '8081',
+}
+// 本地多人联调常用的第二组端口：成员前台 5183、管理后台 5184。
+// 端口只是入口识别和跨端导航的兜底，授权仍由服务端决定。
+const DEFAULT_LOCAL_DEMO_PORTS: Record<'member' | 'admin', string> = {
+  member: '5183',
+  admin: '5184',
 }
 
 function normalizeMode(value: unknown): 'member' | 'admin' | null {
@@ -110,7 +116,7 @@ export function portalEntryConflict(
  *
  * 优先使用部署方显式配置的公开地址（`VITE_MEMBER_PORTAL_URL` /
  * `VITE_ADMIN_PORTAL_URL`）；否则按当前地址换算端口：开发端口互换
- * 5173↔5174，Compose 端口互换 8080↔8081；无法判断时返回空字符串，
+ * 5173↔5174、5183↔5184，Compose 端口互换 8080↔8081；无法判断时返回空字符串，
  * 由界面只显示文字指引而不渲染链接。
  *
  * 换算出的地址总是带上 `?portal=member|admin` 显式覆盖：即使目标端口
@@ -136,6 +142,8 @@ export function crossPortalUrl(
     targetPort = DEFAULT_DEV_PORTS[target]
   } else if (port === DEFAULT_COMPOSE_PORTS.member || port === DEFAULT_COMPOSE_PORTS.admin) {
     targetPort = DEFAULT_COMPOSE_PORTS[target]
+  } else if (port === DEFAULT_LOCAL_DEMO_PORTS.member || port === DEFAULT_LOCAL_DEMO_PORTS.admin) {
+    targetPort = DEFAULT_LOCAL_DEMO_PORTS[target]
   } else {
     return ''
   }
@@ -156,8 +164,8 @@ function withPortalQuery(url: string, target: 'member' | 'admin'): string {
 /** 无法换算跨端 URL 时的纯文字端口提示。 */
 export function crossPortalPortsHint(target: 'member' | 'admin'): string {
   return target === 'admin'
-    ? '本地开发 5174 端口 / Compose 8081 端口'
-    : '本地开发 5173 端口 / Compose 8080 端口'
+    ? '本地开发 5174/5184 端口 / Compose 8081 端口'
+    : '本地开发 5173/5183 端口 / Compose 8080 端口'
 }
 
 /** 欢迎页按入口模式呈现的品牌与登录默认值。 */
@@ -178,7 +186,7 @@ export interface PortalEntryBranding {
   /** 未绑定人脸时的默认凭据 tab。 */
   defaultCredential: 'face' | 'pin' | 'password'
   /**
-   * 账号密码是否收进「其他方式」：成员前台以人脸/家庭 PIN 为主，
+   * 账号密码是否收进「其他方式」：成员前台以刷脸/数字密码为主，
    * 密码不作为常驻 tab，避免长辈把个人前台当成后台账号系统。
    */
   passwordBehindOtherWays: boolean
@@ -191,15 +199,15 @@ export interface PortalEntryBranding {
 
 const MEMBER_BRANDING: PortalEntryBranding = {
   formTitle: '我的健康日常 · 家人登录',
-  formIdentityHint: '以家人自己的身份进入：刷一次脸或输入家庭 PIN，只看到自己的提醒、记录和帮助。',
+  formIdentityHint: '以家人自己的身份进入：刷一次脸或输入数字密码，只看到自己的提醒、记录和帮助。',
   badge: '成员前台 · 每位家人自己的健康日常',
   heroTitle: '我的健康日常，刷脸就能进',
   heroLede:
-    '这里是每位家人自己的个人前台：刷脸或输入家庭 PIN，以自己的身份进门，看今天的提醒、拍药盒交给家人核对。管理档案和授权的事，交给家庭管理后台。',
+    '这里是每位家人自己的个人前台：刷脸或输入数字密码，以自己的身份进门，看今天的提醒、拍药盒交给家人核对。管理档案和授权的事，交给家庭管理后台。',
   chips: [
     { icon: 'sun', text: '今天的提醒，一眼看到' },
     { icon: 'scan', text: '拍个药盒，家人核对' },
-    { icon: 'heart', text: '不用记密码，刷脸或 PIN' },
+    { icon: 'heart', text: '不用记复杂密码，刷脸或数字密码' },
   ],
   credentialOrder: ['face', 'pin', 'password'],
   defaultCredential: 'pin',
@@ -220,11 +228,12 @@ const ADMIN_BRANDING: PortalEntryBranding = {
     { icon: 'review', text: '识别候选，复核后才入档' },
     { icon: 'key', text: '谁能看什么，授权说了算' },
   ],
-  credentialOrder: ['password', 'pin', 'face'],
+  // 管理后台只负责全家管理，避免把管理员误导到成员的人脸 1:N 登录。
+  credentialOrder: ['password'],
   defaultCredential: 'password',
   passwordBehindOtherWays: false,
   ctaLabel: '进入管理后台',
-  crossLinkLabel: '我是家庭成员，回成员前台（人脸 / PIN）',
+  crossLinkLabel: '我是家庭成员，回成员前台（刷脸 / 数字密码）',
   crossLinkTarget: 'member',
 }
 
@@ -235,23 +244,41 @@ export function portalEntryBranding(mode: PortalEntryMode): PortalEntryBranding 
   return null
 }
 
+/** 欢迎页「正确进入成员前台」短清单（HCT-456）。 */
+export const MEMBER_PORTAL_ENTRY_STEPS: ReadonlyArray<string> = [
+  '先启动本地服务，再打开成员前台（开发端口 5173，或 Compose 的 8080）',
+  '打开 http://127.0.0.1:5173（Compose 用 http://localhost:8080）',
+  '用家庭成员账号刷脸或数字密码进入；管理员请改去管理后台 5174/8081',
+]
+
 /** 入口/门户不匹配时的用户可读提示。 */
-export function portalEntryConflictNotice(conflict: PortalEntryConflict): {
+export function portalEntryConflictNotice(
+  conflict: PortalEntryConflict,
+  context: { afterCreate?: boolean } = {},
+): {
   message: string
   crossLinkLabel: string
   crossLinkTarget: 'member' | 'admin'
 } {
   if (conflict === 'need-admin-entry') {
+    if (context.afterCreate) {
+      return {
+        message:
+          '家庭已创建。创建者是家庭管理员，成员前台不会停留在管理界面。请改用管理后台（5174/8081）完成配置；家人日常再用成员登录名在成员前台刷脸或用数字密码进入。',
+        crossLinkLabel: '去管理后台登录',
+        crossLinkTarget: 'admin',
+      }
+    }
     return {
       message:
-        '这是家庭成员前台入口。这个账号是家庭管理员，为避免在前台误操作后台功能，请改用管理后台入口登录。',
+        '这是家庭成员前台。当前账号是家庭管理员（创建家庭的人）。请改用管理后台（5174/8081）登录；若要进本页，请换家庭成员登录名刷脸或用数字密码进入。',
       crossLinkLabel: '去管理后台登录',
       crossLinkTarget: 'admin',
     }
   }
   return {
     message:
-      '这是家庭管理后台入口。这个账号是家庭成员，请回到成员前台用人脸或家庭 PIN 登录。',
+      '这是家庭管理后台。当前账号是家庭成员。请打开成员前台（5173/8080），用刷脸或数字密码登录；不要用管理员账号进成员前台。',
     crossLinkLabel: '回成员前台登录',
     crossLinkTarget: 'member',
   }

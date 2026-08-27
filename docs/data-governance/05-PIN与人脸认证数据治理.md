@@ -9,6 +9,7 @@
 | PIN bcrypt 哈希 | D3 认证秘密 | 进程内家庭键 | 家庭/成员删除立即移除 | 不可逆哈希，不进 URL、响应、日志或审计 |
 | face/PIN challenge | D2 短期认证状态 | 进程内存 | TTL 到期或消费后删除/失效 | 只绑定家庭、账号、动作和 session，不含秘密 |
 | 家庭绑定 session | D2 认证状态 | 进程内存 | TTL、登出、家庭/成员删除时撤销 | token 只走 Bearer header，请求体不回显 |
+| 本机人脸家庭范围绑定（household id、展示名） | D2 本地范围元数据 | 当前 origin `localStorage` + 同主机 `SameSite=Lax` cookie | 用户解绑时同时删除；旧 localStorage 绑定升级时自动镜像 | 只选择家庭内 1:N 候选范围，不是认证/授权凭据；不含图片、视频、模板或相似度；服务端必须重新校验家庭和凭证 |
 | `AUTHENTICATION` 审计 | D2 脱敏元数据 | `access_audit` | 按审计保留策略保存 | 仅结果、原因码、方式、范围和请求关联信息 |
 
 ## 删除传播

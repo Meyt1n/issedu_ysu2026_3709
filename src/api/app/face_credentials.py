@@ -25,7 +25,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache, partial
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 
 import cv2
 import numpy as np
@@ -69,7 +69,7 @@ FAMILY_FACE_MATCH_MARGIN = FAMILY_FACE_MATCH_MARGIN_SFACE
 FACE_LIVENESS_MAX_PAIR_SIMILARITY = 0.9995
 FACE_SEQUENCE_CONSISTENCY_FLOOR_GRAYSCALE = 0.55
 FACE_SEQUENCE_CONSISTENCY_FLOOR_SFACE = 0.30
-FACE_YAW_SPAN_MIN = 0.12
+FACE_YAW_SPAN_MIN = 0.08
 FACE_YAW_ABS_MAX = 0.62
 FACE_AREA_RATIO_MIN = 0.06
 FACE_AREA_RATIO_MAX = 0.55
@@ -367,10 +367,45 @@ def ensure_face_models() -> tuple[Path, Path]:
     return yunet, sface
 
 
+# HCT-424/HCT-425 Windows Unicode 路径根因修复：OpenCV 的 C++ 文件加载器在
+# Windows 上使用 ANSI 窄字符 fopen，仓库路径含中文（如「多模态医疗」）时
+# cv2.FaceDetectorYN_create/cv2.FaceRecognizerSF_create 直接抛
+# "(-5:Bad argument) Can't read ONNX file"，并以裸 HTTP 500 泄漏完整 Windows
+# 路径到前端 toast。改为由 Python 自己读取权重字节（所有平台都原生支持
+# Unicode 路径），再通过 OpenCV >= 4.10 保证存在的 buffer 重载把内存缓冲交给
+# OpenCV——模型路径不再进入任何 OpenCV 文件 API。
+_EMPTY_ONNX_CONFIG = b""
+
+
+def _read_onnx_model_bytes(path: Path) -> np.ndarray:
+    """Read ONNX weights via Python I/O (Unicode-path safe on every OS)."""
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        raise RuntimeError("FACE_DETECTOR_UNAVAILABLE") from exc
+    if not data:
+        raise RuntimeError("FACE_DETECTOR_UNAVAILABLE")
+    return np.frombuffer(data, dtype=np.uint8)
+
+
+@lru_cache(maxsize=1)
+def _yunet_model_buffer(path_text: str) -> np.ndarray:
+    """Cache the small YuNet weights: a detector is created per request."""
+    return _read_onnx_model_bytes(Path(path_text))
+
+
 @lru_cache(maxsize=1)
 def _sface_recognizer() -> cv2.FaceRecognizerSF:
     _, sface = ensure_face_models()
-    recognizer = cv2.FaceRecognizerSF_create(str(sface), "")
+    try:
+        recognizer = cv2.FaceRecognizerSF_create(
+            "onnx",
+            _read_onnx_model_bytes(sface),
+            _EMPTY_ONNX_CONFIG,
+        )
+    except cv2.error as exc:
+        # Never let the raw C++ message (with the full local path) escape.
+        raise RuntimeError("FACE_DETECTOR_UNAVAILABLE") from exc
     if recognizer is None:
         raise RuntimeError("FACE_DETECTOR_UNAVAILABLE")
     return recognizer
@@ -378,14 +413,19 @@ def _sface_recognizer() -> cv2.FaceRecognizerSF:
 
 def _yunet_detector(image_width: int, image_height: int) -> cv2.FaceDetectorYN:
     yunet, _ = ensure_face_models()
-    detector = cv2.FaceDetectorYN_create(
-        str(yunet),
-        "",
-        (image_width, image_height),
-        0.6,
-        0.3,
-        5000,
-    )
+    try:
+        detector = cv2.FaceDetectorYN_create(
+            "onnx",
+            _yunet_model_buffer(str(yunet)),
+            _EMPTY_ONNX_CONFIG,
+            (image_width, image_height),
+            0.6,
+            0.3,
+            5000,
+        )
+    except cv2.error as exc:
+        # Never let the raw C++ message (with the full local path) escape.
+        raise RuntimeError("FACE_DETECTOR_UNAVAILABLE") from exc
     if detector is None:
         raise RuntimeError("FACE_DETECTOR_UNAVAILABLE")
     return detector
@@ -662,11 +702,17 @@ def _consistency_floor_for_templates(templates: list[bytes]) -> float:
 def check_face_liveness(
     templates: list[bytes],
     yaws: list[float] | None = None,
+    *,
+    purpose: Literal["login", "registration"] = "registration",
 ) -> None:
-    """Require a short one-subject motion + head-turn sequence (motion-sequence-v3).
+    """Require a short one-subject motion sequence (motion-sequence-v3).
 
+    Both login and registration accept 2–3 frames with neighbor-pair motion.
+    Registration (and login when callers pass yaw) may also require a yaw span.
     Still a deterministic local OpenCV heuristic, not production-grade anti-spoofing.
     """
+    if purpose not in {"login", "registration"}:
+        raise ValueError("FACE_LIVENESS_FAILED")
     if len(templates) < 2 or len(templates) > 3:
         raise ValueError("FACE_LIVENESS_FAILED")
     try:
