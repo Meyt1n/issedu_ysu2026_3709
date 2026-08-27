@@ -6,8 +6,8 @@ Each rule is a pure function: facts → list of alerts. Alerts carry source even
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -19,6 +19,14 @@ class Alert:
     level: str  # SEVERE | WARNING | INFO | TIP (HCT-303)
     message: str
     source_event_ids: list[str] = field(default_factory=list)
+    # HCT-457: dedup and budget audit metadata. Rules leave these unset; the
+    # dedup and budget passes below fill them so a client can explain *why* an
+    # alert looks the way it does instead of only seeing the survivors.
+    deduplication_key: str | None = None
+    merged_count: int | None = None
+    budget_status: str | None = None
+    budget_reason: str | None = None
+    next_visible_at: datetime | None = None
 
 
 RuleFunc = Callable[[dict[str, Any]], list[Alert]]
@@ -175,24 +183,98 @@ DEFAULT_DAILY_BUDGET = 10  # max non-SEVERE alerts per member per day
 SEVERE_LEVELS = frozenset({"SEVERE"})
 WARNING_LEVELS = frozenset({"SEVERE", "WARNING"})
 
+# HCT-457 budget outcomes. Kept as short ASCII codes so clients can branch on
+# them and logs stay free of health content.
+BUDGET_STATUS_SEVERE_EXEMPT = "SEVERE_EXEMPT"
+BUDGET_STATUS_VISIBLE = "VISIBLE"
+BUDGET_STATUS_SUPPRESSED = "SUPPRESSED"
+
+
+def deduplication_key(alert: Alert) -> str:
+    """Stable grouping key for one alert: rule plus its ordered evidence set."""
+    return ":".join([alert.rule_id, *sorted(alert.source_event_ids)])
+
 
 def dedup_alerts(alerts: list[Alert]) -> list[Alert]:
-    """Merge alerts with the same rule_id and source event set."""
-    seen: dict[tuple[str, ...], Alert] = {}
-    for a in alerts:
-        key = (a.rule_id, *sorted(a.source_event_ids))
-        if key in seen:
+    """Merge alerts sharing a rule and evidence set, recording how many merged.
+
+    HCT-303 dropped duplicates silently, which left a client unable to say
+    "this one stands for N signals". The surviving alert now carries its group
+    key and merged count; input alerts are not mutated.
+    """
+    order: list[str] = []
+    grouped: dict[str, Alert] = {}
+    counts: dict[str, int] = {}
+    for alert in alerts:
+        key = deduplication_key(alert)
+        counts[key] = counts.get(key, 0) + 1
+        if key in grouped:
             continue
-        seen[key] = a
-    return list(seen.values())
+        order.append(key)
+        grouped[key] = alert
+    return [
+        replace(grouped[key], deduplication_key=key, merged_count=counts[key])
+        for key in order
+    ]
 
 
 def apply_daily_budget(
     alerts: list[Alert],
     budget: int = DEFAULT_DAILY_BUDGET,
 ) -> list[Alert]:
-    """Limit non-SEVERE alerts to *budget* per day. SEVERE alerts are exempt."""
-    severe = [a for a in alerts if a.level == "SEVERE"]
-    rest = [a for a in alerts if a.level != "SEVERE"]
-    return severe + rest[:budget]
+    """Limit non-SEVERE alerts to *budget* per day. SEVERE alerts are exempt.
+
+    Returned alerts carry the budget outcome that produced them, so a client can
+    explain a short list instead of presenting it as "nothing else happened".
+    """
+    severe = [
+        replace(
+            alert,
+            budget_status=BUDGET_STATUS_SEVERE_EXEMPT,
+            budget_reason="严重信号不受每日普通预算限制。",
+        )
+        for alert in alerts
+        if alert.level == "SEVERE"
+    ]
+    rest = [alert for alert in alerts if alert.level != "SEVERE"]
+    visible = [
+        replace(
+            alert,
+            budget_status=BUDGET_STATUS_VISIBLE,
+            budget_reason=f"在每日普通提醒预算内（上限 {budget} 条）。",
+        )
+        for alert in rest[:budget]
+    ]
+    return severe + visible
+
+
+def suppressed_by_budget(
+    alerts: list[Alert],
+    budget: int = DEFAULT_DAILY_BUDGET,
+    *,
+    now: datetime | None = None,
+) -> list[Alert]:
+    """Non-SEVERE alerts the budget held back, annotated with when they return.
+
+    The daily budget resets at the next UTC midnight, so that is the earliest
+    time a held-back alert can reappear.
+    """
+    rest = [alert for alert in alerts if alert.level != "SEVERE"]
+    held = rest[budget:]
+    if not held:
+        return []
+    moment = now or datetime.now(UTC)
+    next_reset = (moment + timedelta(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    return [
+        replace(
+            alert,
+            deduplication_key=alert.deduplication_key or deduplication_key(alert),
+            budget_status=BUDGET_STATUS_SUPPRESSED,
+            budget_reason=f"超出每日普通提醒预算（上限 {budget} 条），已暂缓。",
+            next_visible_at=next_reset,
+        )
+        for alert in held
+    ]
 
