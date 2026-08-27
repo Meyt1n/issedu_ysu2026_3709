@@ -31,8 +31,13 @@ from ai.safety.lexicon import (
     MEDICAL_BOUNDARY_TERMS,
     TEACHING_REMINDER,
     medical_boundary_hits,
+    sanitize_answer_sentences,
 )
-from ai.safety.seasonal_context import seasonal_care_context, seasonal_care_hint
+from ai.safety.seasonal_context import (
+    is_seasonal_symptom_query,
+    seasonal_care_context,
+    seasonal_care_hint,
+)
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlalchemy.orm import Session
 
@@ -599,6 +604,7 @@ def _latest_user_query(messages: list[dict[str, Any]]) -> str:
 
 
 _QUESTION_TYPES = {
+    "DOSE_DECISION": "个体剂量决策（硬性拒答）",
     "MEDICATION_SAFETY": "用药安全核对",
     "SYMPTOM_MEDICATION": "症状用药资料解释",
     "MEDICATION_RECORD": "用药记录查询",
@@ -652,18 +658,49 @@ def question_type_label(query_type: str) -> str:
 def risk_notice_for_question(query_type: str) -> str | None:
     if query_type in {"MEDICATION_SAFETY", "SYMPTOM_MEDICATION"}:
         return "用药相关说明仅供教学演示，请结合过敏史并咨询医生或药师；不能替代个体诊疗。"
+    if query_type == "DOSE_DECISION":
+        return "个体用药剂量必须由医生或药师根据具体情况确定；本助手不提供剂量数字。"
     if query_type == "URGENT":
         return "如出现紧急症状，请及时联系医务人员；本助手不能替代紧急救治。"
     return None
 
 
+# Decision 2B: an answer given without a matched reviewed citation carries an
+# explicit low-evidence risk statement instead of being replaced by the old
+# EVIDENCE_REQUIRED wall.
+NO_EVIDENCE_RISK_NOTE = (
+    "【风险说明】以上说明未命中本机已审核资料，属于一般性提示，"
+    "不能作为用药决定的依据；请以药品说明书并咨询医生或药师为准。"
+)
+
+_RISK_APPEND_QUERY_TYPES = {"MEDICATION_SAFETY", "SYMPTOM_MEDICATION", "DOSE_DECISION"}
+
+
 def append_teaching_reminder(answer: str, query_type: str) -> str:
     """Append a fixed teaching disclaimer for medication-oriented answers."""
-    if query_type not in {"MEDICATION_SAFETY", "SYMPTOM_MEDICATION"}:
+    if query_type not in _RISK_APPEND_QUERY_TYPES:
         return answer
     if "教学提醒" in answer:
         return answer
     return f"{answer.rstrip()}\n\n{TEACHING_REMINDER}"
+
+
+def append_risk_statement(
+    answer: str,
+    query_type: str,
+    *,
+    has_citations: bool = True,
+) -> str:
+    """Server-side unified risk-statement append (decision 2B).
+
+    Every medication-oriented answer ends with the teaching reminder; when no
+    reviewed local citation backed the answer, an explicit low-evidence note
+    is appended first.  The append is idempotent.
+    """
+    text = str(answer or "").rstrip()
+    if query_type in _RISK_APPEND_QUERY_TYPES and not has_citations and "风险说明" not in text:
+        text = f"{text}\n\n{NO_EVIDENCE_RISK_NOTE}"
+    return append_teaching_reminder(text, query_type)
 
 
 def is_loopback_ollama_url(url: str) -> bool:
@@ -783,6 +820,37 @@ def suggest_follow_up_questions(
 
 # ── Structured degrade ────────────────────────────────────────────────
 
+# Decision 1A: explicit individual dose-number questions get one fixed,
+# deterministic refusal in every mode and environment.  The copy explains
+# what the assistant CAN still do so the chat is not a dead end.
+DOSE_DECISION_REFUSAL_REASON = "DOSE_DECISION_REFUSED"
+DOSE_DECISION_REFUSAL_ANSWER = (
+    "关于「一次吃几粒 / 吃多少剂量」这类具体用量，我不能给出数字——"
+    "个体剂量必须由医生或药师结合年龄、体重、肝肾功能和正在使用的其它药物来确定。"
+    "我可以帮你做的是：查看家里已确认的用药记录和过敏史、"
+    "解释药品说明书里的注意事项，或者整理好问题清单方便你咨询医生或药师。"
+)
+
+
+def dose_decision_result(
+    messages: list[dict[str, Any]],
+    *,
+    model: str | None,
+    query_type: str = "DOSE_DECISION",
+) -> dict[str, Any]:
+    """Deterministic hard refusal for individual dose-number questions."""
+    result = degrade_result(
+        build_degrade_response(DOSE_DECISION_REFUSAL_REASON),
+        model,
+        query_type=query_type,
+    )
+    result["answer"] = append_teaching_reminder(
+        DOSE_DECISION_REFUSAL_ANSWER, "DOSE_DECISION"
+    )
+    result["suggested_questions"] = suggest_follow_up_questions(messages, escalate=True)
+    return result
+
+
 # Friendly teaching fallback for SYMPTOM_MEDICATION when no reviewed local
 # knowledge card matched.  Unlike EVIDENCE_REQUIRED it never escalates: a
 # "what material can I read about a stuffy nose" question with an empty
@@ -817,8 +885,16 @@ def build_symptom_knowledge_gap_answer(*, user_text: str | None = None) -> str:
             "咽痒咳嗽时可以先注意休息、保暖加湿，避免刺激性食物；"
             "若持续加重或影响呼吸，请咨询医生或药师。"
         )
-    else:
+    elif is_seasonal_symptom_query(text):
         care = seasonal_care_hint()
+    else:
+        # Seasonal templates are keyed to the symptom, not the calendar: an
+        # unrelated complaint gets a generic observation hint instead of
+        # change-of-season copy that does not match the question.
+        care = (
+            "可以先记录症状出现的时间和变化，注意休息与补水；"
+            "若症状持续、加重或伴随明显不适，请及时咨询医生或药师。"
+        )
     return (
         f"{care}"
         "本机知识库暂时没有已审核的相关知识卡，我不能凭空报出具体药品资料。"
@@ -893,6 +969,13 @@ def build_degrade_response(
     if reason == "MEDICAL_BOUNDARY_VIOLATION":
         return DegradedResponse(
             answer="抱歉，我无法提供具体医疗建议。如有紧急情况请及时联系医务人员。",
+            degraded=True,
+            reason=reason,
+            escalate=True,
+        )
+    if reason == DOSE_DECISION_REFUSAL_REASON:
+        return DegradedResponse(
+            answer=DOSE_DECISION_REFUSAL_ANSWER,
             degraded=True,
             reason=reason,
             escalate=True,
@@ -1727,7 +1810,6 @@ def run_assistant(
     """
     from app.config import get_settings
     from app.open_chat import (
-        OPEN_CHAT_SYSTEM_PROMPT,
         coerce_open_model_answer,
         effective_max_tokens,
         is_open_chat,
@@ -1748,6 +1830,11 @@ def run_assistant(
             model,
             query_type=query_type,
         )
+
+    # Decision 1A + 8C: explicit individual dose-number questions are refused
+    # deterministically before any model call, in every mode and environment.
+    if query_type == "DOSE_DECISION":
+        return dose_decision_result(messages, model=model)
 
     if not is_loopback_ollama_url(settings.ollama_base_url):
         logger.warning("Blocked non-loopback Ollama endpoint for local assistant")
@@ -1773,8 +1860,9 @@ def run_assistant(
     elif query_type == "MEDICATION_SAFETY":
         routing_hint += (
             "先调用 get_member_state 或 get_health_events 核对过敏/疾病/已确认用药（如有），"
-            "再调用 retrieve_knowledge。没有知识片段不得回答能否同服、停药、换药或个体剂量；"
-            "有知识片段时只解释文档与规则，不给出个体医嘱。家庭药箱不是唯一依据。"
+            "再调用 retrieve_knowledge。有知识片段时优先解释文档与规则；"
+            "没有命中片段也可以给出一般性资料说明并明确指出证据不足、建议咨询医生或药师，"
+            "但不得替用户决定是否同服、停换，绝不给出个体剂量数字。家庭药箱不是唯一依据。"
             "语气仍保持关心与口语化，但内容必须克制。"
         )
     elif query_type in {"MEDICATION_RECORD", "FAMILY_RECORD"}:
@@ -1787,8 +1875,10 @@ def run_assistant(
             "优先调用 get_applied_rules 或 get_risk_alerts，并在 sources 中引用"
             "工具返回的规则编号或事件 ID。"
         )
-    base_prompt = OPEN_CHAT_SYSTEM_PROMPT if open_chat else ASSISTANT_SYSTEM_PROMPT
-    system_parts = [base_prompt, local_clock_context(), routing_hint] + [
+    # 8C: one unified system prompt for every mode.  Open-chat no longer
+    # swaps in a permissive prompt; it only relaxes output parsing and the
+    # token budget.
+    system_parts = [ASSISTANT_SYSTEM_PROMPT, local_clock_context(), routing_hint] + [
         str(message.get("content", ""))
         for message in messages
         if message.get("role") == "system" and message.get("content")
@@ -1875,17 +1965,24 @@ def run_assistant(
         return degraded("SCHEMA_VALIDATION_FAILED")
 
     assert parsed is not None
-    if not open_chat:
-        violations = _check_medical_boundary(parsed.answer)
-        if violations:
-            logger.warning("Medical boundary violation: %s", violations)
-            return degraded("MEDICAL_BOUNDARY_VIOLATION")
-        if _contains_external_links(parsed.answer):
-            logger.warning("External link detected in assistant output")
-            return degraded("EXTERNAL_LINK_DETECTED")
-        if _check_data_exfiltration(parsed.answer):
-            logger.warning("Sensitive data exfiltration detected in assistant output")
-            return degraded("DATA_EXFILTRATION_VIOLATION")
+    # Decision 1A + blacklist softening: instead of degrading the whole
+    # answer, only the offending sentences (diagnosis/prescription directives,
+    # external links, concrete dose numbers) are removed, with a footnote.
+    # The unified check runs in every mode, including open-chat (8C).
+    answer_text, removal_reasons = sanitize_answer_sentences(parsed.answer)
+    if not answer_text:
+        reason = (
+            "EXTERNAL_LINK_DETECTED"
+            if removal_reasons and set(removal_reasons) == {"EXTERNAL_LINK"}
+            else "MEDICAL_BOUNDARY_VIOLATION"
+        )
+        logger.warning("Assistant answer fully removed by sanitiser: %s", removal_reasons)
+        return degraded(reason)
+    if removal_reasons:
+        logger.info("Assistant answer sentence-sanitised: %s", removal_reasons)
+    if _check_data_exfiltration(answer_text):
+        logger.warning("Sensitive data exfiltration detected in assistant output")
+        return degraded("DATA_EXFILTRATION_VIOLATION")
 
     # A model-proposed tool is never an authority boundary.  Unknown tools,
     # missing sessions and cross-scope arguments all degrade to the same
@@ -1896,65 +1993,25 @@ def run_assistant(
         for error in {"TOOL_SCOPE_DENIED", "TOOL_NOT_ALLOWED", "TOOL_SESSION_REQUIRED"}
     ):
         return degraded("TOOL_SCOPE_DENIED")
-    if "NO_AUTHORISED_DOCUMENTS" in tool_errors and not allowed_citations:
-        if open_chat:
-            pass  # Continue with the model draft; empty library is OK in demo mode.
-        elif query_type == "SYMPTOM_MEDICATION":
-            # Empty / not-yet-seeded teaching library: degrade gently instead
-            # of the hard no-authorised-documents refusal.
-            return symptom_knowledge_gap_result(messages, model=model)
-        else:
-            return degraded("NO_AUTHORISED_DOCUMENTS")
 
     matched_citations = filter_claimed_citations(parsed.sources, allowed_citations)
     unmatched = _unmatched_source_tokens(parsed.sources, matched_citations)
     unknown_sources = [token for token in unmatched if token not in allowed_fact_sources]
-    if open_chat:
-        # Demo mode: keep any real citations, drop unverifiable tokens quietly.
-        fact_sources = [token for token in unmatched if token in allowed_fact_sources]
-        escalated = bool(parsed.escalate)
-        return {
-            "answer": parsed.answer,
-            "sources": [item["chunk_id"] for item in matched_citations] + fact_sources,
-            "citations": matched_citations,
-            "suggested_questions": suggest_follow_up_questions(
-                messages,
-                escalate=escalated,
-                query_type=query_type,
-                has_citations=bool(matched_citations),
-            ),
-            "confidence": parsed.confidence,
-            "escalate": escalated,
-            "degraded": False,
-            "degrade_reason": None,
-            "model": model,
-            "route": None,
-            "query_type": query_type,
-            "risk_notice": None,
-        }
+    # Fabricated knowledge citations are still rejected outright — a source
+    # that pretends to be a reviewed chunk/document must never be shown.
     if any(_looks_like_knowledge_citation(token) for token in unknown_sources):
         return degraded("CITATION_NOT_FOUND")
-    if allowed_citations and not matched_citations:
-        return degraded("EVIDENCE_REQUIRED")
-    # High-risk medication-safety questions (co-administration, stop/switch,
-    # individual dosage) still hard-require reviewed knowledge citations.
-    # Household formulary / event IDs are optional enrichment.
-    if query_type == "MEDICATION_SAFETY" and not matched_citations:
-        return degraded("EVIDENCE_REQUIRED")
-    # Symptom "what material can I read" questions with zero retrievable
-    # knowledge get the friendly teaching fallback instead: the model answer
-    # is discarded (no fabricated evidence) but the chat is not escalated.
-    if query_type == "SYMPTOM_MEDICATION" and not matched_citations:
-        return symptom_knowledge_gap_result(messages, model=model)
-    if any(token not in allowed_fact_sources for token in unknown_sources):
-        return degraded("CITATION_NOT_FOUND")
-
+    # Decision 2B: missing citations no longer wall off the whole answer.
+    # The answer is kept and the server appends an explicit low-evidence risk
+    # statement; other unverifiable tokens are dropped quietly.
     fact_sources = [
         token for token in unmatched if token in allowed_fact_sources
     ]
     escalated = parsed.escalate or query_type == "URGENT"
     return {
-        "answer": append_teaching_reminder(parsed.answer, query_type),
+        "answer": append_risk_statement(
+            answer_text, query_type, has_citations=bool(matched_citations)
+        ),
         "sources": [item["chunk_id"] for item in matched_citations] + fact_sources,
         "citations": matched_citations,
         "suggested_questions": suggest_follow_up_questions(

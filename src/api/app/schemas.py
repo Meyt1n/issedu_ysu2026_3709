@@ -848,6 +848,7 @@ class AssistantCitation(BaseModel):
 
 AssistantQueryType = Literal[
     "URGENT",
+    "DOSE_DECISION",
     "MEDICATION_SAFETY",
     "SYMPTOM_MEDICATION",
     "MEDICATION_RECORD",
@@ -855,6 +856,11 @@ AssistantQueryType = Literal[
     "RULE_EVIDENCE",
     "GENERAL",
 ]
+
+# Decision 4B: per-request outbound-context opt-in tiers.
+# query_only（默认）: 仅发送脱敏后的问题；symptom: 追加会话中的症状关键词；
+# member: 再追加匿名化的过敏/病史/在用药名称（不含任何身份标识）。
+AssistantNetworkContextLevel = Literal["query_only", "symptom", "member"]
 
 
 class AssistantRequest(BaseModel):
@@ -867,6 +873,7 @@ class AssistantRequest(BaseModel):
     # change legacy tool-call tests or integrations unexpectedly.
     agent_mode: Literal["single", "multi_agent"] = "single"
     allow_network_search: bool = False
+    network_context_level: AssistantNetworkContextLevel = "query_only"
     query_type_override: AssistantQueryType | None = None
     assistant_session_id: str | None = Field(default=None, max_length=64)
     clear_session_cache: bool = False
@@ -909,6 +916,7 @@ class AssistantResponse(BaseModel):
     all_agents_local: bool = True
     network_used: bool = False
     network_query: str | None = None
+    network_context_level: str | None = None
     agent_trace: list[dict[str, Any]] = Field(default_factory=list)
     external_sources: list[dict[str, Any]] = Field(default_factory=list)
     route_explanation: str | None = None
