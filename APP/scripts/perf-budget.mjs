@@ -106,6 +106,13 @@ async function measurePage(base) {
   const browser = await chromium.launch({ args: ['--no-proxy-server'] })
   const report = { coldStart: null, routeSwitches: [], weakNetwork: null }
 
+  // 首次启动会展示 MOB-146 隐私告知层。性能脚本使用全新浏览器 context，
+  // 因此必须按真实用户路径确认一次，否则弹层会拦截后续路由点击。
+  async function acknowledgePrivacyNotice(page) {
+    const button = page.getByRole('button', { name: '我已阅读并知晓', exact: true })
+    if (await button.count()) await button.click()
+  }
+
   // 低端设备模拟：对每个页面启用 CPU/网络节流（Chromium CDP）
   async function throttle(page) {
     if (cpuThrottle <= 1 && !networkPreset) return
@@ -133,6 +140,7 @@ async function measurePage(base) {
     const t0 = Date.now()
     await page.goto(`${base}/#/`, { waitUntil: 'commit' })
     await page.waitForSelector('h1', { timeout: 60_000 })
+    await acknowledgePrivacyNotice(page)
     const paint = await page.evaluate(() => {
       const entries = performance.getEntriesByType('paint')
       const fcp = entries.find(entry => entry.name === 'first-contentful-paint')
@@ -167,6 +175,7 @@ async function measurePage(base) {
     // 先在线加载一次，让 Service Worker 完成安装与外壳缓存
     await page.goto(`${base}/#/`, { waitUntil: 'commit' })
     await page.waitForSelector('h1', { timeout: 60_000 })
+    await acknowledgePrivacyNotice(page)
     await page.waitForTimeout(800)
     await context.setOffline(true)
     const t0 = Date.now()

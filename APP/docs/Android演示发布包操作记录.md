@@ -52,3 +52,28 @@ powershell -ExecutionPolicy Bypass -File scripts/build-apk.ps1 -JavaHome "<JDK 2
 | `scripts/build-apk.ps1` | 阻塞：未发现 `C:\Users\C\AppData\Local\Android\Sdk`，未生成 APK |
 
 本机 `JAVA_HOME` 已设置，但 Android SDK 未安装或未配置。安装 Android Studio SDK 后，设置 `ANDROID_HOME` 到实际 SDK 目录并重跑构建脚本。此记录不构成真机安装或 APK 发布验证。
+
+## 本机复核记录（2026-08-27）
+
+本次复核只使用仓库内虚构演示数据，不上传真实健康数据，也不把浏览器或低端模拟结果当作 Android 真机签收。
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm run check` | 通过 |
+| `npm run test` | 通过，31 个文件 / 282 tests passed |
+| `npm run build` | 通过，Vite 生产构建完成 |
+| `npm run android:sync` | 通过，Capacitor 8.5.0 同步完成 |
+| `npm run privacy:scan` | 通过，未发现签名材料、密钥或异常资源 |
+| `npm run audit:android-security` | 通过，Release 明文流量关闭，Release 合并权限已审计 |
+| `npm run audit:pwa` | 通过，外壳资源、缓存边界和离线策略通过 |
+| `npm run release:manifest -- --out release` | 通过，版本 `0.1.0`、源码提交与 55 个 PWA 产物哈希已生成到未跟踪 `release/` |
+| `npm run perf:budget` | 通过，浏览器 PWA 基线与断网恢复均在预算内 |
+| `npm run perf:budget:low-end` | 通过，4× CPU / Slow 3G 模拟均在预算内 |
+| `npm run test:perf-budget` | 通过 |
+| `npm run test:privacy-scan` | 通过 |
+| `npm run verify:linkage` | 阻塞：当前未启动受控后端（`127.0.0.1:18800`） |
+| `scripts/build-apk.ps1` | 阻塞：本机未找到 JDK 21–24，未生成 APK |
+| `npm run verify:android-a11y-evidence` | 阻塞：缺少 Android 真机、TalkBack、WebView 和 APK 哈希签收 |
+| `npm run verify:android-voice-evidence` | 阻塞：缺少 Android 真机语音矩阵和设备元数据 |
+
+本记录证明的是 PWA/Capacitor 同步和静态安全边界可复跑；它不构成 Android 安装、相机权限、通知、TalkBack、TTS、后台恢复或真实后端联机的通过。补齐 JDK、受控 HTTPS 后端和 Android 真机后，必须重跑本节命令并填写未提交的受控发布记录。
