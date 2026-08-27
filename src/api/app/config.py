@@ -91,8 +91,21 @@ class Settings(BaseSettings):
     agent_web_search_timeout_seconds: float = Field(default=8.0, gt=0, le=20)
     agent_web_search_max_results: int = Field(default=5, ge=1, le=10)
     agent_web_search_allowed_domains: str = ""
+    # Decision 3B (ADR-0007): "allowlist" keeps the fixed-domain posture;
+    # "open" allows HTTPS egress to public hosts (SSRF-guarded) so DuckDuckGo
+    # result pages can be fetched and rule-filtered as reference excerpts.
+    agent_web_search_egress_mode: str = "allowlist"
+    # Number of top result pages fetched in open mode (0 disables page fetch).
+    agent_web_search_fetch_page_count: int = Field(default=2, ge=0, le=5)
+    agent_web_search_fetch_page_max_bytes: int = Field(
+        default=262_144, ge=4_096, le=2_097_152
+    )
+    agent_web_search_fetch_page_timeout_seconds: float = Field(default=6.0, gt=0, le=20)
     # Short TTL cache for redacted web-search queries (seconds). 0 disables cache.
     agent_web_search_cache_ttl_seconds: float = Field(default=180.0, ge=0, le=3600)
+    # Empty result sets are cached only briefly so a transient empty page does
+    # not suppress retries for the full TTL (audit-5 P0 follow-up).
+    agent_web_search_empty_cache_ttl_seconds: float = Field(default=30.0, ge=0, le=600)
     # Minimum seconds between outbound search calls from this process (0 = off).
     agent_web_search_min_interval_seconds: float = Field(default=1.0, ge=0, le=60)
     # HCT-442: optional loopback Ollama classifier merged with lexicon (default off).
@@ -100,9 +113,10 @@ class Settings(BaseSettings):
     agent_classifier_timeout_seconds: float = Field(default=3.0, gt=0, le=15)
     # Session-scoped in-process cache for authorised local retrieval results.
     agent_retrieval_cache_ttl_seconds: float = Field(default=120.0, ge=0, le=3600)
-    # HCT-451: open-chat demo — skip evidence/citation walls so operators can
-    # evaluate the raw local model.  Default ON for local demos; unit tests
-    # force it off via tests/conftest.py.  Production must keep this false.
+    # HCT-451 → ADR-0007 (8C): open-chat is now an experience-only knob —
+    # lenient output parsing and a higher token floor.  It no longer bypasses
+    # the medical boundary, dose refusal, or sentence sanitisation, so the
+    # same safety strategy applies in every environment including production.
     agent_open_chat: bool = True
     agent_open_max_tokens: int = Field(default=4096, ge=512, le=16384)
     weather_adapter: str = "disabled"
@@ -161,6 +175,14 @@ class Settings(BaseSettings):
         except ValueError as exc:
             raise ValueError("DEFAULT_HOUSEHOLD_TIME_ZONE_INVALID") from exc
 
+    @field_validator("agent_web_search_egress_mode")
+    @classmethod
+    def validate_agent_web_search_egress_mode(cls, value: str) -> str:
+        normalized = (value or "").strip().casefold()
+        if normalized not in {"allowlist", "open"}:
+            raise ValueError("AGENT_WEB_SEARCH_EGRESS_MODE must be 'allowlist' or 'open'")
+        return normalized
+
     @model_validator(mode="after")
     def reject_unsafe_production_configuration(self) -> "Settings":
         """Fail closed for production until remaining demo gaps are closed.
@@ -190,6 +212,10 @@ class Settings(BaseSettings):
             # The offline teaching-fixture provider performs no egress, so it
             # does not need (and must not pretend to need) a domain allowlist.
             and self.agent_web_search_provider.strip().casefold() != "fixture"
+            # ADR-0007 (3B): "open" egress mode is a documented product
+            # decision — it replaces the fixed allowlist with HTTPS + SSRF
+            # public-host checks, so no domain list is required for it.
+            and self.agent_web_search_egress_mode.strip().casefold() != "open"
             and not self.agent_web_search_allowed_domain_set
         ):
             problems.append("AGENT_WEB_SEARCH_ALLOWED_DOMAINS is required when search is enabled")
@@ -200,8 +226,9 @@ class Settings(BaseSettings):
             problems.append(
                 "HEALTH_NEWS_ALLOWED_DOMAINS is required when HEALTH_NEWS_ADAPTER=enabled"
             )
-        if self.agent_open_chat:
-            problems.append("AGENT_OPEN_CHAT must be false in production")
+        # ADR-0007 (8C): AGENT_OPEN_CHAT is no longer blocked in production —
+        # it only relaxes output parsing / token budget and cannot bypass the
+        # medical boundary, dose refusal, or citation verification any more.
         if problems:
             raise ValueError("PRODUCTION_CONFIGURATION_BLOCKED: " + "; ".join(problems))
         return self

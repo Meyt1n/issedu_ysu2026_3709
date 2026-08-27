@@ -7,7 +7,10 @@ Any request to a non-whitelisted destination is blocked and audited.
 
 from __future__ import annotations
 
+import ipaddress
 import logging
+import socket
+from functools import lru_cache
 from typing import Any
 from urllib.parse import urlparse
 
@@ -100,13 +103,65 @@ def is_egress_allowed(url: str) -> bool:
     return allowed
 
 
-def is_web_search_egress_allowed(url: str, settings=None) -> bool:
-    """Allow only the configured HTTPS search host for HCT-430.
+# Hostname suffixes that can never be a public web host (SSRF guard for the
+# open egress mode).  IP-literal checks below handle the numeric cases.
+_NON_PUBLIC_HOST_SUFFIXES = (".local", ".internal", ".lan", ".localdomain", ".home.arpa")
+_NON_PUBLIC_HOSTNAMES = {"localhost", "metadata", "metadata.google.internal"}
 
-    This is deliberately separate from ``is_egress_allowed``: weather keeps
-    its existing whitelist and audit semantics, while web search is a second,
-    opt-in exception with its own allowlist.  Callers must still redact the
-    query before making a request.
+
+@lru_cache(maxsize=256)
+def _resolved_addresses(hostname: str) -> tuple[str, ...]:
+    """Resolve a hostname to its addresses; empty tuple when unresolvable."""
+    try:
+        infos = socket.getaddrinfo(hostname, 443, proto=socket.IPPROTO_TCP)
+    except OSError:
+        return ()
+    return tuple(dict.fromkeys(str(info[4][0]) for info in infos))
+
+
+def is_public_https_url(url: str, *, resolve_dns: bool = True) -> bool:
+    """SSRF guard for the open web-search egress mode (decision 3B).
+
+    Only HTTPS URLs whose host is a public name/address pass: loopback,
+    private, link-local, reserved and well-known internal hostnames are all
+    rejected, both as literals and after DNS resolution.
+    """
+    parsed = urlparse(str(url or ""))
+    if parsed.scheme.lower() != "https":
+        return False
+    host = (parsed.hostname or "").strip().lower().rstrip(".")
+    if not host:
+        return False
+    if host in _NON_PUBLIC_HOSTNAMES or any(
+        host.endswith(suffix) for suffix in _NON_PUBLIC_HOST_SUFFIXES
+    ):
+        return False
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+    if literal is not None:
+        return literal.is_global
+    if resolve_dns:
+        addresses = _resolved_addresses(host)
+        if not addresses:
+            return False
+        for address in addresses:
+            try:
+                if not ipaddress.ip_address(address).is_global:
+                    return False
+            except ValueError:
+                return False
+    return True
+
+
+def is_web_search_egress_allowed(url: str, settings=None) -> bool:
+    """Gate agent web-search egress for HCT-430 / ADR-0007.
+
+    ``allowlist`` mode (default) allows only the configured HTTPS search
+    hosts.  ``open`` mode (decision 3B) allows any HTTPS URL that resolves to
+    a public address, so result pages can be followed under SSRF protection.
+    Callers must still redact the query before making a request.
     """
     settings = settings or get_settings()
     if not settings.agent_web_search_enabled:
@@ -125,6 +180,17 @@ def is_web_search_egress_allowed(url: str, settings=None) -> bool:
     if not target:
         logger.warning("EGRESS_BLOCKED: agent web search URL has no host")
         return False
+    mode = (
+        getattr(settings, "agent_web_search_egress_mode", "allowlist") or "allowlist"
+    ).strip().casefold()
+    if mode == "open":
+        allowed = is_public_https_url(url)
+        if not allowed:
+            logger.warning(
+                "EGRESS_BLOCKED: open-mode search host=%s is not a public HTTPS host",
+                target,
+            )
+        return allowed
     allowed_hosts = settings.agent_web_search_allowed_domain_set
     if not allowed_hosts:
         configured_host = _normalize_host(settings.agent_web_search_url)

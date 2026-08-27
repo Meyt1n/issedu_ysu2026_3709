@@ -64,6 +64,14 @@ class SearchRateLimited(RuntimeError):
     """Raised when searches are fired faster than the configured interval."""
 
 
+class SearchRedirected(RuntimeError):
+    """Raised when the provider answers with a 3xx instead of a result page.
+
+    Audit-5: a redirect is a failed search, never a successful empty result —
+    treating it as「0 条结果」cached the emptiness and hid the outage.
+    """
+
+
 def _enforce_min_interval(settings: Settings) -> None:
     global _LAST_SEARCH_AT
     interval = float(settings.agent_web_search_min_interval_seconds or 0)
@@ -112,6 +120,15 @@ class _DuckDuckGoParser(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         classes = self._classes(attrs)
+        # Audit-5 P0: DuckDuckGo snippets are themselves anchors —
+        # ``<a class="result__snippet" href="…uddg=…">摘要</a>``.  The old
+        # ``uddg=`` heuristic treated every such anchor as a *new* title link,
+        # so 100% of snippets were lost.  Snippet capture must win first.
+        if self._current is not None and classes & self._SNIPPET_CLASSES:
+            self._flush_buffer()
+            self._capture = "snippet"
+            self._buffer = []
+            return
         if tag == "a":
             href = dict(attrs).get("href") or ""
             if (
@@ -128,10 +145,6 @@ class _DuckDuckGoParser(HTMLParser):
                 return
         elif classes & self._TITLE_WRAPPER_CLASSES:
             self._pending_title_link = True
-        if self._current and classes & self._SNIPPET_CLASSES:
-            self._flush_buffer()
-            self._capture = "snippet"
-            self._buffer = []
 
     def handle_endtag(self, tag: str) -> None:
         if tag in {"h1", "h2", "h3"}:
@@ -202,6 +215,54 @@ def parse_search_results(body: str, max_results: int = 5) -> list[dict[str, str]
 def _query_tokens(query: str) -> set[str]:
     tokens = re.findall(r"[\w\u4e00-\u9fff]{2,}", str(query or "").casefold())
     return set(tokens)
+
+
+# ── Referral / advertising filter (decision 3B: rule filtering) ─────────
+#
+# Open retrieval may surface commercial drug-purchase or tele-consultation
+# funnels.  Those results are dropped before ranking: the assistant must not
+# relay "buy medicine here / chat with our doctor now" solicitations.
+_REFERRAL_AD_RE = re.compile(
+    "|".join((
+        "立即购买", "马上购买", "立刻下单", "一键下单", "低价抢购", "限时优惠",
+        "优惠券", "促销", "秒杀", "包邮", "免费领取", "加微信", "加v信",
+        "扫码咨询", "扫码购买", "在线问诊", "在线购药", "网上药店", "药房直送",
+        "买药上", "购药请", "预约挂号立减", "点击购买", "点击咨询",
+    )),
+    re.IGNORECASE,
+)
+_REFERRAL_DOMAIN_HINTS = (
+    "taobao.com",
+    "tmall.com",
+    "jd.com",
+    "pinduoduo.com",
+    "yduoduo",
+    "111.com.cn",
+)
+
+
+def is_referral_result(item: dict[str, str]) -> bool:
+    """True when a search result reads like a purchase / consultation funnel."""
+    domain = (item.get("domain") or urlparse(item.get("url") or "").hostname or "").casefold()
+    if any(hint in domain for hint in _REFERRAL_DOMAIN_HINTS):
+        return True
+    haystack = f"{item.get('title', '')} {item.get('snippet', '')}"
+    return bool(_REFERRAL_AD_RE.search(haystack))
+
+
+def filter_referral_results(results: list[dict[str, str]]) -> list[dict[str, str]]:
+    kept = [item for item in results if not is_referral_result(item)]
+    dropped = len(results) - len(kept)
+    if dropped:
+        logger.info("HCT-430 dropped %d referral/ad search results", dropped)
+    return kept
+
+
+def strip_referral_sentences(text: str) -> str:
+    """Remove purchase / consultation solicitation sentences from an excerpt."""
+    parts = re.split(r"(?<=[。！？!?；;\n])", str(text or ""))
+    kept = [part for part in parts if part.strip() and not _REFERRAL_AD_RE.search(part)]
+    return "".join(kept).strip()
 
 
 def rank_search_results(
@@ -331,6 +392,12 @@ def reset_search_ops_metrics() -> None:
             _METRICS[key] = None if key.startswith("last_") else 0
 
 
+def _reject_redirect(response: httpx.Response) -> None:
+    """A 3xx answer is a provider failure, never a successful empty page."""
+    if 300 <= response.status_code < 400:
+        raise SearchRedirected(f"HTTP_{response.status_code}")
+
+
 class DuckDuckGoHtmlProvider:
     """Parse DuckDuckGo's HTML result page (default provider)."""
 
@@ -343,6 +410,7 @@ class DuckDuckGoHtmlProvider:
             headers={"User-Agent": "HomeCareTwin-local-agent/1.0"},
         ) as client:
             response = client.get(settings.agent_web_search_url.strip(), params=params)
+            _reject_redirect(response)
             response.raise_for_status()
         return parse_search_results(response.text, settings.agent_web_search_max_results * 2)
 
@@ -364,6 +432,7 @@ class SearXNGProvider:
             headers={"User-Agent": "HomeCareTwin-local-agent/1.0"},
         ) as client:
             response = client.get(endpoint, params=params)
+            _reject_redirect(response)
             response.raise_for_status()
             payload = response.json()
         raw_items = payload.get("results") if isinstance(payload, dict) else []
@@ -378,6 +447,122 @@ class SearXNGProvider:
                     "snippet": str(item.get("content") or item.get("snippet") or ""),
                 })
         return _normalize_results(items, settings.agent_web_search_max_results * 2)
+
+
+# ── Open-mode result-page fetch (decision 3B / ADR-0007) ────────────────
+#
+# In ``AGENT_WEB_SEARCH_EGRESS_MODE=open`` the top result pages may be fetched
+# as reference excerpts.  Every fetch is bounded: HTTPS public hosts only
+# (SSRF guard), page count capped, bytes capped, redirects never followed,
+# and referral/solicitation sentences stripped from the extracted text.
+
+
+class _PageTextParser(HTMLParser):
+    """Extract readable text from an HTML page (scripts/styles skipped)."""
+
+    _SKIP_TAGS = {"script", "style", "noscript", "template", "svg", "head"}
+    _BLOCK_TAGS = {"p", "div", "li", "section", "article", "br", "h1", "h2", "h3", "h4", "td"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._chunks: list[str] = []
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in self._SKIP_TAGS:
+            self._skip_depth += 1
+        elif tag in self._BLOCK_TAGS:
+            self._chunks.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in self._SKIP_TAGS and self._skip_depth > 0:
+            self._skip_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth == 0 and data.strip():
+            self._chunks.append(data)
+
+    def text(self) -> str:
+        joined = "".join(self._chunks)
+        lines = [re.sub(r"\s+", " ", line).strip() for line in joined.splitlines()]
+        return "\n".join(line for line in lines if line)
+
+
+def extract_page_text(body: str) -> str:
+    parser = _PageTextParser()
+    try:
+        parser.feed(str(body or ""))
+        parser.close()
+    except Exception:
+        logger.warning("HCT-430 result page HTML could not be parsed")
+    return parser.text()
+
+
+_PAGE_EXCERPT_MAX_CHARS = 600
+_FETCHABLE_CONTENT_TYPES = ("text/html", "text/plain", "application/xhtml")
+
+
+def fetch_result_page_excerpt(url: str, *, settings: Settings) -> str | None:
+    """Fetch one public HTTPS result page under strict limits.
+
+    Returns a referral-free text excerpt, or ``None`` when the page is not a
+    public HTTPS host, is not HTML/plain text, redirects, or fails to load.
+    """
+    from app.egress_guard import is_public_https_url
+
+    if not is_public_https_url(url):
+        logger.warning("HCT-430 open-mode page fetch blocked (not a public HTTPS host)")
+        return None
+    max_bytes = int(getattr(settings, "agent_web_search_fetch_page_max_bytes", 262_144))
+    timeout = float(getattr(settings, "agent_web_search_fetch_page_timeout_seconds", 6.0))
+    try:
+        with httpx.Client(
+            timeout=timeout,
+            follow_redirects=False,
+            trust_env=False,
+            headers={"User-Agent": "HomeCareTwin-local-agent/1.0"},
+        ) as client:
+            with client.stream("GET", url) as response:
+                if response.status_code != 200:
+                    return None
+                content_type = (response.headers.get("content-type") or "").casefold()
+                if content_type and not any(
+                    accepted in content_type for accepted in _FETCHABLE_CONTENT_TYPES
+                ):
+                    return None
+                collected = bytearray()
+                for chunk in response.iter_bytes():
+                    collected.extend(chunk)
+                    if len(collected) >= max_bytes:
+                        break
+    except Exception as exc:  # noqa: BLE001 — page fetch is best-effort
+        logger.warning("HCT-430 result page fetch failed: %s", str(exc)[:120])
+        return None
+    body = bytes(collected[:max_bytes]).decode("utf-8", errors="ignore")
+    text = strip_referral_sentences(extract_page_text(body))
+    text = re.sub(r"\n{2,}", "\n", text).strip()
+    if not text:
+        return None
+    return text[:_PAGE_EXCERPT_MAX_CHARS]
+
+
+def enrich_results_with_pages(
+    results: list[dict[str, str]],
+    *,
+    settings: Settings,
+) -> list[dict[str, str]]:
+    """Attach bounded page excerpts to the top results in open egress mode."""
+    mode = (getattr(settings, "agent_web_search_egress_mode", "allowlist") or "").casefold()
+    page_count = int(getattr(settings, "agent_web_search_fetch_page_count", 0) or 0)
+    if mode != "open" or page_count <= 0:
+        return results
+    for item in results[:page_count]:
+        if item.get("source") == "teaching_fixture":
+            continue
+        excerpt = fetch_result_page_excerpt(str(item.get("url") or ""), settings=settings)
+        if excerpt:
+            item["page_excerpt"] = excerpt
+    return results
 
 
 # Synthetic offline references for classroom demos.  ``fixture.invalid`` is an
@@ -503,7 +688,18 @@ def execute_web_search(query: str, *, settings: Settings) -> list[dict[str, str]
             settings.agent_web_search_url.strip(),
         ])
     ranked = rank_search_results(
-        query, raw, max_results=settings.agent_web_search_max_results
+        query,
+        filter_referral_results(raw),
+        max_results=settings.agent_web_search_max_results,
     )
-    _cache_put(key, ranked, ttl)
+    ranked = enrich_results_with_pages(ranked, settings=settings)
+    if ranked:
+        _cache_put(key, ranked, ttl)
+    else:
+        # Audit-5: an empty page is cached only briefly so a transient empty
+        # response cannot suppress retries for the whole TTL.
+        empty_ttl = float(
+            getattr(settings, "agent_web_search_empty_cache_ttl_seconds", 0) or 0
+        )
+        _cache_put(key, ranked, min(ttl, empty_ttl) if ttl > 0 else empty_ttl)
     return ranked
