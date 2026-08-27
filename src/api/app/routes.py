@@ -4086,6 +4086,7 @@ def assistant_chat(
             max_tokens=payload.max_tokens,
             temperature=payload.temperature,
             allow_network_search=payload.allow_network_search,
+            network_context_level=payload.network_context_level,
             query_type_override=payload.query_type_override,
             assistant_session_id=payload.assistant_session_id,
             clear_session_cache=payload.clear_session_cache,
@@ -4164,6 +4165,11 @@ def assistant_chat_stream(
             def on_evidence_preview(preview: dict[str, Any]) -> None:
                 event_queue.put(("evidence_preview", preview))
 
+            def on_network_query(network_query: str) -> None:
+                # 4B: surface the exact outbound query before the request is
+                # sent so the UI can show users what leaves the device.
+                event_queue.put(("network_query", {"network_query": network_query}))
+
             result = run_local_multi_agent(
                 worker_session,
                 messages=messages,
@@ -4175,6 +4181,7 @@ def assistant_chat_stream(
                 max_tokens=payload.max_tokens,
                 temperature=payload.temperature,
                 allow_network_search=payload.allow_network_search,
+                network_context_level=payload.network_context_level,
                 query_type_override=payload.query_type_override,
                 assistant_session_id=payload.assistant_session_id,
                 clear_session_cache=payload.clear_session_cache,
@@ -4184,6 +4191,7 @@ def assistant_chat_stream(
                 on_status=on_status,
                 on_external_sources=on_external_sources,
                 on_evidence_preview=on_evidence_preview,
+                on_network_query=on_network_query,
                 cancel_event=cancel_event,
             )
             if cancel_event.is_set():

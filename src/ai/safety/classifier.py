@@ -19,12 +19,14 @@ from ai.safety.lexicon import (
     SYMPTOM_CONTEXT_TERMS,
     SYMPTOM_MEDICATION_INTENT_TERMS,
     URGENT_ROUTE_TERMS,
+    is_dose_decision_query,
 )
 
 logger = logging.getLogger(__name__)
 
 QUERY_TYPES: tuple[str, ...] = (
     "URGENT",
+    "DOSE_DECISION",
     "MEDICATION_SAFETY",
     "SYMPTOM_MEDICATION",
     "MEDICATION_RECORD",
@@ -36,6 +38,9 @@ QUERY_TYPES: tuple[str, ...] = (
 # Higher wins when merging lexicon + model channels.
 _QUERY_TYPE_SEVERITY: dict[str, int] = {
     "URGENT": 100,
+    # Decision 1A: explicit individual dose-number asks are the deterministic
+    # hard-refusal subset, split from the answerable MEDICATION_SAFETY class.
+    "DOSE_DECISION": 95,
     "MEDICATION_SAFETY": 90,
     "SYMPTOM_MEDICATION": 80,
     "MEDICATION_RECORD": 50,
@@ -47,9 +52,10 @@ _QUERY_TYPE_SEVERITY: dict[str, int] = {
 _CLASSIFIER_SYSTEM = (
     "你是本地居家照护助手的问题路由分类器，不是医生。"
     "只输出一个 JSON 对象：{\"query_type\":\"<TYPE>\"}。"
-    "允许的 TYPE：URGENT、MEDICATION_SAFETY、SYMPTOM_MEDICATION、MEDICATION_RECORD、"
-    "FAMILY_RECORD、RULE_EVIDENCE、GENERAL。"
-    "规则：危及生命的紧急描述→URGENT；剂量/停药/换药/误服/过量/同服/"
+    "允许的 TYPE：URGENT、DOSE_DECISION、MEDICATION_SAFETY、SYMPTOM_MEDICATION、"
+    "MEDICATION_RECORD、FAMILY_RECORD、RULE_EVIDENCE、GENERAL。"
+    "规则：危及生命的紧急描述→URGENT；问「一次/一天吃几粒几片、剂量改成多少」等"
+    "个体剂量数字→DOSE_DECISION；停药/换药/误服/过量/同服/漏服补服/"
     "吃错药或近义口语→MEDICATION_SAFETY；症状问“吃什么药”类资料解释→SYMPTOM_MEDICATION；"
     "查用药清单→MEDICATION_RECORD；"
     "查家庭健康档案→FAMILY_RECORD；查规则/证据依据→RULE_EVIDENCE；其余→GENERAL。"
@@ -62,6 +68,8 @@ def classify_question_lexicon(query: str) -> str:
     normalized = re.sub(r"\s+", "", query.casefold())
     if any(term in normalized for term in URGENT_ROUTE_TERMS):
         return "URGENT"
+    if is_dose_decision_query(normalized):
+        return "DOSE_DECISION"
     if any(term in normalized for term in ("一起吃", "一同服用", "共同服用")) and any(
         term in normalized for term in ("药", "阿莫西林", "布洛芬", "处方")
     ):
@@ -265,3 +273,62 @@ def classify_question_dual_detail(
         "override": override_type,
         "model_enabled": bool(model_enabled),
     }
+
+
+# ── Short anaphoric follow-up inheritance ────────────────────────────
+
+_ANAPHORIC_LEADING_MARKERS = ("那", "这", "它", "他", "她", "还有")
+_ANAPHORIC_CONTAINED_MARKERS = (
+    "呢",
+    "也可以",
+    "也能",
+    "也行",
+    "还能",
+    "还可以",
+    "继续",
+    "接着",
+    "刚才说",
+    "上面说",
+)
+_FOLLOW_UP_MAX_CHARS = 16
+
+
+def is_anaphoric_follow_up(query: str) -> bool:
+    """True for short referential follow-ups（「那饭后呢」「小孩也能吗」）."""
+    text = re.sub(r"\s+", "", str(query or ""))
+    if not text or len(text) > _FOLLOW_UP_MAX_CHARS:
+        return False
+    if any(text.startswith(marker) for marker in _ANAPHORIC_LEADING_MARKERS):
+        return True
+    return any(marker in text for marker in _ANAPHORIC_CONTAINED_MARKERS)
+
+
+def inherit_query_type_from_history(
+    messages: list[dict[str, Any]],
+    *,
+    current_type: str,
+) -> tuple[str, bool]:
+    """Let a short anaphoric GENERAL follow-up inherit the prior topic type.
+
+    「布洛芬和阿莫西林能一起吃吗」→「那饭后呢」used to fall back to GENERAL
+    and lose the medication-safety routing (and its risk note).  Only the
+    latest turn is reclassified; explicit overrides and non-GENERAL merges are
+    never replaced.  Returns ``(query_type, inherited)``.
+    """
+    if current_type != "GENERAL":
+        return current_type, False
+    user_turns = [
+        str(message.get("content") or "").strip()
+        for message in messages or []
+        if isinstance(message, dict)
+        and message.get("role") == "user"
+        and isinstance(message.get("content"), str)
+        and str(message.get("content")).strip()
+    ]
+    if len(user_turns) < 2 or not is_anaphoric_follow_up(user_turns[-1]):
+        return current_type, False
+    for previous in reversed(user_turns[:-1]):
+        previous_type = classify_question_lexicon(previous)
+        if previous_type != "GENERAL":
+            return previous_type, True
+    return current_type, False

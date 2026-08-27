@@ -762,7 +762,6 @@ def test_question_classifier_keeps_household_formulary_as_medication_record() ->
 @pytest.mark.parametrize(
     "query",
     [
-        "这个药的剂量是多少？",
         "阿莫西林应该怎么吃？",
         "我今天漏服了一次降压药，需要补服吗？",
         "老人误服了两粒药怎么办？",
@@ -773,13 +772,48 @@ def test_question_classifier_keeps_household_formulary_as_medication_record() ->
     ],
 )
 def test_question_classifier_marks_bare_dosage_terms_as_medication_safety(query) -> None:
-    """Dosage / missed-dose / overdose questions must require reviewed knowledge.
-
-    Without this route, a bare "剂量" question fell through to GENERAL and
-    the citation requirement (EVIDENCE_REQUIRED without reviewed knowledge)
-    did not apply.
-    """
+    """Missed-dose / overdose / stop questions stay in the answerable
+    MEDICATION_SAFETY class (decision 2B: answer + risk note, no wall)."""
     assert classify_question(query) == "MEDICATION_SAFETY"
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "这个药的剂量是多少？",
+        "布洛芬一天吃几粒？",
+        "感冒药一天几粒",
+        "阿莫西林一次吃几片",
+        "请把剂量改成多少合适",
+    ],
+)
+def test_question_classifier_marks_explicit_dose_numbers_as_dose_decision(query) -> None:
+    """Decision 1A: explicit individual dose-number asks route to the
+    deterministic DOSE_DECISION hard refusal — including the previously
+    missed「一天几粒」phrasing."""
+    assert classify_question(query) == "DOSE_DECISION"
+
+
+def test_dose_decision_refuses_before_model_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    """DOSE_DECISION never reaches Ollama: the refusal is deterministic."""
+
+    def exploding_chat(_self: OllamaClient, **kwargs: object) -> dict:
+        raise AssertionError("model must not be called for DOSE_DECISION")
+
+    monkeypatch.setattr(OllamaClient, "chat", exploding_chat)
+    result = run_assistant(
+        None,
+        messages=[{"role": "user", "content": "布洛芬一天吃几粒？"}],
+        actor_id="dose-owner",
+    )
+    assert result["query_type"] == "DOSE_DECISION"
+    assert result["degraded"] is True
+    assert result["degrade_reason"] == "DOSE_DECISION_REFUSED"
+    assert result["escalate"] is True
+    assert result["route"] == "REFUSE"
+    # The refusal copy never contains a dose number and points to a human.
+    assert "医生或药师" in result["answer"]
+    assert result["risk_notice"]
 
 def test_medical_boundary_blocks_stop_medication_synonyms() -> None:
     from app.tool_call import _check_medical_boundary
@@ -968,10 +1002,13 @@ def test_symptom_medication_answers_from_knowledge_without_household_drugs(
     assert "青霉素" in result["answer"] or result["risk_notice"]
 
 
-def test_medication_safety_without_reviewed_knowledge_degrades(
+def test_medication_safety_without_reviewed_knowledge_answers_with_risk_note(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Decision 2B: co-administration questions without reviewed knowledge are
+    answered (no EVIDENCE_REQUIRED wall) with an explicit low-evidence risk
+    statement appended by the server."""
     household, member, _events = _add_confirmed_medication_fixture(db_session)
 
     def scripted_chat(_self: OllamaClient, **kwargs: object) -> dict:
@@ -1013,18 +1050,24 @@ def test_medication_safety_without_reviewed_knowledge_degrades(
         household_id=household.id,
         member_id=member.id,
     )
-    assert result["degraded"] is True
-    assert result["degrade_reason"] in {"NO_AUTHORISED_DOCUMENTS", "EVIDENCE_REQUIRED"}
+    assert result["degraded"] is False
+    assert result["degrade_reason"] is None
     assert result["query_type"] == "MEDICATION_SAFETY"
     assert result["sources"] == []
+    # 2B: the answer survives with the unified server-appended risk texts.
+    assert "无法判断" in result["answer"]
+    assert "风险说明" in result["answer"]
+    assert "教学提醒" in result["answer"]
+    assert result["risk_notice"]
 
 
-def test_symptom_medication_empty_library_degrades_gently(
+def test_symptom_medication_empty_library_answers_with_risk_note(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """HCT-448: symptom-material questions on an empty knowledge library get a
-    friendly teaching fallback, not the harsh evidence wall with escalate."""
+    """Decision 2B (supersedes the HCT-448 fallback): symptom-material
+    questions on an empty knowledge library keep the model answer and get the
+    explicit low-evidence risk statement — not a wall, not an escalation."""
 
     def scripted_chat(_self: OllamaClient, **kwargs: object) -> dict:
         messages = kwargs["messages"]  # type: ignore[index]
@@ -1066,21 +1109,23 @@ def test_symptom_medication_empty_library_degrades_gently(
         actor_id="symptom-owner",
     )
     assert result["query_type"] == "SYMPTOM_MEDICATION"
-    assert result["degraded"] is True
-    assert result["degrade_reason"] == "KNOWLEDGE_UNAVAILABLE"
+    assert result["degraded"] is False
+    assert result["degrade_reason"] is None
     assert result["escalate"] is False
-    assert "暂时没有" in result["answer"]
-    assert "医生或药师" in result["answer"]
+    assert "鼻塞" in result["answer"]
+    assert "风险说明" in result["answer"]
+    assert "教学提醒" in result["answer"]
     assert "缺少可核验的本地知识引用" not in result["answer"]
     assert result["suggested_questions"]
     assert result["citations"] == []
 
 
-def test_symptom_medication_uncited_answer_degrades_gently(
+def test_symptom_medication_uncited_answer_keeps_draft_with_risk_note(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An uncited model draft for SYMPTOM_MEDICATION is dropped in favour of
-    the friendly fallback — never returned as if it were evidence-backed."""
+    """Decision 2B: an uncited model draft for SYMPTOM_MEDICATION is kept and
+    delivered with the low-evidence risk statement — the reader can see it is
+    not evidence-backed instead of losing the whole answer."""
 
     def scripted_chat(_self: OllamaClient, **kwargs: object) -> dict:
         return {
@@ -1101,7 +1146,8 @@ def test_symptom_medication_uncited_answer_degrades_gently(
         actor_id="symptom-owner",
     )
     assert result["query_type"] == "SYMPTOM_MEDICATION"
-    assert result["degraded"] is True
-    assert result["degrade_reason"] == "KNOWLEDGE_UNAVAILABLE"
+    assert result["degraded"] is False
+    assert result["degrade_reason"] is None
     assert result["escalate"] is False
-    assert "常备药" not in result["answer"]
+    assert "风险说明" in result["answer"]
+    assert "教学提醒" in result["answer"]

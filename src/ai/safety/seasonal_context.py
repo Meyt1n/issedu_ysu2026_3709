@@ -9,6 +9,38 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+# Seasonal framing only fits weather-linked complaints.  Injecting the
+# calendar template into e.g. a diarrhoea or rash question produced the
+# "seasonal copy on the wrong symptom" mix-ups flagged in the audits.
+_SEASONAL_SYMPTOM_TERMS: tuple[str, ...] = (
+    "感冒",
+    "着凉",
+    "受凉",
+    "发烧",
+    "发热",
+    "咳嗽",
+    "鼻塞",
+    "流鼻涕",
+    "打喷嚏",
+    "咽痛",
+    "咽痒",
+    "嗓子",
+    "喉咙",
+    "热伤风",
+    "流感",
+)
+
+
+def is_seasonal_symptom_query(text: str) -> bool:
+    """True when the question mentions a weather-linked symptom.
+
+    Seasonal templates are keyed to the symptom, not the calendar: questions
+    that never mention a cold-like complaint must not receive change-of-season
+    framing just because of the current month.
+    """
+    content = str(text or "")
+    return any(term in content for term in _SEASONAL_SYMPTOM_TERMS)
+
 
 def seasonal_care_context(*, when: datetime | None = None) -> str:
     """Return a short seasonal framing string for the current local month."""
