@@ -6,7 +6,6 @@ import type {
   AssistantAgentTrace,
   AssistantCitation,
   AssistantExternalSource,
-  EvidencePreview,
 } from '../api/types'
 import {
   clearChatSession,
@@ -29,7 +28,6 @@ import { normalizeSuggestedQuestions } from '../assistant/followUp'
 import {
   confidenceLabel,
   extraFactSources,
-  questionTypeLabel,
   routeSummary,
   visibleRiskNotice,
 } from '../assistant/replyMeta'
@@ -140,7 +138,6 @@ const selectedAgentId = ref<string | null>(null)
 const workflowExpanded = ref(false)
 const orchestrationPhase = ref<string | null>(null)
 const workflowRouteExplanation = ref<string | null>(null)
-const liveEvidencePreview = ref<EvidencePreview | null>(null)
 const stopStatus = ref('')
 const assistantSessionId = ref('')
 const threads = ref<ChatThreadMeta[]>([])
@@ -381,7 +378,6 @@ const speechInputSupported = isSpeechInputSupported()
 const speechOutputSupported = isSpeechOutputSupported()
 let activeSendController: AbortController | null = null
 let userRequestedStop = false
-// 「结束回复」：abort 请求但保留当前已显示内容，不再有新输出（决策 4B）。
 let keepPartialReply = false
 
 function cancelActiveSend(showStatus = false): void {
@@ -390,12 +386,6 @@ function cancelActiveSend(showStatus = false): void {
     activeSendController.abort()
     activeSendController = null
   }
-}
-
-function finishReplyEarly(): void {
-  if (!activeSendController) return
-  keepPartialReply = true
-  cancelActiveSend(false)
 }
 
 function clearRemoteAssistantSession(sessionId: string): void {
@@ -551,18 +541,6 @@ const AGENT_DETAILS: Record<string, { boundary: string; action: string }> = {
     boundary: '仅使用本机模型，健康数据不离开本机。',
     action: '汇总检索到的证据，生成带出处的回答并通过安全校验。',
   },
-}
-
-const EVIDENCE_TOOL_LABELS: Record<string, string> = {
-  get_member_state: '成员状态',
-  get_health_events: '健康事件',
-  get_care_plan_status: '今日照护计划',
-  get_applied_rules: '已应用规则',
-  get_risk_alerts: '风险提醒',
-}
-
-function evidenceToolLabel(tool: string): string {
-  return EVIDENCE_TOOL_LABELS[tool] ?? tool
 }
 
 function traceForAgent(agentId: string): AssistantAgentTrace | undefined {
@@ -755,7 +733,6 @@ function suspendActiveConversation(): void {
   workflowTrace.value = []
   orchestrationPhase.value = null
   workflowRouteExplanation.value = null
-  liveEvidencePreview.value = null
   sendError.value = ''
   stopStatus.value = ''
   sending.value = false
@@ -851,7 +828,6 @@ function clearConversation(): void {
   workflowTrace.value = []
   orchestrationPhase.value = null
   workflowRouteExplanation.value = null
-  liveEvidencePreview.value = null
   draft.value = ''
   sendError.value = ''
   stopStatus.value = ''
@@ -912,6 +888,32 @@ function evidenceSummary(entry: ChatEntry): string {
   return '本次响应没有返回可展开的知识文档引用，仍需人工确认'
 }
 
+function hasEvidenceDetails(entry: ChatEntry): boolean {
+  return Boolean(
+    entry.degraded
+      || entry.escalate
+      || entry.riskNotice
+      || entry.queryType
+      || entry.routeExplanation
+      || (entry.sources?.length ?? 0) > 0
+      || entry.confidence
+      || (entry.agentTrace?.length ?? 0) > 0
+      || (entry.externalSources?.length ?? 0) > 0,
+  )
+}
+
+function evidenceDisclosureSummary(entry: ChatEntry): string {
+  const parts: string[] = []
+  const citations = entry.citations?.length ?? 0
+  const steps = entry.agentTrace?.length ?? 0
+  const external = entry.externalSources?.length ?? 0
+  if (citations > 0) parts.push(`${citations} 条本地引用`)
+  if (steps > 0) parts.push(`${steps} 个处理步骤`)
+  if (external > 0) parts.push(`${external} 条外部参考`)
+  if (entry.degraded) parts.push('受控降级说明')
+  return parts.join(' · ') || '分析说明与依据状态'
+}
+
 function citationTitle(citation: AssistantCitation): string {
   return citation.document_title?.trim() || citation.document_id
 }
@@ -940,7 +942,6 @@ watch(
       : getAssistantSessionId(actorId, householdId, memberId, activeThreadId.value)
     if (memberId) regenerateOnNextValidContext = false
     workflowRouteExplanation.value = null
-    liveEvidencePreview.value = null
     stopStatus.value = ''
     restoreChatSession(loadChatSession(actorId, householdId, memberId, activeThreadId.value))
   },
@@ -1097,7 +1098,6 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
   workflowTrace.value = []
   orchestrationPhase.value = 'routing'
   workflowRouteExplanation.value = null
-  liveEvidencePreview.value = null
   scrollToEnd()
 
   const streamingEntry: ChatEntry = {
@@ -1163,10 +1163,6 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
           // Tokens are already the validated final answer text.
           entry.content += token
           entry.revealed = entry.content.length
-          scrollToEnd()
-        },
-        onEvidencePreview: preview => {
-          liveEvidencePreview.value = preview
           scrollToEnd()
         },
         onCancelled: () => {
@@ -1241,7 +1237,6 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
   } finally {
     if (activeSendController === controller) activeSendController = null
     orchestrationPhase.value = null
-    liveEvidencePreview.value = null
     sending.value = false
     // 自动播报进行中时不开麦回听（开麦会停止朗读）；播完由 onFinished 回听。
     if (!needMicGesture.value && speakingIndex.value === null) void beginWakeListening()
@@ -1465,27 +1460,19 @@ onBeforeUnmount(() => {
           <AppIcon name="assistant" :size="16" />
         </span>
         <div class="chat-bubble">
-          {{ entry.role === 'assistant' ? entry.content.slice(0, entry.revealed) : entry.content
-          }}<span v-if="isStreaming(entry)" class="stream-caret" aria-hidden="true" />
-          <div
-            v-if="entry.role === 'assistant' && sending && index === history.length - 1 && entry.content.length > 0"
-            class="chat-message-actions"
-            aria-label="生成控制"
+          <div class="chat-message-text"><span class="chat-message-content">{{ entry.role === 'assistant' ? entry.content.slice(0, entry.revealed) : entry.content }}</span><span v-if="isStreaming(entry)" class="stream-caret" aria-hidden="true" /></div>
+          <details
+            v-if="entry.role === 'assistant' && !isStreaming(entry) && hasEvidenceDetails(entry)"
+            class="chat-evidence"
           >
-            <button
-              type="button"
-              class="btn btn-ghost btn-small"
-              title="停止生成新的内容，保留上面已显示的回答"
-              @click="finishReplyEarly"
-            >
-              <AppIcon name="close" :size="13" />
-              结束回复
-            </button>
-          </div>
-          <div
-            v-if="entry.role === 'assistant' && !entry.openChat && !isStreaming(entry) && (entry.degraded || entry.escalate || entry.riskNotice || entry.queryType || entry.routeExplanation || (entry.sources?.length ?? 0) > 0 || entry.confidence || (entry.agentTrace?.length ?? 0) > 0 || (entry.externalSources?.length ?? 0) > 0)"
-            class="chat-sources"
-          >
+            <summary>
+              <span class="chat-evidence-title">
+                <AppIcon name="review" :size="14" />
+                查看依据
+              </span>
+              <small>{{ evidenceDisclosureSummary(entry) }}</small>
+            </summary>
+            <div class="chat-sources">
             <span v-if="isKnowledgeGapDegrade(entry)" class="chat-evidence-summary">
               <AppIcon name="compass" :size="12" style="vertical-align: -1px" />
               本机暂无已审核的相关知识卡，以上是一般照护提示；具体用药请咨询医生或药师。
@@ -1541,7 +1528,7 @@ onBeforeUnmount(() => {
               <p v-else class="text-faint">本次响应未返回片段正文，仅保留服务端核验过的引用标识。</p>
               <p v-if="citation.locator" class="text-faint">定位：{{ citation.locator }}</p>
             </details>
-            <details v-if="(entry.externalSources?.length ?? 0) > 0" class="chat-citation chat-external-sources">
+              <details v-if="(entry.externalSources?.length ?? 0) > 0" class="chat-citation chat-external-sources">
               <summary>外部参考（非本地审核证据）· {{ entry.externalSources?.length }} 条</summary>
               <a
                 v-for="source in entry.externalSources"
@@ -1555,14 +1542,18 @@ onBeforeUnmount(() => {
                 <span>{{ source.domain || source.url }}</span>
                 <small v-if="source.snippet">{{ source.snippet }}</small>
               </a>
-            </details>
-          </div>
+              </details>
+            </div>
+          </details>
           <div
-            v-if="entry.role === 'assistant' && !entry.openChat && !isStreaming(entry) && index === history.length - 1 && (entry.suggestedQuestions?.length ?? 0) > 0"
+            v-if="entry.role === 'assistant' && !isStreaming(entry) && index === history.length - 1 && (entry.suggestedQuestions?.length ?? 0) > 0"
             class="chat-follow-ups"
             aria-label="相关追问"
           >
-            <span class="chat-follow-ups-label">你还可以问</span>
+            <div class="chat-follow-ups-heading">
+              <span class="chat-follow-ups-label"><AppIcon name="sparkle" :size="13" />接下来可以问</span>
+              <small>点击后会放入输入框，可修改后再发送</small>
+            </div>
             <button
               v-for="question in entry.suggestedQuestions"
               :key="question"
@@ -1628,37 +1619,6 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </div>
-
-      <section
-        v-if="sending && liveEvidencePreview"
-        class="assistant-evidence-preview"
-        role="status"
-        aria-live="polite"
-        aria-label="本轮证据预览"
-      >
-        <div class="assistant-evidence-preview-heading">
-          <span><AppIcon name="review" :size="15" />已找到可核对的依据</span>
-          <small>仅显示资料名称和数量，不含健康正文</small>
-        </div>
-        <p>问题类型：{{ questionTypeLabel(liveEvidencePreview.query_type) }}</p>
-        <div class="assistant-evidence-preview-groups">
-          <span v-if="liveEvidencePreview.database_tools.length">
-            档案：{{ liveEvidencePreview.database_tools.map(evidenceToolLabel).join('、') }}
-          </span>
-          <span v-if="liveEvidencePreview.rule_tools.length">
-            规则：{{ liveEvidencePreview.rule_tools.map(evidenceToolLabel).join('、') }}
-          </span>
-          <span>
-            本地资料：{{ liveEvidencePreview.knowledge_count }} 条
-            <template v-if="liveEvidencePreview.knowledge_titles.length">
-              （{{ liveEvidencePreview.knowledge_titles.join('、') }}）
-            </template>
-          </span>
-          <span v-if="liveEvidencePreview.external_count">
-            外部参考：{{ liveEvidencePreview.external_count }} 条（非本地审核证据）
-          </span>
-        </div>
-      </section>
 
       <div v-if="sending && !(history[history.length - 1]?.role === 'assistant' && (history[history.length - 1]?.content.length ?? 0) > 0)" class="chat-bubble-row assistant">
         <span class="chat-avatar thinking" aria-hidden="true">
