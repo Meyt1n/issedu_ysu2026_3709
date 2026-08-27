@@ -35,7 +35,7 @@ const ICONS: Record<ToastTone, IconName> = {
 <style scoped>
 .toast-host {
   position: fixed;
-  top: calc(12px + env(safe-area-inset-top));
+  top: calc(12px + var(--hct-safe-area-top));
   left: 16px;
   right: 16px;
   z-index: 60;
