@@ -231,11 +231,9 @@ Windows 本地开发代理固定使用 `127.0.0.1`，避免 `localhost` 解析�
 
 ### 4.2.1 助手开放演示模式（默认开启）
 
-本地 Demo **默认** `AGENT_OPEN_CHAT=true`，便于直接看本机模型真实回复（跳过证据/引用硬墙与空库季节短接，并注入本机日期）。完整说明、自检步骤与生产强制关闭规则见专文：
+本地 Demo **默认** `AGENT_OPEN_CHAT=true`，便于直接看本机模型真实回复。2026-08-27 起（ADR-0007 决策 8C）开放模式仅是体验项：注入本机日期、放宽 token 下限；剂量硬拒、句级黑名单、风险说明与引用校验在任何模式与环境下统一生效，生产不再强制关闭该开关。完整说明与自检步骤见专文：
 
 → [助手开放演示模式（HCT-451）](./助手开放演示模式.md)
-
-若需恢复教学证据墙：`.env` 设 `AGENT_OPEN_CHAT=false` 后重启 API。
 
 **路线 A：离线教学夹具（推荐课堂/无网演示，完全不出网）**
 
@@ -257,7 +255,22 @@ AGENT_WEB_SEARCH_URL=https://html.duckduckgo.com/html/
 AGENT_WEB_SEARCH_ALLOWED_DOMAINS=html.duckduckgo.com
 ```
 
-自建 SearXNG 可改用 `AGENT_WEB_SEARCH_PROVIDER=searxng` 并把 URL/白名单指向实例地址。硬边界不变：仅发送脱敏后的问题（自动移除 ID/手机号/邮箱/成员姓名），不发送任何健康记录；外部结果单独放在 `external_sources`，页面标注「外部参考（非本地审核证据）」，永不进入本地引用；搜索失败只降级联网节点，不影响本地档案/规则/知识链路。
+自建 SearXNG 可改用 `AGENT_WEB_SEARCH_PROVIDER=searxng` 并把 URL/白名单指向实例地址。硬边界：默认仅发送脱敏后的问题（自动移除 ID/手机号/邮箱/成员姓名），不发送健康记录原文；外部结果单独放在 `external_sources`，页面标注「外部参考（非本地审核证据）」，永不进入本地引用；搜索失败只降级联网节点，不影响本地档案/规则/知识链路。
+
+**路线 C：开放抓页模式（2026-08-27 起，ADR-0007 决策 3B）**
+
+```dotenv
+AGENT_WEB_SEARCH_ENABLED=true
+AGENT_WEB_SEARCH_PROVIDER=duckduckgo_html
+AGENT_WEB_SEARCH_URL=https://html.duckduckgo.com/html/
+AGENT_WEB_SEARCH_EGRESS_MODE=open
+# 可选调参（以下为默认值）：
+AGENT_WEB_SEARCH_FETCH_PAGE_COUNT=2
+AGENT_WEB_SEARCH_FETCH_PAGE_MAX_BYTES=204800
+AGENT_WEB_SEARCH_FETCH_PAGE_TIMEOUT_SECONDS=6
+```
+
+open 模式不再要求域名白名单，改为「公开 HTTPS + SSRF 公网校验」准入（回环/私网/内网一律阻断），并受控跟进前 N 条结果页抽取正文摘录（`external_sources[].page_excerpt`）；购药/问诊/广告导流结果与话术自动过滤。请求可选 `network_context_level=query_only|symptom|member`（默认 `query_only`）分档携带匿名化上下文，最终出网查询在发送前经 `network_query` 事件对用户可见。回滚：`AGENT_WEB_SEARCH_EGRESS_MODE=allowlist` 或 `AGENT_WEB_SEARCH_ENABLED=false`。
 
 验证命令（重启 API 后）：
 
