@@ -114,7 +114,7 @@ watch(
   left: 16px;
   right: 16px;
   /* 浮层要高于 4/5 项底部导航，避免 320px + 特大字号时遮挡入口。 */
-  bottom: calc(144px + env(safe-area-inset-bottom));
+  bottom: calc(144px + var(--hct-safe-area-bottom));
   z-index: 31;
   display: flex;
   align-items: center;
@@ -146,7 +146,7 @@ html[data-contrast='high'] .speech-guidance { background: #fff; border: 2px soli
   position: fixed;
   left: 50%;
   transform: translateX(-50%);
-  bottom: calc(144px + env(safe-area-inset-bottom));
+  bottom: calc(144px + var(--hct-safe-area-bottom));
   z-index: 30;
   display: inline-flex;
   align-items: center;
@@ -185,7 +185,7 @@ html[data-contrast='high'] .speech-guidance {
   position: fixed;
   left: 16px;
   right: 16px;
-  bottom: calc(144px + env(safe-area-inset-bottom));
+  bottom: calc(144px + var(--hct-safe-area-bottom));
   z-index: 31;
   display: flex;
   align-items: center;

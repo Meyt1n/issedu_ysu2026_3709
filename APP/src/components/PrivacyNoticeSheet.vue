@@ -62,7 +62,8 @@ function speakNotice(): void {
   z-index: 60;
   display: grid;
   place-items: center;
-  padding: 16px;
+  padding: max(16px, var(--hct-safe-area-top)) max(16px, var(--hct-safe-area-right))
+    max(16px, var(--hct-safe-area-bottom)) max(16px, var(--hct-safe-area-left));
   background: color-mix(in srgb, var(--c-bg) 72%, transparent);
   backdrop-filter: blur(6px);
 }
@@ -89,8 +90,11 @@ function speakNotice(): void {
 .privacy-body { min-height: 0; overflow-y: auto; display: grid; gap: 12px; padding-right: 4px; }
 .privacy-body h3 { font-size: 0.98rem; color: var(--c-brand-deep); }
 .privacy-body p { line-height: 1.65; font-size: 0.92rem; }
-.privacy-actions { display: flex; gap: 10px; flex-wrap: wrap; }
-.privacy-confirm { flex: 1; }
+.privacy-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.privacy-actions > .btn { min-width: 0; white-space: nowrap; }
+@media (max-width: 420px) {
+  .privacy-actions { grid-template-columns: 1fr; }
+}
 html[data-contrast='high'] .privacy-card { border: 2px solid #000; }
 html[data-contrast='high'] .privacy-sheet { background: #fff; }
 html[data-elder='on'] .privacy-body p { font-size: 1.05rem; }
