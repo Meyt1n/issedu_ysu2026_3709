@@ -4,6 +4,8 @@ HCT-302: Finite rule engine V1 — expiry, low stock, duplicates, allergies, int
 Each rule is a pure function: facts → list of alerts. Alerts carry source event IDs.
 """
 
+import hashlib
+import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -85,7 +87,7 @@ def low_stock(facts: dict[str, Any]) -> list[Alert]:
     alerts: list[Alert] = []
     for drug in drugs:
         stock = drug.get("stock")
-        if isinstance(stock, (int, float)) and stock <= 5:
+        if isinstance(stock, int | float) and stock <= 5:
             alerts.append(Alert("low_stock", "WARNING",
                 f"药品 {drug.get('name')} 库存不足（剩余 {stock}）", [drug.get("added_by", "")]))
     return alerts
@@ -191,8 +193,17 @@ BUDGET_STATUS_SUPPRESSED = "SUPPRESSED"
 
 
 def deduplication_key(alert: Alert) -> str:
-    """Stable grouping key for one alert: rule plus its ordered evidence set."""
-    return ":".join([alert.rule_id, *sorted(alert.source_event_ids)])
+    """Return a stable, opaque grouping key without exposing event IDs."""
+    canonical = json.dumps(
+        {
+            "rule_id": alert.rule_id,
+            "source_event_ids": sorted(alert.source_event_ids),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()[:32]
 
 
 def dedup_alerts(alerts: list[Alert]) -> list[Alert]:
