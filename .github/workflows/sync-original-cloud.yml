@@ -39,11 +39,11 @@ jobs:
       - name: 检出目标 GitHub 提交历史
         uses: actions/checkout@v4
         with:
-          # The repository currently has fewer than 2048 reachable commits.
-          # Pinning the event SHA and excluding tags avoids fetching every head
-          # and tag while retaining the complete history needed by the planner.
+          # The internal mirror is expected to stay close to GitHub master.
+          # Keep the first transfer small; ancestry checks below fail closed if
+          # the mirror ever falls outside this audited history window.
           ref: ${{ github.sha }}
-          fetch-depth: 2048
+          fetch-depth: 64
           fetch-tags: false
           persist-credentials: false
 
