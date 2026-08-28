@@ -26,12 +26,25 @@ jobs:
     timeout-minutes: 10
     env:
       CLOUD_REPO_URL: http://119.3.217.118:30181/29092881243490627/issedu_ysu2026_3709.git
+      # The dedicated Windows runner has intermittently failed while negotiating
+      # parallel HTTP/2 Git fetches from GitHub. Keep checkout on one HTTP/1.1
+      # request so a transport failure cannot be mistaken for an identity error.
+      GIT_CONFIG_COUNT: "2"
+      GIT_CONFIG_KEY_0: http.version
+      GIT_CONFIG_VALUE_0: HTTP/1.1
+      GIT_CONFIG_KEY_1: http.maxRequests
+      GIT_CONFIG_VALUE_1: "1"
 
     steps:
-      - name: 检出完整 Git 历史
+      - name: 检出目标 GitHub 提交历史
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          # The repository currently has fewer than 2048 reachable commits.
+          # Pinning the event SHA and excluding tags avoids fetching every head
+          # and tag while retaining the complete history needed by the planner.
+          ref: ${{ github.sha }}
+          fetch-depth: 2048
+          fetch-tags: false
           persist-credentials: false
 
       - name: 配置同步 Runner 工具

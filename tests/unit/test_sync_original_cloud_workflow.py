@@ -149,11 +149,37 @@ def test_ci_and_relay_review_are_manual_only() -> None:
         assert events == {"workflow_dispatch": None}
 
 
-def test_workflow_uses_full_history_and_preflights_before_push() -> None:
+def test_sync_workflows_pin_checkout_and_limit_remote_refs() -> None:
+    workflow_paths = [
+        WORKFLOW_PATH,
+        WORKFLOW_ROOT / "execute-cloud-history-sync.yml",
+        WORKFLOW_ROOT / "sync-cloud-history-dry-run.yml",
+    ]
+
+    for workflow_path in workflow_paths:
+        document = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+        job = next(iter(document["jobs"].values()))
+        checkout = next(
+            step
+            for step in job["steps"]
+            if step.get("uses", "").startswith("actions/checkout@")
+        )
+
+        assert checkout["with"]["ref"] == "${{ github.sha }}"
+        assert checkout["with"]["fetch-depth"] == 2048
+        assert checkout["with"]["fetch-tags"] is False
+        assert checkout["with"]["persist-credentials"] is False
+        assert job["env"]["GIT_CONFIG_COUNT"] == "2"
+        assert job["env"]["GIT_CONFIG_KEY_0"] == "http.version"
+        assert job["env"]["GIT_CONFIG_VALUE_0"] == "HTTP/1.1"
+        assert job["env"]["GIT_CONFIG_KEY_1"] == "http.maxRequests"
+        assert job["env"]["GIT_CONFIG_VALUE_1"] == "1"
+
+
+def test_workflow_preflights_before_push() -> None:
     run_script = workflow_run_script()
 
     workflow = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
-    assert workflow["jobs"]["sync"]["steps"][0]["with"]["fetch-depth"] == 0
     assert "--repo ." in run_script
     assert "--commit-sha" in run_script
     assert "--parent-sha" in run_script

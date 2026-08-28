@@ -38,13 +38,19 @@ jobs:
       CLOUD_TOKEN_RY12_20: ${{ secrets.CLOUD_TOKEN_RY12_20 }}
       CLOUD_TOKEN_389883656_LGTM: ${{ secrets.CLOUD_TOKEN_389883656_LGTM }}
       CLOUD_TOKEN_JIN_123_ZIP: ${{ secrets.CLOUD_TOKEN_JIN_123_ZIP }}
+      GIT_CONFIG_COUNT: "2"
+      GIT_CONFIG_KEY_0: http.version
+      GIT_CONFIG_VALUE_0: HTTP/1.1
+      GIT_CONFIG_KEY_1: http.maxRequests
+      GIT_CONFIG_VALUE_1: "1"
 
     steps:
-      - name: 检出目标 GitHub master 完整历史
+      - name: 检出目标 GitHub master 历史
         uses: actions/checkout@v4
         with:
-          ref: master
-          fetch-depth: 0
+          ref: ${{ github.sha }}
+          fetch-depth: 2048
+          fetch-tags: false
           persist-credentials: false
 
       - name: 验证操作确认和 SHA 基线
@@ -102,6 +108,8 @@ jobs:
           export CLOUD_SELECTED_PASSWORD="${CLOUD_REPO_PASSWORD}"
           cloud_git() {
             git \
+              -c http.proxy= \
+              -c https.proxy= \
               -c credential.helper= \
               -c credential.useHttpPath=true \
               -c "credential.username=${CLOUD_SELECTED_USERNAME}" \
@@ -162,6 +170,8 @@ jobs:
           export GIT_TERMINAL_PROMPT=0
           cloud_git() {
             git \
+              -c http.proxy= \
+              -c https.proxy= \
               -c credential.helper= \
               -c credential.useHttpPath=true \
               -c "credential.username=${CLOUD_SELECTED_USERNAME}" \
