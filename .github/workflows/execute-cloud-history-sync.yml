@@ -53,6 +53,30 @@ jobs:
           fetch-tags: false
           persist-credentials: false
 
+      - name: 配置历史同步 Runner 工具
+        shell: bash
+        run: |
+          set -euo pipefail
+          runner_bin="${HCT_SYNC_RUNNER_BIN:-}"
+          if [[ -z "${runner_bin}" && "${RUNNER_OS}" == "Linux" ]]; then
+            runner_bin="/data1/ytm/hct-sync-runner/bin"
+          fi
+          if [[ -z "${runner_bin}" ]]; then
+            echo "::error::Windows 同步 Runner 必须配置 HCT_SYNC_RUNNER_BIN 环境变量"
+            exit 1
+          fi
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            if ! command -v cygpath >/dev/null 2>&1; then
+              echo "::error::Windows Runner 缺少 Git Bash cygpath"
+              exit 1
+            fi
+            runner_bin="$(cygpath -u "${runner_bin}")"
+          fi
+          echo "${runner_bin}" >> "${GITHUB_PATH}"
+          export PATH="${runner_bin}:${PATH}"
+          command -v python3
+          command -v jq
+
       - name: 验证操作确认和 SHA 基线
         shell: bash
         env:
@@ -179,7 +203,7 @@ jobs:
           }
 
           plan_file="${RUNNER_TEMP}/cloud-history-plan.json"
-          python .github/scripts/cloud_sync_history_repair.py \
+          python3 .github/scripts/cloud_sync_history_repair.py \
             --repo . \
             --github-repository "${GITHUB_REPOSITORY}" \
             --cloud-sha "${cloud_sha}" \

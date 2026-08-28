@@ -135,6 +135,9 @@ def test_history_replay_uses_dedicated_runner_backup_and_exact_lease() -> None:
     assert '"${replay_from_sha}:refs/heads/master"' in scripts
     assert "-c credential.helper=" in scripts
     assert "cloud_git push original-cloud" in scripts
+    assert "HCT_SYNC_RUNNER_BIN" in scripts
+    assert "command -v python3" in scripts
+    assert "python3 .github/scripts/cloud_sync_history_repair.py" in scripts
     assert "action=\"${action//$'\\r'/}\"" in scripts
     assert "git remote get-url original-cloud" in scripts
     assert "git remote set-url original-cloud" in scripts

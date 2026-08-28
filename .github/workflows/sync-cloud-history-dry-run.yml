@@ -70,7 +70,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python .github/scripts/cloud_sync_history_repair.py \
+          python3 .github/scripts/cloud_sync_history_repair.py \
             --repo . \
             --github-repository "${GITHUB_REPOSITORY}" \
             --cloud-sha "${cloud_sha}" \
