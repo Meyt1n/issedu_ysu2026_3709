@@ -414,4 +414,52 @@ describe('请求回执追踪与超时区分（MOB-144）', () => {
     })
     expect(onCancelled).toHaveBeenCalledOnce()
   })
+
+  it('assistantChatStream 将调用方 AbortSignal 作为取消而不是超时', async () => {
+    const abortController = new AbortController()
+    const client = new ApiClient({
+      baseUrl: 'http://192.168.1.8:8000',
+      fetcher: async () => {
+        abortController.abort()
+        throw new Error('aborted')
+      },
+    })
+
+    await expect(client.assistantChatStream(
+      { messages: [{ role: 'user', content: '停止生成' }], agent_mode: 'multi_agent' },
+      {},
+      undefined,
+      undefined,
+      { signal: abortController.signal },
+    )).rejects.toMatchObject({ code: 'CANCELLED' })
+  })
+
+  it('assistantChatStream 在读取 SSE 期间中止也返回 CANCELLED', async () => {
+    const abortController = new AbortController()
+    const client = new ApiClient({
+      baseUrl: 'http://192.168.1.8:8000',
+      fetcher: async () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'text/event-stream' }),
+        body: {
+          getReader: () => ({
+            read: async () => {
+              abortController.abort()
+              throw new Error('stream aborted')
+            },
+          }),
+        },
+        text: async () => '',
+      }) as unknown as Response,
+    })
+
+    await expect(client.assistantChatStream(
+      { messages: [{ role: 'user', content: '停止流式回复' }], agent_mode: 'multi_agent' },
+      {},
+      undefined,
+      undefined,
+      { signal: abortController.signal },
+    )).rejects.toMatchObject({ code: 'CANCELLED' })
+  })
 })
