@@ -28,6 +28,7 @@ function forbidMatch(source, pattern, message) {
 
 const mainManifest = await read('android/app/src/main/AndroidManifest.xml')
 const debugManifest = await read('android/app/src/debug/AndroidManifest.xml')
+const mainActivity = await read('android/app/src/main/java/com/homecaretwin/companion/MainActivity.java')
 const networkRelease = await read('android/app/src/main/res/xml/network_security_config.xml')
 const networkDebug = await read('android/app/src/debug/res/xml/network_security_config_debug.xml')
 const backupRules = await read('android/app/src/main/res/xml/backup_rules.xml')
@@ -48,6 +49,12 @@ requireMatch(debugManifest, /@xml\/network_security_config_debug/, 'Debug Manife
 requireMatch(networkDebug, /cleartextTrafficPermitted="true"/, 'Debug 网络安全配置未启用局域网联调所需明文能力。')
 requireMatch(networkDebug, /@raw\/controlled_https_ca/, 'Debug 网络安全配置缺少受控 HTTPS 测试 CA。')
 forbidMatch(networkRelease, /controlled_https_ca/, 'Release 网络安全配置不得信任受控 Debug 测试 CA。')
+requireMatch(
+  mainActivity,
+  /if\s*\(\s*BuildConfig\.DEBUG\s*&&[\s\S]*?setMixedContentMode\(WebSettings\.MIXED_CONTENT_ALWAYS_ALLOW\)/,
+  'Android WebView 明文联调放行必须由 BuildConfig.DEBUG 守卫。',
+)
+requireMatch(mainActivity, /import\s+android\.webkit\.WebSettings\s*;/, 'MainActivity 缺少 WebSettings 导入。')
 
 for (const domain of ['root', 'file', 'database', 'sharedpref', 'external']) {
   const excluded = new RegExp(`<exclude\\s+domain="${domain}"\\s+path="\\."\\s*\\/>`)
@@ -99,6 +106,7 @@ console.log(JSON.stringify({
   status: 'passed',
   releaseCleartext: false,
   debugCleartext: true,
+  debugMixedContent: 'BuildConfig.DEBUG only',
   backupAndDeviceTransfer: 'excluded',
   declaredPermissions,
   mergedReleaseManifestChecked: Boolean(mergedReleaseManifest),
