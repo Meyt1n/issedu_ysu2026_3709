@@ -3,6 +3,11 @@ apply plugin: 'com.android.application'
 android {
     namespace = "com.homecaretwin.companion"
     compileSdk = rootProject.ext.compileSdkVersion
+    // AGP 8+ no longer generates BuildConfig unless explicitly enabled. The
+    // debug-only WebView network policy in MainActivity relies on DEBUG.
+    buildFeatures {
+        buildConfig = true
+    }
     defaultConfig {
         applicationId "com.homecaretwin.companion"
         minSdkVersion rootProject.ext.minSdkVersion
