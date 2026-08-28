@@ -159,6 +159,8 @@ MATCHED/CONFLICT/UNKNOWN/REVIEW -> CONFIRMED | CORRECTED | REJECTED
 
 `EVIDENCE_REQUIRED` 没有引用时不得返回肯定性回答。客户端不得只展示 `answer` 而隐藏规则和确认状态。
 
+HCT-458 风险告警逐条返回 `deduplication_key`、`merged_count`、`budget_status`、`budget_reason`、`next_visible_at` 和脱敏 `evidence_summary`。服务端去重时累计合并数量并按同一规则/来源生成稳定分组键；严重告警标记为 `VISIBLE` 且不受普通预算压制，超出普通预算的条目标记为 `DEFERRED` 并保留在响应中，下一次预算重置时间使用显式 UTC。证据摘要只能说明来源事件数量，不得包含事件 payload、药品/疾病正文或原始查询。
+
 `POST /assistant/chat` 只执行白名单只读工具。`retrieve_knowledge` 必须使用请求中的 `household_id`/`member_id`，模型不得改写范围。最终 `citations` 只能引用本次工具返回的 `document_id`/`version`/`chunk_id`；伪造来源返回 `CITATION_NOT_FOUND`，无授权文档返回 `NO_AUTHORISED_DOCUMENTS`。降级响应的 `sources` 和 `citations` 必须为空。
 
 HCT-430 多智能体请求可携带受限枚举 `query_type_override`、最长 64 位的 `assistant_session_id` 和 `clear_session_cache`。响应增加 `route_explanation`、不含思考链的分类通道结果、只列工具名/资料标题/数量的 `evidence_preview` 及 `retrieval_cache_hit`；流式接口在合成前发送 `evidence_preview`，取消时发送 `cancelled`。缓存按 actor/会话/家庭/成员隔离，命中前重新核验当前授权；`POST /assistant/session-cache/clear` 只能清理当前 actor 的会话范围，`GET /assistant/session-cache/ops` 只返回当前 actor/opaque 会话的匿名条目、作用域、代理和 TTL 统计，并在读取时清理该范围的过期项，不返回问题、标识或缓存内容。`GET /assistant/web-search/ops` 只返回不含查询正文的计数；配置了知识管理员时仅允许名单 actor，名单为空时只在非生产环境允许已认证 actor。

@@ -1260,11 +1260,27 @@ def _state_with_sources(facts: dict[str, Any]) -> dict[str, Any]:
 
 
 def _public_alert(alert: Any) -> dict[str, Any]:
+    from app.rules import deduplication_key
+
     return {
         "rule_id": alert.rule_id,
         "level": alert.level,
         "message": alert.message,
         "source_event_ids": list(dict.fromkeys(alert.source_event_ids)),
+        "deduplication_key": getattr(alert, "deduplication_key", None) or deduplication_key(alert),
+        "merged_count": max(int(getattr(alert, "merged_count", 1) or 1), 1),
+        "budget_status": str(getattr(alert, "budget_status", None) or "VISIBLE"),
+        "budget_reason": str(getattr(alert, "budget_reason", None) or ""),
+        "next_visible_at": (
+            alert.next_visible_at.isoformat()
+            if getattr(alert, "next_visible_at", None) is not None
+            else None
+        ),
+        "evidence_summary": (
+            f"{len(set(alert.source_event_ids))} 条脱敏来源事件"
+            if alert.source_event_ids
+            else "无可回显来源事件"
+        ),
     }
 
 
@@ -1409,7 +1425,7 @@ def _execute_get_applied_rules(
     if error:
         return {"error": error, "rules": [], "sources": []}
     from app.projection import build_relationship_graph
-    from app.rules import dedup_alerts, run_rules
+    from app.rules import dedup_alerts, deduplication_key, run_rules
 
     alerts = dedup_alerts(run_rules(build_relationship_graph(events or [])))
     rules = [
@@ -1417,6 +1433,8 @@ def _execute_get_applied_rules(
             "rule_id": alert.rule_id,
             "level": alert.level,
             "source_event_ids": list(dict.fromkeys(alert.source_event_ids)),
+            "deduplication_key": getattr(alert, "deduplication_key", None) or deduplication_key(alert),
+            "merged_count": max(int(alert.merged_count or 1), 1),
         }
         for alert in alerts
     ]
@@ -1448,7 +1466,9 @@ def _execute_get_risk_alerts(
     from app.projection import build_relationship_graph
     from app.rules import apply_daily_budget, dedup_alerts, run_rules
 
-    alerts = apply_daily_budget(dedup_alerts(run_rules(build_relationship_graph(events or []))))
+    alerts = apply_daily_budget(
+        dedup_alerts(run_rules(build_relationship_graph(events or []))),
+    )
     public_alerts = [_public_alert(alert) for alert in alerts]
     sources = list(dict.fromkeys(
         [alert["rule_id"] for alert in public_alerts]

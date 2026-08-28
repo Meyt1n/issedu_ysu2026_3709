@@ -678,6 +678,13 @@ def test_member_tools_return_confirmed_allowlisted_facts_and_rules(db_session: S
     )
     assert risk_result["alerts"]
     assert risk_result["ruleset_version"]
+    risk_alert = risk_result["alerts"][0]
+    assert len(risk_alert["deduplication_key"]) == 32
+    assert risk_alert["merged_count"] >= 1
+    assert risk_alert["budget_status"] == "VISIBLE"
+    assert risk_alert["budget_reason"]
+    assert risk_alert["evidence_summary"].endswith("条脱敏来源事件")
+    assert "阿莫西林" not in risk_alert["evidence_summary"]
 
 
 def test_member_tools_reject_cross_member_scope(db_session: Session) -> None:
