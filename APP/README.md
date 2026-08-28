@@ -162,6 +162,8 @@ npm run dev
 ## 安卓应用（Capacitor）
 
 同一套代码通过 Capacitor 打包为原生 Android 应用，WebView 内置打包产物，联机数据走"我的 → 数据来源"里配置的家庭服务器地址。Release/Main Manifest 和网络安全配置拒绝全部明文流量；Android Debug 通过独立 Manifest 保留家庭局域网 HTTP 联调能力，并继续由 APP 地址校验拒绝公网 HTTP。
+
+Android Debug 的 Capacitor 页面来源仍保持 `https://localhost`，因此 Chromium 默认会拦截发往家庭局域网 `http://` API 的混合内容请求。`MainActivity` 仅在 `BuildConfig.DEBUG` 下将 WebView 的 `MIXED_CONTENT_ALWAYS_ALLOW` 打开，配合 Debug 网络安全配置和 `serverUrl` 的私网地址校验完成受控联调；Release 构建不会启用该设置，正式包仍为 HTTPS-only。可用 `npm run audit:android-security` 检查这条构建边界。
 Android 平台安全基线：
 
 - `allowBackup=false`，Android 11 及以下 full-backup 与 Android 12+ cloud-backup/device-transfer 规则均排除应用全部私有域；联系人、开发身份、服务器地址和本地偏好不得进入系统云备份或设备迁移；
