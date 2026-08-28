@@ -166,7 +166,7 @@ def test_sync_workflows_pin_checkout_and_limit_remote_refs() -> None:
         )
 
         assert checkout["with"]["ref"] == "${{ github.sha }}"
-        assert checkout["with"]["fetch-depth"] == 2048
+        assert checkout["with"]["fetch-depth"] == 64
         assert checkout["with"]["fetch-tags"] is False
         assert checkout["with"]["persist-credentials"] is False
         assert job["env"]["GIT_CONFIG_COUNT"] == "2"
