@@ -7,18 +7,19 @@ import ConfettiBurst from '@/components/ConfettiBurst.vue'
 import ErrorNotice from '@/components/ErrorNotice.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import EnvironmentActionCard from '@/components/EnvironmentActionCard.vue'
+import ListLoadingState from '@/components/ListLoadingState.vue'
+import ListStatusAnnouncer from '@/components/ListStatusAnnouncer.vue'
 import ReminderStatusCard from '@/components/ReminderStatusCard.vue'
 import LevelTag from '@/components/LevelTag.vue'
 import PrivacyBadge from '@/components/PrivacyBadge.vue'
 import ProgressRing from '@/components/ProgressRing.vue'
-import SkeletonCard from '@/components/SkeletonCard.vue'
 import TaskCard from '@/components/TaskCard.vue'
 import TrendChart from '@/components/TrendChart.vue'
 import { useCountUp } from '@/composables/useCountUp'
 import { usePullToRefresh } from '@/composables/usePullToRefresh'
 import { createSpeaker, useSpeech } from '@/composables/useSpeech'
 import { showToast } from '@/composables/useToast'
-import { presentApiError, type ErrorPresentation } from '@/api/errors'
+import { presentApiError, presentListApiError, type ErrorPresentation } from '@/api/errors'
 import { activeProvider } from '@/data'
 import { eventStatusLabel, riskLevelLabel, riskLevelTone, taskLevelLabel, taskStatusLabel } from '@/data/labels'
 import type {
@@ -48,6 +49,7 @@ const snapshot = ref<TodaySnapshot | null>(null)
 const trend = ref<TrendPoint[]>([])
 const loading = ref(true)
 const error = ref<ErrorPresentation | null>(null)
+const partialError = ref<ErrorPresentation | null>(null)
 const actionError = ref<ErrorPresentation | null>(null)
 const busyTaskId = ref('')
 const failedAction = ref<{ taskId: string; action: TaskAction; payload: TaskActionPayload } | null>(null)
@@ -55,6 +57,7 @@ const announced = ref(false)
 const confetti = ref<InstanceType<typeof ConfettiBurst> | null>(null)
 const sessionKey = computed(() => sessionContextKey(session))
 let reloadGeneration = 0
+let reloadInFlight = false
 
 /** MOB-135：任务操作历史。服务端条目按需加载；本地待确认/失败条目只存内存。 */
 const historyOpen = ref(false)
@@ -79,6 +82,7 @@ const RECEIPT_TONES: Record<TaskActionHistoryEntry['receipt'], 'calm' | 'neutral
 }
 
 async function loadHistory(): Promise<void> {
+  if (historyLoading.value) return
   const expectedKey = sessionKey.value
   const memberId = session.currentMemberId
   if (!memberId) {
@@ -93,7 +97,7 @@ async function loadHistory(): Promise<void> {
     serverHistory.value = entries
   } catch (cause) {
     if (expectedKey !== sessionKey.value || memberId !== session.currentMemberId) return
-    historyError.value = presentApiError(cause)
+    historyError.value = presentListApiError(cause)
   } finally {
     if (expectedKey === sessionKey.value) historyLoading.value = false
   }
@@ -191,6 +195,15 @@ const pendingCount = useCountUp(() => pendingTasks.value.length)
 const riskCount = useCountUp(() => snapshot.value?.risks.length ?? 0)
 const recentCount = useCountUp(() => snapshot.value?.recentEvents.length ?? 0)
 
+const listStatusMessage = computed(() => {
+  if (loading.value || error.value) return ''
+  if (!members.value.length) return '当前没有可用的家庭成员。'
+  if (!snapshot.value) return '今日照护数据暂不可用。'
+  const pending = pendingTasks.value.length
+  const risks = snapshot.value.risks.length
+  return `已加载今日照护数据，${pending} 项待处理任务，${risks} 条风险提醒。`
+})
+
 function summaryText(): string {
   if (!snapshot.value) return ''
   const name = currentMember.value?.name ?? '当前成员'
@@ -224,15 +237,21 @@ async function loadSnapshot(expectedKey = sessionKey.value, generation = reloadG
     return true
   }
   const memberId = session.currentMemberId
-  const [nextSnapshot, nextTrend] = await Promise.all([
+  const [snapshotResult, trendResult] = await Promise.allSettled([
     activeProvider().getTodaySnapshot(memberId),
     activeProvider().getWeeklyTrend(memberId),
   ])
+  if (snapshotResult.status === 'rejected') throw snapshotResult.reason
   if (expectedKey !== sessionKey.value || generation !== reloadGeneration) return false
   // 任务、趋势和时间线来自同一轮刷新，避免操作后显示不同步的旧数据。
-  snapshot.value = nextSnapshot
-  trend.value = nextTrend
-  void synchronizeReminders(nextSnapshot.tasks)
+  snapshot.value = snapshotResult.value
+  if (trendResult.status === 'fulfilled') {
+    trend.value = trendResult.value
+  } else {
+    trend.value = []
+    partialError.value = presentListApiError(trendResult.reason, { partial: true })
+  }
+  void synchronizeReminders(snapshotResult.value.tasks)
   if (!announced.value && settings.voiceBroadcast) {
     announced.value = true
     speech.speak(summaryText())
@@ -241,10 +260,13 @@ async function loadSnapshot(expectedKey = sessionKey.value, generation = reloadG
 }
 
 async function reload(options: { preserveSnapshot?: boolean } = {}): Promise<void> {
+  if (reloadInFlight) return
+  reloadInFlight = true
   const generation = ++reloadGeneration
   const expectedKey = sessionKey.value
   loading.value = true
   error.value = null
+  partialError.value = null
   if (!options.preserveSnapshot) {
     members.value = []
     snapshot.value = null
@@ -255,10 +277,11 @@ async function reload(options: { preserveSnapshot?: boolean } = {}): Promise<voi
     await loadSnapshot(expectedKey, generation)
   } catch (cause) {
     if (expectedKey !== sessionKey.value || generation !== reloadGeneration) return
-    error.value = presentApiError(cause)
+    error.value = presentListApiError(cause)
     if (!options.preserveSnapshot) snapshot.value = null
   } finally {
     if (generation === reloadGeneration) loading.value = false
+    reloadInFlight = false
   }
 }
 
@@ -266,6 +289,7 @@ async function onMemberChange(): Promise<void> {
   // 选中值已由 memberSelection 的 setter 经 updateSession 写入并触发上下文清理。
   loading.value = true
   error.value = null
+  partialError.value = null
   actionError.value = null
   failedAction.value = null
   snapshot.value = null
@@ -427,15 +451,18 @@ onMounted(reload)
       </select>
     </label>
 
-    <ErrorNotice v-if="error" :error="error" @retry="reload" />
-    <ErrorNotice v-if="actionError" :error="actionError" @retry="retryTaskAction" />
+    <ErrorNotice v-if="error" :error="error" :busy="loading" @retry="reload" />
+    <ErrorNotice
+      v-if="partialError"
+      :error="partialError"
+      :busy="loading"
+      title="部分数据未加载"
+      tone="warn"
+      @retry="reload"
+    />
+    <ErrorNotice v-if="actionError" :error="actionError" :busy="Boolean(busyTaskId)" @retry="retryTaskAction" />
 
-    <div v-if="loading" class="plain-list" aria-label="正在加载家庭和成员数据" aria-live="polite">
-      <p class="meta-line">正在加载家庭和成员数据…</p>
-      <SkeletonCard />
-      <SkeletonCard />
-      <SkeletonCard :disc="false" />
-    </div>
+    <ListLoadingState v-if="loading" label="正在加载家庭和成员数据…" :count="3" />
 
     <template v-else-if="members.length === 0">
       <EmptyState
@@ -495,7 +522,7 @@ onMounted(reload)
         </div>
         <div v-if="historyOpen" class="card" style="margin-top: 10px">
           <p v-if="historyLoading" class="meta-line" role="status">正在加载服务端操作历史…</p>
-          <ErrorNotice v-else-if="historyError" :error="historyError" @retry="loadHistory" />
+          <ErrorNotice v-else-if="historyError" :error="historyError" :busy="historyLoading" @retry="loadHistory" />
           <template v-else>
             <p
               v-if="historyEntries.length === 0"
@@ -602,6 +629,8 @@ onMounted(reload)
         </ul>
       </section>
     </template>
+
+    <ListStatusAnnouncer :message="listStatusMessage" />
 
     <footer class="disclaimer">
       教学演示，不用于诊断或治疗。系统不改变任何用药决定；紧急情况请联系医生或当地急救服务。

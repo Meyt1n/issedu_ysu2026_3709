@@ -2,9 +2,17 @@
 import AppIcon from '@/components/AppIcon.vue'
 import type { ErrorPresentation } from '@/api/errors'
 
-defineProps<{
-  error: ErrorPresentation
-}>()
+const props = withDefaults(
+  defineProps<{
+    error: ErrorPresentation
+    /** 列表刷新期间锁定重试，避免同一请求被重复发起。 */
+    busy?: boolean
+    /** 部分数据保留时使用较温和的状态标题和色调。 */
+    title?: string
+    tone?: 'error' | 'warn'
+  }>(),
+  { busy: false, title: '请求未完成', tone: 'error' },
+)
 
 const emit = defineEmits<{
   retry: []
@@ -12,20 +20,25 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <aside class="error-notice notice" data-tone="error" role="alert">
+  <aside
+    class="error-notice notice"
+    :data-tone="props.tone"
+    :role="props.tone === 'warn' ? 'status' : 'alert'"
+    :aria-busy="props.busy || undefined"
+  >
     <span class="error-icon" aria-hidden="true"><AppIcon name="alert" :size="18" /></span>
     <span class="error-copy">
-      <strong>请求未完成</strong>
-      <span>{{ error.message }}</span>
+      <strong>{{ props.title }}</strong>
+      <span>{{ props.error.message }}</span>
       <span class="meta-line error-request-id">
-        请求标识：{{ error.requestId ?? '回执信息不可用（服务端未返回请求 ID）' }}
+        请求标识：{{ props.error.requestId ?? '回执信息不可用（服务端未返回请求 ID）' }}
       </span>
     </span>
-    <RouterLink v-if="error.action === 'settings'" class="error-action btn btn-quiet" to="/me">
-      {{ error.actionLabel }}
+    <RouterLink v-if="props.error.action === 'settings'" class="error-action btn btn-quiet" to="/me">
+      {{ props.error.actionLabel }}
     </RouterLink>
-    <button v-else type="button" class="error-action btn btn-quiet" @click="emit('retry')">
-      {{ error.actionLabel }}
+    <button v-else type="button" class="error-action btn btn-quiet" :disabled="props.busy" @click="emit('retry')">
+      {{ props.busy ? '正在重试…' : props.error.actionLabel }}
     </button>
   </aside>
 </template>
@@ -47,6 +60,8 @@ const emit = defineEmits<{
   background: var(--c-danger);
   color: #fff;
 }
+
+.error-notice[data-tone='warn'] .error-icon { background: var(--c-warn); }
 
 .error-copy {
   min-width: 0;

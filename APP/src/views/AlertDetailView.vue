@@ -5,6 +5,8 @@ import { useRoute, useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import ErrorNotice from '@/components/ErrorNotice.vue'
 import LevelTag from '@/components/LevelTag.vue'
+import ListLoadingState from '@/components/ListLoadingState.vue'
+import ListStatusAnnouncer from '@/components/ListStatusAnnouncer.vue'
 import { useSpeech } from '@/composables/useSpeech'
 import { activeProvider } from '@/data'
 import { eventStatusLabel, riskLevelLabel } from '@/data/labels'
@@ -13,7 +15,7 @@ import { CAPABILITY_IDS, useCapabilities } from '@/stores/capabilities'
 import { sessionContextKey, useSession } from '@/stores/session'
 import { formatDateTime } from '@/utils/format'
 import { normalizePhoneNumber } from '@/utils/phone'
-import { presentApiError, type ErrorPresentation } from '@/api/errors'
+import { presentApiError, presentListApiError, type ErrorPresentation } from '@/api/errors'
 
 const route = useRoute()
 const router = useRouter()
@@ -36,6 +38,12 @@ const acknowledgementStatusMessage = computed(() => {
   return '家庭服务器暂不支持回写“已知晓”状态；本页不会将其标记为已记录。'
 })
 let loadGeneration = 0
+let loadInFlight = false
+
+const listStatusMessage = computed(() => {
+  if (loading.value || error.value) return ''
+  return risk.value ? '已加载风险详情及其证据列表。' : ''
+})
 
 const phoneHref = computed(() => {
   const phone = normalizePhoneNumber(session.caregiverPhone)
@@ -43,6 +51,8 @@ const phoneHref = computed(() => {
 })
 
 async function load(): Promise<void> {
+  if (loadInFlight) return
+  loadInFlight = true
   const generation = ++loadGeneration
   const expectedKey = sessionContextKey(session)
   loading.value = true
@@ -57,9 +67,10 @@ async function load(): Promise<void> {
     speech.speak(`${riskLevelLabel(risk.value.level)}风险：${risk.value.message}。${risk.value.suggestion}`)
   } catch (cause) {
     if (generation !== loadGeneration || expectedKey !== sessionContextKey(session)) return
-    error.value = presentApiError(cause)
+    error.value = presentListApiError(cause)
   } finally {
     if (generation === loadGeneration) loading.value = false
+    loadInFlight = false
   }
 }
 
@@ -88,10 +99,8 @@ async function acknowledge(): Promise<void> {
       返回
     </button>
 
-    <ErrorNotice v-if="error" :error="error" @retry="load" />
-    <section v-if="loading" class="card" aria-live="polite">
-      <p class="empty-state">正在加载风险依据…</p>
-    </section>
+    <ErrorNotice v-if="error" :error="error" :busy="loading" @retry="load" />
+    <ListLoadingState v-if="loading" label="正在加载风险依据…" :count="3" />
 
     <template v-else-if="risk">
       <header class="card">
@@ -176,6 +185,8 @@ async function acknowledge(): Promise<void> {
         </div>
       </section>
     </template>
+
+    <ListStatusAnnouncer :message="listStatusMessage" />
 
     <footer class="disclaimer">
       本提示由确定性规则给出，仅表示“发现已知资料，需要进一步确认”；不构成诊断、处方或停药建议。紧急情况请联系医生或当地急救服务。
