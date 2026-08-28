@@ -1,5 +1,7 @@
 /** 移动端领域模型：命名与主仓库（issedu_ysu2026_3709）API 契约和需求文档保持一致。 */
 
+import type { HealthNewsResponse } from '@/api/types'
+
 export type TaskLevel = 'INFO' | 'GENERAL' | 'HIGH' | 'URGENT'
 export type TaskStatus = 'PENDING' | 'CONFIRMED' | 'DEFERRED' | 'SKIPPED' | 'ESCALATED'
 export type CaregiverEscalationStatus = 'CREATED' | 'QUEUED' | 'VIEWED' | 'PROCESSED' | 'FAILED' | 'UNAVAILABLE' | 'UNKNOWN'
@@ -332,6 +334,8 @@ export interface HouseholdOption {
 
 export interface DataProvider {
   info(): ProviderInfo
+  /** 首页健康资讯；内容只来自家庭服务器或明确标注的本地季节日历。 */
+  getHealthNews(): Promise<HealthNewsResponse>
   /** 当前身份被服务端授权访问的家庭；用于显式选择，不代表任何额外权限。 */
   listHouseholds(): Promise<HouseholdOption[]>
   listMembers(): Promise<MemberSummary[]>

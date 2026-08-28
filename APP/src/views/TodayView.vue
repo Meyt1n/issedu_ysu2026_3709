@@ -7,6 +7,7 @@ import ConfettiBurst from '@/components/ConfettiBurst.vue'
 import ErrorNotice from '@/components/ErrorNotice.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import EnvironmentActionCard from '@/components/EnvironmentActionCard.vue'
+import HealthNewsPanel from '@/components/HealthNewsPanel.vue'
 import ListLoadingState from '@/components/ListLoadingState.vue'
 import ListStatusAnnouncer from '@/components/ListStatusAnnouncer.vue'
 import ReminderStatusCard from '@/components/ReminderStatusCard.vue'
@@ -432,6 +433,8 @@ onMounted(reload)
     </section>
 
     <PrivacyBadge />
+
+    <HealthNewsPanel />
 
     <RouterLink class="card link-card assistant-entry" to="/assistant">
       <AppIcon name="mic" :size="22" />

@@ -136,6 +136,38 @@ describe('家庭 PIN 设置（HCT-427）', () => {
   })
 })
 
+describe('首页健康资讯（MOB-159）', () => {
+  it('只通过家庭服务器健康资讯接口读取响应，不直连第三方来源', async () => {
+    let url = ''
+    const client = new ApiClient({
+      baseUrl: 'http://192.168.1.8:8000',
+      fetcher: async input => {
+        url = String(input)
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          text: async () => JSON.stringify({
+            status: 'local_only',
+            cache_status: 'none',
+            season: 'summer',
+            generated_at: '2026-08-28T04:00:00.000Z',
+            disclaimer: '仅供教学演示',
+            items: [],
+          }),
+        } as Response
+      },
+    })
+
+    const news = await client.getHealthNews()
+
+    expect(url).toBe('http://192.168.1.8:8000/api/v1/health-news')
+    expect(news.status).toBe('local_only')
+    expect(news.items).toEqual([])
+    expect(url).not.toMatch(/duckduckgo|rss|news\.google/i)
+  })
+})
+
 describe('视觉任务状态回查（MOB-132）', () => {
   it('getVisionTask 走 GET 且任务 ID 编码进路径，凭据由会话承载', async () => {
     let url = ''

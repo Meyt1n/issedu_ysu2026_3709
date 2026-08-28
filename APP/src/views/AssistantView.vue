@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRoute } from 'vue-router'
 
 import { activeProvider } from '@/data'
 import type { MemberSummary } from '@/data/types'
@@ -66,6 +66,7 @@ const PHASE_LABELS: Record<string, string> = {
 
 const { session } = useSession()
 const { settings } = useA11y()
+const route = useRoute()
 
 const history = ref<ChatEntry[]>([])
 const draft = ref('')
@@ -766,6 +767,15 @@ function clearChat(): void {
   clearChatSession(session.actorId, session.currentHouseholdId, session.currentMemberId)
 }
 
+/** 资讯卡只预填草稿，不自动发送；用户仍需自行编辑并确认提问。 */
+function applyPromptFromRoute(): void {
+  const prompt = typeof route.query.prompt === 'string' ? route.query.prompt.trim() : ''
+  if (!prompt) return
+  draft.value = prompt.slice(0, 240)
+  sendError.value = ''
+  void nextTick(() => draftInput.value?.focus())
+}
+
 function onVisibilityChange(): void {
   if (document.visibilityState === 'hidden') stopVoiceInput()
 }
@@ -778,6 +788,12 @@ watch(
     speakingIndex.value = null
     restoreChatSession(loadChatSession(actorId, householdId, memberId))
   },
+  { immediate: true },
+)
+
+watch(
+  () => route.query.prompt,
+  () => applyPromptFromRoute(),
   { immediate: true },
 )
 
