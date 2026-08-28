@@ -1,10 +1,37 @@
-from datetime import datetime
-from typing import Any, Literal
+from datetime import UTC, datetime
+from typing import Annotated, Any, Literal
 
 from ai.vision.candidate_fusion import CandidateFusionResult
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PlainSerializer,
+    field_validator,
+    model_validator,
+)
 
 from app.time_zone import validate_iana_time_zone
+
+
+def _serialize_utc(value: datetime) -> str:
+    """Serialize an instant with an explicit UTC designator.
+
+    HCT-459: SQLite hands back naive datetimes even for timezone-aware columns,
+    and a date-time string without a designator is read as *browser local time*
+    by `Date.parse`. That shifted the mobile 7-day trend by a whole day on a
+    UTC+8 device, and the size of the error depended on the viewer's machine.
+    Server time is UTC, so say so in the payload instead of leaving it implicit.
+    """
+    moment = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    return moment.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+# Behaves exactly like `datetime` on input; only JSON output gains the designator.
+UtcDatetime = Annotated[
+    datetime,
+    PlainSerializer(_serialize_utc, return_type=str, when_used="json"),
+]
 
 PURPOSE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$"
 ACTOR_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$"
@@ -72,9 +99,9 @@ class FaceCredentialRead(BaseModel):
     consent_version: str
     status: Literal["ACTIVE", "REVOKED", "DELETED"]
     created_by: str
-    consented_at: datetime
-    revoked_at: datetime | None
-    created_at: datetime
+    consented_at: UtcDatetime
+    revoked_at: UtcDatetime | None
+    created_at: UtcDatetime
     upgrade_recommended: bool = False
     template_count: int = 1
 
@@ -182,7 +209,7 @@ class HouseholdRead(BaseModel):
     name: str
     created_by: str
     time_zone: str
-    created_at: datetime
+    created_at: UtcDatetime
 
 
 class MemberCreate(BaseModel):
@@ -205,7 +232,7 @@ class MemberRead(BaseModel):
     display_name: str
     role: str
     actor_id: str | None
-    created_at: datetime
+    created_at: UtcDatetime
 
 
 class AuthorizationCreate(BaseModel):
@@ -214,7 +241,7 @@ class AuthorizationCreate(BaseModel):
     data_fields: list[str] = Field(min_length=1)
     actions: list[Literal["READ_EVENTS", "WRITE_EVENTS", "ACK_RISK"]] = Field(min_length=1)
     purpose: str = Field(pattern=PURPOSE_PATTERN)
-    valid_until: datetime
+    valid_until: UtcDatetime
 
 
 class AuthorizationUpdate(BaseModel):
@@ -225,7 +252,7 @@ class AuthorizationUpdate(BaseModel):
         min_length=1,
     )
     purpose: str | None = Field(default=None, pattern=PURPOSE_PATTERN)
-    valid_until: datetime | None = None
+    valid_until: UtcDatetime | None = None
 
     @model_validator(mode="after")
     def require_change(self) -> "AuthorizationUpdate":
@@ -252,12 +279,12 @@ class AuthorizationRead(BaseModel):
     data_fields: list[str]
     actions: list[str]
     purpose: str
-    valid_from: datetime
-    valid_until: datetime
-    revoked_at: datetime | None
+    valid_from: UtcDatetime
+    valid_until: UtcDatetime
+    revoked_at: UtcDatetime | None
     version: int
-    created_at: datetime
-    updated_at: datetime
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
 
 
 class AccessAuditRead(BaseModel):
@@ -276,7 +303,7 @@ class AccessAuditRead(BaseModel):
     request_id: str | None
     before_version: int | None
     after_version: int | None
-    created_at: datetime
+    created_at: UtcDatetime
 
 
 class AccessAuditPageRead(BaseModel):
@@ -289,7 +316,7 @@ class AccessAuditSummaryRead(BaseModel):
     total: int
     by_action: dict[str, int]
     by_outcome: dict[str, int]
-    generated_at: datetime
+    generated_at: UtcDatetime
 
 
 class HealthEventCreate(BaseModel):
@@ -301,7 +328,7 @@ class HealthEventCreate(BaseModel):
     evidence: dict[str, Any] = Field(default_factory=dict)
     idempotency_key: str | None = Field(default=None, max_length=128)
     compensates_event_id: str | None = Field(default=None, max_length=36)
-    occurred_at: datetime | None = None
+    occurred_at: UtcDatetime | None = None
 
 
 class HealthEventCompensationCreate(BaseModel):
@@ -309,7 +336,7 @@ class HealthEventCompensationCreate(BaseModel):
     payload: dict[str, Any] = Field(min_length=1)
     evidence: dict[str, Any] = Field(default_factory=dict)
     reason: str = Field(min_length=1, max_length=240)
-    occurred_at: datetime | None = None
+    occurred_at: UtcDatetime | None = None
 
 
 class HealthEventRead(BaseModel):
@@ -328,13 +355,13 @@ class HealthEventRead(BaseModel):
     confirmed_by: str | None
     idempotency_key: str | None
     compensates_event_id: str | None
-    occurred_at: datetime
-    recorded_at: datetime = Field(validation_alias="created_at")
+    occurred_at: UtcDatetime
+    recorded_at: UtcDatetime = Field(validation_alias="created_at")
     correlation_id: str
     causation_id: str | None
     supersedes_event_id: str | None
     schema_version: int
-    created_at: datetime
+    created_at: UtcDatetime
 
 
 class HealthEventPageRead(BaseModel):
@@ -353,7 +380,7 @@ class MemberStateRead(BaseModel):
     last_sequence: int
     version: int
     state_hash: str | None
-    updated_at: datetime
+    updated_at: UtcDatetime
 
 
 class ProjectionCheckpointRead(BaseModel):
@@ -366,7 +393,7 @@ class ProjectionCheckpointRead(BaseModel):
     last_event_id: str | None
     state_hash: str
     created_by: str
-    created_at: datetime
+    created_at: UtcDatetime
 
 
 class ProjectionReplayRequest(BaseModel):
@@ -392,12 +419,12 @@ class OutboxRead(BaseModel):
     topic: str
     status: str
     attempts: int
-    available_at: datetime
-    locked_at: datetime | None
-    dispatched_at: datetime | None
+    available_at: UtcDatetime
+    locked_at: UtcDatetime | None
+    dispatched_at: UtcDatetime | None
     last_error: str | None
-    created_at: datetime
-    updated_at: datetime
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
 
 
 class OutboxDispatchRequest(BaseModel):
@@ -415,7 +442,7 @@ class OutboxDispatchRead(BaseModel):
 
 class PlanWorkbenchActionRead(BaseModel):
     action: Literal["CONFIRM", "DEFER", "SKIP", "MISS"]
-    recorded_at: datetime
+    recorded_at: UtcDatetime
     reason: str | None = None
     delay_hours: int | None = None
 
@@ -429,7 +456,7 @@ class PlanWorkbenchItemRead(BaseModel):
     start_date: str | None = None
     end_date: str | None = None
     status: Literal["NORMAL", "REMINDER", "ESCALATED", "COMPLETED"]
-    next_action_at: datetime
+    next_action_at: UtcDatetime
     last_action: PlanWorkbenchActionRead | None = None
     action_history: list[PlanWorkbenchActionRead] = Field(default_factory=list)
     allowed_actions: list[Literal["CONFIRM", "DEFER", "SKIP", "MISS"]]
@@ -437,13 +464,13 @@ class PlanWorkbenchItemRead(BaseModel):
 
 class PlanWorkbenchRead(BaseModel):
     member_id: str
-    generated_at: datetime
+    generated_at: UtcDatetime
     plans: list[PlanWorkbenchItemRead]
 
 
 class PlanAutomationRead(BaseModel):
     member_id: str
-    evaluated_at: datetime
+    evaluated_at: UtcDatetime
     created_events: list[HealthEventRead] = Field(default_factory=list)
     notified_caregiver_actor_ids: list[str] = Field(default_factory=list)
 
@@ -454,7 +481,7 @@ class DashboardDayCountRead(BaseModel):
 
 
 class DashboardSummaryRead(BaseModel):
-    generated_at: datetime
+    generated_at: UtcDatetime
     member_count: int
     events_today: int
     events_total: int
@@ -471,13 +498,13 @@ class RelationshipGraphNodeRead(BaseModel):
     category: Literal["drug", "allergy", "disease", "plan", "caregiver"]
     label: str
     source_event_id: str
-    source_recorded_at: datetime
+    source_recorded_at: UtcDatetime
     source_created_by: str
 
 
 class RelationshipGraphRead(BaseModel):
     member_id: str
-    generated_at: datetime
+    generated_at: UtcDatetime
     events_count: int
     last_event_id: str | None
     nodes: list[RelationshipGraphNodeRead]
@@ -499,7 +526,7 @@ class RiskAcknowledgementRead(BaseModel):
     rule_version: str
     risk_fingerprint: str
     actor_id: str
-    acknowledged_at: datetime
+    acknowledged_at: UtcDatetime
     replayed: bool = False
 
 
@@ -510,19 +537,19 @@ class RiskAlertRead(BaseModel):
     level: str  # SEVERE | WARNING | INFO | TIP
     message: str
     source_event_ids: list[str] = Field(default_factory=list)
-    created_at: datetime | None = None
+    created_at: UtcDatetime | None = None
     rule_version: str
     risk_fingerprint: str
     acknowledgement: RiskAcknowledgementRead | None = None
-    # HCT-458: server-authoritative merge/budget explanation.  These fields
-    # contain only an opaque grouping key, counts, status and a redacted
-    # evidence summary; no event payload is exposed.
-    deduplication_key: str = Field(default="", max_length=64)
-    merged_count: int = Field(default=1, ge=1)
-    budget_status: Literal["VISIBLE", "DEFERRED"] = "VISIBLE"
-    budget_reason: str = Field(default="", max_length=160)
+    # HCT-457: per-alert audit metadata so a client can explain merging and the
+    # daily budget instead of silently showing a shorter list.
+    deduplication_key: str | None = None
+    merged_count: int | None = None
+    budget_status: str | None = None
+    budget_reason: str | None = None
     next_visible_at: datetime | None = None
-    evidence_summary: str = Field(default="", max_length=200)
+    # Desensitized: evidence count only, never health content.
+    evidence_summary: str | None = None
 
 
 class RiskListResponse(BaseModel):
@@ -536,6 +563,10 @@ class RiskListResponse(BaseModel):
     ruleset_version: str
     non_severe_budget: int
     suppressed_count: int
+    # HCT-457: the alerts the daily budget held back, each carrying why it was
+    # held and when it can reappear. Previously only their count was reported,
+    # so a client could not explain a short list.
+    suppressed_alerts: list[RiskAlertRead] = Field(default_factory=list)
 
 
 class RiskDetailResponse(BaseModel):
@@ -627,9 +658,9 @@ class ReviewTaskRead(BaseModel):
     rule_version: str | None = None
     version: int
     confirmed_by: str | None = None
-    confirmed_at: datetime | None = None
-    created_at: datetime
-    updated_at: datetime
+    confirmed_at: UtcDatetime | None = None
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
 
 
 # ── HCT-204: Vision task schemas ──────────────────────────────────────
@@ -666,13 +697,13 @@ class VisionTaskRead(BaseModel):
     code_version: str | None = None
     data_version: str | None = None
     input_digest: str | None = None
-    started_at: datetime | None = None
-    finished_at: datetime | None = None
+    started_at: UtcDatetime | None = None
+    finished_at: UtcDatetime | None = None
     lease_owner: str | None = None
-    lease_expires_at: datetime | None = None
+    lease_expires_at: UtcDatetime | None = None
     attempt_count: int = Field(default=0, ge=0)
     created_by: str
-    created_at: datetime
+    created_at: UtcDatetime
 
     @model_validator(mode="after")
     def derive_error_detail(self) -> "VisionTaskRead":
@@ -717,7 +748,7 @@ class VisionTaskCleanupRequest(BaseModel):
 
 
 class VisionTaskCleanupRead(BaseModel):
-    cutoff_at: datetime
+    cutoff_at: UtcDatetime
     retention_seconds: int
     dry_run: bool
     scanned: int
@@ -762,8 +793,8 @@ class KnowledgeDocumentCreate(BaseModel):
     license: str = Field(default="internal", max_length=60)
     version: str = Field(default="1.0", max_length=40)
     permission_scope: dict[str, Any] = Field(default_factory=dict)
-    effective_from: datetime | None = None
-    effective_until: datetime | None = None
+    effective_from: UtcDatetime | None = None
+    effective_until: UtcDatetime | None = None
 
 
 class KnowledgeDocumentRead(BaseModel):
@@ -777,10 +808,10 @@ class KnowledgeDocumentRead(BaseModel):
     content_hash: str
     permission_scope: dict[str, Any]
     status: str
-    effective_from: datetime | None = None
-    effective_until: datetime | None = None
+    effective_from: UtcDatetime | None = None
+    effective_until: UtcDatetime | None = None
     created_by: str
-    created_at: datetime
+    created_at: UtcDatetime
 
 
 class KnowledgeChunkRead(BaseModel):
@@ -829,7 +860,7 @@ class KnowledgeQueryAuditRead(BaseModel):
     member_id: str | None = None
     returned_count: int = Field(ge=0)
     top_chunk_count: int = Field(ge=0)
-    created_at: datetime
+    created_at: UtcDatetime
 
 
 class KnowledgeQueryAuditPageRead(BaseModel):
@@ -857,6 +888,7 @@ class AssistantCitation(BaseModel):
 
 AssistantQueryType = Literal[
     "URGENT",
+    "DOSE_DECISION",
     "MEDICATION_SAFETY",
     "SYMPTOM_MEDICATION",
     "MEDICATION_RECORD",
@@ -864,6 +896,11 @@ AssistantQueryType = Literal[
     "RULE_EVIDENCE",
     "GENERAL",
 ]
+
+# Decision 4B: per-request outbound-context opt-in tiers.
+# query_only（默认）: 仅发送脱敏后的问题；symptom: 追加会话中的症状关键词；
+# member: 再追加匿名化的过敏/病史/在用药名称（不含任何身份标识）。
+AssistantNetworkContextLevel = Literal["query_only", "symptom", "member"]
 
 
 class AssistantRequest(BaseModel):
@@ -876,6 +913,7 @@ class AssistantRequest(BaseModel):
     # change legacy tool-call tests or integrations unexpectedly.
     agent_mode: Literal["single", "multi_agent"] = "single"
     allow_network_search: bool = False
+    network_context_level: AssistantNetworkContextLevel = "query_only"
     query_type_override: AssistantQueryType | None = None
     assistant_session_id: str | None = Field(default=None, max_length=64)
     clear_session_cache: bool = False
@@ -901,6 +939,7 @@ class AssistantSessionCacheClearRequest(BaseModel):
 
 class AssistantResponse(BaseModel):
     answer: str
+    open_chat: bool = False
     sources: list[str] = Field(default_factory=list)
     citations: list[AssistantCitation] = Field(default_factory=list)
     suggested_questions: list[str] = Field(default_factory=list)
@@ -917,6 +956,7 @@ class AssistantResponse(BaseModel):
     all_agents_local: bool = True
     network_used: bool = False
     network_query: str | None = None
+    network_context_level: str | None = None
     agent_trace: list[dict[str, Any]] = Field(default_factory=list)
     external_sources: list[dict[str, Any]] = Field(default_factory=list)
     route_explanation: str | None = None
@@ -952,7 +992,7 @@ class CorrectionDiffRead(BaseModel):
     evidence: dict[str, Any]
     operator_actor_id: str
     version: int
-    created_at: datetime
+    created_at: UtcDatetime
 
 
 # ── HCT-208: Hard sample schemas ──────────────────────────────────────
@@ -981,12 +1021,12 @@ class HardSampleRead(BaseModel):
     status: str
     note: str | None = None
     reviewed_by: str | None = None
-    reviewed_at: datetime | None = None
+    reviewed_at: UtcDatetime | None = None
     deleted_by: str | None = None
-    deleted_at: datetime | None = None
+    deleted_at: UtcDatetime | None = None
     created_by: str
-    created_at: datetime
-    updated_at: datetime
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
 
 
 # ── HCT-208: Training consent schemas ─────────────────────────────────
@@ -1013,9 +1053,9 @@ class TrainingConsentRead(BaseModel):
     scope: dict[str, Any]
     license: str
     revoked_by: str | None = None
-    revoked_at: datetime | None = None
+    revoked_at: UtcDatetime | None = None
     version: int
-    created_at: datetime
+    created_at: UtcDatetime
 
 
 # ── HCT-208: Export manifest schemas ──────────────────────────────────
@@ -1046,9 +1086,9 @@ class ExportManifestRead(BaseModel):
     created_by: str
     status: str
     invalidated_by: str | None = None
-    invalidated_at: datetime | None = None
-    created_at: datetime
-    updated_at: datetime
+    invalidated_at: UtcDatetime | None = None
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
 
 
 # ── HCT-404: Model version binding schemas ────────────────────────────
@@ -1087,12 +1127,12 @@ class ModelVersionBindingRead(BaseModel):
     release_evidence_hash: str | None
     rollback_evidence_hash: str | None
     approved_by: str | None
-    approved_at: datetime | None
+    approved_at: UtcDatetime | None
     revoked_by: str | None
-    revoked_at: datetime | None
+    revoked_at: UtcDatetime | None
     created_by: str
-    created_at: datetime
-    updated_at: datetime
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
 
 
 class ErasureTaskRead(BaseModel):
@@ -1102,8 +1142,8 @@ class ErasureTaskRead(BaseModel):
     household_id: str
     member_id: str | None
     requested_by: str
-    requested_at: datetime
-    completed_at: datetime | None
+    requested_at: UtcDatetime
+    completed_at: UtcDatetime | None
     status: str
     layers: dict[str, Any]
     scope: dict[str, Any]

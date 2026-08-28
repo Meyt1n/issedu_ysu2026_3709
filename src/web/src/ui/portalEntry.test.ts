@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   crossPortalUrl,
+  MEMBER_PORTAL_ENTRY_STEPS,
   portalEntryBranding,
   portalEntryConflict,
   portalEntryConflictNotice,
@@ -35,6 +36,7 @@ describe('resolvePortalEntryMode (HCT-453)', () => {
   it('falls back to known admin entry ports only', () => {
     expect(resolvePortalEntryMode({ port: '5174' })).toBe('admin')
     expect(resolvePortalEntryMode({ port: '8081' })).toBe('admin')
+    expect(resolvePortalEntryMode({ port: '5184' })).toBe('admin')
     expect(resolvePortalEntryMode({ port: '3000' })).toBe('auto')
   })
 
@@ -103,6 +105,15 @@ describe('crossPortalUrl', () => {
     ).toBe('http://localhost:8080/?portal=member')
   })
 
+  it('swaps the local demo ports 5183/5184 with an explicit portal override', () => {
+    expect(
+      crossPortalUrl('admin', { protocol: 'http:', hostname: '127.0.0.1', port: '5183' }, noEnv),
+    ).toBe('http://127.0.0.1:5184/?portal=admin')
+    expect(
+      crossPortalUrl('member', { protocol: 'http:', hostname: '127.0.0.1', port: '5184' }, noEnv),
+    ).toBe('http://127.0.0.1:5183/?portal=member')
+  })
+
   it('returns empty for unknown ports so the UI can degrade to text', () => {
     expect(
       crossPortalUrl('admin', { protocol: 'https:', hostname: 'family.lan', port: '443' }, noEnv),
@@ -133,6 +144,7 @@ describe('portalEntryBranding', () => {
     expect(branding.formTitle).toContain('家庭管理后台')
     expect(branding.formIdentityHint).toContain('整个家庭')
     expect(branding.credentialOrder[0]).toBe('password')
+    expect(branding.credentialOrder).toEqual(['password'])
     expect(branding.defaultCredential).toBe('password')
     expect(branding.passwordBehindOtherWays).toBe(false)
     expect(branding.ctaLabel).toBe('进入管理后台')
@@ -157,6 +169,15 @@ describe('portalEntryConflictNotice', () => {
     const notice = portalEntryConflictNotice('need-admin-entry')
     expect(notice.message).toContain('家庭成员前台')
     expect(notice.message).toContain('管理员')
+    expect(notice.message).toContain('数字密码')
+    expect(notice.message).not.toContain('demo-parent')
+    expect(notice.crossLinkTarget).toBe('admin')
+  })
+
+  it('explains creating a household on the member entry then switching to admin', () => {
+    const notice = portalEntryConflictNotice('need-admin-entry', { afterCreate: true })
+    expect(notice.message).toContain('家庭已创建')
+    expect(notice.message).toContain('管理后台')
     expect(notice.crossLinkTarget).toBe('admin')
   })
 
@@ -164,6 +185,15 @@ describe('portalEntryConflictNotice', () => {
     const notice = portalEntryConflictNotice('need-member-entry')
     expect(notice.message).toContain('管理后台')
     expect(notice.message).toContain('成员前台')
+    expect(notice.message).toContain('数字密码')
     expect(notice.crossLinkTarget).toBe('member')
+  })
+
+  it('lists the three steps for entering the member portal', () => {
+    expect(MEMBER_PORTAL_ENTRY_STEPS).toHaveLength(3)
+    expect(MEMBER_PORTAL_ENTRY_STEPS[0]).toContain('成员前台')
+    expect(MEMBER_PORTAL_ENTRY_STEPS[0]).not.toContain('scripts/')
+    expect(MEMBER_PORTAL_ENTRY_STEPS[1]).toContain('5173')
+    expect(MEMBER_PORTAL_ENTRY_STEPS[2]).toContain('数字密码')
   })
 })

@@ -1,3 +1,5 @@
+import { loadVoicePreferences } from './prefs'
+
 export interface SpeechVoiceLike {
   name: string
   lang: string
@@ -92,6 +94,33 @@ export function pickPreferredChineseVoice<T extends SpeechVoiceLike>(voices: rea
   return bestScore >= 0 ? best : null
 }
 
+/**
+ * 解析实际播报音色：用户首选（按名称精确匹配）优先，
+ * 找不到或未设置时回退到自动优选的自然中文音色。
+ */
+export function resolveSpeechVoice<T extends SpeechVoiceLike>(
+  voices: readonly T[],
+  preferredName?: string | null,
+): T | null {
+  const wanted = preferredName?.trim()
+  if (wanted) {
+    const match = voices.find((voice) => voice.name === wanted)
+    if (match) return match
+  }
+  return pickPreferredChineseVoice(voices)
+}
+
+/** 列出本机中文音色（供设置页音色下拉），按自然度得分从高到低排序。 */
+export async function listChineseVoices(): Promise<SpeechVoiceLike[]> {
+  const currentWindow = speechWindow()
+  const synth = currentWindow?.speechSynthesis as SpeechSynthesisLike | undefined
+  if (!synth) return []
+  const voices = await waitForVoices(synth, 1000)
+  return voices
+    .filter((voice) => /^zh/i.test(voice.lang.replace('_', '-')))
+    .sort((a, b) => chineseVoiceScore(b) - chineseVoiceScore(a))
+}
+
 function speechWindow(): Window | null {
   return typeof window === 'undefined' ? null : window
 }
@@ -132,6 +161,8 @@ export interface SpeakProgress {
 export interface SpeakOptions {
   onFinished?: () => void
   onProgress?: (progress: SpeakProgress) => void
+  /** 本次播报指定音色名；缺省读本机偏好，空串走自动优选。 */
+  voiceName?: string | null
 }
 
 let speechToken = 0
@@ -260,13 +291,14 @@ export function speakText(text: string, onFinishedOrOptions?: (() => void) | Spe
     options.onFinished?.()
   }
 
+  const preferredName = options.voiceName ?? loadVoicePreferences().preferredVoiceName
   const loadedVoices = getVoicesSafe(synth)
   if (loadedVoices.length > 0 || typeof synth.addEventListener !== 'function') {
-    speakSegments(synth, segments, pickPreferredChineseVoice(loadedVoices), token, finish, 0, options.onProgress ?? null)
+    speakSegments(synth, segments, resolveSpeechVoice(loadedVoices, preferredName), token, finish, 0, options.onProgress ?? null)
   } else {
     void waitForVoices(synth).then((voices) => {
       if (token !== speechToken) return
-      speakSegments(synth, segments, pickPreferredChineseVoice(voices), token, finish, 0, options.onProgress ?? null)
+      speakSegments(synth, segments, resolveSpeechVoice(voices, preferredName), token, finish, 0, options.onProgress ?? null)
     })
   }
   return true

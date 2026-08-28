@@ -138,12 +138,20 @@ const voiceStatusLabel = computed(() => {
 })
 
 let activeSendController: AbortController | null = null
+// 「结束回复」：abort 请求但保留当前已显示内容，不再有新输出（决策 4B）。
+let keepPartialReply = false
 
 function cancelActiveSend(): void {
   if (activeSendController) {
     activeSendController.abort()
     activeSendController = null
   }
+}
+
+function finishReplyEarly(): void {
+  if (!activeSendController) return
+  keepPartialReply = true
+  cancelActiveSend()
 }
 
 function isAssistantCancellation(cause: unknown): boolean {
@@ -315,6 +323,11 @@ function ensureDictation(): DictationController {
   dictation = createDictationController({
     onModeChange: (mode) => {
       voiceMode.value = mode
+      if (mode === 'active') {
+        // 续说回到听写态（含指令期非指令语音回流）：取消倒计时，避免草稿被中途发出。
+        sendConfirmGate.reset()
+        voiceSendHint.value = ''
+      }
     },
     onPreview: (text) => {
       voicePreview.value = text
@@ -415,6 +428,30 @@ function toggleVoiceInput(): void {
   void beginWakeListening()
 }
 
+function startReplySpeech(index: number, content: string, resumeListeningAfter: boolean): boolean {
+  speakingProgress.value = ''
+  speakingSegmentIndex.value = 0
+  const started = speakText(content, {
+    onFinished: () => {
+      if (speakingIndex.value === index) {
+        speakingIndex.value = null
+        speakingProgress.value = ''
+        speakingSegmentIndex.value = 0
+      }
+      // 播报真正结束后再回到唤醒聆听，避免开麦把播报掐断。
+      if (resumeListeningAfter && !sending.value && !needMicGesture.value) {
+        void beginWakeListening()
+      }
+    },
+    onProgress: (progress) => {
+      speakingSegmentIndex.value = progress.index
+      speakingProgress.value = `正在朗读 ${progress.index + 1}/${progress.total}`
+    },
+  })
+  if (started) speakingIndex.value = index
+  return started
+}
+
 function toggleSpeech(index: number, content: string): void {
   if (speakingIndex.value === index) {
     stopSpeaking()
@@ -423,24 +460,7 @@ function toggleSpeech(index: number, content: string): void {
     return
   }
   if (listening.value) stopVoiceInput()
-  speakingProgress.value = ''
-  speakingSegmentIndex.value = 0
-  speakingIndex.value = index
-  const started = speakText(content, {
-    onFinished: () => {
-      if (speakingIndex.value === index) {
-        speakingIndex.value = null
-        speakingProgress.value = ''
-        speakingSegmentIndex.value = 0
-      }
-    },
-    onProgress: (progress) => {
-      speakingSegmentIndex.value = progress.index
-      speakingProgress.value = `正在朗读 ${progress.index + 1}/${progress.total}`
-    },
-  })
-  if (!started) {
-    speakingIndex.value = null
+  if (!startReplySpeech(index, content, false)) {
     voiceError.value = '当前无法语音播报，请阅读文字回答。可先安装 Natural 类中文语音包。'
   }
 }
@@ -475,20 +495,19 @@ function summarizeAgentTrace(reply: AssistantResponse): string | undefined {
   return parts.join(' · ')
 }
 
-function pushAssistantReply(reply: AssistantResponse): void {
-  history.value.push({
-    role: 'assistant',
-    content: reply.answer,
-    degraded: reply.degraded,
-    degradeReason: reply.degrade_reason,
-    sources: reply.sources,
-    suggestedQuestions: (reply.suggested_questions ?? []).filter(
-      (item) => typeof item === 'string' && item.trim(),
-    ),
-    queryType: reply.query_type,
-    networkUsed: reply.network_used,
-    agentTraceSummary: summarizeAgentTrace(reply),
-  })
+function applyAssistantReply(entryIndex: number, reply: AssistantResponse): void {
+  const entry = history.value[entryIndex]
+  if (!entry) return
+  entry.content = reply.answer
+  entry.degraded = reply.degraded
+  entry.degradeReason = reply.degrade_reason
+  entry.sources = reply.sources
+  entry.suggestedQuestions = (reply.suggested_questions ?? []).filter(
+    (item) => typeof item === 'string' && item.trim(),
+  )
+  entry.queryType = reply.query_type
+  entry.networkUsed = reply.network_used
+  entry.agentTraceSummary = summarizeAgentTrace(reply)
   if (reply.degraded) {
     sendError.value = reply.degrade_reason
       ? `回答已降级：${reply.degrade_reason}`
@@ -497,25 +516,24 @@ function pushAssistantReply(reply: AssistantResponse): void {
   persistChatSession()
   scrollToEnd()
   if (settings.voiceBroadcast && reply.answer.trim()) {
-    const lastIndex = history.value.length - 1
-    speakingIndex.value = lastIndex
-    speakingProgress.value = ''
-    speakingSegmentIndex.value = 0
-    const started = speakText(reply.answer, {
-      onFinished: () => {
-        if (speakingIndex.value === lastIndex) {
-          speakingIndex.value = null
-          speakingProgress.value = ''
-          speakingSegmentIndex.value = 0
-        }
-      },
-      onProgress: (progress) => {
-        speakingSegmentIndex.value = progress.index
-        speakingProgress.value = `正在朗读 ${progress.index + 1}/${progress.total}`
-      },
-    })
-    if (!started) speakingIndex.value = null
+    if (listening.value) stopVoiceInput()
+    // 播报完成后由 startReplySpeech 的 onFinished 回到唤醒聆听，避免被 send() 收尾掐断。
+    startReplySpeech(entryIndex, reply.answer, true)
   }
+}
+
+/** 取消/结束回复的收尾：结束回复保留已显示内容，普通停止移除未完成气泡。 */
+function settleCancelledReply(entryIndex: number, streamingEntry: ChatEntry): void {
+  const entry = history.value[entryIndex]
+  if (keepPartialReply && entry === streamingEntry && entry.content.trim()) {
+    cancelStatus.value = '已结束回复，保留已生成的内容'
+  } else {
+    if (entry === streamingEntry) history.value.splice(entryIndex, 1)
+    cancelStatus.value = '已停止'
+  }
+  keepPartialReply = false
+  persistChatSession()
+  scrollToEnd()
 }
 
 async function send(text?: string, queryTypeOverride?: string): Promise<void> {
@@ -527,6 +545,7 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
   stopSpeaking()
   speakingIndex.value = null
   speakingProgress.value = ''
+  keepPartialReply = false
 
   history.value.push({ role: 'user', content })
   persistChatSession()
@@ -600,7 +619,11 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
   const memberId = session.currentMemberId || undefined
   const requestOpts = { ...requestOptions(), signal: controller.signal }
 
-  let streamingAnswer = ''
+  // 流式展示：token 直接写入这条气泡；结束回复/停止时按需保留或移除。
+  const streamingEntry: ChatEntry = { role: 'assistant', content: '' }
+  history.value.push(streamingEntry)
+  const entryIndex = history.value.length - 1
+
   let streamStarted = false
   let streamCancelled = false
 
@@ -615,8 +638,9 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
           onToken: (token) => {
             if (!token) return
             streamStarted = true
-            streamingAnswer += token
+            streamingEntry.content += token
             orchestrationPhase.value = 'generating'
+            scrollToEnd()
           },
           onEvidencePreview: (preview) => {
             liveEvidencePreview.value = preview
@@ -630,52 +654,58 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
         memberId,
         requestOpts,
       )
-      pushAssistantReply(reply)
+      applyAssistantReply(entryIndex, reply)
     } catch (streamError) {
       if (controller.signal.aborted || streamCancelled || isAssistantCancellation(streamError)) {
-        cancelStatus.value = '已停止'
+        settleCancelledReply(entryIndex, streamingEntry)
         return
       }
-      if (streamStarted && streamingAnswer.trim()) {
-        history.value.push({
-          role: 'assistant',
-          content: streamingAnswer.trim(),
-          degraded: true,
-          degradeReason: 'stream_incomplete',
-        })
+      if (streamStarted && streamingEntry.content.trim()) {
+        streamingEntry.content = streamingEntry.content.trim()
+        streamingEntry.degraded = true
+        streamingEntry.degradeReason = 'stream_incomplete'
         sendError.value = '流式连接中断，已保留已生成内容。'
         persistChatSession()
         scrollToEnd()
         return
       }
       const reply = await client.assistantChat(chatInput, householdId, memberId, requestOpts)
-      pushAssistantReply(reply)
+      applyAssistantReply(entryIndex, reply)
     }
   } catch (cause) {
     if (controller.signal.aborted || isAssistantCancellation(cause)) {
-      cancelStatus.value = '已停止'
+      settleCancelledReply(entryIndex, streamingEntry)
     } else {
       const message =
         cause instanceof ApiClientError
           ? cause.message
           : '家庭服务器暂时无法回答。请确认电脑后端已启动，且手机与电脑在同一局域网。'
       sendError.value = message
-      history.value.push({
-        role: 'assistant',
-        content:
-          '本地模型或其依赖当前不可用，无法生成回答。家庭事实、任务与提醒不受影响，可直接在对应页面查看。',
-        degraded: true,
-        degradeReason: 'request_failed',
-      })
+      const fallbackContent =
+        '本地模型或其依赖当前不可用，无法生成回答。家庭事实、任务与提醒不受影响，可直接在对应页面查看。'
+      const entry = history.value[entryIndex]
+      if (entry === streamingEntry) {
+        entry.content = fallbackContent
+        entry.degraded = true
+        entry.degradeReason = 'request_failed'
+      } else {
+        history.value.push({
+          role: 'assistant',
+          content: fallbackContent,
+          degraded: true,
+          degradeReason: 'request_failed',
+        })
+      }
       persistChatSession()
+      scrollToEnd()
     }
-    scrollToEnd()
   } finally {
     if (activeSendController === controller) activeSendController = null
     sending.value = false
     orchestrationPhase.value = null
     liveEvidencePreview.value = null
-    if (!needMicGesture.value) void beginWakeListening()
+    // 自动播报进行中时不开麦回听（开麦会停止朗读）；播完由 onFinished 回听。
+    if (!needMicGesture.value && speakingIndex.value === null) void beginWakeListening()
   }
 }
 
@@ -773,6 +803,7 @@ onBeforeUnmount(() => {
       </div>
       <article
         v-for="(entry, index) in history"
+        v-show="entry.role === 'user' || entry.content.length > 0"
         :key="`${entry.role}-${index}`"
         class="bubble"
         :data-role="entry.role"
@@ -783,6 +814,15 @@ onBeforeUnmount(() => {
         <p v-if="entry.agentTraceSummary" class="meta-line">{{ entry.agentTraceSummary }}</p>
         <p v-if="entry.networkUsed" class="meta-line">含外部参考 · 需人工确认，不作诊断</p>
         <div v-if="entry.role === 'assistant' && entry.content" class="bubble-actions">
+          <button
+            v-if="sending && index === history.length - 1"
+            type="button"
+            class="btn btn-secondary"
+            title="停止生成新的内容，保留上面已显示的回答"
+            @click="finishReplyEarly"
+          >
+            结束回复
+          </button>
           <button
             type="button"
             class="btn btn-secondary"

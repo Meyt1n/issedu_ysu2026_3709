@@ -85,8 +85,9 @@ def test_face_challenge_is_opaque_and_single_use(client: TestClient) -> None:
 
     assert first.status_code == 401
     assert second.status_code == 401
-    assert first.json()["detail"] == "FACE_AUTH_FAILED"
-    assert second.json()["detail"] == "FACE_AUTH_FAILED"
+    # One frame → count invalid; replayed challenge → challenge invalid.
+    assert first.json()["detail"] == "FRAME_COUNT_INVALID"
+    assert second.json()["detail"] == "CHALLENGE_INVALID"
 
 
 def test_face_failures_are_rate_limited(client: TestClient) -> None:
@@ -134,6 +135,43 @@ def test_face_failures_are_rate_limited(client: TestClient) -> None:
         files=files,
     )
     assert sixth_login.status_code == 429
+
+
+def test_successful_face_login_clears_challenge_rate_limit(
+    client: TestClient, db_session: Session
+) -> None:
+    """Successful login must not leave the household challenge-locked."""
+    from app.auth import MAX_LOGIN_ATTEMPTS, clear_face_challenge_rate_limit
+
+    household_id = "challenge-clear-hh"
+    actor_id = "challenge-clear-actor"
+
+    # Burn challenge issuances up to the limit without logging in.
+    for _ in range(MAX_LOGIN_ATTEMPTS):
+        issued = client.post(
+            "/api/v1/auth/face-challenge",
+            json={"household_id": household_id, "actor_id": actor_id},
+        )
+        assert issued.status_code == 200, issued.text
+
+    blocked = client.post(
+        "/api/v1/auth/face-challenge",
+        json={"household_id": household_id, "actor_id": actor_id},
+    )
+    assert blocked.status_code == 429
+
+    clear_face_challenge_rate_limit(
+        db_session,
+        household_id=household_id,
+        client_key="testclient",
+    )
+    db_session.commit()
+
+    recovered = client.post(
+        "/api/v1/auth/face-challenge",
+        json={"household_id": household_id, "actor_id": actor_id},
+    )
+    assert recovered.status_code == 200, recovered.text
 
 
 def test_member_account_can_discover_household_and_be_bound(client: TestClient) -> None:
@@ -381,7 +419,9 @@ def test_face_login_rejects_a_single_injected_matching_frame(
     )
 
     assert rejected.status_code == 401
-    assert rejected.json()["detail"] == "FACE_AUTH_FAILED"
+    # Injected photo + attacker motion fails the all-frames min-score gate as NO_MATCH
+    # (desensitized; never returns scores or which frame failed).
+    assert rejected.json()["detail"] == "NO_MATCH"
 
 
 def test_deleting_a_face_credential_revokes_household_sessions(
@@ -616,4 +656,4 @@ def test_family_face_login_rejects_an_ambiguous_member_match(
     )
 
     assert rejected.status_code == 401
-    assert rejected.json()["detail"] == "FACE_AUTH_FAILED"
+    assert rejected.json()["detail"] == "AMBIGUOUS_MATCH"

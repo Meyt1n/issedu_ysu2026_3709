@@ -84,7 +84,7 @@ async function installSessionApi(
 
 async function chooseFormalLogin(page: Page): Promise<void> {
   await page.goto('/')
-  await page.getByRole('button', { name: '正式账号登录' }).click()
+  await page.getByRole('button', { name: '家庭账号登录' }).click()
   await page.getByLabel('本地账号').fill('session-owner')
   await page.getByLabel('密码').fill('synthetic-password-123')
   await page.getByRole('button', { name: '登录', exact: true }).click()

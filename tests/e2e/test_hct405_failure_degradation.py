@@ -332,7 +332,10 @@ def test_unauthorized_actor_cannot_cite_private_knowledge_via_tools(
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["degraded"] is True
-    assert body["degrade_reason"] == "NO_AUTHORISED_DOCUMENTS"
+    # 2B removed the NO_AUTHORISED_DOCUMENTS blanket wall; the forged source
+    # is now caught by citation verification instead.  Either way the private
+    # knowledge never leaks to the unauthorized actor.
+    assert body["degrade_reason"] in {"NO_AUTHORISED_DOCUMENTS", "CITATION_NOT_FOUND"}
     assert body["citations"] == []
     assert body["sources"] == []
 

@@ -1,0 +1,34 @@
+{
+  "release_id": "<MOB-148-release-candidate-id>",
+  "reviewed_at": "<ISO-8601 timestamp>",
+  "reviewer": "<maintainer identity>",
+  "environment": "controlled-demo",
+  "app_commit": "<app Git commit>",
+  "server_commit": "<server Git commit>",
+  "pwa_shell_version": "<Service Worker cache version>",
+  "android_version": "<versionName/versionCode>",
+  "rollback": {
+    "previous_release_id": "<previous verified release>",
+    "artifact_sha256": "<SHA-256 of rollback artifact>",
+    "drill_evidence_path": "<sanitized evidence path>"
+  },
+  "gate_items": [
+    {
+      "id": "build-supply-chain",
+      "status": "VERIFIED",
+      "evidence_path": "<sanitized evidence path>",
+      "verified_at": "<ISO-8601 timestamp>"
+    }
+  ],
+  "runtime_release": {
+    "status": "BLOCKED",
+    "reason": "<mandatory until all runtime gate items are verified>",
+    "evidence_paths": ["<sanitized evidence path>"]
+  },
+  "full_vision_production": {
+    "status": "BLOCKED",
+    "reason": "<mandatory until HCT-201 and HCT-409 are verified>",
+    "evidence_paths": ["<sanitized evidence path>"]
+  },
+  "known_limitations": ["<truthful limitation or blocked dependency>"]
+}

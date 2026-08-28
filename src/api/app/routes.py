@@ -46,6 +46,7 @@ from app.auth import (
     authenticate,
     authenticate_with_pin,
     check_face_rate_limit,
+    clear_face_challenge_rate_limit,
     clear_face_failures,
     consume_face_challenge,
     consume_family_face_challenge,
@@ -452,7 +453,11 @@ def capabilities() -> CapabilityResponse:
         "llm",
         "risk-acknowledgement",
     ]
-    unavailable = ["vision-inference", "llm-cloud"]
+    unavailable = ["llm-cloud"]
+    if settings.ocr_version.strip().casefold() == "unavailable":
+        unavailable.append("vision-inference")
+    else:
+        available.append("vision-inference")
     # Keep the global capability sidebar aligned with the assistant catalog.
     # ``external-web`` is available only after the configured provider passes
     # the egress checks and is not an offline teaching fixture.
@@ -1975,6 +1980,7 @@ def auth_family_face_challenge(
 
 @router.post("/auth/face-login", response_model=AuthSessionRead)
 async def auth_face_login(
+    request: Request,
     household_id: str = Form(..., min_length=1, max_length=120),
     actor_id: str = Form(..., min_length=1, max_length=120),
     challenge_id: str = Form(..., min_length=16, max_length=128),
@@ -1996,6 +2002,7 @@ async def auth_face_login(
         raise
 
     def failed(reason: str = "FACE_AUTH_FAILED") -> NoReturn:
+        bucket = normalize_face_failure_reason(reason)
         record_face_failure(rate_key, session)
         _record_authentication_audit(
             session,
@@ -2003,77 +2010,22 @@ async def auth_face_login(
             actor_id=actor_id,
             method="FACE",
             outcome="FAILED",
-            reason=normalize_face_failure_reason(reason),
+            reason=bucket,
         )
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="FACE_AUTH_FAILED")
+        # Return the desensitized bucket (no scores/templates) so the UI can
+        # coach the user — collapsing everything to FACE_AUTH_FAILED made
+        # liveness / pose failures look like "never matches anyone".
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=bucket)
 
     try:
         consume_face_challenge(challenge_id, actor_id, household_id, session)
     except HTTPException:
         failed("CHALLENGE_INVALID")
 
-    if not _actor_belongs_to_household(session, household_id, actor_id):
-        failed("ACCOUNT_SCOPE_INVALID")
-    credential = session.scalar(
-        select(FaceCredential).where(
-            FaceCredential.household_id == household_id,
-            FaceCredential.actor_id == actor_id,
-            FaceCredential.status == "ACTIVE",
-        )
-    )
-    if credential is None or not credential.encrypted_template:
-        failed("CREDENTIAL_UNAVAILABLE")
-
+    # Validate capture completeness before credential lookup so an incomplete
+    # three-step sequence surfaces as FRAME_COUNT_INVALID (coachable) instead
+    # of CREDENTIAL_UNAVAILABLE / scope failures that look like "never matches".
     frame_bytes: list[bytes] = []
-
-    def _match_frames_against_credential() -> float:
-        """Gate/extract/liveness/match pipeline; runs off the event loop.
-
-        Raises ``_FaceAuthRejected`` with the desensitized reason bucket,
-        ``HTTPException`` when the stored template cannot be decrypted, or
-        ``RuntimeError`` when the local face service is unavailable.
-        """
-        templates: list[bytes] = []
-        yaws: list[float] = []
-        try:
-            for data in frame_bytes:
-                # Face-specific frame gate; the medicine-carton OCR gate falsely
-                # rejected valid guided webcam captures (HCT-424/HCT-425 fix).
-                try:
-                    ensure_face_frame_quality(data)
-                except ValueError as exc:
-                    raise _FaceAuthRejected("FRAME_QUALITY_INVALID") from exc
-                extractor = _face_extractor_for_algorithm(credential.algorithm_version)
-                if credential.algorithm_version.startswith("opencv-yunet-sface"):
-                    template, frame_meta = extractor(data)
-                    yaws.append(float(frame_meta.get("yaw", 0.0)))
-                else:
-                    template, _ = extractor(data)
-                templates.append(template)
-            try:
-                pose_yaws = yaws if settings.face_require_pose_liveness and yaws else None
-                check_face_liveness(templates, pose_yaws)
-            except ValueError as exc:
-                if str(exc) == "FACE_LIVENESS_FAILED":
-                    raise _FaceAuthRejected("LIVENESS_FAILED") from exc
-                raise _FaceAuthRejected("FACE_MATCH_FAILED") from exc
-            try:
-                stored_template = decrypt_template(credential.encrypted_template)
-                gallery = unpack_face_templates(stored_template)
-            except ValueError as exc:
-                raise _FaceAuthRejected("FACE_MATCH_FAILED") from exc
-            # Every frame must match the enrolled gallery (best angle per frame),
-            # then take the minimum across frames so one stolen photo cannot pass.
-            return aggregate_match_scores(
-                [score_probe_against_gallery(template, gallery) for template in templates]
-            )
-        except (_FaceAuthRejected, HTTPException, RuntimeError):
-            raise
-        except ValueError as exc:
-            raise _FaceAuthRejected("FACE_MATCH_FAILED") from exc
-        finally:
-            templates.clear()
-
     try:
         if len(frames) < 2 or len(frames) > 3:
             failed("FRAME_COUNT_INVALID")
@@ -2088,6 +2040,69 @@ async def auth_face_login(
             if upload.content_type == "image/png" and not data.startswith(b"\x89PNG\r\n\x1a\n"):
                 failed("FRAME_MAGIC_INVALID")
             frame_bytes.append(data)
+
+        if not _actor_belongs_to_household(session, household_id, actor_id):
+            failed("ACCOUNT_SCOPE_INVALID")
+        credential = session.scalar(
+            select(FaceCredential).where(
+                FaceCredential.household_id == household_id,
+                FaceCredential.actor_id == actor_id,
+                FaceCredential.status == "ACTIVE",
+            )
+        )
+        if credential is None or not credential.encrypted_template:
+            failed("CREDENTIAL_UNAVAILABLE")
+
+        def _match_frames_against_credential() -> float:
+            """Gate/extract/liveness/match pipeline; runs off the event loop.
+
+            Raises ``_FaceAuthRejected`` with the desensitized reason bucket,
+            ``HTTPException`` when the stored template cannot be decrypted, or
+            ``RuntimeError`` when the local face service is unavailable.
+            """
+            templates: list[bytes] = []
+            yaws: list[float] = []
+            try:
+                for data in frame_bytes:
+                    # Face-specific frame gate; the medicine-carton OCR gate falsely
+                    # rejected valid guided webcam captures (HCT-424/HCT-425 fix).
+                    try:
+                        ensure_face_frame_quality(data)
+                    except ValueError as exc:
+                        raise _FaceAuthRejected("FRAME_QUALITY_INVALID") from exc
+                    extractor = _face_extractor_for_algorithm(credential.algorithm_version)
+                    if credential.algorithm_version.startswith("opencv-yunet-sface"):
+                        template, frame_meta = extractor(data)
+                        yaws.append(float(frame_meta.get("yaw", 0.0)))
+                    else:
+                        template, _ = extractor(data)
+                    templates.append(template)
+                try:
+                    pose_yaws = (
+                        yaws if settings.face_login_require_pose_liveness and yaws else None
+                    )
+                    check_face_liveness(templates, pose_yaws, purpose="login")
+                except ValueError as exc:
+                    if str(exc) == "FACE_LIVENESS_FAILED":
+                        raise _FaceAuthRejected("LIVENESS_FAILED") from exc
+                    raise _FaceAuthRejected("FACE_MATCH_FAILED") from exc
+                try:
+                    stored_template = decrypt_template(credential.encrypted_template)
+                    gallery = unpack_face_templates(stored_template)
+                except ValueError as exc:
+                    raise _FaceAuthRejected("FACE_MATCH_FAILED") from exc
+                # Every frame must match the enrolled gallery (best angle per frame),
+                # then take the minimum across frames so one stolen photo cannot pass.
+                return aggregate_match_scores(
+                    [score_probe_against_gallery(template, gallery) for template in templates]
+                )
+            except (_FaceAuthRejected, HTTPException, RuntimeError):
+                raise
+            except ValueError as exc:
+                raise _FaceAuthRejected("FACE_MATCH_FAILED") from exc
+            finally:
+                templates.clear()
+
         # Run the heavy OpenCV/ONNX matching on the dedicated face worker so the
         # event loop (health checks, other logins) never hangs behind it.
         try:
@@ -2110,12 +2125,16 @@ async def auth_face_login(
                 detail="FACE_AUTH_UNAVAILABLE",
             ) from exc
         if match_score < match_threshold_for(credential.algorithm_version):
-            failed()
+            failed("NO_MATCH")
     finally:
         for index in range(len(frame_bytes)):
             frame_bytes[index] = b""
 
     clear_face_failures(rate_key, session)
+    client_host = request.client.host if request.client else None
+    clear_face_challenge_rate_limit(
+        session, household_id=household_id, client_key=client_host
+    )
     _record_authentication_audit(
         session,
         household_id=household_id,
@@ -2133,6 +2152,7 @@ async def auth_face_login(
 
 @router.post("/auth/family-face-login", response_model=AuthSessionRead)
 async def auth_family_face_login(
+    request: Request,
     household_id: str = Form(..., min_length=1, max_length=120),
     challenge_id: str = Form(..., min_length=16, max_length=128),
     frames: list[UploadFile] = File(...),
@@ -2154,6 +2174,7 @@ async def auth_family_face_login(
         raise
 
     def failed(reason: str = "FACE_AUTH_FAILED") -> NoReturn:
+        bucket = normalize_face_failure_reason(reason)
         record_face_failure(rate_key, session)
         _record_authentication_audit(
             session,
@@ -2161,33 +2182,17 @@ async def auth_family_face_login(
             actor_id=rate_actor,
             method="FACE",
             outcome="FAILED",
-            reason=normalize_face_failure_reason(reason),
+            reason=bucket,
         )
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="FACE_AUTH_FAILED")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=bucket)
 
     try:
         consume_family_face_challenge(challenge_id, household_id, session)
     except HTTPException:
         failed("CHALLENGE_INVALID")
 
-    credentials = list(
-        session.scalars(
-            select(FaceCredential).where(
-                FaceCredential.household_id == household_id,
-                FaceCredential.status == "ACTIVE",
-            )
-        ).all()
-    )
-    credentials = [
-        credential
-        for credential in credentials
-        if credential.encrypted_template
-        and _actor_belongs_to_household(session, household_id, credential.actor_id)
-    ]
-    if not credentials:
-        failed("CREDENTIAL_UNAVAILABLE")
-
     frame_bytes: list[bytes] = []
+    credentials: list[FaceCredential] = []
 
     def _identify_household_member() -> str:
         """Gate/extract/liveness/1:N match pipeline; runs off the event loop.
@@ -2221,8 +2226,10 @@ async def auth_family_face_login(
                     if algorithm_version.startswith("opencv-yunet-sface"):
                         yaws.append(float(frame_meta.get("yaw", 0.0)))
                 try:
-                    pose_yaws = yaws if settings.face_require_pose_liveness and yaws else None
-                    check_face_liveness(extracted, pose_yaws)
+                    pose_yaws = (
+                        yaws if settings.face_login_require_pose_liveness and yaws else None
+                    )
+                    check_face_liveness(extracted, pose_yaws, purpose="login")
                 except ValueError as exc:
                     if str(exc) == "FACE_LIVENESS_FAILED":
                         raise _FaceAuthRejected("LIVENESS_FAILED") from exc
@@ -2295,6 +2302,24 @@ async def auth_family_face_login(
             if upload.content_type == "image/png" and not data.startswith(b"\x89PNG\r\n\x1a\n"):
                 failed("FRAME_MAGIC_INVALID")
             frame_bytes.append(data)
+
+        credentials = list(
+            session.scalars(
+                select(FaceCredential).where(
+                    FaceCredential.household_id == household_id,
+                    FaceCredential.status == "ACTIVE",
+                )
+            ).all()
+        )
+        credentials = [
+            credential
+            for credential in credentials
+            if credential.encrypted_template
+            and _actor_belongs_to_household(session, household_id, credential.actor_id)
+        ]
+        if not credentials:
+            failed("CREDENTIAL_UNAVAILABLE")
+
         # Run the heavy OpenCV/ONNX 1:N matching on the dedicated face worker so
         # the event loop (health checks, other logins) never hangs behind it.
         try:
@@ -2321,6 +2346,10 @@ async def auth_family_face_login(
             frame_bytes[index] = b""
 
     clear_face_failures(rate_key, session)
+    client_host = request.client.host if request.client else None
+    clear_face_challenge_rate_limit(
+        session, household_id=household_id, client_key=client_host
+    )
     _record_authentication_audit(
         session,
         household_id=household_id,
@@ -2456,7 +2485,16 @@ def _confirm_face_registration(
 
 
 def _face_credential_read(credential: FaceCredential) -> FaceCredentialRead:
-    template_count = 3 if "multi" in (credential.feature_version or "") else 1
+    template_count = 1
+    if credential.encrypted_template:
+        try:
+            packed = decrypt_template(credential.encrypted_template)
+            template_count = max(1, len(unpack_face_templates(packed)))
+        except (HTTPException, ValueError):
+            # Revoked/corrupt ciphertext: fall back without inventing a hard-coded 3.
+            template_count = 2 if "multi" in (credential.feature_version or "") else 1
+    elif "multi" in (credential.feature_version or ""):
+        template_count = 2
     return FaceCredentialRead(
         id=credential.id,
         household_id=credential.household_id,
@@ -2620,7 +2658,7 @@ async def register_face_credential(
                 frame_metadata = frame_meta
             try:
                 pose_yaws = yaws if settings.face_require_pose_liveness else None
-                check_face_liveness(templates, pose_yaws)
+                check_face_liveness(templates, pose_yaws, purpose="registration")
             except ValueError as exc:
                 raise ValueError("FACE_LIVENESS_FAILED") from exc
             # Keep every angle in an encrypted multi-template gallery so login can
@@ -4048,6 +4086,7 @@ def assistant_chat(
             max_tokens=payload.max_tokens,
             temperature=payload.temperature,
             allow_network_search=payload.allow_network_search,
+            network_context_level=payload.network_context_level,
             query_type_override=payload.query_type_override,
             assistant_session_id=payload.assistant_session_id,
             clear_session_cache=payload.clear_session_cache,
@@ -4071,6 +4110,7 @@ def assistant_chat(
                 "all_agents_local": True,
             }
         )
+    result["open_chat"] = bool(settings.agent_open_chat)
     session.commit()
     return AssistantResponse(**result)
 
@@ -4125,6 +4165,11 @@ def assistant_chat_stream(
             def on_evidence_preview(preview: dict[str, Any]) -> None:
                 event_queue.put(("evidence_preview", preview))
 
+            def on_network_query(network_query: str) -> None:
+                # 4B: surface the exact outbound query before the request is
+                # sent so the UI can show users what leaves the device.
+                event_queue.put(("network_query", {"network_query": network_query}))
+
             result = run_local_multi_agent(
                 worker_session,
                 messages=messages,
@@ -4136,6 +4181,7 @@ def assistant_chat_stream(
                 max_tokens=payload.max_tokens,
                 temperature=payload.temperature,
                 allow_network_search=payload.allow_network_search,
+                network_context_level=payload.network_context_level,
                 query_type_override=payload.query_type_override,
                 assistant_session_id=payload.assistant_session_id,
                 clear_session_cache=payload.clear_session_cache,
@@ -4145,6 +4191,7 @@ def assistant_chat_stream(
                 on_status=on_status,
                 on_external_sources=on_external_sources,
                 on_evidence_preview=on_evidence_preview,
+                on_network_query=on_network_query,
                 cancel_event=cancel_event,
             )
             if cancel_event.is_set():
@@ -4152,6 +4199,7 @@ def assistant_chat_stream(
                 event_queue.put(("cancelled", {"code": "CANCELLED"}))
             else:
                 worker_session.commit()
+                result["open_chat"] = bool(settings.agent_open_chat)
                 event_queue.put(("done", {"response": result}))
         except OrchestrationCancelled:
             worker_session.rollback()
@@ -5382,8 +5430,6 @@ def _risk_alert_read(
     member_id: str,
     alert: Any,
 ) -> RiskAlertRead:
-    from app.rules import deduplication_key
-
     current_version = settings.ruleset_version
     fingerprint = risk_fingerprint(
         rule_id=alert.rule_id,
@@ -5407,29 +5453,24 @@ def _risk_alert_read(
         rule_version=current_version,
         risk_fingerprint=fingerprint,
         acknowledgement=(acknowledgement_read(acknowledgement) if acknowledgement else None),
-        deduplication_key=deduplication_key(alert),
-        merged_count=max(int(getattr(alert, "merged_count", 1) or 1), 1),
-        budget_status=str(getattr(alert, "budget_status", None) or "VISIBLE"),
-        budget_reason=str(getattr(alert, "budget_reason", None) or ""),
+        deduplication_key=getattr(alert, "deduplication_key", None),
+        merged_count=getattr(alert, "merged_count", None),
+        budget_status=getattr(alert, "budget_status", None),
+        budget_reason=getattr(alert, "budget_reason", None),
         next_visible_at=getattr(alert, "next_visible_at", None),
-        evidence_summary=(
-            f"{len(set(alert.source_event_ids))} 条脱敏来源事件"
-            if alert.source_event_ids
-            else "无可回显来源事件"
-        ),
+        # Count only: the number of confirmed evidence events behind this alert.
+        # Never the event payload, which may carry health content.
+        evidence_summary=f"{len(alert.source_event_ids)} 条已确认证据事件",
     )
 
 
 def _current_risk_alert(session: Session, member_id: str, rule_id: str) -> Any | None:
     from app.projection import build_relationship_graph, get_timeline
-    from app.rules import apply_daily_budget, dedup_alerts, run_rules
+    from app.rules import run_rules
 
     events = get_timeline(session, member_id)
     facts = build_relationship_graph(events)
-    alerts = dedup_alerts(run_rules(facts, rule_ids=[rule_id]))
-    # Annotate even a deferred signal so detail/acknowledgement remains
-    # explainable without making suppressed risks impossible to acknowledge.
-    apply_daily_budget(alerts, include_suppressed=True)
+    alerts = run_rules(facts, rule_ids=[rule_id])
     return alerts[0] if alerts else None
 
 
@@ -5457,23 +5498,30 @@ def list_risks(
     ):
         _raise_resource_not_found()
     from app.projection import build_relationship_graph, get_timeline
-    from app.rules import DEFAULT_DAILY_BUDGET, apply_daily_budget, dedup_alerts, run_rules
+    from app.rules import (
+        DEFAULT_DAILY_BUDGET,
+        apply_daily_budget,
+        dedup_alerts,
+        run_rules,
+        suppressed_by_budget,
+    )
 
     events = get_timeline(session, member_id)
     facts = build_relationship_graph(events)
     raw = run_rules(facts)
     deduped = dedup_alerts(raw)
-    budgeted = apply_daily_budget(deduped, include_suppressed=True)
+    budgeted = apply_daily_budget(deduped)
+    held_back = suppressed_by_budget(deduped)
 
-    alerts = [
-        _risk_alert_read(
+    def read(alert: Any) -> RiskAlertRead:
+        return _risk_alert_read(
             session,
             household_id=household_id,
             member_id=member_id,
-            alert=a,
+            alert=alert,
         )
-        for a in budgeted
-    ]
+
+    alerts = [read(a) for a in budgeted]
     return RiskListResponse(
         member_id=member_id,
         alerts=alerts,
@@ -5482,7 +5530,8 @@ def list_risks(
         warning_count=sum(1 for a in alerts if a.level == "WARNING"),
         ruleset_version=settings.ruleset_version,
         non_severe_budget=DEFAULT_DAILY_BUDGET,
-        suppressed_count=sum(1 for a in budgeted if a.budget_status == "DEFERRED"),
+        suppressed_count=len(held_back),
+        suppressed_alerts=[read(a) for a in held_back],
     )
 
 
@@ -5511,12 +5560,11 @@ def get_risk_detail(
     ):
         _raise_resource_not_found()
     from app.projection import build_relationship_graph, get_timeline
-    from app.rules import apply_daily_budget, dedup_alerts, run_rules
+    from app.rules import run_rules
 
     events = get_timeline(session, member_id)
     facts = build_relationship_graph(events)
-    alerts = dedup_alerts(run_rules(facts, rule_ids=[rule_id]))
-    apply_daily_budget(alerts, include_suppressed=True)
+    alerts = run_rules(facts, rule_ids=[rule_id])
     if not alerts:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RISK_NOT_FOUND")
 

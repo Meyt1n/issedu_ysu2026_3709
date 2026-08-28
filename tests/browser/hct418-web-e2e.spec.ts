@@ -183,7 +183,7 @@ async function installSyntheticApi(page: Page, qualityDecision: 'PASS' | 'RETAKE
           locator: 'p1',
         }],
         suggested_questions: ['这条证据来自哪个版本？'], confidence: 'medium', escalate: false,
-        degraded: false, degrade_reason: null, model: 'synthetic-model-v1', route: 'local',
+        degraded: false, degrade_reason: null, model: 'synthetic-model-v1', route: 'local', open_chat: true,
       })
     }
     if (request.method() === 'GET' && path === '/api/v1/knowledge/documents') return respond(documents)
@@ -208,7 +208,7 @@ async function installSyntheticApi(page: Page, qualityDecision: 'PASS' | 'RETAKE
 
 async function enterFamilySpace(page: Page): Promise<void> {
   await page.goto('/')
-  await page.getByLabel('开发身份标识').fill('e2e-owner')
+  await page.getByLabel(/(?:开发|调试)身份标识/).fill('e2e-owner')
   await page.getByRole('button', { name: '进入家庭空间' }).click()
   await expect(page.locator('.app-frame')).toBeVisible()
 }
@@ -269,14 +269,49 @@ test('助手和知识文档链路显示本地依据，并保留受控检索结�
 
   await navItem(page, '健康助手').click()
   await expect(page.getByRole('heading', { name: '本地证据助手' })).toBeVisible()
-  await page.locator('textarea[placeholder^="例如：最近的用药提醒"]').fill('这条证据依据什么？')
+  await page.locator('textarea[placeholder^="例如：最近的用药提醒"]').fill('nihao')
   await page.getByRole('button', { name: '发送' }).click()
   await expect(page.getByText('根据本地合成证据')).toBeVisible({ timeout: 15_000 })
+
+  const userBubble = page.locator('.chat-bubble-row.user .chat-bubble').last()
+  const assistantBubble = page.locator('.chat-bubble-row.assistant .chat-bubble').last()
+  const bubblePresentation = await page.evaluate(() => {
+    const user = document.querySelector<HTMLElement>('.chat-bubble-row.user .chat-bubble')
+    const assistant = document.querySelector<HTMLElement>('.chat-bubble-row.assistant .chat-bubble')
+    const userRect = user?.getBoundingClientRect()
+    const assistantStyle = assistant ? window.getComputedStyle(assistant) : null
+    return {
+      userWidth: userRect?.width ?? 0,
+      userHeight: userRect?.height ?? 0,
+      assistantBackground: assistantStyle?.backgroundColor ?? '',
+      assistantBackgroundImage: assistantStyle?.backgroundImage ?? '',
+      assistantRadius: assistantStyle?.borderRadius ?? '',
+    }
+  })
+  await expect(userBubble).toBeVisible()
+  await expect(assistantBubble).toBeVisible()
+  expect(bubblePresentation.userWidth).toBeLessThan(180)
+  expect(bubblePresentation.userHeight).toBeLessThan(96)
+  expect(bubblePresentation.userHeight).toBeLessThan(bubblePresentation.userWidth * 1.5)
+  expect(
+    bubblePresentation.assistantBackground !== 'rgba(0, 0, 0, 0)'
+      || bubblePresentation.assistantBackgroundImage !== 'none',
+  ).toBe(true)
+  expect(bubblePresentation.assistantRadius).not.toBe('0px')
+
+  const evidenceDisclosure = page.locator('details.chat-evidence').last()
+  await expect(evidenceDisclosure.getByText('查看依据', { exact: false })).toBeVisible()
+  await expect(evidenceDisclosure).not.toHaveAttribute('open', '')
+  await evidenceDisclosure.locator(':scope > summary').click()
   const citation = page.locator('details.chat-citation').filter({ hasText: 'Synthetic care guide' })
   await expect(citation).toBeVisible()
   await citation.locator('summary').click()
   await expect(citation).toContainText('Synthetic evidence fragment')
-  await expect(page.getByRole('button', { name: '这条证据来自哪个版本？' })).toBeVisible()
+  const followUp = page.getByRole('button', { name: '这条证据来自哪个版本？' })
+  await expect(followUp).toBeVisible()
+  await followUp.click()
+  await expect(page.locator('textarea[placeholder^="例如：最近的用药提醒"]')).toHaveValue('这条证据来自哪个版本？')
+  await expect(page.locator('.chat-bubble-row.user')).toHaveCount(1)
 })
 
 test('助手和业务页面把纵向滚动收进视口内容区，并随视口尺寸自适应', async ({ page }) => {

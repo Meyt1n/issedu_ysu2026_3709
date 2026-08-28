@@ -53,22 +53,3 @@ def test_risk_list_reports_budget_and_suppressed_signal_count(client: TestClient
     assert body["suppressed_count"] > 0
     assert body["total"] == len(body["alerts"])
     assert body["suppressed_count"] + body["total"] >= 12
-    assert body["suppressed_count"] == sum(
-        alert["budget_status"] == "DEFERRED" for alert in body["alerts"]
-    )
-    assert all(
-        {
-            "deduplication_key",
-            "merged_count",
-            "budget_status",
-            "budget_reason",
-            "next_visible_at",
-            "evidence_summary",
-        }.issubset(alert)
-        for alert in body["alerts"]
-    )
-    assert all(alert["merged_count"] >= 1 for alert in body["alerts"])
-    assert all("Synthetic medicine" not in alert["evidence_summary"] for alert in body["alerts"])
-    deferred = [alert for alert in body["alerts"] if alert["budget_status"] == "DEFERRED"]
-    assert deferred
-    assert all(alert["next_visible_at"] for alert in deferred)

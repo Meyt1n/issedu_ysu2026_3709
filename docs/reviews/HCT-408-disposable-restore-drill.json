@@ -1,0 +1,73 @@
+{
+  "schema_version": "hct408-disposable-restore-drill/v1",
+  "passed": true,
+  "decision": "DISPOSABLE_RESTORE_PASSED",
+  "backup_id": "hct-backup-20260826-121500",
+  "backup_path": "tmp/hct408-disposable-drill/backups/hct-backup-20260826-121500",
+  "file_root": "tmp/hct408-disposable-drill/file-root",
+  "seeded_files": [
+    "backup-skip/tombstone.json",
+    "uploads/nested/demo-ref.bin",
+    "uploads/teaching-label.txt"
+  ],
+  "archive": {
+    "total_files": 3,
+    "sha256": "25043905d9a6cc781786bf8f39698eeb0703ed9019088a332623c2dce8205f29"
+  },
+  "version_manifest": {
+    "git_commit_short": "a1cd514",
+    "migration_head": "disposable-drill",
+    "compose_profile": "basic"
+  },
+  "preflight": {
+    "schema_version": "hct408-backup-validation/v1",
+    "passed": true,
+    "decision": "BACKUP_READY_FOR_RESTORE",
+    "backup_id": "hct-backup-20260826-121500",
+    "migration_head": "disposable-drill",
+    "file_count": 3,
+    "findings": [],
+    "limitations": [
+      "Validation does not modify the database by itself.",
+      "MySQL restore still requires a running Compose db service.",
+      "A successful manifest check does not replace an independent R3 review."
+    ]
+  },
+  "restore": {
+    "schema_version": "hct408-files-restore/v1",
+    "file_root": "/workspace/tmp/hct408-disposable-drill/file-root",
+    "restored_files": 3,
+    "mismatches": [],
+    "passed": true,
+    "restored_utc": "2026-08-26T12:15:00.824661+00:00"
+  },
+  "post_validate": {
+    "schema_version": "hct408-backup-validation/v1",
+    "passed": true,
+    "decision": "BACKUP_READY_FOR_RESTORE",
+    "backup_id": "hct-backup-20260826-121500",
+    "migration_head": "disposable-drill",
+    "file_count": 3,
+    "findings": [],
+    "limitations": [
+      "Validation does not modify the database by itself.",
+      "MySQL restore still requires a running Compose db service.",
+      "A successful manifest check does not replace an independent R3 review."
+    ]
+  },
+  "content_hash_match": true,
+  "mysql": {
+    "attempted": false,
+    "docker_available": false,
+    "status": "MYSQL_RESTORE_SKIPPED_NO_DOCKER",
+    "note": "Disposable drill does not DROP a shared MySQL database. Live Compose restore remains an operator-run step with --force against a disposable project."
+  },
+  "limitations": [
+    "No real household health data was used.",
+    "Synthetic mysqldump is not a production database backup.",
+    "Three-profile live Compose up/health and MySQL DROP/IMPORT still need Docker.",
+    "Independent R3 review is still required before marking HCT-408 verified."
+  ],
+  "completed_utc": "2026-08-26T12:15:00.825460+00:00",
+  "report_path": "tmp/hct408-disposable-drill/backups/hct-backup-20260826-121500/disposable-restore-drill.json"
+}

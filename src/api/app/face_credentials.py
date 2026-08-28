@@ -25,7 +25,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache, partial
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 
 import cv2
 import numpy as np
@@ -69,7 +69,7 @@ FAMILY_FACE_MATCH_MARGIN = FAMILY_FACE_MATCH_MARGIN_SFACE
 FACE_LIVENESS_MAX_PAIR_SIMILARITY = 0.9995
 FACE_SEQUENCE_CONSISTENCY_FLOOR_GRAYSCALE = 0.55
 FACE_SEQUENCE_CONSISTENCY_FLOOR_SFACE = 0.30
-FACE_YAW_SPAN_MIN = 0.12
+FACE_YAW_SPAN_MIN = 0.08
 FACE_YAW_ABS_MAX = 0.62
 FACE_AREA_RATIO_MIN = 0.06
 FACE_AREA_RATIO_MAX = 0.55
@@ -702,11 +702,17 @@ def _consistency_floor_for_templates(templates: list[bytes]) -> float:
 def check_face_liveness(
     templates: list[bytes],
     yaws: list[float] | None = None,
+    *,
+    purpose: Literal["login", "registration"] = "registration",
 ) -> None:
-    """Require a short one-subject motion + head-turn sequence (motion-sequence-v3).
+    """Require a short one-subject motion sequence (motion-sequence-v3).
 
+    Both login and registration accept 2–3 frames with neighbor-pair motion.
+    Registration (and login when callers pass yaw) may also require a yaw span.
     Still a deterministic local OpenCV heuristic, not production-grade anti-spoofing.
     """
+    if purpose not in {"login", "registration"}:
+        raise ValueError("FACE_LIVENESS_FAILED")
     if len(templates) < 2 or len(templates) > 3:
         raise ValueError("FACE_LIVENESS_FAILED")
     try:

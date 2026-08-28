@@ -1,4 +1,9 @@
-import { matchVoiceCommand, VOICE_COMMAND_HINT, type VoiceCommandId } from './commands'
+import {
+  couldBeVoiceCommandPrefix,
+  matchVoiceCommand,
+  VOICE_COMMAND_HINT,
+  type VoiceCommandId,
+} from './commands'
 import { applyHotwordCorrections, endsWithContinuationCue, type HotwordPair } from './hotwords'
 import {
   createSpeechRecognition,
@@ -246,12 +251,18 @@ export function createDictationController(
         // 仅在出现较完整短语时匹配，减少 interim 误触
         if (probe.trim().length < 2) return
         const command = matchVoiceCommand(probe) ?? matchVoiceCommand(transcript)
-        if (!command) {
+        if (command) {
+          handleCommandTranscript(probe)
+          return
+        }
+        if (couldBeVoiceCommandPrefix(probe) || couldBeVoiceCommandPrefix(transcript)) {
           handlers.onPreview?.(`正在听指令：${probe}`)
           return
         }
-        handleCommandTranscript(probe)
-        return
+        // 非指令语音：回到听写态累加进草稿，禁止丢弃（页面收到 active 后应取消自动发送倒计时）。
+        draftPrefix = currentDraft.trim() ? `${currentDraft.trim()} ` : ''
+        setMode('active')
+        handlers.onPreview?.('听到继续口述，已回到听写')
       }
 
       if (mode === 'wake') {

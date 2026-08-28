@@ -780,6 +780,7 @@ export interface WebSearchOpsSnapshot {
 
 export interface AssistantResponse {
   answer: string
+  open_chat?: boolean
   sources: string[]
   citations?: AssistantCitation[]
   suggested_questions?: string[]

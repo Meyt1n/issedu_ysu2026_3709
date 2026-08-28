@@ -59,7 +59,7 @@ function isActive(tab: TabItem): boolean {
 <style scoped>
 .tabbar-wrap {
   position: fixed;
-  bottom: calc(12px + env(safe-area-inset-bottom));
+  bottom: calc(12px + var(--hct-safe-area-bottom));
   left: 0;
   right: 0;
   z-index: 20;

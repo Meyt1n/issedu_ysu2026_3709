@@ -6,7 +6,6 @@ import type {
   AssistantAgentTrace,
   AssistantCitation,
   AssistantExternalSource,
-  EvidencePreview,
 } from '../api/types'
 import {
   clearChatSession,
@@ -29,7 +28,6 @@ import { normalizeSuggestedQuestions } from '../assistant/followUp'
 import {
   confidenceLabel,
   extraFactSources,
-  questionTypeLabel,
   routeSummary,
   visibleRiskNotice,
 } from '../assistant/replyMeta'
@@ -50,6 +48,7 @@ import {
   isSpeechInputSupported,
   isSpeechOutputSupported,
   jumpSpeakingSegment,
+  listChineseVoices,
   loadVoicePreferences,
   memberNameHotwordPairs,
   runVoicePreflight,
@@ -62,6 +61,7 @@ import {
   WAKE_PHRASE_PRESETS,
   type DictationController,
   type DictationMode,
+  type SpeechVoiceLike,
   type VoiceCommandId,
   type VoicePackReport,
   type VoicePreflightReport,
@@ -82,6 +82,7 @@ interface ChatEntry {
   role: 'user' | 'assistant'
   content: string
   revealed: number
+  openChat?: boolean
   sources?: string[]
   citations?: AssistantCitation[]
   confidence?: string
@@ -137,7 +138,6 @@ const selectedAgentId = ref<string | null>(null)
 const workflowExpanded = ref(false)
 const orchestrationPhase = ref<string | null>(null)
 const workflowRouteExplanation = ref<string | null>(null)
-const liveEvidencePreview = ref<EvidencePreview | null>(null)
 const stopStatus = ref('')
 const assistantSessionId = ref('')
 const threads = ref<ChatThreadMeta[]>([])
@@ -161,6 +161,7 @@ const wakePhraseDraft = ref(voicePrefs.value.wakePhrase)
 const voiceSendHint = ref('')
 const voicePackReport = ref<VoicePackReport | null>(null)
 const voicePackChecking = ref(false)
+const voiceOptions = ref<SpeechVoiceLike[]>([])
 const preflightReport = ref<VoicePreflightReport | null>(null)
 const preflightRunning = ref(false)
 const speakingSegmentIndex = ref(0)
@@ -304,6 +305,23 @@ function handleVoiceCommand(command: VoiceCommandId): void {
   }
 }
 
+async function refreshVoiceOptions(): Promise<void> {
+  if (!isSpeechOutputSupported()) return
+  voiceOptions.value = await listChineseVoices()
+}
+
+function applyPreferredVoice(name: string): void {
+  voicePrefs.value = saveVoicePreferences({ preferredVoiceName: name })
+}
+
+function previewPreferredVoice(): void {
+  if (!isSpeechOutputSupported()) return
+  stopSpeaking()
+  speakingIndex.value = null
+  speakingProgress.value = ''
+  speakText('您好，我会用这个声音朗读回答。')
+}
+
 async function checkVoicePacks(): Promise<void> {
   voicePackChecking.value = true
   try {
@@ -360,6 +378,7 @@ const speechInputSupported = isSpeechInputSupported()
 const speechOutputSupported = isSpeechOutputSupported()
 let activeSendController: AbortController | null = null
 let userRequestedStop = false
+let keepPartialReply = false
 
 function cancelActiveSend(showStatus = false): void {
   if (activeSendController) {
@@ -391,8 +410,8 @@ function isAssistantCancellation(cause: unknown): boolean {
     && (cause.code === 'CANCELLED' || cause.message.includes('CANCELLED'))
 }
 
-function showStoppedStatus(): void {
-  stopStatus.value = '已停止'
+function showStoppedStatus(text = '已停止'): void {
+  stopStatus.value = text
   if (stopStatusTimer) clearTimeout(stopStatusTimer)
   stopStatusTimer = setTimeout(() => {
     stopStatusTimer = null
@@ -405,6 +424,11 @@ function ensureDictation(): DictationController {
   dictation = createDictationController({
     onModeChange: (mode) => {
       voiceMode.value = mode
+      if (mode === 'active') {
+        // 续说回到听写态（含指令期非指令语音回流）：取消倒计时，避免草稿被中途发出。
+        sendConfirmGate.reset()
+        voiceSendHint.value = ''
+      }
     },
     onPreview: (text) => {
       voicePreview.value = text
@@ -517,18 +541,6 @@ const AGENT_DETAILS: Record<string, { boundary: string; action: string }> = {
     boundary: '仅使用本机模型，健康数据不离开本机。',
     action: '汇总检索到的证据，生成带出处的回答并通过安全校验。',
   },
-}
-
-const EVIDENCE_TOOL_LABELS: Record<string, string> = {
-  get_member_state: '成员状态',
-  get_health_events: '健康事件',
-  get_care_plan_status: '今日照护计划',
-  get_applied_rules: '已应用规则',
-  get_risk_alerts: '风险提醒',
-}
-
-function evidenceToolLabel(tool: string): string {
-  return EVIDENCE_TOOL_LABELS[tool] ?? tool
 }
 
 function traceForAgent(agentId: string): AssistantAgentTrace | undefined {
@@ -721,7 +733,6 @@ function suspendActiveConversation(): void {
   workflowTrace.value = []
   orchestrationPhase.value = null
   workflowRouteExplanation.value = null
-  liveEvidencePreview.value = null
   sendError.value = ''
   stopStatus.value = ''
   sending.value = false
@@ -817,7 +828,6 @@ function clearConversation(): void {
   workflowTrace.value = []
   orchestrationPhase.value = null
   workflowRouteExplanation.value = null
-  liveEvidencePreview.value = null
   draft.value = ''
   sendError.value = ''
   stopStatus.value = ''
@@ -878,6 +888,32 @@ function evidenceSummary(entry: ChatEntry): string {
   return '本次响应没有返回可展开的知识文档引用，仍需人工确认'
 }
 
+function hasEvidenceDetails(entry: ChatEntry): boolean {
+  return Boolean(
+    entry.degraded
+      || entry.escalate
+      || entry.riskNotice
+      || entry.queryType
+      || entry.routeExplanation
+      || (entry.sources?.length ?? 0) > 0
+      || entry.confidence
+      || (entry.agentTrace?.length ?? 0) > 0
+      || (entry.externalSources?.length ?? 0) > 0,
+  )
+}
+
+function evidenceDisclosureSummary(entry: ChatEntry): string {
+  const parts: string[] = []
+  const citations = entry.citations?.length ?? 0
+  const steps = entry.agentTrace?.length ?? 0
+  const external = entry.externalSources?.length ?? 0
+  if (citations > 0) parts.push(`${citations} 条本地引用`)
+  if (steps > 0) parts.push(`${steps} 个处理步骤`)
+  if (external > 0) parts.push(`${external} 条外部参考`)
+  if (entry.degraded) parts.push('受控降级说明')
+  return parts.join(' · ') || '分析说明与依据状态'
+}
+
 function citationTitle(citation: AssistantCitation): string {
   return citation.document_title?.trim() || citation.document_id
 }
@@ -906,7 +942,6 @@ watch(
       : getAssistantSessionId(actorId, householdId, memberId, activeThreadId.value)
     if (memberId) regenerateOnNextValidContext = false
     workflowRouteExplanation.value = null
-    liveEvidencePreview.value = null
     stopStatus.value = ''
     restoreChatSession(loadChatSession(actorId, householdId, memberId, activeThreadId.value))
   },
@@ -946,9 +981,14 @@ function onVisibilityChange(): void {
   if (document.visibilityState === 'hidden') stopVoiceInput()
 }
 
+watch(settingsOpen, (open) => {
+  if (open) void refreshVoiceOptions()
+})
+
 onMounted(() => {
   void loadAgentCatalog()
   void bootstrapVoice()
+  void refreshVoiceOptions()
   document.addEventListener('visibilitychange', onVisibilityChange)
   const seeded = consumeAssistantSeedPrompt()
   if (seeded) {
@@ -965,15 +1005,7 @@ function toggleVoiceInput(): void {
   void beginWakeListening()
 }
 
-function toggleSpeech(index: number, content: string): void {
-  if (speakingIndex.value === index) {
-    stopSpeaking()
-    speakingIndex.value = null
-    speakingProgress.value = ''
-    return
-  }
-  voiceError.value = ''
-  if (listening.value) stopVoiceInput()
+function startReplySpeech(index: number, content: string, resumeListeningAfter: boolean): boolean {
   speakingProgress.value = ''
   speakingSegmentIndex.value = 0
   const started = speakText(content, {
@@ -983,17 +1015,41 @@ function toggleSpeech(index: number, content: string): void {
         speakingProgress.value = ''
         speakingSegmentIndex.value = 0
       }
+      // 播报真正结束后再回到唤醒聆听，避免开麦把播报掐断。
+      if (resumeListeningAfter && !sending.value && !needMicGesture.value) {
+        void beginWakeListening()
+      }
     },
     onProgress: (progress) => {
       speakingSegmentIndex.value = progress.index
       speakingProgress.value = `正在朗读 ${progress.index + 1}/${progress.total}`
     },
   })
-  if (!started) {
-    voiceError.value = '当前浏览器不支持语音回复，请阅读文字回答。'
+  if (started) speakingIndex.value = index
+  return started
+}
+
+function toggleSpeech(index: number, content: string): void {
+  if (speakingIndex.value === index) {
+    stopSpeaking()
+    speakingIndex.value = null
+    speakingProgress.value = ''
     return
   }
-  speakingIndex.value = index
+  voiceError.value = ''
+  if (listening.value) stopVoiceInput()
+  if (!startReplySpeech(index, content, false)) {
+    voiceError.value = '当前浏览器不支持语音回复，请阅读文字回答。'
+  }
+}
+
+/** 决策 3A：开启「语音回复」后，回答完成自动播报；播完再回听，期间可打断。 */
+function autoSpeakReply(index: number, content: string): void {
+  if (!speechOutputSupported) return
+  if (!loadVoicePreferences().autoSpeakReplies) return
+  if (!content.trim()) return
+  if (listening.value) stopVoiceInput()
+  startReplySpeech(index, content, true)
 }
 
 function skipCurrentSpeechSegment(): void {
@@ -1028,6 +1084,7 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
     stopSpeaking()
     speakingIndex.value = null
   }
+  keepPartialReply = false
   history.value.push({ role: 'user', content, revealed: content.length })
   persistChatSession()
   draft.value = ''
@@ -1041,7 +1098,6 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
   workflowTrace.value = []
   orchestrationPhase.value = 'routing'
   workflowRouteExplanation.value = null
-  liveEvidencePreview.value = null
   scrollToEnd()
 
   const streamingEntry: ChatEntry = {
@@ -1059,6 +1115,7 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
     const alreadyStreamed = entry.content.length > 0 && entry.content === reply.answer
     entry.content = reply.answer
     entry.revealed = alreadyStreamed ? reply.answer.length : 0
+    entry.openChat = reply.open_chat
     entry.sources = reply.sources
     entry.citations = reply.citations
     entry.confidence = reply.confidence
@@ -1081,6 +1138,7 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
     if (reply.model) modelLabel.value = formatModelLabel(reply.model)
     persistChatSession()
     if (!alreadyStreamed) streamReveal(entry)
+    autoSpeakReply(entryIndex, reply.answer)
   }
 
   const chatInput = buildAssistantChatInput({
@@ -1107,10 +1165,6 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
           entry.revealed = entry.content.length
           scrollToEnd()
         },
-        onEvidencePreview: preview => {
-          liveEvidencePreview.value = preview
-          scrollToEnd()
-        },
         onCancelled: () => {
           streamCancelled = true
         },
@@ -1126,9 +1180,18 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
     applyReply(reply)
   } catch (cause) {
     if (controller.signal.aborted || streamCancelled || isAssistantCancellation(cause)) {
-      if (history.value[entryIndex] === streamingEntry) history.value.splice(entryIndex, 1)
-      persistChatSession()
-      if (userRequestedStop) showStoppedStatus()
+      const entry = history.value[entryIndex]
+      if (keepPartialReply && entry === streamingEntry && entry.content.trim()) {
+        // 决策 4B：结束回复停在已显示内容，不删气泡、不再有新输出。
+        entry.revealed = entry.content.length
+        persistChatSession()
+        showStoppedStatus('已结束回复，保留已生成的内容')
+      } else {
+        if (entry === streamingEntry) history.value.splice(entryIndex, 1)
+        persistChatSession()
+        if (userRequestedStop) showStoppedStatus()
+      }
+      keepPartialReply = false
       userRequestedStop = false
       return
     }
@@ -1143,9 +1206,17 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
       applyReply(reply)
     } catch (fallbackCause) {
       if (controller.signal.aborted || isAssistantCancellation(fallbackCause)) {
-        if (history.value[entryIndex] === streamingEntry) history.value.splice(entryIndex, 1)
-        persistChatSession()
-        if (userRequestedStop) showStoppedStatus()
+        const entry = history.value[entryIndex]
+        if (keepPartialReply && entry === streamingEntry && entry.content.trim()) {
+          entry.revealed = entry.content.length
+          persistChatSession()
+          showStoppedStatus('已结束回复，保留已生成的内容')
+        } else {
+          if (entry === streamingEntry) history.value.splice(entryIndex, 1)
+          persistChatSession()
+          if (userRequestedStop) showStoppedStatus()
+        }
+        keepPartialReply = false
         userRequestedStop = false
         return
       }
@@ -1166,9 +1237,9 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
   } finally {
     if (activeSendController === controller) activeSendController = null
     orchestrationPhase.value = null
-    liveEvidencePreview.value = null
     sending.value = false
-    if (!needMicGesture.value) void beginWakeListening()
+    // 自动播报进行中时不开麦回听（开麦会停止朗读）；播完由 onFinished 回听。
+    if (!needMicGesture.value && speakingIndex.value === null) void beginWakeListening()
   }
 }
 
@@ -1389,12 +1460,19 @@ onBeforeUnmount(() => {
           <AppIcon name="assistant" :size="16" />
         </span>
         <div class="chat-bubble">
-          {{ entry.role === 'assistant' ? entry.content.slice(0, entry.revealed) : entry.content
-          }}<span v-if="isStreaming(entry)" class="stream-caret" aria-hidden="true" />
-          <div
-            v-if="entry.role === 'assistant' && !isStreaming(entry) && (entry.degraded || entry.escalate || entry.riskNotice || entry.queryType || entry.routeExplanation || (entry.sources?.length ?? 0) > 0 || entry.confidence || (entry.agentTrace?.length ?? 0) > 0 || (entry.externalSources?.length ?? 0) > 0)"
-            class="chat-sources"
+          <div class="chat-message-text"><span class="chat-message-content">{{ entry.role === 'assistant' ? entry.content.slice(0, entry.revealed) : entry.content }}</span><span v-if="isStreaming(entry)" class="stream-caret" aria-hidden="true" /></div>
+          <details
+            v-if="entry.role === 'assistant' && !isStreaming(entry) && hasEvidenceDetails(entry)"
+            class="chat-evidence"
           >
+            <summary>
+              <span class="chat-evidence-title">
+                <AppIcon name="review" :size="14" />
+                查看依据
+              </span>
+              <small>{{ evidenceDisclosureSummary(entry) }}</small>
+            </summary>
+            <div class="chat-sources">
             <span v-if="isKnowledgeGapDegrade(entry)" class="chat-evidence-summary">
               <AppIcon name="compass" :size="12" style="vertical-align: -1px" />
               本机暂无已审核的相关知识卡，以上是一般照护提示；具体用药请咨询医生或药师。
@@ -1450,7 +1528,7 @@ onBeforeUnmount(() => {
               <p v-else class="text-faint">本次响应未返回片段正文，仅保留服务端核验过的引用标识。</p>
               <p v-if="citation.locator" class="text-faint">定位：{{ citation.locator }}</p>
             </details>
-            <details v-if="(entry.externalSources?.length ?? 0) > 0" class="chat-citation chat-external-sources">
+              <details v-if="(entry.externalSources?.length ?? 0) > 0" class="chat-citation chat-external-sources">
               <summary>外部参考（非本地审核证据）· {{ entry.externalSources?.length }} 条</summary>
               <a
                 v-for="source in entry.externalSources"
@@ -1464,14 +1542,18 @@ onBeforeUnmount(() => {
                 <span>{{ source.domain || source.url }}</span>
                 <small v-if="source.snippet">{{ source.snippet }}</small>
               </a>
-            </details>
-          </div>
+              </details>
+            </div>
+          </details>
           <div
             v-if="entry.role === 'assistant' && !isStreaming(entry) && index === history.length - 1 && (entry.suggestedQuestions?.length ?? 0) > 0"
             class="chat-follow-ups"
             aria-label="相关追问"
           >
-            <span class="chat-follow-ups-label">你还可以问</span>
+            <div class="chat-follow-ups-heading">
+              <span class="chat-follow-ups-label"><AppIcon name="sparkle" :size="13" />接下来可以问</span>
+              <small>点击后会放入输入框，可修改后再发送</small>
+            </div>
             <button
               v-for="question in entry.suggestedQuestions"
               :key="question"
@@ -1537,37 +1619,6 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </div>
-
-      <section
-        v-if="sending && liveEvidencePreview"
-        class="assistant-evidence-preview"
-        role="status"
-        aria-live="polite"
-        aria-label="本轮证据预览"
-      >
-        <div class="assistant-evidence-preview-heading">
-          <span><AppIcon name="review" :size="15" />已找到可核对的依据</span>
-          <small>仅显示资料名称和数量，不含健康正文</small>
-        </div>
-        <p>问题类型：{{ questionTypeLabel(liveEvidencePreview.query_type) }}</p>
-        <div class="assistant-evidence-preview-groups">
-          <span v-if="liveEvidencePreview.database_tools.length">
-            档案：{{ liveEvidencePreview.database_tools.map(evidenceToolLabel).join('、') }}
-          </span>
-          <span v-if="liveEvidencePreview.rule_tools.length">
-            规则：{{ liveEvidencePreview.rule_tools.map(evidenceToolLabel).join('、') }}
-          </span>
-          <span>
-            本地资料：{{ liveEvidencePreview.knowledge_count }} 条
-            <template v-if="liveEvidencePreview.knowledge_titles.length">
-              （{{ liveEvidencePreview.knowledge_titles.join('、') }}）
-            </template>
-          </span>
-          <span v-if="liveEvidencePreview.external_count">
-            外部参考：{{ liveEvidencePreview.external_count }} 条（非本地审核证据）
-          </span>
-        </div>
-      </section>
 
       <div v-if="sending && !(history[history.length - 1]?.role === 'assistant' && (history[history.length - 1]?.content.length ?? 0) > 0)" class="chat-bubble-row assistant">
         <span class="chat-avatar thinking" aria-hidden="true">
@@ -1787,7 +1838,9 @@ AGENT_WEB_SEARCH_ALLOWED_DOMAINS=html.duckduckgo.com
         <h4>语音偏好</h4>
         <p class="text-faint" style="font-size: 12px; line-height: 1.6; margin: 0 0 10px">
           点击输入框旁的麦克风按钮开启唤醒，再说「{{ wakePhrase }}」开始实时填入草稿。
-          说完并静音后会倒计时自动发送（可在下方改时长或关闭）；等待时可说「取消」「继续说」，或说「发送吧」立即发送。
+          中途停顿不超过「静音结束」时长（默认约 15 秒）会继续累加，不会打断口述；
+          静音结束后会倒计时自动发送（可在下方改时长或关闭），等待时继续说话会取消倒计时并累加进草稿，
+          也可说「取消」「继续说」，或说「发送吧」立即发送。
           语音回复由浏览器本地朗读，原始音频不会上传到本地助手 API。
         </p>
         <label class="voice-pref-row">
@@ -1827,6 +1880,38 @@ AGENT_WEB_SEARCH_ALLOWED_DOMAINS=html.duckduckgo.com
             </option>
           </select>
         </label>
+        <label class="voice-pref-row">
+          <input
+            type="checkbox"
+            :checked="voicePrefs.autoSpeakReplies"
+            :disabled="!speechOutputSupported"
+            @change="toggleVoicePref('autoSpeakReplies', ($event.target as HTMLInputElement).checked)"
+          />
+          <span>语音回复：回答完成后自动朗读（可随时停止）</span>
+        </label>
+        <label class="voice-pref-row">
+          <span>播报音色</span>
+          <select
+            :value="voicePrefs.preferredVoiceName"
+            :disabled="!speechOutputSupported"
+            @change="applyPreferredVoice(($event.target as HTMLSelectElement).value)"
+          >
+            <option value="">自动优选（更自然的中文女声）</option>
+            <option v-for="voiceOption in voiceOptions" :key="voiceOption.name" :value="voiceOption.name">
+              {{ voiceOption.name }}（{{ voiceOption.lang }}{{ voiceOption.localService ? ' · 本地' : '' }}）
+            </option>
+          </select>
+        </label>
+        <div class="row-actions" style="margin: 0 0 8px">
+          <button
+            type="button"
+            class="btn btn-ghost btn-small"
+            :disabled="!speechOutputSupported"
+            @click="previewPreferredVoice"
+          >
+            试听当前音色
+          </button>
+        </div>
         <label class="voice-pref-row">
           <input
             type="checkbox"

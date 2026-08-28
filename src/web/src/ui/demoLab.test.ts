@@ -13,7 +13,7 @@ describe('demo lab error layering (HCT-452)', () => {
     const message = describeSeedError(forbidden)
     expect(message).toContain('demo-parent')
     expect(message).toContain('无权补种')
-    expect(message).not.toContain('本地 API 服务不可用')
+    expect(message).not.toContain('本地服务暂时连不上')
   })
 
   it('keeps other 403 errors on the generic permission copy', () => {
@@ -31,8 +31,8 @@ describe('demo lab error layering (HCT-452)', () => {
     })
 
     const message = describeSeedError(offline)
-    expect(message).toContain('本地 API 服务不可用，本次没有改变任何数据。')
-    expect(message).toContain('8000')
+    expect(message).toContain('本地服务暂时连不上，本次没有改变任何数据。')
+    expect(message).toContain('服务已启动')
   })
 
   it('prefixes scenario loading failures so they are not mistaken for seed failures', () => {
@@ -43,6 +43,6 @@ describe('demo lab error layering (HCT-452)', () => {
 
     const message = describeScenarioError(offline)
     expect(message).toContain('课堂剧本加载失败')
-    expect(message).toContain('本地 API 服务不可用')
+    expect(message).toContain('本地服务暂时连不上')
   })
 })

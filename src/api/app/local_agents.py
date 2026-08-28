@@ -17,6 +17,7 @@ list.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -25,17 +26,18 @@ import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from threading import Event
+from threading import Event, Lock
 from typing import Any
 
-from ai.safety.seasonal_context import seasonal_care_context
+from ai.safety.classifier import inherit_query_type_from_history
+from ai.safety.lexicon import sanitize_answer_sentences
+from ai.safety.seasonal_context import is_seasonal_symptom_query, seasonal_care_context
 
 from app.config import Settings, get_settings
 from app.db import SessionLocal
 from app.egress_guard import is_web_search_egress_allowed
 from app.models import AccessAudit
 from app.open_chat import (
-    OPEN_CHAT_SYSTEM_PROMPT,
     coerce_open_model_answer,
     effective_max_tokens,
     is_open_chat,
@@ -59,15 +61,15 @@ from app.tool_call import (
     ASSISTANT_SYSTEM_PROMPT,
     HealthAssistantOutput,
     OllamaClient,
-    _check_medical_boundary,
     _latest_user_query,
     _looks_like_knowledge_citation,
     _parse_assistant_output,
     _unmatched_source_tokens,
-    append_teaching_reminder,
+    append_risk_statement,
     build_degrade_response,
     classify_question_detail,
     degrade_result,
+    dose_decision_result,
     execute_whitelisted_tool,
     filter_claimed_citations,
     is_loopback_ollama_url,
@@ -190,53 +192,68 @@ def plan_agent_execution(
     }
 
 
-def _knowledge_has_evidence(knowledge: dict[str, Any]) -> bool:
-    return bool(knowledge.get("results")) and not knowledge.get("error")
+# NOTE: the former ``_medication_safety_short_circuit`` (EVIDENCE_REQUIRED
+# wall when no local knowledge matched) was removed by decision 2B: the model
+# may answer without local evidence and the server appends an explicit
+# low-evidence risk statement instead of walling off the whole turn.
 
 
-def _medication_safety_short_circuit(
+# ── Context binding: one assistant session must not mix members ─────────
+_CONTEXT_BINDING_LOCK = Lock()
+# actor-session digest -> "household|member" scope bound to that session.
+_SESSION_MEMBER_BINDING: dict[str, str] = {}
+
+
+def bind_session_member_context(
     messages: list[dict[str, Any]],
     *,
-    model: str,
-    query_type: str,
-    started: float,
-) -> dict[str, Any]:
-    """Skip Ollama when medication safety has no approved local knowledge."""
-    result = degrade_result(
-        build_degrade_response("EVIDENCE_REQUIRED"),
-        model,
-        query_type=query_type,
-    )
-    result["_trace"] = _trace(
-        "synthesis", _AGENT_ROLES["synthesis"], "degraded", started,
-        "本地资料库暂无用药安全依据，已跳过模型生成",
-    )
-    result["suggested_questions"] = suggest_follow_up_questions(messages, escalate=True)
-    result["escalate"] = True
-    return result
+    assistant_session_id: str | None,
+    actor_id: str,
+    household_id: str | None,
+    member_id: str | None,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Discard chat history recorded for a different member (context binding).
 
-
-def _symptom_knowledge_gap_short_circuit(
-    messages: list[dict[str, Any]],
-    *,
-    model: str,
-    query_type: str,
-    started: float,
-) -> dict[str, Any]:
-    """Friendly teaching fallback when a symptom-material question has no
-    reviewed local knowledge.
-
-    Unlike the medication-safety short circuit this never escalates: an empty
-    teaching library on a "what can I read about a stuffy nose" question is a
-    knowledge gap, not a boundary violation.  The deterministic answer keeps
-    the hard limits (no fabricated drug evidence, no dosage decisions).
+    When the same assistant session switches to another member, earlier
+    user/assistant turns (which may contain the previous member's facts) are
+    dropped: only server system context and the latest user question remain,
+    and the session's retrieval cache is cleared.  Returns
+    ``(messages, member_switched)``.
     """
-    result = symptom_knowledge_gap_result(messages, model=model, query_type=query_type)
-    result["_trace"] = _trace(
-        "synthesis", _AGENT_ROLES["synthesis"], "degraded", started,
-        "本机暂无已审核的相关知识卡，已返回一般照护提示（未调用模型）",
+    session_id = str(assistant_session_id or "").strip()
+    if not session_id:
+        return messages, False
+    key = hashlib.sha256(f"{session_id}|{actor_id}".encode()).hexdigest()[:32]
+    scope = f"{household_id or ''}|{member_id or ''}"
+    with _CONTEXT_BINDING_LOCK:
+        previous = _SESSION_MEMBER_BINDING.get(key)
+        _SESSION_MEMBER_BINDING[key] = scope
+        while len(_SESSION_MEMBER_BINDING) > 512:
+            _SESSION_MEMBER_BINDING.pop(next(iter(_SESSION_MEMBER_BINDING)))
+    if previous is None or previous == scope:
+        return messages, False
+    trimmed = [
+        message for message in messages
+        if isinstance(message, dict) and message.get("role") == "system"
+    ]
+    last_user = next(
+        (
+            message for message in reversed(messages)
+            if isinstance(message, dict) and message.get("role") == "user"
+        ),
+        None,
     )
-    return result
+    if last_user is not None:
+        trimmed.append(last_user)
+    clear_actor_session(assistant_session_id=session_id, actor_id=actor_id)
+    logger.info("HCT-430 context binding dropped cross-member history for session")
+    return trimmed, True
+
+
+def reset_session_member_bindings() -> None:
+    """Test helper: forget all session→member bindings."""
+    with _CONTEXT_BINDING_LOCK:
+        _SESSION_MEMBER_BINDING.clear()
 
 
 def redact_web_query(query: str, sensitive_values: list[str | None] | None = None) -> str:
@@ -253,6 +270,55 @@ def redact_web_query(query: str, sensitive_values: list[str | None] | None = Non
             redacted = re.sub(re.escape(value), " ", redacted, flags=re.I)
     redacted = re.sub(r"\s+", " ", redacted).strip()
     return redacted[:240]
+
+
+# ── Decision 4B: tiered network-context opt-in ──────────────────────────
+#
+# ``query_only``（默认）: only the redacted question leaves the device.
+# ``symptom``: adds symptom keywords found in this conversation's user turns.
+# ``member``: additionally adds anonymised, whitelisted member facts —
+#   allergy / chronic-disease / confirmed drug *names* only, never member or
+#   household identifiers.  Every tier passes the same redaction; the final
+#   network query is surfaced to the caller before the request is sent.
+NETWORK_CONTEXT_LEVELS: tuple[str, ...] = ("query_only", "symptom", "member")
+
+# Whitelisted member-state fields that may contribute anonymous context.
+_MEMBER_CONTEXT_FIELDS = ("allergies", "diseases", "drugs")
+
+
+def build_network_context_terms(
+    level: str,
+    *,
+    messages: list[dict[str, Any]] | None = None,
+    database: dict[str, Any] | None = None,
+) -> list[str]:
+    """Return deduplicated, anonymised context terms for the chosen tier."""
+    normalized = (level or "query_only").strip().casefold()
+    if normalized not in NETWORK_CONTEXT_LEVELS or normalized == "query_only":
+        return []
+    terms: list[str] = []
+    from ai.safety.lexicon import SYMPTOM_CONTEXT_TERMS
+
+    conversation_text = " ".join(
+        str(message.get("content") or "")
+        for message in messages or []
+        if isinstance(message, dict) and message.get("role") == "user"
+    )
+    terms.extend(term for term in SYMPTOM_CONTEXT_TERMS if term in conversation_text)
+    if normalized == "member":
+        state = {}
+        member_state = (database or {}).get("get_member_state")
+        if isinstance(member_state, dict) and isinstance(member_state.get("state"), dict):
+            state = member_state["state"]
+        for field_name in _MEMBER_CONTEXT_FIELDS:
+            for item in state.get(field_name) or []:
+                name = str((item or {}).get("name") or (item or {}).get("drug") or "").strip()
+                if name:
+                    prefix = {"allergies": "过敏史", "diseases": "病史", "drugs": "在用"}[
+                        field_name
+                    ]
+                    terms.append(f"{prefix}{name}")
+    return list(dict.fromkeys(terms))[:8]
 
 
 def _trace(
@@ -335,6 +401,13 @@ def get_agent_catalog(settings: Settings | None = None) -> dict[str, Any]:
         "web_search_unavailable_reason": unavailable_reason,
         "web_search_enable_hint": enable_hint,
         "web_search_requires_request_opt_in": True,
+        # Decision 3B: allowlist keeps the fixed-host posture; open allows
+        # SSRF-guarded public HTTPS result-page follow-up with rule filtering.
+        "web_search_egress_mode": getattr(
+            settings, "agent_web_search_egress_mode", "allowlist"
+        ),
+        # Decision 4B: per-request opt-in tiers for outbound context.
+        "network_context_levels": list(NETWORK_CONTEXT_LEVELS),
         "open_chat": is_open_chat(settings),
         "open_max_tokens": int(settings.agent_open_max_tokens)
         if is_open_chat(settings)
@@ -716,6 +789,8 @@ def _web_search_agent(
     sensitive_values: list[str | None],
     allow_network_search: bool,
     settings: Settings,
+    network_context_terms: list[str] | None = None,
+    on_network_query: Callable[[str], None] | None = None,
 ) -> tuple[list[dict[str, str]], dict[str, Any], str | None]:
     started = time.perf_counter()
     if not allow_network_search:
@@ -732,6 +807,10 @@ def _web_search_agent(
         ), None
 
     safe_query = redact_web_query(query, sensitive_values)
+    if safe_query and network_context_terms:
+        # 4B: opted-in context terms pass the same redaction as the query.
+        combined = f"{safe_query} {' '.join(network_context_terms)}"
+        safe_query = redact_web_query(combined, sensitive_values)
     if not safe_query:
         return [], _trace(
             "web_search", _AGENT_ROLES["web_search"], "blocked", started,
@@ -747,6 +826,10 @@ def _web_search_agent(
         ), safe_query
 
     fixture = is_fixture_search_provider(settings)
+    # 4B: the exact outbound query is surfaced before the request is sent so
+    # the UI can show users what leaves the device.
+    if on_network_query is not None:
+        on_network_query(safe_query)
     try:
         results = execute_web_search(safe_query, settings=settings)
         if fixture:
@@ -801,6 +884,10 @@ def _compact_external_sources(results: list[dict[str, str]]) -> str:
     for idx, item in enumerate(results[:3], 1):
         snippet = (item.get("snippet") or "无摘要")[:80]
         lines.append(f"[WEB-{idx}] {item['title']}：{snippet}")
+        # Open egress mode (3B) may attach a rule-filtered page excerpt.
+        excerpt = (item.get("page_excerpt") or "").strip()
+        if excerpt:
+            lines.append(f"[WEB-{idx} 页面摘录] {excerpt[:200]}")
     return "\n".join(lines)
 
 
@@ -1034,13 +1121,32 @@ def _synthesis_agent(
     base = {
         "model": model,
         "query_type": query_type,
-        "risk_notice": None if open_chat else risk_notice_for_question(query_type),
+        # Unified server-side risk statement (2B/8C): the notice applies in
+        # every mode, including open-chat.
+        "risk_notice": risk_notice_for_question(query_type),
     }
 
     def cancelled() -> bool:
         return bool(cancel_event and cancel_event.is_set())
 
     def degraded(reason: str) -> dict[str, Any]:
+        # A symptom-material question that cannot be answered because the
+        # model itself is unavailable keeps the friendly deterministic
+        # teaching fallback instead of the generic degrade wall.
+        if (
+            reason in {"SCHEMA_VALIDATION_FAILED", "MODEL_UNAVAILABLE"}
+            and query_type == "SYMPTOM_MEDICATION"
+            and not (knowledge.get("results") or [])
+        ):
+            payload = symptom_knowledge_gap_result(
+                messages, model=model, query_type=query_type
+            )
+            payload["_trace"] = _trace(
+                "synthesis", _AGENT_ROLES["synthesis"], "degraded", started,
+                "模型暂不可用且本机无相关知识卡，已返回一般照护提示",
+            )
+            _emit_answer_tokens(str(payload.get("answer") or ""), on_token)
+            return payload
         payload = degrade_result(build_degrade_response(reason), model, query_type=query_type)
         # A model/schema failure must not hide evidence that was actually
         # retrieved: point users at the references the earlier nodes found.
@@ -1100,34 +1206,39 @@ def _synthesis_agent(
             f"{item['chunk_id']}（{item['document_title'] or '未命名资料'}）"
             for item in allowed_citations[:5]
         )
+        # 2B: citations are strongly preferred but no longer a hard wall —
+        # the server appends a low-evidence risk statement when none match.
         citation_rule = (
-            "回答要点必须来自这些片段的内容，并把真正用到的 chunk_id 原样填入 "
-            "sources（至少一个，不得改写、缩写或编造）。"
-            if query_type != "GENERAL" and not open_chat
-            else "如果回答用到了片段内容，就把对应 chunk_id 原样填入 sources；"
-            "用不上时保持 sources 为空即可，不要编造。"
+            "回答要点尽量来自这些片段的内容，并把真正用到的 chunk_id 原样填入 "
+            "sources（不得改写、缩写或编造）；确实用不上时保持 sources 为空。"
         )
         routing_hint += (
             f"\n本轮命中的本地知识片段（chunk_id｜资料名）：{listed_citations}。"
             f"{citation_rule}"
         )
-    if external_sources and open_chat:
+    if external_sources:
         routing_hint += (
             f"\n本轮有 {len(external_sources)} 条联网参考摘要，可转述要点并标明「外部参考」；"
-            "不要把外链写进 sources。"
+            "不要把外链写进 sources，不要转述任何购药、问诊或导流话术。"
         )
-    if query_type == "SYMPTOM_MEDICATION" and not open_chat:
+    if query_type == "SYMPTOM_MEDICATION":
         routing_hint += (
             "这是症状用药资料问题：以已审核知识卡为主，结合过敏史/疾病史说明；"
-            "家庭药箱不是前提。请结合【季节情境】共情换季/着凉等生活处境，语气亲切有温度；"
+            "家庭药箱不是前提。语气亲切有温度；"
             "若有联网参考，只能把近期季节性呼吸道提醒当补充参考，禁止编造具体病毒名或确诊。"
             "不下诊断、不开个体处方、不写具体片数。"
-            f"\n{seasonal_care_context()}"
         )
-    elif query_type == "MEDICATION_SAFETY" and not open_chat:
+        # Seasonal framing is keyed to the symptom, not the calendar: only
+        # weather-linked complaints receive the change-of-season template.
+        latest_query = _latest_user_query(messages)
+        if is_seasonal_symptom_query(latest_query):
+            routing_hint += f"\n{seasonal_care_context()}"
+    elif query_type == "MEDICATION_SAFETY":
         routing_hint += (
-            "这是用药安全问题，必须以本地已审核知识片段为依据；如果没有知识片段，"
-            "明确说明无法判断，不得用外部搜索结果替代。家庭药箱不是唯一依据。"
+            "这是用药安全问题：优先以本地已审核知识片段为依据；没有命中片段时，"
+            "仍可给出一般性资料说明，但必须明确说明「本机资料未覆盖」并建议咨询医生或药师，"
+            "不得替用户决定是否同服、停换，绝不给出个体剂量数字。"
+            "外部搜索结果只能作补充参考，不是审核证据。家庭药箱不是唯一依据。"
             "语气关心但内容克制。"
         )
     if query_type in {"FAMILY_RECORD", "MEDICATION_RECORD", "RULE_EVIDENCE", "MEDICATION_SAFETY"}:
@@ -1136,9 +1247,10 @@ def _synthesis_agent(
             "「病史 → 已确认药品 → 过敏/规则冲突 → 下一步由谁确认」的顺序叙述，"
             "不得自行补充未返回的事实，不得给出剂量或诊断结论。"
         )
-    base_prompt = OPEN_CHAT_SYSTEM_PROMPT if open_chat else ASSISTANT_SYSTEM_PROMPT
+    # 8C: one unified system prompt in every mode; open-chat only relaxes
+    # output parsing and the token budget.
     synthesis_system = "\n\n".join(filter(None, [
-        base_prompt,
+        ASSISTANT_SYSTEM_PROMPT,
         local_clock_context(),
         routing_hint,
         network_status_note,
@@ -1156,11 +1268,10 @@ def _synthesis_agent(
     client = OllamaClient(settings.ollama_base_url)
     parsed = None
     matched_citations: list[dict[str, str]] = []
-    # HCT-450: citation correction retry.  Open-chat demo skips the wall.
-    # Open-chat mode is intentionally permissive about citations, but it
-    # still gets one quality retry when the model emits a control token or an
-    # otherwise invalid contract.  Showing the token would be worse than a
-    # short structured degrade response.
+    # HCT-450: one quality retry — either the draft was not a displayable
+    # contract, or citations were hit but none was referenced.  The retry is
+    # a quality nudge, not a wall: an uncited second draft is still delivered
+    # with the low-evidence risk statement (2B).
     retry_budget = 2
     for attempt in range(retry_budget):
         if on_status is not None:
@@ -1201,7 +1312,7 @@ def _synthesis_agent(
                 except Exception:  # noqa: BLE001
                     parsed = None
         if parsed is None:
-            if open_chat and attempt + 1 < retry_budget:
+            if attempt + 1 < retry_budget:
                 conversation.append({
                     "role": "system",
                     "content": (
@@ -1212,15 +1323,10 @@ def _synthesis_agent(
                 })
                 continue
             return degraded("SCHEMA_VALIDATION_FAILED")
-        if not open_chat and _check_medical_boundary(parsed.answer):
-            return degraded("MEDICAL_BOUNDARY_VIOLATION")
-        if not open_chat and ("http://" in parsed.answer or "https://" in parsed.answer):
-            return degraded("EXTERNAL_LINK_DETECTED")
 
         matched_citations = filter_claimed_citations(parsed.sources, allowed_citations)
         if (
-            not open_chat
-            and allowed_citations
+            allowed_citations
             and not matched_citations
             and attempt == 0
             and retry_budget > 1
@@ -1239,71 +1345,37 @@ def _synthesis_agent(
         break
 
     assert parsed is not None
-    if open_chat:
-        fact_sources = [
-            token
-            for token in _unmatched_source_tokens(parsed.sources, matched_citations)
-            if token in allowed_fact_sources
-        ]
-        escalated = bool(parsed.escalate)
-        result = {
-            **base,
-            "answer": parsed.answer,
-            "sources": [item["chunk_id"] for item in matched_citations] + fact_sources,
-            "citations": matched_citations,
-            "suggested_questions": suggest_follow_up_questions(
-                messages,
-                escalate=escalated,
-                query_type=query_type,
-                has_citations=bool(matched_citations),
-            ),
-            "confidence": parsed.confidence,
-            "escalate": escalated,
-            "degraded": False,
-            "degrade_reason": None,
-            "route": None,
-        }
-        result["_trace"] = _trace(
-            "synthesis", _AGENT_ROLES["synthesis"], "completed", started,
-            "开放演示模式：已放行本机模型回答（未启用引用硬墙）",
-            source_count=len(matched_citations) + len(fact_sources),
+    # Sentence-level sanitisation (1A + blacklist softening) in every mode:
+    # only the offending sentences are removed, with a footnote; the whole
+    # answer degrades only when nothing survives.
+    answer_text, removal_reasons = sanitize_answer_sentences(parsed.answer)
+    if not answer_text:
+        reason = (
+            "EXTERNAL_LINK_DETECTED"
+            if removal_reasons and set(removal_reasons) == {"EXTERNAL_LINK"}
+            else "MEDICAL_BOUNDARY_VIOLATION"
         )
-        _emit_answer_tokens(parsed.answer, on_token)
-        return result
+        return degraded(reason)
 
     unmatched = _unmatched_source_tokens(parsed.sources, matched_citations)
     unknown_sources = [
         token for token in unmatched if token not in allowed_fact_sources
     ]
+    # Fabricated knowledge citations are still rejected outright.
     if any(_looks_like_knowledge_citation(token) for token in unknown_sources):
         return degraded("CITATION_NOT_FOUND")
-    if allowed_citations and not matched_citations and query_type != "GENERAL":
-        # GENERAL science answers may draw on retrieved knowledge without being
-        # forced to cite it; the citation wall stays for record/safety questions
-        # where an uncited answer could masquerade as verified local evidence.
-        # Fabricated citations are still rejected above.
-        return degraded("EVIDENCE_REQUIRED")
-    if query_type == "MEDICATION_SAFETY" and not matched_citations:
-        return degraded("EVIDENCE_REQUIRED")
-    if query_type == "SYMPTOM_MEDICATION" and not matched_citations:
-        # No retrievable reviewed knowledge: drop the uncited model draft and
-        # answer with the deterministic friendly teaching fallback instead of
-        # the hard evidence wall reserved for medication-safety decisions.
-        payload = symptom_knowledge_gap_result(messages, model=model, query_type=query_type)
-        payload["_trace"] = _trace(
-            "synthesis", _AGENT_ROLES["synthesis"], "degraded", started,
-            "本机暂无已审核的相关知识卡，已返回一般照护提示",
-        )
-        _emit_answer_tokens(str(payload.get("answer") or ""), on_token)
-        return payload
-    if any(token not in allowed_fact_sources for token in unknown_sources):
-        return degraded("CITATION_NOT_FOUND")
 
+    # Decision 2B: missing citations no longer wall off the answer.  The
+    # answer is delivered with the unified server-appended risk statement;
+    # unverifiable non-knowledge tokens are dropped quietly.
     fact_sources = [token for token in unmatched if token in allowed_fact_sources]
     escalated = parsed.escalate or query_type == "URGENT"
+    final_answer = append_risk_statement(
+        answer_text, query_type, has_citations=bool(matched_citations)
+    )
     result = {
         **base,
-        "answer": append_teaching_reminder(parsed.answer, query_type),
+        "answer": final_answer,
         "sources": [item["chunk_id"] for item in matched_citations] + fact_sources,
         "citations": matched_citations,
         "suggested_questions": suggest_follow_up_questions(
@@ -1320,10 +1392,11 @@ def _synthesis_agent(
     }
     result["_trace"] = _trace(
         "synthesis", _AGENT_ROLES["synthesis"], "completed", started,
-        "已在本机汇总证据并生成回答",
+        "已在本机汇总证据并生成回答"
+        + ("（已按句级安全规则省略个别语句）" if removal_reasons else ""),
         source_count=len(matched_citations) + len(fact_sources),
     )
-    _emit_answer_tokens(parsed.answer, on_token)
+    _emit_answer_tokens(final_answer, on_token)
     return result
 
 
@@ -1392,6 +1465,7 @@ def run_local_multi_agent(
     max_tokens: int = 512,
     temperature: float = 0.3,
     allow_network_search: bool = False,
+    network_context_level: str = "query_only",
     query_type_override: str | None = None,
     assistant_session_id: str | None = None,
     clear_session_cache: bool = False,
@@ -1401,6 +1475,7 @@ def run_local_multi_agent(
     on_status: Callable[[str], None] | None = None,
     on_external_sources: Callable[[list[dict[str, str]], str | None], None] | None = None,
     on_evidence_preview: Callable[[dict[str, Any]], None] | None = None,
+    on_network_query: Callable[[str], None] | None = None,
     cancel_event: Event | None = None,
 ) -> dict[str, Any]:
     """Run the local router -> data/knowledge/web -> local Ollama pipeline.
@@ -1412,10 +1487,35 @@ def run_local_multi_agent(
     """
     settings = get_settings()
     orchestration_id = str(uuid.uuid4())
+    # Context binding: a session that switches member drops earlier turns so
+    # one member's facts can never leak into another member's conversation.
+    messages, member_context_switched = bind_session_member_context(
+        messages,
+        assistant_session_id=assistant_session_id,
+        actor_id=actor_id,
+        household_id=household_id,
+        member_id=member_id,
+    )
+    context_level = (network_context_level or "query_only").strip().casefold()
+    if context_level not in NETWORK_CONTEXT_LEVELS:
+        context_level = "query_only"
     query = _latest_user_query(messages)
     classifier = classify_question_detail(query, override=query_type_override)
     query_type = str(classifier["merged"])
+    # Short anaphoric follow-ups（「那饭后呢」）inherit the previous topic's
+    # query type so the risk routing survives multi-turn conversations.
+    if not query_type_override:
+        inherited_type, inherited = inherit_query_type_from_history(
+            messages, current_type=query_type
+        )
+        if inherited:
+            query_type = inherited_type
+            classifier = {**classifier, "merged": query_type, "inherited": True}
     route_explanation = _classifier_explanation(classifier)
+    if classifier.get("inherited"):
+        route_explanation += "；短追问已继承上一轮主题类型"
+    if member_context_switched:
+        route_explanation += "；检测到成员切换，已丢弃此前对话上下文"
     model_name = model or settings.ollama_model
     traces: list[dict[str, Any]] = []
     evidence_preview: dict[str, Any] | None = None
@@ -1481,6 +1581,7 @@ def run_local_multi_agent(
             "all_agents_local": True,
             "network_used": network_used,
             "network_query": network_query,
+            "network_context_level": context_level,
             "agent_trace": traces,
             "external_sources": external_sources,
             "route_explanation": route_explanation,
@@ -1525,6 +1626,32 @@ def run_local_multi_agent(
         ))
         return _finalize(result, network_used=False, network_query=None, external_sources=[])
 
+    # Decision 1A + 8C: explicit individual dose-number questions get the
+    # deterministic refusal before any retrieval or model call, in every mode.
+    if query_type == "DOSE_DECISION":
+        _append_trace(_trace(
+            "router", _AGENT_ROLES["router"], "completed", started,
+            f"{route_explanation}；命中个体剂量硬拒策略，直接返回固定拒答",
+            classifier=classifier,
+        ))
+        _append_trace(_skipped("database", "个体剂量问题按策略直接拒答，无需读取健康档案"))
+        _append_trace(_skipped("rules", "个体剂量问题按策略直接拒答"))
+        _append_trace(_skipped("knowledge", "个体剂量问题按策略直接拒答"))
+        _append_trace(_skipped(
+            "web_search", "个体剂量问题按策略直接拒答", "DOSE_DECISION_REFUSED",
+        ))
+        _publish_evidence_preview({}, {}, {}, [])
+        synthesis_started = time.perf_counter()
+        if on_status is not None:
+            on_status("generating")
+        result = dose_decision_result(messages, model=model_name, query_type=query_type)
+        _emit_answer_tokens(str(result.get("answer") or ""), on_synthesis_token)
+        _append_trace(_trace(
+            "synthesis", _AGENT_ROLES["synthesis"], "completed", synthesis_started,
+            "已按个体剂量硬拒策略返回固定回复（未调用模型）",
+        ))
+        return _finalize(result, network_used=False, network_query=None, external_sources=[])
+
     plan = plan_agent_execution(
         query_type,
         household_id=household_id,
@@ -1540,7 +1667,11 @@ def run_local_multi_agent(
     sensitive = [actor_id, household_id, member_id, *(sensitive_values or [])]
     executor: ThreadPoolExecutor | None = None
     web_future = None
-    parallel_web = plan["web_search"].run and allow_network_search
+    # 4B「member」tier needs the database step's anonymised facts, so the web
+    # search runs after local retrieval instead of in parallel.
+    parallel_web = (
+        plan["web_search"].run and allow_network_search and context_level != "member"
+    )
     parallel_local = plan["database"].run and plan["knowledge"].run
     worker_count = (1 if parallel_web else 0) + (2 if parallel_local else 0)
     if worker_count:
@@ -1555,6 +1686,10 @@ def run_local_multi_agent(
             sensitive_values=sensitive,
             allow_network_search=allow_network_search,
             settings=settings,
+            network_context_terms=build_network_context_terms(
+                context_level, messages=messages
+            ),
+            on_network_query=on_network_query,
         )
 
     database: dict[str, Any] = {}
@@ -1672,6 +1807,10 @@ def run_local_multi_agent(
                 sensitive_values=sensitive,
                 allow_network_search=allow_network_search,
                 settings=settings,
+                network_context_terms=build_network_context_terms(
+                    context_level, messages=messages, database=database
+                ),
+                on_network_query=on_network_query,
             )
         _append_trace(web_trace)
         if on_external_sources is not None and external_sources:
@@ -1682,34 +1821,9 @@ def run_local_multi_agent(
 
     _ensure_active()
     _publish_evidence_preview(database, knowledge, rules, external_sources)
-    if (
-        not is_open_chat(settings)
-        and query_type in {"MEDICATION_SAFETY", "SYMPTOM_MEDICATION"}
-        and plan["knowledge"].run
-        and not _knowledge_has_evidence(knowledge)
-    ):
-        short_circuit = (
-            _medication_safety_short_circuit
-            if query_type == "MEDICATION_SAFETY"
-            else _symptom_knowledge_gap_short_circuit
-        )
-        synthesis = short_circuit(
-            messages,
-            model=model_name,
-            query_type=query_type,
-            started=time.perf_counter(),
-        )
-        _emit_answer_tokens(str(synthesis.get("answer") or ""), on_synthesis_token)
-        synthesis_trace = synthesis.pop("_trace", None)
-        if synthesis_trace:
-            _append_trace(synthesis_trace)
-        return _finalize(
-            synthesis,
-            network_used=web_trace.get("network_used", False),
-            network_query=network_query,
-            external_sources=external_sources,
-        )
-
+    # Decision 2B: medication-safety / symptom questions without local
+    # evidence are no longer short-circuited into an EVIDENCE_REQUIRED wall —
+    # synthesis runs and the server appends the low-evidence risk statement.
     synthesis = _synthesis_agent(
         messages=messages,
         query_type=query_type,

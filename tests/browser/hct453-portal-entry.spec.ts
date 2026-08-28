@@ -45,8 +45,10 @@ async function installEntryApi(page: Page): Promise<void> {
     })
 
     if (request.method() === 'POST' && path === '/api/v1/auth/login') {
+      const submitted = request.postDataJSON() as { actor_id?: string } | null
+      const actorId = submitted?.actor_id ?? 'parent-admin'
       return respond({
-        actor_id: 'parent-admin',
+        actor_id: actorId,
         session_token: 'o'.repeat(48),
         expires_at: (Date.now() + 1_800_000) / 1000,
       })
@@ -107,16 +109,18 @@ test('成员前台入口展示个人前台品牌：人脸/PIN 为主，密码收
   await expect(page.getByText('成员前台 · 个人身份')).toBeVisible()
   await expect(page.getByText(/以家人自己的身份进入/)).toBeVisible()
 
-  // 凭据 tab 只保留人脸识别 / 家庭 PIN；账号密码退到「其他方式」次级入口。
+  // 凭据 tab 只保留刷脸 / 数字密码；账号密码退到「其他方式」次级入口。
   const credentialGroup = page.getByRole('group', { name: '选择账号登录凭据' })
   const tabs = credentialGroup.getByRole('button')
   await expect(tabs).toHaveCount(2)
-  await expect(tabs.nth(0)).toHaveText('人脸识别')
-  await expect(tabs.nth(1)).toHaveText('家庭 PIN')
-  await expect(credentialGroup.getByRole('button', { name: '家庭 PIN' })).toHaveClass(/active/)
-  await expect(page.getByLabel('六位数字 PIN')).toBeVisible()
+  await expect(tabs.nth(0)).toHaveText('刷脸进入')
+  await expect(tabs.nth(1)).toHaveText('数字密码')
+  await expect(credentialGroup.getByRole('button', { name: '数字密码' })).toHaveClass(/active/)
+  await expect(page.getByLabel('六位数字密码')).toBeVisible()
   await expect(page.getByRole('button', { name: '其他方式：用账号密码登录' })).toBeVisible()
   await expect(page.getByRole('button', { name: '进入我的前台' })).toBeVisible()
+  await expect(page.getByTestId('member-portal-entry-guide')).toContainText('正确进入成员前台')
+  await expect(page.getByTestId('member-portal-entry-guide')).toContainText('成员前台')
 
   // 跨端指引指向管理后台端口，并显式带上 ?portal=admin 覆盖。
   const crossLink = page.getByRole('link', { name: /我是家庭管理员，去管理后台/ })
@@ -134,9 +138,11 @@ test('管理后台入口展示全家管理品牌，账号密码为主', async ({
 
   const credentialGroup = page.getByRole('group', { name: '选择账号登录凭据' })
   const tabs = credentialGroup.getByRole('button')
-  await expect(tabs).toHaveCount(3)
+  await expect(tabs).toHaveCount(1)
   await expect(tabs.nth(0)).toHaveText('账号密码')
   await expect(credentialGroup.getByRole('button', { name: '账号密码' })).toHaveClass(/active/)
+  await expect(credentialGroup.getByRole('button', { name: '数字密码' })).toHaveCount(0)
+  await expect(credentialGroup.getByRole('button', { name: '刷脸进入' })).toHaveCount(0)
   await expect(page.getByLabel('本地账号')).toBeVisible()
   await expect(page.getByText('管理员推荐使用账号密码')).toBeVisible()
   await expect(page.getByRole('button', { name: '进入管理后台' })).toBeVisible()
@@ -172,7 +178,8 @@ test('成员前台入口拦截管理员账号：登出并指向管理后台，�
   await page.getByRole('button', { name: '进入我的前台' }).click()
 
   // 不落在管理后台：无应用框架、无后台导航。
-  await expect(page.getByRole('alert')).toContainText('这是家庭成员前台入口')
+  await expect(page.getByRole('alert')).toContainText('这是家庭成员前台')
+  await expect(page.getByRole('alert')).toContainText('管理后台')
   await expect(page.locator('.app-frame')).toHaveCount(0)
   await expect(page.getByRole('button', { name: '人工复核' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '家庭总览' })).toHaveCount(0)
@@ -186,15 +193,13 @@ test('管理后台入口拦截成员账号：登出并指向成员前台，不�
   await installEntryApi(page)
   await page.goto('/?portal=admin')
 
-  await page.getByRole('button', { name: '家庭 PIN' }).click()
-  await page.getByRole('textbox', { name: /你的登录名/ }).fill(grandmaMember.actor_id)
-  const householdSelect = page.locator('select').filter({ has: page.locator(`option[value="${household.id}"]`) })
-  await expect(householdSelect).toBeVisible({ timeout: 5000 })
-  await householdSelect.selectOption(household.id)
-  await page.getByLabel('六位数字 PIN').fill('135790')
+  // 管理后台不再提供家人使用的 PIN / 人脸入口；用成员账号密码验证入口锁仍会拒绝。
+  await page.getByLabel('本地账号').fill(grandmaMember.actor_id)
+  await page.getByLabel('密码').fill('synthetic-password-123')
   await page.getByRole('button', { name: '进入管理后台' }).click()
 
-  await expect(page.getByRole('alert')).toContainText('这是家庭管理后台入口')
+  await expect(page.getByRole('alert')).toContainText('这是家庭管理后台')
+  await expect(page.getByRole('alert')).toContainText('成员前台')
   await expect(page.locator('.app-frame')).toHaveCount(0)
   await expect(page.getByRole('button', { name: '拍照录药' })).toHaveCount(0)
 
@@ -211,7 +216,7 @@ test('成员前台入口放行成员账号并落在成员首页，只见成员�
   const householdSelect = page.locator('select').filter({ has: page.locator(`option[value="${household.id}"]`) })
   await expect(householdSelect).toBeVisible({ timeout: 5000 })
   await householdSelect.selectOption(household.id)
-  await page.getByLabel('六位数字 PIN').fill('135790')
+  await page.getByLabel('六位数字密码').fill('135790')
   await page.getByRole('button', { name: '进入我的前台' }).click()
 
   await expect(page.locator('.app-frame')).toBeVisible()
