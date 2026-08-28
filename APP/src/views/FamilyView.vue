@@ -1,16 +1,17 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 
 import AppIcon from '@/components/AppIcon.vue'
 import ErrorNotice from '@/components/ErrorNotice.vue'
 import EmptyState from '@/components/EmptyState.vue'
+import ListLoadingState from '@/components/ListLoadingState.vue'
+import ListStatusAnnouncer from '@/components/ListStatusAnnouncer.vue'
 import PrivacyBadge from '@/components/PrivacyBadge.vue'
-import SkeletonCard from '@/components/SkeletonCard.vue'
 import { activeProvider } from '@/data'
 import { memberRoleLabel } from '@/data/labels'
 import type { MemberSummary } from '@/data/types'
 import { avatarHue, formatDay } from '@/utils/format'
-import { presentApiError, type ErrorPresentation } from '@/api/errors'
+import { presentListApiError, type ErrorPresentation } from '@/api/errors'
 import { sessionContextKey, useSession } from '@/stores/session'
 
 const members = ref<MemberSummary[]>([])
@@ -18,8 +19,18 @@ const loading = ref(true)
 const error = ref<ErrorPresentation | null>(null)
 const { session } = useSession()
 let reloadGeneration = 0
+let reloadInFlight = false
+
+const listStatusMessage = computed(() => {
+  if (loading.value || error.value) return ''
+  return members.value.length > 0
+    ? `已加载 ${members.value.length} 位家庭成员。`
+    : '当前没有可用的家庭成员。'
+})
 
 async function reload(): Promise<void> {
+  if (reloadInFlight) return
+  reloadInFlight = true
   const generation = ++reloadGeneration
   const expectedKey = sessionContextKey(session)
   loading.value = true
@@ -31,9 +42,10 @@ async function reload(): Promise<void> {
     members.value = nextMembers
   } catch (cause) {
     if (generation !== reloadGeneration || expectedKey !== sessionContextKey(session)) return
-    error.value = presentApiError(cause)
+    error.value = presentListApiError(cause)
   } finally {
     if (generation === reloadGeneration) loading.value = false
+    reloadInFlight = false
   }
 }
 
@@ -50,13 +62,8 @@ watch(() => sessionContextKey(session), () => void reload())
       <PrivacyBadge />
     </header>
 
-    <ErrorNotice v-if="error" :error="error" @retry="reload" />
-    <div v-if="loading" class="plain-list" aria-label="正在加载家庭成员" aria-live="polite">
-      <p class="meta-line">正在加载家庭成员…</p>
-      <SkeletonCard />
-      <SkeletonCard />
-      <SkeletonCard />
-    </div>
+    <ErrorNotice v-if="error" :error="error" :busy="loading" @retry="reload" />
+    <ListLoadingState v-if="loading" label="正在加载家庭成员…" :count="3" />
 
     <div v-else class="plain-list">
       <EmptyState
@@ -98,6 +105,8 @@ watch(() => sessionContextKey(session), () => void reload())
         </div>
       </RouterLink>
     </div>
+
+    <ListStatusAnnouncer :message="listStatusMessage" />
 
     <p class="notice">
       授权范围由家庭服务器在接口层过滤；本页不会推断或显示未授权的内容。调整授权请使用网页端“授权设置”。

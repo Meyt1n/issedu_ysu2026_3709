@@ -4,10 +4,11 @@ import { computed, onMounted, ref } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
 import SwitchRow from '@/components/SwitchRow.vue'
 import ErrorNotice from '@/components/ErrorNotice.vue'
+import ListLoadingState from '@/components/ListLoadingState.vue'
 import { createSpeaker } from '@/composables/useSpeech'
 import { ApiClient, ApiClientError } from '@/api/client'
 import { buildInfoLine } from '@/buildInfo'
-import { presentApiError, type ErrorPresentation } from '@/api/errors'
+import { presentApiError, presentListApiError, type ErrorPresentation } from '@/api/errors'
 import { requestOutcomeLabel, requestTraces, type RequestTraceEntry } from '@/api/requestLog'
 import { clearLocalData, localDataInventory } from '@/stores/localData'
 import { resetDemoData } from '@/data/demoProvider'
@@ -162,6 +163,7 @@ const households = ref<HouseholdOption[]>([])
 const householdsLoading = ref(false)
 const householdError = ref<ErrorPresentation | null>(null)
 const householdMessage = ref('')
+let householdsLoadInFlight = false
 
 const currentHousehold = computed(
   () => households.value.find(item => item.id === session.currentHouseholdId) ?? null,
@@ -172,6 +174,8 @@ const needsHouseholdChoice = computed(
 
 /** 读取服务端授权范围内的家庭列表；错误不暴露隐藏家庭是否存在。 */
 async function loadHouseholds(): Promise<HouseholdOption[]> {
+  if (householdsLoadInFlight) return households.value
+  householdsLoadInFlight = true
   householdsLoading.value = true
   householdError.value = null
   try {
@@ -186,10 +190,11 @@ async function loadHouseholds(): Promise<HouseholdOption[]> {
     return options
   } catch (cause) {
     households.value = []
-    householdError.value = presentApiError(cause)
+    householdError.value = presentListApiError(cause)
     throw cause
   } finally {
     householdsLoading.value = false
+    householdsLoadInFlight = false
   }
 }
 
@@ -734,7 +739,7 @@ onMounted(() => {
         <p v-if="capabilityProbeError" class="notice" data-tone="warn" role="status">
           能力限制暂时无法读取：{{ capabilityProbeError.message }} 未声明的能力均按不可用处理，请先不要使用相关入口。
         </p>
-        <ErrorNotice v-if="connectionError" :error="connectionError" @retry="testConnection" />
+        <ErrorNotice v-if="connectionError" :error="connectionError" :busy="connectionState === 'testing'" @retry="testConnection" />
 
         <section class="household-panel" aria-labelledby="household-title">
           <div class="h-icon-row">
@@ -742,7 +747,7 @@ onMounted(() => {
             <h3 id="household-title">当前家庭</h3>
           </div>
 
-          <p v-if="householdsLoading" class="meta-line">正在读取可访问的家庭…</p>
+          <ListLoadingState v-if="householdsLoading" label="正在读取可访问的家庭…" :count="2" :disc="false" />
 
           <template v-else-if="households.length">
             <p v-if="currentHousehold" class="meta-line">
@@ -768,7 +773,7 @@ onMounted(() => {
           <p v-else-if="!householdError" class="meta-line">尚未读取家庭列表；测试连接后会自动读取。</p>
 
           <p v-if="householdMessage" class="notice" data-tone="info" role="status">{{ householdMessage }}</p>
-          <ErrorNotice v-if="householdError" :error="householdError" @retry="loadHouseholds" />
+          <ErrorNotice v-if="householdError" :error="householdError" :busy="householdsLoading" @retry="loadHouseholds" />
           <p class="meta-line">
             选择家庭不等于获得权限：成员、字段、动作、目的和期限仍由家庭服务器逐次校验。本机只保存家庭标识，不保存家庭健康数据。
           </p>

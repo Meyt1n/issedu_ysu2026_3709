@@ -4,15 +4,16 @@ import { computed, onMounted, ref, watch } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
 import ErrorNotice from '@/components/ErrorNotice.vue'
 import EmptyState from '@/components/EmptyState.vue'
+import ListLoadingState from '@/components/ListLoadingState.vue'
+import ListStatusAnnouncer from '@/components/ListStatusAnnouncer.vue'
 import LevelTag from '@/components/LevelTag.vue'
 import PrivacyBadge from '@/components/PrivacyBadge.vue'
-import SkeletonCard from '@/components/SkeletonCard.vue'
 import { createSpeaker } from '@/composables/useSpeech'
 import { activeProvider } from '@/data'
 import { riskLevelLabel, riskLevelTone } from '@/data/labels'
 import type { RiskCard, RiskSummary } from '@/data/types'
 import { formatDateTime } from '@/utils/format'
-import { presentApiError, type ErrorPresentation } from '@/api/errors'
+import { presentListApiError, type ErrorPresentation } from '@/api/errors'
 import { sessionContextKey, useSession } from '@/stores/session'
 
 const LEVEL_FILTERS = [
@@ -29,10 +30,12 @@ const risks = ref<RiskCard[]>([])
 const riskSummary = ref<RiskSummary | null>(null)
 const loading = ref(true)
 const error = ref<ErrorPresentation | null>(null)
+const partialError = ref<ErrorPresentation | null>(null)
 const levelFilter = ref<LevelFilter>('ALL')
 const manualSpeaker = createSpeaker(() => true)
 const { session } = useSession()
 let reloadGeneration = 0
+let reloadInFlight = false
 
 const filtered = computed(() =>
   levelFilter.value === 'ALL' ? risks.value : risks.value.filter(r => r.level === levelFilter.value),
@@ -60,25 +63,43 @@ const distributionLabel = computed(() =>
   distribution.value.map(b => `${b.label} ${b.count} 条`).join('，'),
 )
 
+const listStatusMessage = computed(() => {
+  if (loading.value || error.value) return ''
+  if (partialError.value) return `已加载 ${risks.value.length} 条风险提醒，但部分汇总暂不可用。`
+  return risks.value.length > 0
+    ? `已加载 ${risks.value.length} 条风险提醒。`
+    : '当前没有风险提醒。'
+})
+
 async function reload(): Promise<void> {
+  if (reloadInFlight) return
+  reloadInFlight = true
   const generation = ++reloadGeneration
   const expectedKey = sessionContextKey(session)
   loading.value = true
   error.value = null
+  partialError.value = null
   risks.value = []
   riskSummary.value = null
   try {
     const provider = activeProvider()
     const nextRisks = await provider.listRisks()
-    const nextSummary = await provider.getRiskSummary()
     if (generation !== reloadGeneration || expectedKey !== sessionContextKey(session)) return
     risks.value = nextRisks
-    riskSummary.value = nextSummary
+    try {
+      const nextSummary = await provider.getRiskSummary()
+      if (generation !== reloadGeneration || expectedKey !== sessionContextKey(session)) return
+      riskSummary.value = nextSummary
+    } catch (cause) {
+      if (generation !== reloadGeneration || expectedKey !== sessionContextKey(session)) return
+      partialError.value = presentListApiError(cause, { partial: true })
+    }
   } catch (cause) {
     if (generation !== reloadGeneration || expectedKey !== sessionContextKey(session)) return
-    error.value = presentApiError(cause)
+    error.value = presentListApiError(cause)
   } finally {
     if (generation === reloadGeneration) loading.value = false
+    reloadInFlight = false
   }
 }
 
@@ -152,7 +173,16 @@ watch(() => sessionContextKey(session), () => void reload())
     <p v-if="serverSevereCount > 0" class="notice" data-tone="error" role="alert">
       有 {{ serverSevereCount }} 条严重风险待处理，请优先查看。
     </p>
-    <ErrorNotice v-if="error" :error="error" @retry="reload" />
+    <ErrorNotice v-if="error" :error="error" :busy="loading" @retry="reload" />
+    <ErrorNotice
+      v-if="partialError"
+      :error="partialError"
+      :busy="loading"
+      title="部分数据未加载"
+      tone="warn"
+      @retry="reload"
+    />
+    <ListStatusAnnouncer :message="listStatusMessage" />
 
     <section v-if="!loading && riskSummary" class="card audit-summary" aria-labelledby="risk-audit-title">
       <div class="card-title-row">
@@ -178,11 +208,7 @@ watch(() => sessionContextKey(session), () => void reload())
       </p>
     </section>
 
-    <div v-if="loading" class="plain-list" aria-label="正在加载风险提醒" aria-live="polite">
-      <p class="meta-line">正在加载风险提醒…</p>
-      <SkeletonCard />
-      <SkeletonCard />
-    </div>
+    <ListLoadingState v-if="loading" label="正在加载风险提醒…" :count="2" />
 
     <div v-else class="plain-list">
       <EmptyState

@@ -1,15 +1,17 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import AppIcon from '@/components/AppIcon.vue'
 import ErrorNotice from '@/components/ErrorNotice.vue'
 import EmptyState from '@/components/EmptyState.vue'
+import ListLoadingState from '@/components/ListLoadingState.vue'
+import ListStatusAnnouncer from '@/components/ListStatusAnnouncer.vue'
 import { activeProvider } from '@/data'
 import { eventStatusLabel, memberRoleLabel } from '@/data/labels'
 import type { MemberDetail } from '@/data/types'
 import { avatarHue, formatDateTime, formatDay } from '@/utils/format'
-import { presentApiError, type ErrorPresentation } from '@/api/errors'
+import { presentListApiError, type ErrorPresentation } from '@/api/errors'
 import { sessionContextKey, useSession } from '@/stores/session'
 
 const route = useRoute()
@@ -33,8 +35,16 @@ const detail = ref<MemberDetail | null>(null)
 const loading = ref(true)
 const error = ref<ErrorPresentation | null>(null)
 let loadGeneration = 0
+let loadInFlight = false
+
+const listStatusMessage = computed(() => {
+  if (loading.value || error.value) return ''
+  return detail.value ? '已加载成员档案及其可见列表。' : ''
+})
 
 async function load(): Promise<void> {
+  if (loadInFlight) return
+  loadInFlight = true
   const generation = ++loadGeneration
   const expectedKey = sessionContextKey(session)
   loading.value = true
@@ -47,9 +57,10 @@ async function load(): Promise<void> {
     detail.value = nextDetail
   } catch (cause) {
     if (generation !== loadGeneration || expectedKey !== sessionContextKey(session)) return
-    error.value = presentApiError(cause)
+    error.value = presentListApiError(cause)
   } finally {
     if (generation === loadGeneration) loading.value = false
+    loadInFlight = false
   }
 }
 
@@ -64,10 +75,8 @@ watch(() => sessionContextKey(session), () => void load())
       返回
     </button>
 
-    <ErrorNotice v-if="error" :error="error" @retry="load" />
-    <section v-if="loading" class="card" aria-live="polite">
-      <p class="empty-state">正在加载成员档案…</p>
-    </section>
+    <ErrorNotice v-if="error" :error="error" :busy="loading" @retry="load" />
+    <ListLoadingState v-if="loading" label="正在加载成员档案…" :count="3" />
 
     <template v-else-if="detail">
       <header class="card">
@@ -200,6 +209,8 @@ watch(() => sessionContextKey(session), () => void load())
         </div>
       </section>
     </template>
+
+    <ListStatusAnnouncer :message="listStatusMessage" />
 
     <footer class="disclaimer">教学演示，不用于诊断或治疗。</footer>
   </main>

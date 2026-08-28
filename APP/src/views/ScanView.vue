@@ -4,6 +4,8 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
 import ErrorNotice from '@/components/ErrorNotice.vue'
 import LevelTag from '@/components/LevelTag.vue'
+import ListLoadingState from '@/components/ListLoadingState.vue'
+import ListStatusAnnouncer from '@/components/ListStatusAnnouncer.vue'
 import PrivacyBadge from '@/components/PrivacyBadge.vue'
 import { useSpeech } from '@/composables/useSpeech'
 import { createVisionTaskPolling, visionTaskStatusLabel } from '@/composables/useVisionTaskPolling'
@@ -22,7 +24,7 @@ import { imageInputUnavailableMessage, validateMedicineImage } from '@/utils/upl
 import { probeVideoFile, validateMedicineVideo } from '@/utils/videoInput'
 import { CAPABILITY_IDS, useCapabilities } from '@/stores/capabilities'
 import { sessionContextKey, useSession } from '@/stores/session'
-import { presentApiError, type ErrorPresentation } from '@/api/errors'
+import { presentApiError, presentListApiError, type ErrorPresentation } from '@/api/errors'
 
 type Stage = 'idle' | 'checking' | 'quality' | 'recognizing' | 'result'
 
@@ -30,6 +32,7 @@ const { session } = useSession()
 const { capabilities, hasCapability } = useCapabilities()
 const speech = useSpeech()
 let memberLoadGeneration = 0
+let memberLoadInFlight = false
 
 const members = ref<MemberSummary[]>([])
 const membersLoading = ref(true)
@@ -60,6 +63,12 @@ const isBusy = computed(() => stage.value === 'checking' || stage.value === 'rec
 const cameraAvailable = computed(() => {
   if (typeof navigator === 'undefined') return false
   return Boolean(navigator.mediaDevices?.getUserMedia)
+})
+const membersStatusMessage = computed(() => {
+  if (membersLoading.value || error.value) return ''
+  return members.value.length > 0
+    ? `已加载 ${members.value.length} 位家庭成员，可选择录入对象。`
+    : '当前没有可用的家庭成员。'
 })
 const handoff = computed(() => candidate.value?.handoff ?? {
   taskId: 'demo-review-pending',
@@ -250,6 +259,8 @@ async function recognize(): Promise<void> {
 }
 
 async function loadMembers(): Promise<void> {
+  if (memberLoadInFlight) return
+  memberLoadInFlight = true
   const generation = ++memberLoadGeneration
   const expectedKey = sessionContextKey(session)
   membersLoading.value = true
@@ -263,9 +274,10 @@ async function loadMembers(): Promise<void> {
     memberId.value = session.currentMemberId || nextMembers[0]?.id || ''
   } catch (cause) {
     if (generation !== memberLoadGeneration || expectedKey !== sessionContextKey(session)) return
-    error.value = presentApiError(cause)
+    error.value = presentListApiError(cause)
   } finally {
     if (generation === memberLoadGeneration) membersLoading.value = false
+    memberLoadInFlight = false
   }
 }
 
@@ -315,10 +327,11 @@ onBeforeUnmount(() => {
       </li>
     </ol>
 
-    <p v-if="membersLoading" class="notice" role="status">正在加载家庭和成员数据…</p>
+    <ListLoadingState v-if="membersLoading" label="正在加载家庭和成员数据…" :count="2" :disc="false" />
     <p v-else-if="members.length === 0 && !error" class="notice" data-tone="warn" role="status">
       当前家庭暂无可用成员，请到“我的”检查联机身份、家庭和授权设置；没有成员时不能开始录入。
     </p>
+    <ListStatusAnnouncer :message="membersStatusMessage" />
     <p
       v-if="session.dataMode === 'live' && !capabilities.snapshot"
       class="notice"

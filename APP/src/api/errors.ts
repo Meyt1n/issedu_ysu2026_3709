@@ -163,6 +163,72 @@ export function presentApiError(cause: unknown): ErrorPresentation {
   return presentation
 }
 
+function isConnectionTimeout(cause: unknown): boolean {
+  return cause instanceof ApiClientError
+    && (cause.code.toUpperCase() === 'REQUEST_TIMEOUT' || cause.status === 408)
+}
+
+function isServerSlow(cause: unknown): boolean {
+  if (!(cause instanceof ApiClientError)) return false
+  const code = cause.code.toUpperCase()
+  return cause.status === 504 || code === 'GATEWAY_TIMEOUT' || code === 'SERVER_TIMEOUT'
+}
+
+/**
+ * 列表场景的上下文文案：不改变 MOB-112 的通用错误码映射，
+ * 只在列表保留可用内容或需要解释超时来源时补充用户可执行的下一步。
+ */
+export function presentListApiError(
+  cause: unknown,
+  options: { partial?: boolean } = {},
+): ErrorPresentation {
+  const presentation = presentApiError(cause)
+  if (options.partial) {
+    if (isConnectionTimeout(cause)) {
+      return {
+        ...presentation,
+        message: '部分数据连接超时，已保留可用内容；请检查网络后重试补齐。',
+        action: 'retry',
+        actionLabel: '重试补齐',
+      }
+    }
+    if (isServerSlow(cause)) {
+      return {
+        ...presentation,
+        message: '部分数据处理较慢，已保留可用内容；请稍后重试补齐。',
+        action: 'retry',
+        actionLabel: '重试补齐',
+      }
+    }
+    if (presentation.action === 'settings') {
+      return {
+        ...presentation,
+        message: '部分数据未能加载，可能需要检查联机身份或授权设置。',
+      }
+    }
+    return {
+      ...presentation,
+      message: '部分数据未能加载，已保留可用内容；请点击“重试补齐”。',
+      action: 'retry',
+      actionLabel: '重试补齐',
+    }
+  }
+
+  if (isConnectionTimeout(cause)) {
+    return {
+      ...presentation,
+      message: '连接等待超时，列表还没有收到完整响应；请检查网络或服务器地址后重试。',
+    }
+  }
+  if (isServerSlow(cause)) {
+    return {
+      ...presentation,
+      message: '服务端处理较慢，本次列表没有完成；请稍后重试或检查家庭服务器状态。',
+    }
+  }
+  return presentation
+}
+
 export function errorMessage(cause: unknown): string {
   return presentApiError(cause).message
 }

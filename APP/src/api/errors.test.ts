@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { AuthAdapterError } from './auth'
 import { ApiClientError } from './client'
-import { errorMessage, presentApiError } from './errors'
+import { errorMessage, presentApiError, presentListApiError } from './errors'
 
 describe('移动端 API 错误用户文案', () => {
   it('网络失败提供可恢复提示', () => {
@@ -135,5 +135,42 @@ describe('请求标识与超时文案（MOB-144）', () => {
     expect(presentation.message).toContain('超时')
     expect(presentation.message).toContain('幂等键')
     expect(presentation.requestId).toBe('req-43')
+  })
+})
+
+describe('列表弱网上下文文案（MOB-171）', () => {
+  it('列表内部等待超时明确说明连接未等到完整响应', () => {
+    const presentation = presentListApiError(
+      new ApiClientError('timeout', { status: 0, code: 'REQUEST_TIMEOUT', requestId: 'req-list-1' }),
+    )
+
+    expect(presentation).toMatchObject({
+      message: '连接等待超时，列表还没有收到完整响应；请检查网络或服务器地址后重试。',
+      action: 'retry',
+      requestId: 'req-list-1',
+    })
+  })
+
+  it('网关 504 明确说明服务端处理较慢', () => {
+    const presentation = presentListApiError(
+      new ApiClientError('gateway timeout', { status: 504, code: 'HTTP_ERROR' }),
+    )
+
+    expect(presentation.message).toBe('服务端处理较慢，本次列表没有完成；请稍后重试或检查家庭服务器状态。')
+    expect(presentation.action).toBe('retry')
+  })
+
+  it('部分数据失败时保留可用内容并提供补齐动作', () => {
+    const presentation = presentListApiError(
+      new ApiClientError('partial', { status: 503, code: 'HTTP_ERROR', requestId: 'req-list-2' }),
+      { partial: true },
+    )
+
+    expect(presentation).toEqual({
+      message: '部分数据未能加载，已保留可用内容；请点击“重试补齐”。',
+      action: 'retry',
+      actionLabel: '重试补齐',
+      requestId: 'req-list-2',
+    })
   })
 })
