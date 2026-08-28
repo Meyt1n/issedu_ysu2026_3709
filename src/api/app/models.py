@@ -492,3 +492,52 @@ Index(
     RiskAcknowledgement.risk_fingerprint,
     unique=True,
 )
+
+
+class RiskDisposition(Base):
+    """Auditable handling action for one computed risk signal (HCT-462).
+
+    A disposition is deliberately separate from ``RiskAcknowledgement``: the
+    existing acknowledgement endpoint remains compatible while a risk can
+    accumulate a history of handoffs, snoozes and notes.  Only the rule
+    version/fingerprint and minimal action metadata are stored; no risk or
+    health-event payload is copied into this table.
+    """
+
+    __tablename__ = "risk_disposition"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    household_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("household.id", ondelete="CASCADE"), nullable=False
+    )
+    member_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("member.id", ondelete="CASCADE"), nullable=False
+    )
+    rule_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    rule_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    risk_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    action: Mapped[str] = mapped_column(String(24), nullable=False)
+    note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    target_actor_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    snooze_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    actor_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), server_default=func.now()
+    )
+
+
+Index(
+    "uq_risk_disposition_household_idempotency",
+    RiskDisposition.household_id,
+    RiskDisposition.idempotency_key,
+    unique=True,
+)
+Index(
+    "ix_risk_disposition_signal_created",
+    RiskDisposition.household_id,
+    RiskDisposition.member_id,
+    RiskDisposition.rule_id,
+    RiskDisposition.created_at,
+)

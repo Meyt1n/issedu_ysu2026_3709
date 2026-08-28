@@ -135,6 +135,7 @@ from app.models import (
     MemberStateProjection,
     OutboxMessage,
     RiskAcknowledgement,
+    RiskDisposition,
     VisionTask,
 )
 from app.request_context import current_request_id
@@ -158,6 +159,12 @@ from app.risk_acknowledgement import (
     acknowledgement_read,
     request_fingerprint,
     risk_fingerprint,
+)
+from app.risk_disposition import (
+    MAX_SNOOZE_SECONDS,
+    as_utc,
+    disposition_read,
+    disposition_request_fingerprint,
 )
 from app.schemas import (
     AccessAuditPageRead,
@@ -232,6 +239,9 @@ from app.schemas import (
     RiskAcknowledgementRead,
     RiskAlertRead,
     RiskDetailResponse,
+    RiskDispositionCreate,
+    RiskDispositionListResponse,
+    RiskDispositionRead,
     RiskListResponse,
     SecurityDashboardRead,
     SessionIntrospectRead,
@@ -5725,6 +5735,255 @@ def acknowledge_risk(
         ) from None
     session.refresh(acknowledgement)
     return acknowledgement_read(acknowledgement)
+
+
+def _risk_disposition_target_allowed(
+    session: Session,
+    household: Household,
+    member_id: str,
+    target_actor_id: str,
+) -> bool:
+    """Return whether a handoff target can receive this member's risk."""
+
+    if target_actor_id == household.created_by:
+        return True
+    now = datetime.now(UTC)
+    grants = session.scalars(
+        select(CareAuthorization).where(
+            CareAuthorization.household_id == household.id,
+            CareAuthorization.member_id == member_id,
+            CareAuthorization.grantee_actor_id == target_actor_id,
+        )
+    ).all()
+    return any(
+        grant.revoked_at is None
+        and as_utc(grant.valid_from) <= now
+        and as_utc(grant.valid_until) > now
+        and "ACK_RISK" in (grant.actions or [])
+        and "risk_alerts" in (grant.data_fields or [])
+        for grant in grants
+    )
+
+
+@router.post(
+    "/households/{household_id}/members/{member_id}/risks/{rule_id}/dispositions",
+    response_model=RiskDispositionRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_risk_disposition(
+    household_id: str,
+    member_id: str,
+    rule_id: str,
+    payload: RiskDispositionCreate,
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> RiskDispositionRead:
+    """Record a safe, auditable handling action for the current risk signal."""
+
+    if not idempotency_key or len(idempotency_key) > 128:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="IDEMPOTENCY_KEY_REQUIRED",
+        )
+
+    household = session.get(Household, household_id)
+    member = session.get(Member, member_id)
+    if _is_erased(household, member):
+        _raise_resource_not_found()
+    if not has_authorized_action(
+        session,
+        household,
+        member_id,
+        actor_id,
+        "ACK_RISK",
+        "risk_alerts",
+        access_purpose,
+    ):
+        _raise_resource_not_found()
+
+    alert = _current_risk_alert(session, member_id, rule_id)
+    if alert is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RISK_NOT_FOUND")
+
+    current_version = settings.ruleset_version
+    current_fingerprint = risk_fingerprint(
+        rule_id=alert.rule_id,
+        level=alert.level,
+        source_event_ids=alert.source_event_ids,
+        rule_version=current_version,
+    )
+    snooze_until = as_utc(payload.snooze_until) if payload.snooze_until else None
+    request_hash = disposition_request_fingerprint(
+        household_id=household_id,
+        member_id=member_id,
+        rule_id=rule_id,
+        rule_version=payload.rule_version,
+        risk_fingerprint_value=payload.risk_fingerprint,
+        action=payload.action,
+        note=payload.note,
+        target_actor_id=payload.target_actor_id,
+        snooze_until=snooze_until,
+        actor_id=actor_id,
+    )
+    existing = session.scalar(
+        select(RiskDisposition).where(
+            RiskDisposition.household_id == household_id,
+            RiskDisposition.idempotency_key == idempotency_key,
+        )
+    )
+    if existing is not None:
+        if existing.request_fingerprint != request_hash:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="IDEMPOTENCY_KEY_CONFLICT",
+            )
+        return disposition_read(existing, replayed=True)
+
+    if payload.rule_version != current_version or payload.risk_fingerprint != current_fingerprint:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="RISK_VERSION_CONFLICT",
+        )
+
+    if payload.action == "HANDOFF":
+        if payload.target_actor_id == actor_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="HANDOFF_TARGET_SELF",
+            )
+        if not _risk_disposition_target_allowed(
+            session,
+            household,
+            member_id,
+            payload.target_actor_id or "",
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="HANDOFF_TARGET_NOT_AUTHORIZED",
+            )
+    elif payload.action == "SNOOZE":
+        now = datetime.now(UTC)
+        if snooze_until is None or snooze_until <= now:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="SNOOZE_UNTIL_PAST",
+            )
+        if snooze_until > now + timedelta(seconds=MAX_SNOOZE_SECONDS):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="SNOOZE_UNTIL_TOO_FAR",
+            )
+
+    disposition = RiskDisposition(
+        household_id=household_id,
+        member_id=member_id,
+        rule_id=rule_id,
+        rule_version=current_version,
+        risk_fingerprint=current_fingerprint,
+        action=payload.action,
+        note=payload.note,
+        target_actor_id=payload.target_actor_id,
+        snooze_until=snooze_until,
+        actor_id=actor_id,
+        idempotency_key=idempotency_key,
+        request_fingerprint=request_hash,
+    )
+    session.add(disposition)
+    session.add(
+        AccessAudit(
+            household_id=household_id,
+            authorization_id=None,
+            actor_id=actor_id,
+            operation="RISK_DISPOSITION",
+            action=f"RISK_{payload.action}",
+            data_field="risk_alerts",
+            purpose=access_purpose,
+            outcome="ALLOWED",
+            reason=None,
+            request_id=getattr(request.state, "request_id", None),
+        )
+    )
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raced = session.scalar(
+            select(RiskDisposition).where(
+                RiskDisposition.household_id == household_id,
+                RiskDisposition.idempotency_key == idempotency_key,
+            )
+        )
+        if raced is not None:
+            if raced.request_fingerprint != request_hash:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="IDEMPOTENCY_KEY_CONFLICT",
+                ) from None
+            return disposition_read(raced, replayed=True)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="IDEMPOTENCY_KEY_CONFLICT",
+        ) from None
+    session.refresh(disposition)
+    return disposition_read(disposition)
+
+
+@router.get(
+    "/households/{household_id}/members/{member_id}/risks/{rule_id}/dispositions",
+    response_model=RiskDispositionListResponse,
+)
+def list_risk_dispositions(
+    household_id: str,
+    member_id: str,
+    rule_id: str,
+    risk_fingerprint_value: str | None = Query(
+        default=None,
+        alias="risk_fingerprint",
+        min_length=64,
+        max_length=64,
+    ),
+    limit: int = Query(default=20, ge=1, le=100),
+    actor_id: str = Depends(get_actor_id),
+    access_purpose: str | None = Depends(get_access_purpose),
+    session: Session = Depends(get_session),
+) -> RiskDispositionListResponse:
+    """Read a bounded, desensitized handling history for one risk rule."""
+
+    household = session.get(Household, household_id)
+    member = session.get(Member, member_id)
+    if _is_erased(household, member):
+        _raise_resource_not_found()
+    if not has_authorized_action(
+        session,
+        household,
+        member_id,
+        actor_id,
+        "ACK_RISK",
+        "risk_alerts",
+        access_purpose,
+    ):
+        _raise_resource_not_found()
+
+    query = (
+        select(RiskDisposition)
+        .where(
+            RiskDisposition.household_id == household_id,
+            RiskDisposition.member_id == member_id,
+            RiskDisposition.rule_id == rule_id,
+        )
+        .order_by(RiskDisposition.created_at.desc(), RiskDisposition.id.desc())
+        .limit(limit)
+    )
+    if risk_fingerprint_value is not None:
+        query = query.where(RiskDisposition.risk_fingerprint == risk_fingerprint_value)
+    items = list(session.scalars(query).all())
+    return RiskDispositionListResponse(
+        items=[disposition_read(item) for item in items],
+        total=len(items),
+    )
 
 
 # ── HCT-208: Correction diff, hard sample, training consent & export ───
