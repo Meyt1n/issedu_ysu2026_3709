@@ -216,6 +216,33 @@ describe('联机会话初始化边界', () => {
   })
 })
 
+describe('首页健康资讯（MOB-159）', () => {
+  it('把家庭服务器资讯响应透传，并携带当前访问目的', async () => {
+    const response = {
+      status: 'ok' as const,
+      cache_status: 'fresh' as const,
+      season: 'summer',
+      generated_at: '2026-08-28T04:00:00.000Z',
+      fetched_at: '2026-08-28T04:00:00.000Z',
+      disclaimer: '仅供教学演示',
+      items: [],
+    }
+    const getHealthNews = vi.fn().mockResolvedValue(response)
+    const client = { getHealthNews } as unknown as ApiClient
+    const provider = new HttpDataProvider(client, () => ({
+      actorId: 'actor-1',
+      accessPurpose: 'family-care',
+      householdId: 'h1',
+    }))
+
+    await expect(provider.getHealthNews()).resolves.toBe(response)
+    expect(getHealthNews).toHaveBeenCalledWith(expect.objectContaining({
+      actorId: 'actor-1',
+      accessPurpose: 'family-care',
+    }))
+  })
+})
+
 describe('联机写请求的幂等与重试', () => {
   it('计划动作重试复用 action + plan_event_id 幂等键', async () => {
     const confirmCarePlan = vi.fn().mockResolvedValue({})

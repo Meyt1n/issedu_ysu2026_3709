@@ -21,6 +21,48 @@ export interface HealthResponse {
   version: string
 }
 
+/** 首页健康资讯（与主仓库 /api/v1/health-news 契约对齐）。 */
+export interface HealthNewsItem {
+  id: string
+  kind?: 'seasonal_tip' | 'remote'
+  title: string
+  summary: string
+  tag: string
+  chat_prompt: string
+  source: 'seasonal_calendar' | 'remote_whitelist'
+  source_name?: string | null
+  source_url?: string | null
+  published_at?: string | null
+  fetched_at?: string | null
+}
+
+export type HealthNewsStatus =
+  | 'ok'
+  | 'stale'
+  | 'local_only'
+  | 'disabled'
+  | 'unconfigured'
+  | 'egress_blocked'
+  | 'rate_limited'
+  | 'timeout'
+  | 'provider_unavailable'
+  | 'invalid_response'
+  | 'error'
+
+export type HealthNewsCacheStatus = 'none' | 'miss' | 'fresh' | 'stale'
+
+export interface HealthNewsResponse {
+  status?: HealthNewsStatus
+  cache_status?: HealthNewsCacheStatus
+  season: string
+  generated_at: string
+  fetched_at?: string | null
+  disclaimer: string
+  degraded_reason?: string | null
+  sources_attempted?: string[]
+  items: HealthNewsItem[]
+}
+
 export interface CapabilityResponse {
   phase: string
   available: string[]

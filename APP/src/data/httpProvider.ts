@@ -1,6 +1,6 @@
 import { ApiClient, ApiClientError } from '@/api/client'
 import { CAPABILITY_IDS, hasCapability } from '@/stores/capabilities'
-import type { AuthorizationRead, HealthEvent, Member, RequestOptions, RiskAlert, RiskListResponse, UploadedFile, VisionTask } from '@/api/types'
+import type { AuthorizationRead, HealthEvent, HealthNewsResponse, Member, RequestOptions, RiskAlert, RiskListResponse, UploadedFile, VisionTask } from '@/api/types'
 import type {
   CareTask,
   CaregiverEscalation,
@@ -724,6 +724,10 @@ export class HttpDataProvider implements DataProvider {
   async listHouseholds(): Promise<HouseholdOption[]> {
     const households = await this.client.listHouseholds(this.options())
     return households.map(household => ({ id: household.id, name: household.name }))
+  }
+
+  async getHealthNews(): Promise<HealthNewsResponse> {
+    return this.client.getHealthNews(this.options())
   }
 
   private async memberName(memberId: string): Promise<string> {

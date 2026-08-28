@@ -24,6 +24,16 @@ describe('演示数据 provider', () => {
     expect(snapshot.recentEvents.length).toBeGreaterThan(0)
   })
 
+  it('首页健康资讯使用虚构本地季节日历，不访问网络', async () => {
+    const news = await demoProvider.getHealthNews()
+
+    expect(news.status).toBe('local_only')
+    expect(news.cache_status).toBe('none')
+    expect(news.items.length).toBeGreaterThan(0)
+    expect(news.items.every(item => item.source === 'seasonal_calendar')).toBe(true)
+    expect(news.items.every(item => item.source_name?.includes('演示'))).toBe(true)
+  })
+
   it('环境行动卡仅在已授权的演示成员上显示虚构且可追溯的内容', async () => {
     const snapshot = await demoProvider.getTodaySnapshot('m-wang')
 

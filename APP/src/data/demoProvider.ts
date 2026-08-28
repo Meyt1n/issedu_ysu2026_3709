@@ -1,6 +1,8 @@
 import { reactive } from 'vue'
 
 import { formatDay } from '@/utils/format'
+import { buildLocalHealthNews } from '@/utils/healthNews'
+import type { HealthNewsResponse } from '@/api/types'
 import type {
   CareTask,
   DataProvider,
@@ -499,6 +501,11 @@ export const demoProvider: DataProvider = {
     await delay(180)
     const list = memberId ? state.risks.filter(r => r.memberId === memberId) : state.risks
     return clone(list)
+  },
+
+  async getHealthNews(): Promise<HealthNewsResponse> {
+    await delay(120)
+    return buildLocalHealthNews()
   },
 
   async getRiskSummary(): Promise<RiskSummary> {

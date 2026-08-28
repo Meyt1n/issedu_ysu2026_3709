@@ -8,6 +8,7 @@ import type {
   CapabilityResponse,
   EvidencePreview,
   HealthEvent,
+  HealthNewsResponse,
   HealthResponse,
   Household,
   Member,
@@ -195,6 +196,11 @@ export class ApiClient {
 
   getCapabilities(options?: RequestOptions): Promise<CapabilityResponse> {
     return this.request('/api/v1/meta/capabilities', undefined, options)
+  }
+
+  /** 首页健康资讯只消费家庭服务器的季节/白名单结果，不直连第三方来源。 */
+  getHealthNews(options?: RequestOptions): Promise<HealthNewsResponse> {
+    return this.request('/api/v1/health-news', undefined, options)
   }
 
   listHouseholds(options?: RequestOptions): Promise<Household[]> {
