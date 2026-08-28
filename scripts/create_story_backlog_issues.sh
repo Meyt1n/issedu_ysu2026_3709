@@ -60,7 +60,13 @@ BODY_COMMON_FOOTER=$'
 - Story 文件：`docs/stories/`（若尚未建立，合并 PR 前补齐）
 '
 
-# --- §一 HCT-444～456（含顺延 460～463）---
+# 已有 Issue、跳过创建（Story 文件内已回填或 master 已建）
+# HCT-460 → #501（聊天气泡，master）
+# HCT-463 → #463（资讯运维诊断；Story 文件名仍 HCT-453）
+# HCT-464 → #468（会话缓存；Story 文件名仍 HCT-455）
+# HCT-454 → #465（缓存指纹隔离）
+
+# --- §一 HCT-444～456（顺延 HCT-461/462；跳过已建）---
 declare -a ISSUES=(
   "HCT-444|[HCT-444] 首页季节健康新闻与助手跳转|已在 master；默认无出口；待矩阵回填"
   "HCT-445|[HCT-445] 健康新闻白名单抓取与缓存降级|正式部署需 R3 出口复核"
@@ -69,22 +75,32 @@ declare -a ISSUES=(
   "HCT-449|[HCT-449] 授权管理模板化与家庭友好闭环|纯前端"
   "HCT-450|[HCT-450] 助手回复智能度与编排优化|PR #453 已合并"
   "HCT-451|[HCT-451] 开放对话演示模式（ADR-0007 8C）|PR #467 #496"
-  "HCT-460|[HCT-460] Web 截图驱动排版与助手全屏对话|原撞号 HCT-451；PR #456 待验收"
-  "HCT-452|[HCT-452] 助手聊天气泡与对话流视觉打磨|PR #457 已合并"
-  "HCT-461|[HCT-461] 演示造数页错误分层与可用性修复|原撞号 HCT-452；PR #460"
+  "HCT-461|[HCT-461] Web 截图驱动排版与助手全屏对话|顺延原 HCT-451 撞号；PR #456 待验收"
+  "HCT-462|[HCT-462] 演示造数页错误分层与可用性修复|顺延原 HCT-452 撞号；PR #460"
   "HCT-453|[HCT-453] 前后台分端口登录入口|PR #462；ADR-0006"
-  "HCT-462|[HCT-462] 健康资讯运维诊断快照|原撞号 HCT-453；PR #464"
   "HCT-455|[HCT-455] 成员前台登录差异化与总览排版修复|PR #472"
-  "HCT-463|[HCT-463] 助手会话缓存运维诊断与过期清理|原撞号 HCT-455；PR #469"
   "HCT-456|[HCT-456] 成员前台正确进入指引|PR #488"
 )
 
-for entry in "${ISSUES[@]}"; do
+# --- 子代理盘点：高优先级补票（无 Issue 的已实现切片）---
+declare -a EXTRA_ISSUES=(
+  "HCT-471|[HCT-471] 助手联网搜索开放模式安全验收|ADR-0007 / PR #496"
+  "HCT-442|[HCT-442] 助手问题分类双通道|关联 #310；默认词表-only"
+  "HCT-420|[HCT-420] 桌面端风险预算摘要卡片|Story 已有，待 PR/验收"
+  "HCT-421|[HCT-421] 桌面端会话主动到期|Story 已有，待 PR/验收"
+  "HCT-468|[HCT-468] 桌面端照护任务工作台|顺延 HCT-411 撞号"
+  "HCT-469|[HCT-469] 家庭大屏脱敏数据展示|顺延 HCT-412 撞号"
+  "HCT-470|[HCT-470] 家庭关系图谱服务端投影|顺延 HCT-419 撞号"
+  "MOB-176|[MOB-176] 随身版语音助手真机验收矩阵|顺延 MOB-150 撞号；Related #210"
+)
+
+for entry in "${ISSUES[@]}" "${EXTRA_ISSUES[@]}"; do
   IFS='|' read -r story title note <<<"$entry"
   body="## Story 与需求
 - Story：${story}
 - 说明：${note}
-- 清单：docs/planning/Story与Issue补全清单-2026-08-28.md §一
+- 清单：docs/planning/Story与Issue补全清单-2026-08-28.md
+- 编号：docs/planning/编号顺延映射表-2026-08-28.md
 ${BODY_COMMON_FOOTER}"
   url=$(create_issue "$title" "$body")
   append_result "$story" "$url" "$title"
@@ -151,5 +167,6 @@ ${BODY_COMMON_FOOTER}"
 done
 
 echo "" >>"$OUT"
-echo "完成。共创建 $(( ${#ISSUES[@]} + ${#MOB_ISSUES[@]} + ${#NEXT_ISSUES[@]} )) 个 Issue。" >>"$OUT"
+echo "完成。共创建 $(( ${#ISSUES[@]} + ${#EXTRA_ISSUES[@]} + ${#MOB_ISSUES[@]} + ${#NEXT_ISSUES[@]} )) 个 Issue。" >>"$OUT"
+echo "已跳过：HCT-460(#501)、资讯运维(#463)、会话缓存(#468)、HCT-454(#465)。" >>"$OUT"
 echo "结果已写入 $OUT"
