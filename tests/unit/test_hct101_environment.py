@@ -151,7 +151,7 @@ def test_alembic_has_a_single_head() -> None:
 
     assert len(scripts.get_heads()) == 1
     head = scripts.get_heads()[0]
-    assert head == "0023_hct425_face_challenge_persistence"
+    assert head == "0024_hct462_risk_disposition"
     assert len(head) <= 64
 
 

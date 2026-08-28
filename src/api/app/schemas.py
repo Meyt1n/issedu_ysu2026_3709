@@ -530,6 +530,64 @@ class RiskAcknowledgementRead(BaseModel):
     replayed: bool = False
 
 
+class RiskDispositionCreate(BaseModel):
+    """One auditable action against the server-computed risk signal."""
+
+    rule_version: str = Field(min_length=1, max_length=64)
+    risk_fingerprint: str = Field(min_length=64, max_length=64)
+    action: Literal["ACKNOWLEDGE", "HANDOFF", "SNOOZE", "NOTE"]
+    note: str | None = Field(default=None, max_length=500)
+    target_actor_id: str | None = Field(default=None, max_length=120, pattern=ACTOR_ID_PATTERN)
+    snooze_until: UtcDatetime | None = None
+
+    @field_validator("note")
+    @classmethod
+    def normalize_note(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @model_validator(mode="after")
+    def validate_action_fields(self) -> "RiskDispositionCreate":
+        if self.action == "HANDOFF":
+            if not self.target_actor_id:
+                raise ValueError("HANDOFF_TARGET_REQUIRED")
+        elif self.target_actor_id is not None:
+            raise ValueError("HANDOFF_TARGET_NOT_ALLOWED")
+
+        if self.action == "SNOOZE":
+            if self.snooze_until is None:
+                raise ValueError("SNOOZE_UNTIL_REQUIRED")
+        elif self.snooze_until is not None:
+            raise ValueError("SNOOZE_UNTIL_NOT_ALLOWED")
+
+        if self.action == "NOTE" and self.note is None:
+            raise ValueError("NOTE_REQUIRED")
+        return self
+
+
+class RiskDispositionRead(BaseModel):
+    disposition_id: str
+    household_id: str
+    member_id: str
+    rule_id: str
+    rule_version: str
+    risk_fingerprint: str
+    action: Literal["ACKNOWLEDGE", "HANDOFF", "SNOOZE", "NOTE"]
+    note: str | None
+    target_actor_id: str | None
+    snooze_until: UtcDatetime | None
+    actor_id: str
+    created_at: UtcDatetime
+    replayed: bool = False
+
+
+class RiskDispositionListResponse(BaseModel):
+    items: list[RiskDispositionRead]
+    total: int
+
+
 class RiskAlertRead(BaseModel):
     """Risk alert as returned by the rules engine. Evidence is desensitized."""
 
