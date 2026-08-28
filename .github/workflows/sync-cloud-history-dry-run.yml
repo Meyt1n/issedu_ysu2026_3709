@@ -21,13 +21,19 @@ jobs:
       CLOUD_TOKEN_RY12_20: ${{ secrets.CLOUD_TOKEN_RY12_20 }}
       CLOUD_TOKEN_389883656_LGTM: ${{ secrets.CLOUD_TOKEN_389883656_LGTM }}
       CLOUD_TOKEN_JIN_123_ZIP: ${{ secrets.CLOUD_TOKEN_JIN_123_ZIP }}
+      GIT_CONFIG_COUNT: "2"
+      GIT_CONFIG_KEY_0: http.version
+      GIT_CONFIG_VALUE_0: HTTP/1.1
+      GIT_CONFIG_KEY_1: http.maxRequests
+      GIT_CONFIG_VALUE_1: "1"
 
     steps:
-      - name: 检出 GitHub master 完整历史
+      - name: 检出 GitHub master 历史
         uses: actions/checkout@v4
         with:
-          ref: master
-          fetch-depth: 0
+          ref: ${{ github.sha }}
+          fetch-depth: 2048
+          fetch-tags: false
           persist-credentials: false
 
       - name: 校验读取凭据并获取内部 master
@@ -54,7 +60,7 @@ jobs:
           export CLOUD_SELECTED_USERNAME="${CLOUD_REPO_USERNAME}"
           export CLOUD_SELECTED_PASSWORD="${CLOUD_REPO_PASSWORD}"
           git remote add original-cloud "${CLOUD_REPO_URL}"
-          git fetch original-cloud master
+          git -c http.proxy= -c https.proxy= fetch original-cloud master
           cloud_sha="$(git rev-parse original-cloud/master)"
           github_sha="$(git rev-parse master)"
           echo "cloud_sha=${cloud_sha}" >> "${GITHUB_ENV}"
