@@ -11,7 +11,7 @@ from sqlalchemy import create_engine, inspect, text
 from app.config import get_settings
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CURRENT_HEAD = "0023_hct425_face_challenge_persistence"
+CURRENT_HEAD = "0024_hct462_risk_disposition"
 RESTORED_TABLES = {
     "projection_checkpoint",
     "review_task",
@@ -28,6 +28,7 @@ CURRENT_BRANCH_TABLES = {
     "export_manifest",
     "model_version_binding",
     "erasure_task",
+    "risk_disposition",
 }
 
 
