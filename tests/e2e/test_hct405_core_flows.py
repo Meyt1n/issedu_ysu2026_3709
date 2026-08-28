@@ -180,7 +180,7 @@ def test_caregiver_plan_actions_require_write_authorization(client: TestClient) 
         ("confirm", {"plan_event_id": plans[0]["id"]}, "plan_confirmed"),
         (
             "defer",
-            {"plan_event_id": plans[1]["id"], "delay_hours": 6},
+            {"plan_event_id": plans[1]["id"], "delay_hours": 2},
             "plan_deferred",
         ),
         (

@@ -529,6 +529,14 @@ describe('formatError 区分真实失败原因（HCT-401 爬虫面板）', () =>
     expect(message).not.toContain('HTTP 500')
     expect(message).not.toContain('SOMETHING_BROKE')
   })
+
+  it('409 EVENT_ALREADY_SUPERSEDED 说明记录已被更正，不要求盲目刷新', () => {
+    const message = formatError(
+      new ApiClientError('EVENT_ALREADY_SUPERSEDED', { status: 409, code: 'VERSION_CONFLICT' }),
+    )
+    expect(message).toContain('已被补偿更正')
+    expect(message).not.toContain('其它位置被修改')
+  })
 })
 
 describe('formatError timeout vs unavailability (HCT-424)', () => {

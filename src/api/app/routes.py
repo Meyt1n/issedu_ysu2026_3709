@@ -3195,7 +3195,7 @@ def defer_plan_endpoint(
     member_id: str,
     plan_event_id: str,
     request: Request,
-    delay_hours: int = 4,
+    delay_hours: int = Query(default=1, ge=1, le=2),
     actor_id: str = Depends(get_actor_id),
     access_purpose: str | None = Depends(get_access_purpose),
     session: Session = Depends(get_session),

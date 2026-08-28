@@ -80,13 +80,6 @@ class HealthNewsSourceProfile(BaseModel):
 # HEALTH_NEWS_ALLOWED_DOMAINS (and adapter=enabled).
 BUILTIN_SOURCES: tuple[HealthNewsSourceProfile, ...] = (
     HealthNewsSourceProfile(
-        id="who_news_en",
-        name="世界卫生组织",
-        list_url="https://www.who.int/rss-feeds/news-english.xml",
-        kind="rss",
-        max_items=4,
-    ),
-    HealthNewsSourceProfile(
         id="nhc_xwzx",
         name="国家卫生健康委员会",
         list_url="https://www.nhc.gov.cn/xcs/yqfkdt/list_gzbd.shtml",
@@ -100,6 +93,20 @@ BUILTIN_SOURCES: tuple[HealthNewsSourceProfile, ...] = (
         list_url="https://www.chinacdc.cn/jkzt/crb/",
         kind="html_list",
         link_path_contains="/jkzt/",
+        max_items=4,
+    ),
+    HealthNewsSourceProfile(
+        id="who_news_zh",
+        name="世界卫生组织（中文）",
+        list_url="https://www.who.int/rss-feeds/news-chinese.xml",
+        kind="rss",
+        max_items=4,
+    ),
+    HealthNewsSourceProfile(
+        id="who_news_en",
+        name="世界卫生组织",
+        list_url="https://www.who.int/rss-feeds/news-english.xml",
+        kind="rss",
         max_items=4,
     ),
 )
@@ -253,6 +260,52 @@ def _chat_prompt_for(title: str) -> str:
         "请结合本地知识库，用教学语气说明一般性居家照护注意点；"
         "不要诊断、不开处方、不编造病例数或未证实的疫情结论。"
     )
+
+
+def _cjk_ratio(text: str) -> float:
+    if not text:
+        return 0.0
+    cjk = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
+    return cjk / max(len(text), 1)
+
+
+def _localize_english_draft(draft: RemoteNewsDraft) -> RemoteNewsDraft:
+    """Teaching home cards prefer Chinese; annotate English-only remote drafts."""
+    title = _strip_html(draft.title)
+    summary = _strip_html(draft.summary)
+    if _cjk_ratio(title) >= 0.12 or _cjk_ratio(summary) >= 0.12:
+        return draft
+    short_title = _truncate(title, 96)
+    localized_summary = (
+        f"【英文公开资讯】{short_title}。"
+        "首页仅展示标题摘要，不构成诊断或疫情通报；可点进本地助手了解一般照护提示。"
+    )
+    if summary and _cjk_ratio(summary) < 0.12:
+        localized_summary = f"{localized_summary} 原文摘要：{_truncate(summary, 180)}"
+    return draft.model_copy(update={"summary": localized_summary})
+
+
+def _round_robin_merge(
+    buckets: list[list[HealthNewsItem]],
+    *,
+    limit: int,
+) -> list[HealthNewsItem]:
+    merged: list[HealthNewsItem] = []
+    seen_keys: set[str] = set()
+    max_len = max((len(bucket) for bucket in buckets), default=0)
+    for index in range(max_len):
+        for bucket in buckets:
+            if index >= len(bucket):
+                continue
+            item = bucket[index]
+            key = (item.source_url or item.title).casefold()
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            merged.append(item)
+            if len(merged) >= limit:
+                return merged
+    return merged
 
 
 def draft_to_item(draft: RemoteNewsDraft, *, fetched_at: datetime) -> HealthNewsItem | None:
@@ -695,44 +748,46 @@ async def fetch_health_news(*, when: datetime | None = None) -> dict[str, Any]:
 
         _last_request_at = now_mono
         fetched_at = datetime.now(UTC)
-        remote_items: list[HealthNewsItem] = []
+        per_source_items: list[list[HealthNewsItem]] = []
         attempted: list[str] = []
         errors: list[str] = []
 
         for source in sources:
             attempted.append(source.id)
+            bucket: list[HealthNewsItem] = []
             try:
                 drafts = await _fetch_source(source, allowed_hosts=allowed)
                 for draft in drafts:
-                    item = draft_to_item(draft, fetched_at=fetched_at)
+                    localized = _localize_english_draft(draft)
+                    item = draft_to_item(localized, fetched_at=fetched_at)
                     if item is not None:
-                        remote_items.append(item)
+                        bucket.append(item)
+                per_source_items.append(bucket)
             except httpx.TimeoutException:
                 errors.append(f"{source.id}:timeout")
+                per_source_items.append([])
             except httpx.HTTPStatusError as exc:
                 code = exc.response.status_code if exc.response is not None else 0
                 if code == 429:
                     errors.append(f"{source.id}:rate_limited")
                 else:
                     errors.append(f"{source.id}:http_{code}")
+                per_source_items.append([])
             except HealthNewsEgressBlockedError:
                 errors.append(f"{source.id}:egress_blocked")
+                per_source_items.append([])
             except ValueError:
                 errors.append(f"{source.id}:invalid_response")
+                per_source_items.append([])
             except Exception as exc:  # noqa: BLE001
                 logger.warning("health_news source=%s failed: %s", source.id, str(exc)[:160])
                 errors.append(f"{source.id}:error")
+                per_source_items.append([])
 
-        # Dedupe by URL / title
-        deduped: list[HealthNewsItem] = []
-        seen_keys: set[str] = set()
-        for item in remote_items:
-            key = (item.source_url or item.title).casefold()
-            if key in seen_keys:
-                continue
-            seen_keys.add(key)
-            deduped.append(item)
-        remote_items = deduped[: settings.health_news_max_items]
+        remote_items = _round_robin_merge(
+            per_source_items,
+            limit=settings.health_news_max_items,
+        )
 
         if remote_items:
             _cache = _CacheEntry(

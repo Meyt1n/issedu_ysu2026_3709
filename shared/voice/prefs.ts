@@ -40,7 +40,7 @@ export const DEFAULT_VOICE_PREFERENCES: VoicePreferences = {
   silenceMs: 15_000,
   continuationSilenceMs: 18_000,
   confirmSound: true,
-  doubleWake: true,
+  doubleWake: false,
   wakePhrase: DEFAULT_WAKE_PHRASE,
   voiceCommands: true,
   autoSendDelayMs: 3000,
@@ -97,7 +97,7 @@ function sanitizePreferences(raw: Partial<VoicePreferences> | null): VoicePrefer
         ? raw.continuationSilenceMs
         : DEFAULT_VOICE_PREFERENCES.continuationSilenceMs,
     confirmSound: raw.confirmSound !== false,
-    doubleWake: raw.doubleWake !== false,
+    doubleWake: raw.doubleWake === true,
     wakePhrase: normalizeWakePhrase(raw.wakePhrase),
     voiceCommands: raw.voiceCommands !== false,
     autoSendDelayMs:

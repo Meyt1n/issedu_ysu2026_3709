@@ -120,6 +120,18 @@ const stateFacts = computed(() => buildFactsFromTimeline(timeline.value))
 
 const orderedTimeline = computed(() => [...timeline.value].reverse())
 
+const supersededEventIds = computed(() => {
+  const ids = new Set<string>()
+  for (const event of timeline.value) {
+    if (event.supersedes_event_id) ids.add(event.supersedes_event_id)
+  }
+  return ids
+})
+
+function isEventSuperseded(event: HealthEvent): boolean {
+  return supersededEventIds.value.has(event.id)
+}
+
 const TIMELINE_PREVIEW = 8
 const showAllTimeline = ref(false)
 const visibleTimeline = computed(() =>
@@ -357,12 +369,17 @@ onMounted(() => void loadProfile())
                 {{ confirmationLabel(event.confirmation_status) }}
               </span>
               <span v-if="event.compensates_event_id" class="pill gold">更正记录</span>
+              <span v-else-if="isEventSuperseded(event)" class="pill">已被更正</span>
             </div>
             <span v-if="summarizeEventPayload(event)" class="timeline-payload">{{ summarizeEventPayload(event) }}</span>
             <span class="timeline-meta">
               {{ formatDateTime(event.created_at) }} · 序号 {{ event.sequence_no }} · 记录人 {{ event.created_by }}
             </span>
-            <div v-if="event.event_type !== 'COMPENSATION'" class="row-actions" style="margin-top: 4px">
+            <div
+              v-if="event.event_type !== 'COMPENSATION' && !isEventSuperseded(event)"
+              class="row-actions"
+              style="margin-top: 4px"
+            >
               <button type="button" class="btn btn-ghost btn-small" @click="startCompensation(event)">
                 {{ compensatingId === event.id ? '收起' : '补偿更正' }}
               </button>

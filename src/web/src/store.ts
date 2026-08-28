@@ -61,6 +61,15 @@ export const FACE_FAMILY_STORAGE_KEY = 'hct:face-family-household'
 // verifies the household and face credential; this value only selects the
 // household whose gallery may be searched.
 const FACE_FAMILY_COOKIE_KEY = 'hct-face-family-household'
+const SESSION_STORAGE_KEY = 'hct:auth-session'
+const SESSION_COOKIE_KEY = 'hct-auth-session'
+
+interface PersistedSession {
+  token: string
+  expiresAt: number
+  actorId: string
+  accessPurpose: string
+}
 
 interface BoundFaceHousehold {
   id: string
@@ -232,6 +241,9 @@ export function formatError(cause: unknown): string {
       if (cause.message === 'STEP_UP_EXPIRED' || cause.message === 'STEP_UP_REPLAY') {
         return '二次确认已过期或已使用，请重新发起确认。'
       }
+      if (cause.message === 'EVENT_ALREADY_SUPERSEDED') {
+        return '这条记录已被补偿更正覆盖，无需再次更正。请刷新时间线查看最新状态。'
+      }
       return '数据已在其它位置被修改，请刷新后再试。'
     }
     if (cause.status === 422) {
@@ -349,11 +361,92 @@ export function signOut(): void {
   clearSessionContext()
 }
 
+function readPersistedSession(): PersistedSession | null {
+  const parse = (raw: string): PersistedSession | null => {
+    try {
+      const parsed = JSON.parse(raw) as Partial<PersistedSession>
+      if (
+        typeof parsed.token === 'string'
+        && parsed.token.length >= 40
+        && typeof parsed.expiresAt === 'number'
+        && parsed.expiresAt * 1000 > Date.now()
+      ) {
+        return {
+          token: parsed.token,
+          expiresAt: parsed.expiresAt,
+          actorId: typeof parsed.actorId === 'string' ? parsed.actorId : '',
+          accessPurpose:
+            typeof parsed.accessPurpose === 'string' && parsed.accessPurpose.trim()
+              ? parsed.accessPurpose
+              : 'family-care',
+        }
+      }
+    } catch {
+      // Ignore malformed persistence payloads.
+    }
+    return null
+  }
+
+  try {
+    const local = globalThis.localStorage?.getItem(SESSION_STORAGE_KEY)?.trim() ?? ''
+    const fromLocal = local ? parse(local) : null
+    if (fromLocal) return fromLocal
+  } catch {
+    // Fall through to the same-host cookie when storage is unavailable.
+  }
+
+  try {
+    const cookie = globalThis.document?.cookie ?? ''
+    const pair = cookie
+      .split(';')
+      .map(item => item.trim())
+      .find(item => item.startsWith(`${SESSION_COOKIE_KEY}=`))
+    if (!pair) return null
+    return parse(decodeURIComponent(pair.slice(SESSION_COOKIE_KEY.length + 1)))
+  } catch {
+    return null
+  }
+}
+
+function writePersistedSession(payload: PersistedSession): void {
+  const encoded = JSON.stringify(payload)
+  try {
+    globalThis.localStorage?.setItem(SESSION_STORAGE_KEY, encoded)
+  } catch {
+    // Private browsing may disable storage; the same-host cookie remains available.
+  }
+  try {
+    if (globalThis.document) {
+      const maxAge = Math.max(60, Math.floor(payload.expiresAt - Date.now() / 1000))
+      globalThis.document.cookie =
+        `${SESSION_COOKIE_KEY}=${encodeURIComponent(encoded)}; Path=/; SameSite=Lax; Max-Age=${maxAge}`
+    }
+  } catch {
+    // Ignore cookie persistence failures; the in-memory session still works.
+  }
+}
+
+function clearPersistedSession(): void {
+  try {
+    globalThis.localStorage?.removeItem(SESSION_STORAGE_KEY)
+  } catch {
+    // Ignore storage cleanup failures.
+  }
+  try {
+    if (globalThis.document) {
+      globalThis.document.cookie = `${SESSION_COOKIE_KEY}=; Max-Age=0; Path=/; SameSite=Lax`
+    }
+  } catch {
+    // Ignore cookie cleanup failures.
+  }
+}
+
 function clearSessionContext(): void {
   if (sessionExpiryTimer !== null) {
     clearTimeout(sessionExpiryTimer)
     sessionExpiryTimer = null
   }
+  clearPersistedSession()
   clearChatSessionsForActor(state.actorId)
   state.actorId = ''
   state.sessionToken = ''
@@ -557,6 +650,14 @@ async function enterAuthenticatedSession(
   state.households = await apiClient.listHouseholds(requestOptions.value)
   if (state.households.length === 0) {
     state.status = 'empty'
+    if (state.authMode === 'session' && state.sessionToken && state.sessionExpiresAt) {
+      writePersistedSession({
+        token: state.sessionToken,
+        expiresAt: state.sessionExpiresAt,
+        actorId: state.actorId,
+        accessPurpose: state.accessPurpose,
+      })
+    }
     return
   }
 
@@ -568,6 +669,41 @@ async function enterAuthenticatedSession(
   await loadHouseholdScope()
   if (sessionIsSignedOut()) return
   state.status = 'ready'
+  if (state.authMode === 'session' && state.sessionToken && state.sessionExpiresAt) {
+    writePersistedSession({
+      token: state.sessionToken,
+      expiresAt: state.sessionExpiresAt,
+      actorId: state.actorId,
+      accessPurpose: state.accessPurpose,
+    })
+  }
+}
+
+/** 刷新页面后从本机持久化的 Bearer 会话恢复登录态（HCT-428）。 */
+export async function restoreSessionFromCookie(): Promise<boolean> {
+  const persisted = readPersistedSession()
+  if (!persisted) return false
+
+  state.status = 'loading'
+  state.authMode = 'session'
+  state.accessPurpose = persisted.accessPurpose
+  state.error = ''
+  try {
+    const introspected = await apiClient.introspectSession(persisted.token)
+    await enterAuthenticatedSession(
+      {
+        actor_id: introspected.actor_id,
+        session_token: persisted.token,
+        expires_at: introspected.expires_at,
+        household_id: introspected.household_id ?? undefined,
+      },
+      introspected.household_id ?? '',
+    )
+    return state.status === 'ready' || state.status === 'empty'
+  } catch {
+    clearSessionContext()
+    return false
+  }
 }
 
 export async function connectWithPassword(
