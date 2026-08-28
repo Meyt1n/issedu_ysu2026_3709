@@ -203,6 +203,7 @@ $env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk"
 - 首次构建需要 Android SDK（Android Studio 自带）；`android/local.properties` 由本机自动生成，不入库；
 - 仓库路径含中文目录时依赖 `android.overridePathCheck=true`（已配置），个别环境仍失败时可把仓库放到纯 ASCII 路径构建；
 - 把 `app-debug.apk` 传到手机安装（需允许安装未知来源应用），或连接手机后 `npx cap run android`；
+- 部分荣耀/Huawei 复合 USB 接口在默认 ADB 后端下会显示空设备列表；若 Windows 已识别 `ADB Interface` 但 `adb devices` 为空，可在当前终端先设置 `$env:ADB_LIBUSB = "1"`，再执行 `adb devices`/`adb install`；
 - 手机与家庭服务器需在同一局域网，服务器地址填电脑的局域网 IP，例如 `http://192.168.1.10:8000`。
 - `npm run android:sync` 使用生产模式 Web 产物，私网 HTTP 会在 APP 层被拒绝；Release/Main Android 网络策略也只允许 HTTPS。
 
