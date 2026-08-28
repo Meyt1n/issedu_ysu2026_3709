@@ -416,8 +416,14 @@ export class ApiClient {
           },
         )
       } catch {
-        const aborted = timeoutController?.signal.aborted === true
-        if (aborted) {
+        // An explicit caller abort is a user cancellation; only an abort from
+        // our timer is a timeout. Keeping these codes distinct prevents a
+        // deliberate Stop action from being rendered as a network failure.
+        if (options.signal?.aborted) {
+          throw new ApiClientError('ASSISTANT_STREAM_CANCELLED', { status: 0, code: 'CANCELLED' })
+        }
+        const timedOut = timeoutController?.signal.aborted === true
+        if (timedOut) {
           throw new ApiClientError('请求超时，服务器没有在限定时间内响应', { status: 0, code: 'REQUEST_TIMEOUT' })
         }
         throw new ApiClientError('家庭服务器暂时无法访问', { status: 0, code: 'DEPENDENCY_UNAVAILABLE' })
@@ -505,6 +511,16 @@ export class ApiClient {
         throw new ApiClientError('流式结束但未收到回答', { status: 0, code: 'DEPENDENCY_UNAVAILABLE' })
       }
       return finalResponse
+    } catch (cause) {
+      // Abort can happen while reading the SSE body, after fetch() has
+      // already resolved. Normalize that path just like fetch rejection.
+      if (options.signal?.aborted) {
+        throw new ApiClientError('ASSISTANT_STREAM_CANCELLED', { status: 0, code: 'CANCELLED' })
+      }
+      if (timeoutController?.signal.aborted) {
+        throw new ApiClientError('请求超时，服务器没有在限定时间内响应', { status: 0, code: 'REQUEST_TIMEOUT' })
+      }
+      throw cause
     } finally {
       if (timeoutTimer) clearTimeout(timeoutTimer)
       options.signal?.removeEventListener('abort', onExternalAbort)

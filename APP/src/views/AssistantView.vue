@@ -36,10 +36,17 @@ import {
 } from '@/composables/useVoiceInput'
 import { useA11y } from '@/stores/accessibility'
 import { useSession } from '@/stores/session'
+import {
+  assistantReplyStatusLabel,
+  isInterruptedAssistantReply,
+  restoreAssistantReplyStatus,
+  type AssistantReplyStatus,
+} from '@/utils/assistantReply'
 
 interface ChatEntry {
   role: 'user' | 'assistant'
   content: string
+  replyStatus?: AssistantReplyStatus
   degraded?: boolean
   degradeReason?: string | null
   sources?: string[]
@@ -226,6 +233,7 @@ function restoreChatSession(entries: StoredChatEntry[]): void {
   history.value = entries.map((entry) => ({
     role: entry.role,
     content: entry.content,
+    replyStatus: restoreAssistantReplyStatus(entry.role, entry.content, entry.degraded, entry.degradeReason),
     degraded: entry.degraded,
     degradeReason: entry.degradeReason,
     sources: entry.sources,
@@ -499,6 +507,7 @@ function applyAssistantReply(entryIndex: number, reply: AssistantResponse): void
   const entry = history.value[entryIndex]
   if (!entry) return
   entry.content = reply.answer
+  entry.replyStatus = 'completed'
   entry.degraded = reply.degraded
   entry.degradeReason = reply.degrade_reason
   entry.sources = reply.sources
@@ -522,11 +531,20 @@ function applyAssistantReply(entryIndex: number, reply: AssistantResponse): void
   }
 }
 
-/** 取消/结束回复的收尾：结束回复保留已显示内容，普通停止移除未完成气泡。 */
+/** 取消/结束回复的收尾：保留已显示内容并明确标记为不完整。 */
 function settleCancelledReply(entryIndex: number, streamingEntry: ChatEntry): void {
   const entry = history.value[entryIndex]
-  if (keepPartialReply && entry === streamingEntry && entry.content.trim()) {
-    cancelStatus.value = '已结束回复，保留已生成的内容'
+  if (entry === streamingEntry && entry.content.trim()) {
+    entry.replyStatus = keepPartialReply ? 'ended' : 'stopped'
+    entry.degraded = true
+    entry.degradeReason = keepPartialReply ? 'reply_ended' : 'user_stopped'
+    entry.sources = undefined
+    entry.suggestedQuestions = undefined
+    entry.networkUsed = false
+    entry.agentTraceSummary = undefined
+    cancelStatus.value = keepPartialReply
+      ? '已结束回复，保留已生成的内容'
+      : '已停止，已保留未完整内容；可点击“重新提问”'
   } else {
     if (entry === streamingEntry) history.value.splice(entryIndex, 1)
     cancelStatus.value = '已停止'
@@ -534,6 +552,21 @@ function settleCancelledReply(entryIndex: number, streamingEntry: ChatEntry): vo
   keepPartialReply = false
   persistChatSession()
   scrollToEnd()
+}
+
+function retryInterruptedReply(replyIndex: number): void {
+  if (!isInterruptedAssistantReply(history.value[replyIndex]?.replyStatus)) return
+  for (let index = replyIndex - 1; index >= 0; index -= 1) {
+    const entry = history.value[index]
+    if (entry?.role === 'user' && entry.content.trim()) {
+      draft.value = entry.content
+      sendError.value = ''
+      cancelStatus.value = '已恢复原问题，请确认后重新提问'
+      void nextTick(() => draftInput.value?.focus())
+      return
+    }
+  }
+  cancelStatus.value = '找不到原问题，请重新输入后再试'
 }
 
 async function send(text?: string, queryTypeOverride?: string): Promise<void> {
@@ -620,7 +653,7 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
   const requestOpts = { ...requestOptions(), signal: controller.signal }
 
   // 流式展示：token 直接写入这条气泡；结束回复/停止时按需保留或移除。
-  const streamingEntry: ChatEntry = { role: 'assistant', content: '' }
+  const streamingEntry: ChatEntry = { role: 'assistant', content: '', replyStatus: 'streaming' }
   history.value.push(streamingEntry)
   const entryIndex = history.value.length - 1
 
@@ -636,7 +669,7 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
             orchestrationPhase.value = phase || 'retrieving'
           },
           onToken: (token) => {
-            if (!token) return
+            if (!token || controller.signal.aborted) return
             streamStarted = true
             streamingEntry.content += token
             orchestrationPhase.value = 'generating'
@@ -662,6 +695,7 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
       }
       if (streamStarted && streamingEntry.content.trim()) {
         streamingEntry.content = streamingEntry.content.trim()
+        streamingEntry.replyStatus = 'incomplete'
         streamingEntry.degraded = true
         streamingEntry.degradeReason = 'stream_incomplete'
         sendError.value = '流式连接中断，已保留已生成内容。'
@@ -686,12 +720,14 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
       const entry = history.value[entryIndex]
       if (entry === streamingEntry) {
         entry.content = fallbackContent
+        entry.replyStatus = 'incomplete'
         entry.degraded = true
         entry.degradeReason = 'request_failed'
       } else {
         history.value.push({
           role: 'assistant',
           content: fallbackContent,
+          replyStatus: 'incomplete',
           degraded: true,
           degradeReason: 'request_failed',
         })
@@ -810,6 +846,16 @@ onBeforeUnmount(() => {
       >
         <p class="bubble-role">{{ entry.role === 'user' ? '我' : '助手' }}</p>
         <p class="bubble-text">{{ entry.content }}</p>
+        <p
+          v-if="entry.role === 'assistant' && entry.replyStatus"
+          class="meta-line reply-status"
+          role="status"
+          aria-live="polite"
+        >
+          {{ assistantReplyStatusLabel(entry.replyStatus) }}
+          <span v-if="entry.replyStatus === 'stopped' || entry.replyStatus === 'ended'">；未得出引用完整性结论。</span>
+          <span v-else-if="entry.replyStatus === 'incomplete'">；请重新提问以获得完整回答。</span>
+        </p>
         <p v-if="entry.degraded" class="meta-line">降级说明：{{ entry.degradeReason || '受控降级' }}</p>
         <p v-if="entry.agentTraceSummary" class="meta-line">{{ entry.agentTraceSummary }}</p>
         <p v-if="entry.networkUsed" class="meta-line">含外部参考 · 需人工确认，不作诊断</p>
@@ -822,6 +868,14 @@ onBeforeUnmount(() => {
             @click="finishReplyEarly"
           >
             结束回复
+          </button>
+          <button
+            v-if="isInterruptedAssistantReply(entry.replyStatus)"
+            type="button"
+            class="btn btn-secondary"
+            @click="retryInterruptedReply(index)"
+          >
+            重新提问
           </button>
           <button
             type="button"
