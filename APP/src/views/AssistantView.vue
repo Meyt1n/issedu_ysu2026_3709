@@ -813,7 +813,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main id="main" class="page assistant-page" tabindex="-1">
+  <main id="main" class="screen assistant-page" tabindex="-1">
     <header class="page-header">
       <div>
         <p class="eyebrow">随身助手</p>
@@ -1066,7 +1066,6 @@ onBeforeUnmount(() => {
 .assistant-page {
   display: grid;
   gap: 14px;
-  padding-bottom: 28px;
 }
 .page-header {
   display: flex;
