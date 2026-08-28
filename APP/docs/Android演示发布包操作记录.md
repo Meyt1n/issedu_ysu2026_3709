@@ -41,7 +41,7 @@ powershell -ExecutionPolicy Bypass -File scripts/build-apk.ps1 -JavaHome "<JDK 2
 - 安装后：卸载 debug 应用或安装上一经验证 APK；本地设置可在应用内恢复演示数据。
 - 代码：revert 对应 PR。不得通过删除服务端事件、授权或审计记录来回滚客户端发布。
 
-## 本机验证记录（2026-08-17）
+## 本机验证记录（2026-08-17，历史）
 
 | 检查 | 结果 |
 | --- | --- |
@@ -53,7 +53,7 @@ powershell -ExecutionPolicy Bypass -File scripts/build-apk.ps1 -JavaHome "<JDK 2
 
 本机 `JAVA_HOME` 已设置，但 Android SDK 未安装或未配置。安装 Android Studio SDK 后，设置 `ANDROID_HOME` 到实际 SDK 目录并重跑构建脚本。此记录不构成真机安装或 APK 发布验证。
 
-## 本机复核记录（2026-08-27）
+## 本机复核记录（2026-08-27，历史）
 
 本次复核只使用仓库内虚构演示数据，不上传真实健康数据，也不把浏览器或低端模拟结果当作 Android 真机签收。
 
@@ -77,3 +77,19 @@ powershell -ExecutionPolicy Bypass -File scripts/build-apk.ps1 -JavaHome "<JDK 2
 | `npm run verify:android-voice-evidence` | 阻塞：缺少 Android 真机语音矩阵和设备元数据 |
 
 本记录证明的是 PWA/Capacitor 同步和静态安全边界可复跑；它不构成 Android 安装、相机权限、通知、TalkBack、TTS、后台恢复或真实后端联机的通过。补齐 JDK、受控 HTTPS 后端和 Android 真机后，必须重跑本节命令并填写未提交的受控发布记录。
+
+## 本机发布候选复核（2026-08-28）
+
+本次基于最新 `master`（源码基线 `c0640ca`）及 Android 构建配置修复执行，使用仓库虚构演示数据。APK 和签名材料只保存在本机，未提交仓库。
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm run check` | 通过 |
+| `npm run test` | 通过，32 个文件 / 290 tests |
+| `npm run build` | 通过，Vite 生产构建完成 |
+| `npm run android:sync` | 通过，Capacitor 8.5.0 同步完成 |
+| `scripts/build-apk.ps1` | 通过，JDK 21 + Android SDK 生成 debug APK |
+| APK 产物 | 4,756,985 bytes（约 4.54 MiB），SHA-256 `3F3AAC97B55AAC57F5048CAEA509A6A4D97620DC2FA6F195FF9F5BB531A32792` |
+| 荣耀真机安装/启动烟测 | 通过：AAP-AN00、Android 16、Android System WebView 138.0.7204.179、1272×2800；USB 安装后可启动并显示演示首页 |
+
+Windows 端对该荣耀设备需要设置 `ADB_LIBUSB=1` 才能稳定枚举；这只是本机连接兼容性记录，不是运行时功能依赖。当前尚未完成升级、后台恢复、断网/恢复、系统权限、TalkBack、TTS、触觉、320/375px 小屏和 PWA/APK/API 回滚演练，因此本记录不能单独批准 #234。
