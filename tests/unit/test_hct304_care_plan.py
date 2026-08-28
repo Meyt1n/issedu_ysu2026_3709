@@ -89,9 +89,9 @@ class TestPlanActions:
         assert event.event_type == "plan_confirmed"
 
     def test_defer_has_idempotency_key(self):
-        event = defer_plan("m1", "h1", "plan-1", 8, "actor1")
+        event = defer_plan("m1", "h1", "plan-1", 2, "actor1")
         assert event.idempotency_key == "defer:plan-1"
-        assert event.payload["delay_hours"] == 8
+        assert event.payload["delay_hours"] == 2
 
     def test_skip_has_idempotency_key(self):
         event = skip_plan("m1", "h1", "plan-1", "doctor advised", "actor1")

@@ -2119,6 +2119,7 @@ button:focus-visible, a:focus-visible {
 
 .chat-bubble-row.user {
   justify-content: flex-end;
+  align-items: flex-start;
   padding-left: clamp(24px, 14%, 120px);
 }
 
@@ -2150,10 +2151,16 @@ button:focus-visible, a:focus-visible {
   border-radius: 19px 19px 6px 19px;
   box-shadow: 0 7px 18px rgba(56, 102, 90, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.58);
   color: var(--ink);
-  flex: 0 1 auto;
-  max-width: min(74%, 620px);
+  align-self: flex-end;
+  display: inline-block;
+  flex: 0 0 auto;
+  max-width: min(72%, 520px);
   padding: 10px 15px;
-  width: fit-content;
+  width: max-content;
+}
+
+.chat-bubble-row.user .chat-message-content {
+  white-space: normal;
 }
 
 /* 助手回答使用轻纸面气泡，保留现有暖纸主题且与用户消息形成明确层级。 */

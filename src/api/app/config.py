@@ -139,7 +139,7 @@ class Settings(BaseSettings):
     # before any outbound fetch (WHO / NHC / China CDC, etc.).
     health_news_adapter: str = "local"
     health_news_allowed_domains: str = ""
-    # Optional subset of built-in source ids (who_news_en,nhc_xwzx,chinacdc_zxxx).
+    # Optional subset of built-in source ids (nhc_xwzx,chinacdc_zxxx,who_news_zh,who_news_en).
     health_news_source_ids: str = ""
     # Extra sources: id|name|https_url|rss_or_html_list|optional_path_hint ; separated
     health_news_extra_sources: str = ""

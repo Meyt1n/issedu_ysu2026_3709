@@ -195,7 +195,7 @@ def test_plan_workbench_uses_latest_deferral_for_next_action(client: TestClient)
     deferred = client.post(
         f"/api/v1/households/{household_id}/members/{member_id}/plans/defer",
         headers=OWNER_HEADERS,
-        params={"plan_event_id": plan["id"], "delay_hours": 6},
+        params={"plan_event_id": plan["id"], "delay_hours": 2},
     )
     assert deferred.status_code == 201, deferred.text
 
@@ -209,7 +209,18 @@ def test_plan_workbench_uses_latest_deferral_for_next_action(client: TestClient)
     assert item["status"] == "NORMAL"
     assert item["last_action"]["action"] == "DEFER"
     next_action_at = datetime.fromisoformat(item["next_action_at"])
-    assert timedelta(hours=5) < next_action_at - datetime.now(UTC) < timedelta(hours=7)
+    assert timedelta(hours=1) < next_action_at - datetime.now(UTC) < timedelta(hours=3)
+
+
+def test_plan_defer_rejects_delay_outside_one_to_two_hours(client: TestClient) -> None:
+    household_id, member_id = _create_household_and_member(client)
+    plan = _append_plan(client, household_id, member_id)
+    rejected = client.post(
+        f"/api/v1/households/{household_id}/members/{member_id}/plans/defer",
+        headers=OWNER_HEADERS,
+        params={"plan_event_id": plan["id"], "delay_hours": 6},
+    )
+    assert rejected.status_code == 422, rejected.text
 
 
 def test_plan_workbench_records_missed_dose_separately(client: TestClient) -> None:

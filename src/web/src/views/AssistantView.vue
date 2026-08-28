@@ -1238,6 +1238,7 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
     if (activeSendController === controller) activeSendController = null
     orchestrationPhase.value = null
     sending.value = false
+    void loadAgentCatalog()
     // 自动播报进行中时不开麦回听（开麦会停止朗读）；播完由 onFinished 回听。
     if (!needMicGesture.value && speakingIndex.value === null) void beginWakeListening()
   }
@@ -1455,7 +1456,13 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div v-for="(entry, index) in history" :key="index" class="chat-bubble-row" :class="entry.role">
+      <div
+        v-for="(entry, index) in history"
+        v-show="entry.role === 'user' || entry.content.length > 0"
+        :key="index"
+        class="chat-bubble-row"
+        :class="entry.role"
+      >
         <span v-if="entry.role === 'assistant'" class="chat-avatar" aria-hidden="true">
           <AppIcon name="assistant" :size="16" />
         </span>
@@ -1717,7 +1724,7 @@ onBeforeUnmount(() => {
               ? webSearchDisabledText
               : '仅发送脱敏后的问题以补充公开参考；详情见右上角设置'"
           >
-            <input v-model="allowNetworkSearch" type="checkbox" :disabled="sending || webSearchAvailable === false" />
+            <input v-model="allowNetworkSearch" type="checkbox" :disabled="webSearchAvailable === false" />
             <AppIcon name="cloud" :size="14" />
             联网搜索
             <span v-if="webSearchBadge" class="pill sage">{{ webSearchBadge }}</span>
@@ -1790,7 +1797,7 @@ onBeforeUnmount(() => {
       <section class="assistant-settings-section" aria-label="联网搜索">
         <h4>联网搜索</h4>
         <label class="agent-network-toggle">
-          <input v-model="allowNetworkSearch" type="checkbox" :disabled="sending || webSearchAvailable === false" />
+          <input v-model="allowNetworkSearch" type="checkbox" :disabled="webSearchAvailable === false" />
           <span>
             <strong>
               补充联网参考

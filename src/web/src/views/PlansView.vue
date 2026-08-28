@@ -26,7 +26,7 @@ let removeHealthRefreshListener: (() => void) | null = null
 const actionDraft = reactive({
   planEventId: '',
   action: 'confirm' as 'confirm' | 'defer' | 'skip' | 'miss',
-  delayHours: 4,
+  delayHours: 1,
   skipReason: '',
 })
 
@@ -75,7 +75,7 @@ function openAction(plan: PlanWorkbenchItem, action: 'confirm' | 'defer' | 'skip
   }
   actionDraft.planEventId = plan.plan_event_id
   actionDraft.action = action
-  actionDraft.delayHours = 4
+  actionDraft.delayHours = 1
   actionDraft.skipReason = ''
 }
 
@@ -268,9 +268,9 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
             </template>
             <template v-else-if="actionDraft.action === 'defer'">
               <label class="field">
-                延期小时数（1–168）
-                <input v-model.number="actionDraft.delayHours" type="number" min="1" max="168" required />
-                <small>延期不改变医嘱内容，只调整本次提醒时间，且必须落在安全时间窗内。</small>
+                延期小时数（1–2）
+                <input v-model.number="actionDraft.delayHours" type="number" min="1" max="2" required />
+                <small>仅推迟本次提醒，最长 2 小时；不改变医嘱剂量与频次。</small>
               </label>
             </template>
             <template v-else>

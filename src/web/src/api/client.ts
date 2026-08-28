@@ -318,6 +318,18 @@ export class ApiClient {
     })
   }
 
+  introspectSession(sessionToken: string): Promise<{
+    actor_id: string
+    household_id: string | null
+    issued_at: number
+    expires_at: number
+  }> {
+    return this.request('/api/v1/auth/session', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${sessionToken}` },
+    })
+  }
+
   getHealth(options?: RequestOptions): Promise<HealthResponse> {
     return this.request('/health', undefined, options)
   }

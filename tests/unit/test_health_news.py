@@ -17,11 +17,16 @@ from app.egress_guard import is_health_news_egress_allowed
 from app.health_news import build_health_news
 from app.health_news_adapter import (
     HealthNewsSourceProfile,
+    RemoteNewsDraft,
     draft_to_item,
     health_news_ops_snapshot,
     parse_html_list_payload,
     parse_rss_payload,
     reset_health_news_state,
+)
+from app.health_news_adapter import (
+    _localize_english_draft,
+    _round_robin_merge,
 )
 from app.main import app
 from app.security import get_actor_id
@@ -158,6 +163,56 @@ def enabled_news(monkeypatch: pytest.MonkeyPatch) -> object:
     monkeypatch.setattr(settings, "health_news_max_items", 6)
     monkeypatch.setattr(settings, "health_news_timeout_seconds", 2.0)
     return settings
+
+
+def test_localize_english_draft_adds_chinese_annotation() -> None:
+    draft = RemoteNewsDraft(
+        title="WHO Director-General visits Jordan",
+        summary="A two-day state visit focused on universal health coverage.",
+        source_url="https://www.who.int/news/item/example",
+        source_name="世界卫生组织",
+        source_id="who_news_en",
+    )
+    localized = _localize_english_draft(draft)
+    assert "英文公开资讯" in localized.summary
+    assert "WHO Director-General" in localized.summary
+
+
+def test_round_robin_merge_interleaves_sources() -> None:
+    fetched = datetime(2026, 8, 25, tzinfo=ZoneInfo("UTC"))
+    first = draft_to_item(
+        RemoteNewsDraft(
+            title="中文标题一",
+            summary="摘要一",
+            source_url="https://www.nhc.gov.cn/a",
+            source_name="国家卫健委",
+            source_id="nhc_xwzx",
+        ),
+        fetched_at=fetched,
+    )
+    second = draft_to_item(
+        RemoteNewsDraft(
+            title="中文标题二",
+            summary="摘要二",
+            source_url="https://www.nhc.gov.cn/b",
+            source_name="国家卫健委",
+            source_id="nhc_xwzx",
+        ),
+        fetched_at=fetched,
+    )
+    third = draft_to_item(
+        RemoteNewsDraft(
+            title="English headline",
+            summary="English summary",
+            source_url="https://www.who.int/c",
+            source_name="世界卫生组织",
+            source_id="who_news_en",
+        ),
+        fetched_at=fetched,
+    )
+    assert first and second and third
+    merged = _round_robin_merge([[first, second], [third]], limit=3)
+    assert [item.title for item in merged] == ["中文标题一", "English headline", "中文标题二"]
 
 
 def test_parse_rss_and_filter_commercial_titles() -> None:

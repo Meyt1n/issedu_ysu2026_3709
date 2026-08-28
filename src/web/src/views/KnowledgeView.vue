@@ -34,6 +34,18 @@ import { vReveal } from '../ui/motion'
 const documents = ref<KnowledgeDocument[]>([])
 const tools = ref<AssistantTool[]>([])
 
+const TOOL_DESCRIPTION_ZH: Record<string, string> = {
+  retrieve_knowledge: '检索已审核的本地知识文档（说明书、照护指引等）。',
+  get_health_events: '读取家庭成员的健康事件时间线（只读）。',
+  get_member_state: '读取成员当前状态投影（只读）。',
+  get_applied_rules: '查看当前生效的规则与提醒依据（只读）。',
+  get_care_plan_status: '查看用药计划与提醒状态（只读）。',
+}
+
+function toolDescriptionLabel(tool: AssistantTool): string {
+  return TOOL_DESCRIPTION_ZH[tool.name] ?? tool.description ?? ''
+}
+
 const DOC_PREVIEW = 6
 const showAllDocs = ref(false)
 const visibleDocuments = computed(() =>
@@ -527,13 +539,13 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onDetailKeydown))
         </template>
       </section>
 
-      <section class="card">
+      <section v-if="!crawlForbidden" class="card">
         <div class="card-heading">
           <div>
-            <p class="eyebrow">受控刷新</p>
-            <h3 class="card-title">知识爬虫 / Staging</h3>
+            <p class="eyebrow">维护者专用</p>
+            <h3 class="card-title">知识抓取与审核（Staging）</h3>
           </div>
-          <div v-if="!crawlForbidden" style="display: flex; gap: 8px; flex-wrap: wrap">
+          <div style="display: flex; gap: 8px; flex-wrap: wrap">
             <button type="button" class="btn btn-ghost btn-small" :disabled="crawlBusy" @click="runCrawl(true)">
               <AppIcon name="refresh" :size="15" />
               {{ crawlBusy ? '刷新中' : `到期刷新${dueCount ? ` (${dueCount})` : ''}` }}
@@ -552,17 +564,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onDetailKeydown))
             </button>
           </div>
         </div>
-        <div v-if="crawlForbidden" class="notice warn" role="status">
-          <strong>需要知识管理员身份</strong>
-          <p style="margin: 6px 0 0; line-height: 1.65">
-            演示环境可在欢迎页切换为 <span class="mono">demo-parent</span> 等演示账号；
-            正式部署由负责人把账号加入 <span class="mono">KNOWLEDGE_ADMIN_ACTORS</span> 后重启 API。
-          </p>
-        </div>
-        <template v-else>
-          <p class="card-note" style="margin-top: 0">
-            只抓白名单来源并写入 staging 草稿，<strong>不会自动入库</strong>；批准晋升后仍需人工 dry-run 才入库。
-          </p>
+        <p class="card-note" style="margin-top: 0">
+          面向知识管理员的<strong>教学演示</strong>：把白名单来源写入 staging 草稿，人工批准后才可晋升入库；日常家庭问答请用上方「检索」或「登记知识文档」。
+        </p>
+        <template>
           <p v-if="crawlLoadErrorText" class="notice warn" role="status" style="margin: 0 0 8px">
             爬虫状态读取失败：{{ crawlLoadErrorText }}
           </p>
@@ -823,7 +828,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onDetailKeydown))
         <ul v-else class="list-plain" style="gap: 8px">
           <li v-for="tool in tools" :key="tool.name" class="row-card" style="padding: 11px 14px">
             <span class="row-title mono" style="font-size: 13px">{{ tool.name }}</span>
-            <p v-if="tool.description" class="row-meta" style="margin: 0">{{ tool.description }}</p>
+            <p v-if="toolDescriptionLabel(tool)" class="row-meta" style="margin: 0">{{ toolDescriptionLabel(tool) }}</p>
           </li>
         </ul>
         <p class="text-faint" style="font-size: 12px; line-height: 1.6; margin: 10px 0 0">
