@@ -16,6 +16,7 @@ import { activeProvider, clearHouseholdSelection, selectHousehold } from '@/data
 import type { HouseholdOption } from '@/data/types'
 import { currentAuthAdapter, familyAuthAdapter } from '@/data/authAdapter'
 import { useA11y } from '@/stores/accessibility'
+import { buildOnboardingChecklist, stepStatusLabel } from '@/utils/onboardingSteps'
 import {
   canPromptInstall,
   dismissInstallEntry,
@@ -170,6 +171,24 @@ const currentHousehold = computed(
 )
 const needsHouseholdChoice = computed(
   () => households.value.length > 1 && !session.currentHouseholdId,
+)
+
+/**
+ * MOB-164 三步清单：只读地汇总已有状态，不改变任何授权判定，也不触发请求。
+ * 能力数量为 null 表示尚未完成探测，清单文案按「不可用」口径描述。
+ */
+const onboardingChecklist = computed(() =>
+  buildOnboardingChecklist({
+    liveMode: session.dataMode === 'live',
+    serverBaseUrl: session.serverBaseUrl,
+    serverAddressError: serverAddressError.value,
+    householdCount: households.value.length,
+    selectedHouseholdId: session.currentHouseholdId,
+    selectedHouseholdName: currentHousehold.value?.name ?? '',
+    connectionState: connectionState.value,
+    connectionError: connectionError.value?.message ?? '',
+    capabilityAvailableCount: capabilityState.snapshot?.available.length ?? null,
+  }),
 )
 
 /** 读取服务端授权范围内的家庭列表；错误不暴露隐藏家庭是否存在。 */
@@ -515,6 +534,44 @@ onMounted(() => {
       <p class="eyebrow">设置</p>
       <h1>我的</h1>
     </header>
+
+    <section class="card onboarding-card" aria-labelledby="onboarding-title">
+      <div class="card-title-row">
+        <h2 id="onboarding-title">联机三步</h2>
+        <span class="tag" :data-tone="onboardingChecklist.complete ? 'calm' : 'warn'">
+          {{ onboardingChecklist.complete ? '已就绪' : '待完成' }}
+        </span>
+      </div>
+      <p v-if="onboardingChecklist.summary" class="meta-line" role="status">
+        {{ onboardingChecklist.summary }}
+      </p>
+      <ol class="onboarding-steps">
+        <li
+          v-for="(step, index) in onboardingChecklist.steps"
+          :key="step.id"
+          class="onboarding-step"
+          :data-status="step.status"
+        >
+          <p class="onboarding-step-head">
+            <span class="onboarding-step-index" aria-hidden="true">{{ index + 1 }}</span>
+            <strong>{{ step.title }}</strong>
+            <span class="onboarding-step-status">{{ stepStatusLabel(step.status) }}</span>
+          </p>
+          <p class="onboarding-step-detail">{{ step.detail }}</p>
+          <p v-if="step.nextAction" class="onboarding-step-next">下一步：{{ step.nextAction }}</p>
+        </li>
+      </ol>
+      <button
+        type="button"
+        class="btn btn-quiet onboarding-recheck"
+        :disabled="connectionState === 'testing'"
+        :aria-busy="connectionState === 'testing'"
+        @click="testConnection"
+      >
+        <AppIcon name="refresh" :size="16" />
+        {{ connectionState === 'testing' ? '自检中…' : '重新自检' }}
+      </button>
+    </section>
 
     <section class="card" aria-labelledby="elder-title">
       <h2 id="elder-title" class="visually-hidden-title">长辈模式</h2>
@@ -1143,5 +1200,78 @@ html[data-contrast='high'] .mode-option { border-color: #000; background: #fff; 
 .pwa-recovery-row .recovery-button.armed {
   background: #b3541e;
   border-color: #b3541e;
+}
+
+.onboarding-card {
+  display: grid;
+  gap: 10px;
+}
+
+.onboarding-steps {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: none;
+}
+
+.onboarding-step {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border-left: 4px solid var(--c-line-strong);
+  background: var(--c-surface-solid);
+}
+
+.onboarding-step[data-status='current'] { border-left-color: var(--c-brand); }
+.onboarding-step[data-status='blocked'] { border-left-color: var(--c-warn-deep); }
+.onboarding-step[data-status='done'] { border-left-color: var(--c-calm-deep); }
+
+.onboarding-step-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+}
+
+.onboarding-step-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  border-radius: 50%;
+  background: var(--c-brand-softer);
+  color: var(--c-brand-deep);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.onboarding-step-status {
+  color: var(--c-ink-soft);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.onboarding-step-detail,
+.onboarding-step-next {
+  margin: 0;
+  color: var(--c-ink-soft);
+  font-size: 0.86rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.onboarding-step-next { color: var(--c-brand-strong); font-weight: 700; }
+
+.onboarding-recheck {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+  justify-self: start;
+  min-height: var(--tap);
 }
 </style>

@@ -825,6 +825,7 @@ class VisionFusionRead(CandidateFusionResult):
 
 
 class VisionQualityRead(BaseModel):
+    quality_record_id: str | None = None
     schema_version: str
     config_version: str
     media_type: Literal["image", "video"]
@@ -839,6 +840,27 @@ class VisionQualityRead(BaseModel):
     frames: list[dict[str, Any]] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
     quality_receipt: str | None = None
+
+
+class VisionQualityRecordRead(BaseModel):
+    """Creator-scoped, non-media provenance for a quality decision."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    actor_id: str
+    input_digest: str
+    media_type: Literal["image", "video"]
+    schema_version: str
+    config_version: str
+    decision: Literal["PASS", "RETAKE"]
+    allow_downstream: bool
+    metrics: dict[str, Any]
+    thresholds: dict[str, Any]
+    reasons: list[str]
+    retake_prompts: list[str]
+    frames: list[dict[str, Any]]
+    created_at: UtcDatetime
 
 
 # ── HCT-401: Knowledge / RAG schemas ──────────────────────────────────

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import secrets
@@ -136,6 +137,7 @@ from app.models import (
     OutboxMessage,
     RiskAcknowledgement,
     RiskDisposition,
+    VisionQualityRecord,
     VisionTask,
 )
 from app.request_context import current_request_id
@@ -254,6 +256,7 @@ from app.schemas import (
     TrainingConsentRevoke,
     VisionFusionRead,
     VisionQualityRead,
+    VisionQualityRecordRead,
     VisionTaskClaimRequest,
     VisionTaskCleanupRead,
     VisionTaskCleanupRequest,
@@ -4254,6 +4257,7 @@ async def check_vision_quality(
     sample_interval_ms: int = Form(default=1000, ge=250, le=10_000),
     max_selected_frames: int = Form(default=30, ge=1, le=120),
     actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
 ) -> dict:
     """Check caller-supplied bytes locally; do not read another actor's stored file."""
     from ai.vision.quality_gate import assess_image, assess_video_file, decode_image
@@ -4349,6 +4353,29 @@ async def check_vision_quality(
         else None
     )
 
+    quality_record = VisionQualityRecord(
+        actor_id=actor_id,
+        input_digest=input_digest,
+        media_type=media_type,
+        schema_version=result["schema_version"],
+        config_version=result["config_version"],
+        decision=result["decision"],
+        allow_downstream=bool(result["allow_downstream"]),
+        metrics=result.get("metrics") or {},
+        thresholds=result.get("thresholds") or {},
+        reasons=list(result.get("reasons") or []),
+        retake_prompts=list(result.get("retake_prompts") or []),
+        frames=list(result.get("frames") or []),
+        receipt_digest=(
+            hashlib.sha256(result["quality_receipt"].encode("utf-8")).hexdigest()
+            if result["quality_receipt"]
+            else None
+        ),
+    )
+    session.add(quality_record)
+    session.flush()
+    result["quality_record_id"] = quality_record.id
+
     logger.info(
         "VISION_QUALITY_CHECK actor=%s source=%s media=%s decision=%s reasons=%d",
         actor_id,
@@ -4358,6 +4385,26 @@ async def check_vision_quality(
         len(result["reasons"]),
     )
     return result
+
+
+@router.get(
+    "/vision-quality/records/{record_id}",
+    response_model=VisionQualityRecordRead,
+)
+def get_vision_quality_record(
+    record_id: str,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> VisionQualityRecord:
+    """Return quality provenance only to the actor who created the record."""
+
+    record = session.get(VisionQualityRecord, record_id)
+    if record is None or record.actor_id != actor_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="VISION_QUALITY_RECORD_NOT_FOUND",
+        )
+    return record
 
 
 def _require_vision_task_access(
