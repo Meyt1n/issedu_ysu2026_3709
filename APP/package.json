@@ -15,6 +15,7 @@
     "verify:android-voice-evidence": "node scripts/verify-android-voice-evidence.mjs",
     "android:sync:debug": "vite build --mode android-debug && cap sync android",
     "audit:android-security": "node scripts/audit-android-security.mjs",
+    "audit:responsive": "node scripts/audit-responsive-layout.mjs",
     "serve:controlled-https": "node scripts/controlled-https-fixture.mjs",
     "seed:live": "node scripts/seed-live-demo.mjs",
     "verify:linkage": "node scripts/verify-web-linkage.mjs",
