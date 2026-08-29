@@ -1045,3 +1045,95 @@ describe('服务端时间戳的时区语义（MOB-143）', () => {
     expect(trend[5]!.done).toBe(0)
   })
 })
+
+describe('知识条目只读详情（MOB-162）', () => {
+  const activeResponse = {
+    id: 'doc-1',
+    title: '用药说明',
+    source: '家庭服务器知识库',
+    license: 'CC-BY',
+    version: 'idx-2026-08-28',
+    content_hash: 'hash',
+    permission_scope: {},
+    status: 'active',
+    effective_from: '2026-08-01T00:00:00Z',
+    effective_until: null,
+    created_by: 'actor-admin',
+    created_at: '2026-08-01T00:00:00Z',
+    content: '全文',
+    chunk_count: 2,
+    chunks: [
+      { id: 'c1', document_id: 'doc-1', chunk_index: 0, text: '第一段', locator: '第 1 页' },
+      { id: 'c2', document_id: 'doc-1', chunk_index: 1, text: '第二段', locator: null },
+    ],
+  }
+
+  function providerForDoc(response: Record<string, unknown>) {
+    const getKnowledgeDocument = vi.fn().mockResolvedValue(response)
+    const client = { getKnowledgeDocument } as unknown as ApiClient
+    const provider = new HttpDataProvider(client, () => ({
+      actorId: 'actor-1',
+      accessPurpose: 'family-care',
+      householdId: 'hh-1',
+    }))
+    return { provider, getKnowledgeDocument }
+  }
+
+  it('映射已批准条目的分块并保留服务端索引版本', async () => {
+    const { provider, getKnowledgeDocument } = providerForDoc(activeResponse)
+
+    const doc = await provider.getKnowledgeDocument('doc-1')
+
+    expect(getKnowledgeDocument).toHaveBeenCalledWith(
+      'doc-1',
+      expect.objectContaining({ actorId: 'actor-1', accessPurpose: 'family-care' }),
+    )
+    expect(doc.approved).toBe(true)
+    expect(doc.version).toBe('idx-2026-08-28')
+    expect(doc.chunks.map(chunk => chunk.index)).toEqual([0, 1])
+    expect(doc.chunks[0]).toMatchObject({ id: 'c1', text: '第一段', locator: '第 1 页' })
+  })
+
+  it('未批准条目只保留元信息，不下发任何正文分块', async () => {
+    const { provider } = providerForDoc({ ...activeResponse, status: 'staging' })
+
+    const doc = await provider.getKnowledgeDocument('doc-1')
+
+    expect(doc.approved).toBe(false)
+    expect(doc.status).toBe('staging')
+    expect(doc.chunks).toEqual([])
+    // chunk_count 仍来自服务端，用来说明条目规模，但正文一律不展示。
+    expect(doc.chunkCount).toBe(2)
+  })
+
+  it('服务端没有返回 chunks 字段时按空分块处理，不本地补全', async () => {
+    const { chunks: _chunks, ...withoutChunks } = activeResponse
+    const { provider } = providerForDoc(withoutChunks)
+
+    const doc = await provider.getKnowledgeDocument('doc-1')
+
+    expect(doc.approved).toBe(true)
+    expect(doc.chunks).toEqual([])
+  })
+
+  it('列表只映射元信息，不携带正文，也不在客户端二次筛选', async () => {
+    const listKnowledgeDocuments = vi.fn().mockResolvedValue([activeResponse])
+    const client = { listKnowledgeDocuments } as unknown as ApiClient
+    const provider = new HttpDataProvider(client, () => ({
+      actorId: 'actor-1',
+      accessPurpose: 'family-care',
+      householdId: 'hh-1',
+    }))
+
+    const docs = await provider.listKnowledgeDocuments()
+
+    expect(docs).toEqual([{
+      id: 'doc-1',
+      title: '用药说明',
+      source: '家庭服务器知识库',
+      version: 'idx-2026-08-28',
+      effectiveFrom: '2026-08-01T00:00:00Z',
+    }])
+    expect(Object.keys(docs[0]!)).not.toContain('content')
+  })
+})

@@ -989,6 +989,10 @@ onMounted(() => {
         <AppIcon name="shield" :size="18" />
         查看本地数据与隐私管理
       </RouterLink>
+      <RouterLink class="btn btn-quiet btn-block" to="/knowledge">
+        <AppIcon name="eye" :size="18" />
+        阅读助手用到的知识条目（只读）
+      </RouterLink>
     </section>
 
     <section class="card" aria-labelledby="trace-title">

@@ -7,6 +7,8 @@ import type {
   DataProvider,
   EnvironmentActionState,
   HouseholdOption,
+  KnowledgeDocumentSummaryView,
+  KnowledgeDocumentView,
   MemberDetail,
   MemberSummary,
   MedicationItem,
@@ -967,6 +969,51 @@ export class HttpDataProvider implements DataProvider {
     const householdId = await this.resolveHouseholdId()
     const events = await this.client.listMemberTimeline(householdId, memberId, this.options())
     return deriveWeeklyTrendFromEvents(events, new Date(), this.householdTimeZone ?? undefined)
+  }
+
+  /**
+   * MOB-162 知识条目只读列表。
+   * 服务端已按批准状态与权限过滤，客户端不再做二次筛选，也不缓存正文。
+   */
+  async listKnowledgeDocuments(): Promise<KnowledgeDocumentSummaryView[]> {
+    const response = await this.client.listKnowledgeDocuments(this.options())
+    return (response ?? []).map((doc) => ({
+      id: doc.id,
+      title: doc.title,
+      source: doc.source,
+      version: doc.version,
+      effectiveFrom: doc.effective_from,
+    }))
+  }
+
+  /**
+   * MOB-162 知识条目只读详情。
+   * 只有服务端标记 `status === 'active'` 的条目才把分块正文带回界面；
+   * 其它状态（staging、待批准、已下线）只保留元信息，避免移动端展示未批准内容。
+   */
+  async getKnowledgeDocument(docId: string): Promise<KnowledgeDocumentView> {
+    const response = await this.client.getKnowledgeDocument(docId, this.options())
+    const approved = response.status === 'active'
+    return {
+      id: response.id,
+      title: response.title,
+      source: response.source,
+      license: response.license,
+      version: response.version,
+      status: response.status,
+      approved,
+      effectiveFrom: response.effective_from,
+      effectiveUntil: response.effective_until,
+      chunkCount: response.chunk_count,
+      chunks: approved
+        ? (response.chunks ?? []).map((chunk) => ({
+            id: chunk.id,
+            index: chunk.chunk_index,
+            text: chunk.text,
+            locator: chunk.locator,
+          }))
+        : [],
+    }
   }
 
   async checkImageQuality(file: File): Promise<QualityCheckResult> {
