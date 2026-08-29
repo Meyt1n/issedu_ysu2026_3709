@@ -16,25 +16,39 @@ import { createLiveApiClient } from '@/data'
 import {
   AUTO_SEND_PRESETS,
   clearChatSession,
+  clearChatDraft,
+  clearChatSessionsForActor,
+  createChatThread,
   createAutoSendScheduler,
   createDictationController,
+  deleteChatThread,
+  getActiveChatThreadId,
+  getAssistantSessionId,
   getSpeakingIndex,
   getSpeakingSegments,
   isSpeechInputSupported,
   jumpSpeakingSegment,
+  listChatThreads,
+  loadChatDraft,
   loadVoicePreferences,
   memberNameHotwordPairs,
   loadChatSession,
+  regenerateAssistantSessionId,
+  renameChatThread,
   saveChatSession,
+  saveChatDraft,
   saveVoicePreferences,
+  setActiveChatThread,
   sessionEntryToStored,
   skipSpeakingSegment,
   speakText,
   stopSpeaking,
+  touchChatThread,
   validateWakePhrase,
   WAKE_PHRASE_PRESETS,
   type DictationController,
   type DictationMode,
+  type ChatThreadMeta,
   type StoredChatEntry,
   type VoiceCommandId,
   type VoicePreferences,
@@ -85,6 +99,8 @@ const { capabilities, hasCapability } = useCapabilities()
 const route = useRoute()
 
 const history = ref<ChatEntry[]>([])
+const threads = ref<ChatThreadMeta[]>([])
+const activeThreadId = ref('')
 const draft = ref('')
 const sending = ref(false)
 const sendError = ref('')
@@ -228,7 +244,12 @@ watch(
   (_current, previous) => {
     if (!previous) return
     cancelActiveSend()
-    assistantSessionId.value = createAssistantSessionId()
+    assistantSessionId.value = getAssistantSessionId(
+      session.actorId,
+      session.currentHouseholdId,
+      session.currentMemberId,
+      activeThreadId.value,
+    ) || createAssistantSessionId()
     liveEvidencePreview.value = null
     cancelStatus.value = ''
   },
@@ -265,8 +286,28 @@ function persistChatSession(): void {
     session.currentHouseholdId,
     session.currentMemberId,
     history.value.map((entry) => sessionEntryToStored(entry)),
+    activeThreadId.value,
   )
+  const firstQuestion = history.value.find((entry) => entry.role === 'user')?.content
+  touchChatThread(
+    session.actorId,
+    session.currentHouseholdId,
+    session.currentMemberId,
+    activeThreadId.value,
+    firstQuestion,
+  )
+  threads.value = listChatThreads(session.actorId, session.currentHouseholdId, session.currentMemberId)
 }
+
+watch(draft, (value) => {
+  saveChatDraft(
+    session.actorId,
+    session.currentHouseholdId,
+    session.currentMemberId,
+    value,
+    activeThreadId.value,
+  )
+})
 
 function restoreChatSession(entries: StoredChatEntry[]): void {
   history.value = entries.map((entry) => ({
@@ -279,6 +320,141 @@ function restoreChatSession(entries: StoredChatEntry[]): void {
     suggestedQuestions: entry.suggestedQuestions,
   }))
   scrollToEnd()
+}
+
+function refreshThreads(): void {
+  threads.value = listChatThreads(session.actorId, session.currentHouseholdId, session.currentMemberId)
+}
+
+/** 切换/新建会话前统一停止请求、语音和流式状态，避免旧会话内容串入新会话。 */
+function suspendActiveConversation(): void {
+  cancelActiveSend()
+  stopVoiceInput()
+  if (speakingIndex.value !== null) {
+    stopSpeaking()
+    speakingIndex.value = null
+    speakingProgress.value = ''
+  }
+  orchestrationPhase.value = null
+  liveEvidencePreview.value = null
+  sendError.value = ''
+  cancelStatus.value = ''
+  sending.value = false
+}
+
+function switchThread(threadId: string): void {
+  if (!threadId || threadId === activeThreadId.value) return
+  suspendActiveConversation()
+  activeThreadId.value = threadId
+  setActiveChatThread(session.actorId, session.currentHouseholdId, session.currentMemberId, threadId)
+  assistantSessionId.value = getAssistantSessionId(
+    session.actorId,
+    session.currentHouseholdId,
+    session.currentMemberId,
+    threadId,
+  )
+  restoreChatSession(loadChatSession(
+    session.actorId,
+    session.currentHouseholdId,
+    session.currentMemberId,
+    threadId,
+  ))
+  draft.value = loadChatDraft(
+    session.actorId,
+    session.currentHouseholdId,
+    session.currentMemberId,
+    threadId,
+  )
+}
+
+function startNewThread(): void {
+  suspendActiveConversation()
+  const meta = createChatThread(session.actorId, session.currentHouseholdId, session.currentMemberId)
+  activeThreadId.value = meta.id
+  assistantSessionId.value = getAssistantSessionId(
+    session.actorId,
+    session.currentHouseholdId,
+    session.currentMemberId,
+    meta.id,
+  )
+  history.value = []
+  draft.value = ''
+  refreshThreads()
+}
+
+function removeThread(threadId: string): void {
+  if (!threadId || sending.value) return
+  const title = threads.value.find(thread => thread.id === threadId)?.title ?? '该会话'
+  if (globalThis.confirm && !globalThis.confirm(`确定删除“${title}”吗？消息与草稿会从本机清除。`)) return
+  const remaining = deleteChatThread(
+    session.actorId,
+    session.currentHouseholdId,
+    session.currentMemberId,
+    threadId,
+  )
+  threads.value = remaining
+  if (threadId !== activeThreadId.value) return
+  suspendActiveConversation()
+  const nextId = getActiveChatThreadId(session.actorId, session.currentHouseholdId, session.currentMemberId)
+  activeThreadId.value = nextId
+  assistantSessionId.value = getAssistantSessionId(
+    session.actorId,
+    session.currentHouseholdId,
+    session.currentMemberId,
+    nextId,
+  )
+  restoreChatSession(loadChatSession(
+    session.actorId,
+    session.currentHouseholdId,
+    session.currentMemberId,
+    nextId,
+  ))
+  draft.value = loadChatDraft(
+    session.actorId,
+    session.currentHouseholdId,
+    session.currentMemberId,
+    nextId,
+  )
+}
+
+function clearAllThreads(): void {
+  if (sending.value || !session.actorId) return
+  if (globalThis.confirm && !globalThis.confirm('确定清空当前账号的全部助手会话吗？消息与草稿会从本机清除。')) return
+  clearChatSessionsForActor(session.actorId)
+  threads.value = listChatThreads(session.actorId, session.currentHouseholdId, session.currentMemberId)
+  activeThreadId.value = getActiveChatThreadId(session.actorId, session.currentHouseholdId, session.currentMemberId)
+  assistantSessionId.value = getAssistantSessionId(
+    session.actorId,
+    session.currentHouseholdId,
+    session.currentMemberId,
+    activeThreadId.value,
+  )
+  history.value = []
+  draft.value = ''
+  sendError.value = ''
+  cancelStatus.value = '已清空当前账号的全部助手会话与草稿'
+}
+
+function renameThread(threadId: string): void {
+  if (sending.value) return
+  const current = threads.value.find(thread => thread.id === threadId)
+  const nextTitle = globalThis.prompt?.('为会话设置名称', current?.title ?? '')
+  if (nextTitle === null || nextTitle === undefined) return
+  threads.value = renameChatThread(
+    session.actorId,
+    session.currentHouseholdId,
+    session.currentMemberId,
+    threadId,
+    nextTitle,
+  )
+}
+
+function threadTimeLabel(thread: ChatThreadMeta): string {
+  const elapsed = Math.max(0, Date.now() - thread.updatedAt)
+  if (elapsed < 60_000) return '刚刚'
+  if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)} 分钟前`
+  if (elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)} 小时前`
+  return `${Math.floor(elapsed / 86_400_000)} 天前`
 }
 
 function applyWakePreset(phrase: string): void {
@@ -828,14 +1004,31 @@ function clearChat(): void {
   speakingIndex.value = null
   speakingProgress.value = ''
   history.value = []
-  assistantSessionId.value = createAssistantSessionId()
+  assistantSessionId.value = regenerateAssistantSessionId(
+    session.actorId,
+    session.currentHouseholdId,
+    session.currentMemberId,
+    activeThreadId.value,
+  ) || createAssistantSessionId()
   draft.value = ''
   sendError.value = ''
   voiceError.value = ''
   cancelStatus.value = ''
   liveEvidencePreview.value = null
   orchestrationPhase.value = null
-  clearChatSession(session.actorId, session.currentHouseholdId, session.currentMemberId)
+  clearChatSession(
+    session.actorId,
+    session.currentHouseholdId,
+    session.currentMemberId,
+    activeThreadId.value,
+  )
+  clearChatDraft(
+    session.actorId,
+    session.currentHouseholdId,
+    session.currentMemberId,
+    activeThreadId.value,
+  )
+  refreshThreads()
 }
 
 /** 资讯卡只预填草稿，不自动发送；用户仍需自行编辑并确认提问。 */
@@ -857,7 +1050,11 @@ watch(
     stopVoiceInput()
     stopSpeaking()
     speakingIndex.value = null
-    restoreChatSession(loadChatSession(actorId, householdId, memberId))
+    threads.value = listChatThreads(actorId, householdId, memberId)
+    activeThreadId.value = getActiveChatThreadId(actorId, householdId, memberId)
+    assistantSessionId.value = getAssistantSessionId(actorId, householdId, memberId, activeThreadId.value)
+    restoreChatSession(loadChatSession(actorId, householdId, memberId, activeThreadId.value))
+    draft.value = loadChatDraft(actorId, householdId, memberId, activeThreadId.value)
   },
   { immediate: true },
 )
@@ -944,6 +1141,55 @@ onBeforeUnmount(() => {
           </ul>
         </details>
       </div>
+    </section>
+
+    <section class="card thread-card" aria-label="会话历史">
+      <div class="thread-card-header">
+        <div>
+          <h2>会话历史</h2>
+          <p class="meta-line">当前账号、家庭和成员分别保存；只在本标签页保留，不会上传服务器。</p>
+        </div>
+        <div class="thread-actions">
+          <button type="button" class="btn btn-secondary" :disabled="sending" @click="startNewThread">
+            新建会话
+          </button>
+          <button type="button" class="btn btn-secondary" :disabled="sending || threads.length === 0" @click="clearAllThreads">
+            清空全部历史
+          </button>
+        </div>
+      </div>
+      <ul class="thread-list">
+        <li v-for="thread in threads" :key="thread.id" class="thread-item" :class="{ active: thread.id === activeThreadId }">
+          <button
+            type="button"
+            class="thread-open"
+            :aria-current="thread.id === activeThreadId ? 'page' : undefined"
+            :disabled="sending"
+            @click="switchThread(thread.id)"
+          >
+            <strong>{{ thread.title }}</strong>
+            <span>{{ threadTimeLabel(thread) }}</span>
+          </button>
+          <button
+            type="button"
+            class="thread-rename"
+            :aria-label="`重命名会话：${thread.title}`"
+            :disabled="sending"
+            @click="renameThread(thread.id)"
+          >
+            重命名
+          </button>
+          <button
+            type="button"
+            class="thread-delete"
+            :aria-label="`删除会话：${thread.title}`"
+            :disabled="sending"
+            @click="removeThread(thread.id)"
+          >
+            删除
+          </button>
+        </li>
+      </ul>
     </section>
 
     <section class="card chat-card" aria-label="对话">
@@ -1216,6 +1462,69 @@ onBeforeUnmount(() => {
 }
 .status-card p { margin: 0 0 6px; }
 .meta-line { color: var(--muted); font-size: 0.9rem; margin: 0; }
+.thread-card { display: grid; gap: 10px; }
+.thread-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.thread-card-header h2 { margin: 0 0 4px; font-size: 1.05rem; }
+.thread-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.thread-list {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.thread-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.thread-open {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 8px 10px;
+  text-align: left;
+}
+.thread-open strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.thread-open span { color: var(--muted); font-size: 0.8rem; }
+.thread-item.active .thread-open {
+  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+.thread-open:focus-visible,
+.thread-rename:focus-visible,
+.thread-delete:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 1px;
+}
+.thread-rename,
+.thread-delete {
+  min-height: var(--tap);
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 6px 8px;
+  white-space: nowrap;
+}
+.thread-delete { color: var(--danger, #b42318); }
 .chat-card {
   display: grid;
   gap: 12px;

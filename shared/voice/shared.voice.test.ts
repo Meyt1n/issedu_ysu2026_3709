@@ -15,7 +15,21 @@ import {
   type SpeechRecognitionResultLike,
 } from './recognition'
 import { createDictationController } from './dictation'
-import { loadChatSession, saveChatSession, clearChatSession } from './chatSession'
+import {
+  clearChatSession,
+  clearChatDraft,
+  createChatThread,
+  deleteChatThread,
+  getActiveChatThreadId,
+  getAssistantSessionId,
+  loadChatDraft,
+  listChatThreads,
+  loadChatSession,
+  saveChatSession,
+  saveChatDraft,
+  setActiveChatThread,
+  touchChatThread,
+} from './chatSession'
 import { loadVoicePreferences, saveVoicePreferences, DEFAULT_VOICE_PREFERENCES } from './prefs'
 import { splitSpeechSegments } from './tts'
 import {
@@ -252,6 +266,45 @@ describe('hotwords and chat session', () => {
     clearChatSession('a1', 'h1', 'm1')
     expect(loadChatSession('a1', 'h1', 'm1')).toEqual([])
     expect(loadChatSession('a1', 'h1', 'm2')[0]?.content).toBe('成员二')
+    vi.unstubAllGlobals()
+  })
+
+  it('keeps multiple threads isolated and clears deleted history', () => {
+    const store = new Map<string, string>()
+    vi.stubGlobal('sessionStorage', {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => { store.set(key, value) },
+      removeItem: (key: string) => { store.delete(key) },
+      clear: () => store.clear(),
+      key: (index: number) => [...store.keys()][index] ?? null,
+      get length() { return store.size },
+    })
+    const scope = ['actor', 'household', 'member'] as const
+    const first = createChatThread(...scope)
+    saveChatSession(...scope, [{ role: 'user', content: '第一条会话' }], first.id)
+    touchChatThread(...scope, first.id, '第一条会话')
+    const second = createChatThread(...scope)
+    saveChatSession(...scope, [{ role: 'user', content: '第二条会话' }], second.id)
+    touchChatThread(...scope, second.id, '第二条会话')
+
+    expect(listChatThreads(...scope).map(thread => thread.title)).toEqual(['第二条会话', '第一条会话', '新对话'])
+    expect(getActiveChatThreadId(...scope)).toBe(second.id)
+    setActiveChatThread(...scope, first.id)
+    expect(getActiveChatThreadId(...scope)).toBe(first.id)
+    expect(loadChatSession(...scope, first.id)[0]?.content).toBe('第一条会话')
+    expect(loadChatSession(...scope, second.id)[0]?.content).toBe('第二条会话')
+    saveChatDraft(...scope, '第一条草稿', first.id)
+    saveChatDraft(...scope, '第二条草稿', second.id)
+    expect(loadChatDraft(...scope, first.id)).toBe('第一条草稿')
+    expect(loadChatDraft(...scope, second.id)).toBe('第二条草稿')
+    expect(getAssistantSessionId(...scope, first.id)).not.toBe(getAssistantSessionId(...scope, second.id))
+
+    deleteChatThread(...scope, first.id)
+    expect(loadChatSession(...scope, first.id)).toEqual([])
+    expect(loadChatDraft(...scope, first.id)).toBe('')
+    expect(listChatThreads(...scope).every(thread => thread.id !== first.id)).toBe(true)
+    clearChatDraft(...scope, second.id)
+    expect(loadChatDraft(...scope, second.id)).toBe('')
     vi.unstubAllGlobals()
   })
 
