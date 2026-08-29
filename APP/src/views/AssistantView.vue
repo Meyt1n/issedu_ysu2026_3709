@@ -67,10 +67,19 @@ import {
   networkSearchDisabledReason as resolveNetworkSearchDisabledReason,
   resolveNetworkSearchForTurn,
 } from '@/utils/networkSearch'
+import {
+  chatEntryAriaLabel,
+  chatTimestampIso,
+  formatChatTimestamp,
+  isChatGroupEnd,
+  isChatGroupStart,
+} from '@/utils/chatPresentation'
 
 interface ChatEntry {
   role: 'user' | 'assistant'
   content: string
+  /** 新消息保留创建时间；旧会话没有时间戳时不伪造当前时间。 */
+  createdAt?: number
   replyStatus?: AssistantReplyStatus
   degraded?: boolean
   degradeReason?: string | null
@@ -313,6 +322,7 @@ function restoreChatSession(entries: StoredChatEntry[]): void {
   history.value = entries.map((entry) => ({
     role: entry.role,
     content: entry.content,
+    createdAt: entry.createdAt,
     replyStatus: restoreAssistantReplyStatus(entry.role, entry.content, entry.degraded, entry.degradeReason),
     degraded: entry.degraded,
     degradeReason: entry.degradeReason,
@@ -814,7 +824,7 @@ async function send(
   speakingProgress.value = ''
   keepPartialReply = false
 
-  history.value.push({ role: 'user', content })
+  history.value.push({ role: 'user', content, createdAt: Date.now() })
   persistChatSession()
   draft.value = ''
   sending.value = true
@@ -829,6 +839,7 @@ async function send(
       role: 'assistant',
       content:
         '当前是演示模式，助手不会连接家庭服务器。请到「我的」切换为「家庭服务器（联机）」，填写电脑后端地址（例如 http://192.168.x.x:8000）后再提问。',
+      createdAt: Date.now(),
       degraded: true,
       degradeReason: 'demo_mode',
     })
@@ -844,6 +855,7 @@ async function send(
     history.value.push({
       role: 'assistant',
       content: '尚未填写家庭服务器地址。请到「我的」填写电脑上 FastAPI 的局域网地址后再试。',
+      createdAt: Date.now(),
       degraded: true,
       degradeReason: 'missing_server',
     })
@@ -860,6 +872,7 @@ async function send(
     history.value.push({
       role: 'assistant',
       content: '当前登录会话不可用，请先在「我的」完成联机登录后再使用助手。',
+      createdAt: Date.now(),
       degraded: true,
       degradeReason: 'auth_required',
     })
@@ -893,7 +906,7 @@ async function send(
   const requestOpts = { ...requestOptions(), signal: controller.signal }
 
   // 流式展示：token 直接写入这条气泡；结束回复/停止时按需保留或移除。
-  const streamingEntry: ChatEntry = { role: 'assistant', content: '', replyStatus: 'streaming' }
+  const streamingEntry: ChatEntry = { role: 'assistant', content: '', createdAt: Date.now(), replyStatus: 'streaming' }
   history.value.push(streamingEntry)
   const entryIndex = history.value.length - 1
 
@@ -975,6 +988,7 @@ async function send(
         history.value.push({
           role: 'assistant',
           content: fallbackContent,
+          createdAt: Date.now(),
           replyStatus: 'incomplete',
           degraded: true,
           degradeReason: 'request_failed',
@@ -1203,9 +1217,27 @@ onBeforeUnmount(() => {
         :key="`${entry.role}-${index}`"
         class="bubble"
         :data-role="entry.role"
+        :class="{
+          'bubble--group-start': isChatGroupStart(history, index),
+          'bubble--group-end': isChatGroupEnd(history, index),
+          'bubble--continuation': !isChatGroupStart(history, index),
+        }"
+        :aria-label="chatEntryAriaLabel(entry)"
       >
-        <p class="bubble-role">{{ entry.role === 'user' ? '我' : '助手' }}</p>
-        <p class="bubble-text">{{ entry.content }}</p>
+        <p
+          class="bubble-role"
+          :class="{ 'sr-only': !isChatGroupStart(history, index) }"
+        >
+          {{ entry.role === 'user' ? '我' : '助手' }}
+        </p>
+        <p class="bubble-text">{{ entry.content || '正在生成回答…' }}</p>
+        <time
+          v-if="entry.createdAt"
+          class="bubble-time"
+          :datetime="chatTimestampIso(entry.createdAt)"
+        >
+          {{ formatChatTimestamp(entry.createdAt) }}
+        </time>
         <p
           v-if="entry.role === 'assistant' && entry.replyStatus"
           class="meta-line reply-status"
@@ -1528,26 +1560,76 @@ onBeforeUnmount(() => {
 .thread-delete { color: var(--danger, #b42318); }
 .chat-card {
   display: grid;
-  gap: 12px;
+  gap: 8px;
   min-height: 220px;
   max-height: min(52vh, 480px);
   overflow: auto;
+  padding: 10px;
 }
 .empty-hint { color: var(--muted); margin: 0; line-height: 1.5; }
 .bubble {
   display: grid;
-  gap: 6px;
-  padding: 12px 14px;
-  border-radius: 16px;
-  background: color-mix(in srgb, var(--surface) 88%, var(--accent) 12%);
+  gap: 7px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  padding: 13px 15px 11px;
+  position: relative;
+  transition: margin var(--speed) var(--ease), border-radius var(--speed) var(--ease);
 }
 .bubble[data-role='user'] {
-  background: color-mix(in srgb, var(--accent) 18%, var(--surface));
+  align-self: end;
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--c-brand-soft) 86%, var(--c-surface-solid)), color-mix(in srgb, var(--c-calm-soft) 72%, var(--c-surface-solid)));
+  border: 1px solid color-mix(in srgb, var(--c-brand) 18%, transparent);
+  border-radius: 20px 20px 6px 20px;
+  box-shadow: 0 7px 18px color-mix(in srgb, var(--c-brand) 10%, transparent), inset 0 1px 0 var(--hilite);
+  color: var(--c-ink);
   justify-self: end;
-  max-width: 92%;
+  max-width: min(86%, 480px);
 }
-.bubble-role { margin: 0; font-size: 0.8rem; font-weight: 700; color: var(--muted); }
-.bubble-text { margin: 0; white-space: pre-wrap; line-height: 1.5; }
+.bubble[data-role='assistant'] {
+  align-self: start;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--c-surface-solid) 94%, transparent), color-mix(in srgb, var(--c-brand-softer) 34%, var(--c-surface-solid)));
+  border: 1px solid color-mix(in srgb, var(--c-brand) 16%, var(--c-line-strong));
+  border-radius: 20px 20px 20px 7px;
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--c-ink) 8%, transparent), inset 0 1px 0 var(--hilite);
+  max-width: calc(100% - 12px);
+}
+.bubble[data-role='assistant']::before {
+  background: linear-gradient(90deg, var(--c-brand), var(--c-calm), transparent);
+  border-radius: var(--r-pill);
+  content: '';
+  height: 2px;
+  left: 16px;
+  opacity: 0.42;
+  position: absolute;
+  top: 0;
+  width: 82px;
+}
+.bubble--continuation {
+  margin-top: -5px;
+}
+.bubble--continuation[data-role='user'] { border-top-right-radius: 7px; }
+.bubble--continuation[data-role='assistant'] { border-top-left-radius: 7px; }
+.bubble-role { margin: 0; font-size: 0.78rem; font-weight: 800; color: var(--c-ink-faint); }
+.bubble-text {
+  margin: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  line-height: 1.7;
+  word-break: break-word;
+}
+.bubble-time {
+  color: var(--c-ink-faint);
+  font-size: 0.72rem;
+  line-height: 1.3;
+  justify-self: end;
+}
+.bubble[data-role='user'] .bubble-time { color: color-mix(in srgb, var(--c-brand-deep) 72%, var(--c-ink-faint)); }
+.bubble--continuation .bubble-time { margin-top: -2px; }
+html[data-contrast='high'] .bubble { background: #fff; border: 2px solid #000; box-shadow: none; }
+html[data-contrast='high'] .bubble[data-role='user'] { color: #000; }
 .bubble-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .speech-segment-chips { display: flex; flex-wrap: wrap; gap: 8px; width: 100%; }
 .speech-segment-chips .chip.active {

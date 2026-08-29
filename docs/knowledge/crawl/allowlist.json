@@ -8,10 +8,33 @@
     "max_bytes_per_page": 500000,
     "user_agent": "HomeCareTwinKnowledgeBot/1.0 (+local-teaching; not-for-diagnosis)",
     "allowed_hosts": [
+      "www.nhc.gov.cn",
+      "nhc.gov.cn",
+      "www.chinacdc.cn",
+      "chinacdc.cn",
+      "ncncd.chinacdc.cn",
+      "www.nmpa.gov.cn",
+      "nmpa.gov.cn",
+      "www.gov.cn",
+      "gov.cn",
+      "www.npc.gov.cn",
+      "npc.gov.cn",
       "www.cdc.gov",
       "cdc.gov",
       "www.who.int",
-      "who.int"
+      "who.int",
+      "www.fda.gov",
+      "fda.gov",
+      "dailymed.nlm.nih.gov",
+      "medlineplus.gov",
+      "www.nia.nih.gov",
+      "nia.nih.gov",
+      "www.niddk.nih.gov",
+      "niddk.nih.gov",
+      "www.nhlbi.nih.gov",
+      "nhlbi.nih.gov",
+      "www.ahrq.gov",
+      "ahrq.gov"
     ]
   },
   "sources": [
@@ -78,6 +101,206 @@
       "topics": ["medication-safety"],
       "enabled": false,
       "notes": "默认关闭。启用前须确认许可与摘要改写策略；禁止整页版权复制入库。"
+    },
+    {
+      "id": "official-nhc-health-literacy-2024",
+      "title": "国家卫健委：中国公民健康素养（2024年版）",
+      "url": "https://www.nhc.gov.cn/xcs/c100123/202405/73a4927142f34152abed875634a3c13b.shtml",
+      "license": "public-page-summary-only",
+      "refresh_hours": 720,
+      "topics": ["健康素养", "合理用药", "家庭健康"],
+      "enabled": false,
+      "notes": "已核对官方来源；默认关闭，按需用 --live 抓取到 staging 后人工摘要审核。"
+    },
+    {
+      "id": "official-chinacdc-fall-prevention",
+      "title": "中国疾控：预防老年人跌倒健康教育核心信息",
+      "url": "https://ncncd.chinacdc.cn/xzzq/202409/t20240923_311832.htm",
+      "license": "public-page-summary-only",
+      "refresh_hours": 720,
+      "topics": ["老年健康", "跌倒预防", "家居安全"],
+      "enabled": false,
+      "notes": "已核对官方来源；默认关闭，禁止整页复制。"
+    },
+    {
+      "id": "official-who-medication-without-harm",
+      "title": "WHO：Medication Without Harm",
+      "url": "https://www.who.int/initiatives/medication-without-harm",
+      "license": "public-page-summary-only",
+      "refresh_hours": 720,
+      "topics": ["用药安全", "药品核对", "患者参与"],
+      "enabled": false,
+      "notes": "仅允许原创中文摘要；不得生成剂量、停换药或处方建议。"
+    },
+    {
+      "id": "official-who-hypertension",
+      "title": "WHO：Hypertension fact sheet",
+      "url": "https://www.who.int/news-room/fact-sheets/detail/hypertension",
+      "license": "public-page-summary-only",
+      "refresh_hours": 336,
+      "topics": ["血压", "心血管", "生活方式"],
+      "enabled": false,
+      "notes": "仅作健康教育摘要；个体阈值和治疗目标必须由专业人员判断。"
+    },
+    {
+      "id": "official-who-diabetes",
+      "title": "WHO：Diabetes fact sheet",
+      "url": "https://www.who.int/news-room/fact-sheets/detail/diabetes",
+      "license": "public-page-summary-only",
+      "refresh_hours": 336,
+      "topics": ["糖尿病", "健康生活", "并发症随访"],
+      "enabled": false,
+      "notes": "仅作一般健康教育，不生成个体诊断或治疗方案。"
+    },
+    {
+      "id": "official-who-healthy-diet",
+      "title": "WHO：Healthy diet fact sheet",
+      "url": "https://www.who.int/news-room/fact-sheets/detail/healthy-diet",
+      "license": "public-page-summary-only",
+      "refresh_hours": 336,
+      "topics": ["营养", "均衡膳食", "食品安全"],
+      "enabled": false,
+      "notes": "仅作原则性健康教育；特殊疾病饮食交由医生或营养师个体化评估。"
+    },
+    {
+      "id": "official-who-older-mental-health",
+      "title": "WHO：Mental health of older adults",
+      "url": "https://www.who.int/news-room/fact-sheets/detail/mental-health-of-older-adults",
+      "license": "public-page-summary-only",
+      "refresh_hours": 336,
+      "topics": ["老年心理", "社会连接", "照护者支持"],
+      "enabled": false,
+      "notes": "不替代心理评估；出现危机信号应联系当地急救或专业支持。"
+    },
+    {
+      "id": "official-cdc-respiratory-prevention",
+      "title": "CDC：Preventing Respiratory Illnesses",
+      "url": "https://www.cdc.gov/respiratory-viruses/prevention/index.html",
+      "license": "public-page-summary-only",
+      "refresh_hours": 168,
+      "topics": ["呼吸道", "卫生", "通风"],
+      "enabled": false,
+      "notes": "跨地区建议可能不同；摘要须提示遵循本地卫生部门最新指引。"
+    },
+    {
+      "id": "official-cdc-respiratory-hygiene",
+      "title": "CDC：Hygiene and Respiratory Viruses Prevention",
+      "url": "https://www.cdc.gov/respiratory-viruses/prevention/hygiene.html",
+      "license": "public-page-summary-only",
+      "refresh_hours": 168,
+      "topics": ["手卫生", "咳嗽礼仪", "高频表面"],
+      "enabled": false,
+      "notes": "仅作家庭通用卫生教育。"
+    },
+    {
+      "id": "official-cdc-falls",
+      "title": "CDC：Older Adult Fall Prevention",
+      "url": "https://www.cdc.gov/falls/prevention/index.html",
+      "license": "public-page-summary-only",
+      "refresh_hours": 336,
+      "topics": ["跌倒", "药物复核", "力量与平衡"],
+      "enabled": false,
+      "notes": "运动与辅助器具须结合个体能力并咨询专业人员。"
+    },
+    {
+      "id": "official-fda-older-medication-safety",
+      "title": "FDA：Medication Safety Tips for Older Adults",
+      "url": "https://www.fda.gov/consumers/consumer-updates/5-medication-safety-tips-older-adults",
+      "license": "public-page-summary-only",
+      "refresh_hours": 336,
+      "topics": ["老年用药", "相互作用", "储存"],
+      "enabled": false,
+      "notes": "不提供剂量或个体停换药建议。"
+    },
+    {
+      "id": "official-fda-expiration",
+      "title": "FDA：Expiration Dates Questions and Answers",
+      "url": "https://www.fda.gov/drugs/pharmaceutical-quality-resources/expiration-dates-questions-and-answers",
+      "license": "public-page-summary-only",
+      "refresh_hours": 720,
+      "topics": ["有效期", "稳定性", "药品储存"],
+      "enabled": false,
+      "notes": "家庭药品不得自行延长标签有效期。"
+    },
+    {
+      "id": "official-fda-disposal",
+      "title": "FDA：Where and How to Dispose of Unused Medicines",
+      "url": "https://www.fda.gov/consumers/consumer-updates/where-and-how-dispose-unused-medicines",
+      "license": "public-page-summary-only",
+      "refresh_hours": 720,
+      "topics": ["过期药", "回收", "隐私清理"],
+      "enabled": false,
+      "notes": "处置方式须同时服从所在地法规、药品标签和药师建议。"
+    },
+    {
+      "id": "official-nia-exercise",
+      "title": "NIA：Health Benefits of Exercise and Physical Activity",
+      "url": "https://www.nia.nih.gov/health/exercise-and-physical-activity/health-benefits-exercise-and-physical-activity",
+      "license": "public-page-summary-only",
+      "refresh_hours": 720,
+      "topics": ["老年运动", "功能维持", "心理健康"],
+      "enabled": false,
+      "notes": "运动计划须考虑慢性病、跌倒风险和个人能力。"
+    },
+    {
+      "id": "official-nia-falls",
+      "title": "NIA：Falls and Fractures in Older Adults",
+      "url": "https://www.nia.nih.gov/health/falls-and-falls-prevention/falls-and-fractures-older-adults-causes-and-prevention",
+      "license": "public-page-summary-only",
+      "refresh_hours": 720,
+      "topics": ["跌倒", "骨骼", "应急联络"],
+      "enabled": false,
+      "notes": "仅作预防与沟通摘要，不替代跌倒后的专业评估。"
+    },
+    {
+      "id": "official-nia-healthy-aging",
+      "title": "NIA：What Do We Know About Healthy Aging",
+      "url": "https://www.nia.nih.gov/health/healthy-aging/what-do-we-know-about-healthy-aging",
+      "license": "public-page-summary-only",
+      "refresh_hours": 720,
+      "topics": ["健康老龄化", "睡眠", "社会连接"],
+      "enabled": false,
+      "notes": "仅作一般健康教育。"
+    },
+    {
+      "id": "official-niddk-diabetes-management",
+      "title": "NIDDK：Managing Diabetes",
+      "url": "https://www.niddk.nih.gov/health-information/diabetes/overview/managing-diabetes",
+      "license": "public-page-summary-only",
+      "refresh_hours": 720,
+      "topics": ["糖尿病", "家庭记录", "随访沟通"],
+      "enabled": false,
+      "notes": "个体目标与监测频率必须由医疗团队制定。"
+    },
+    {
+      "id": "official-niddk-kidney-medicines",
+      "title": "NIDDK：Keeping Kidneys Safe — Medicines",
+      "url": "https://www.niddk.nih.gov/health-information/kidney-disease/keeping-kidneys-safe",
+      "license": "public-page-summary-only",
+      "refresh_hours": 720,
+      "topics": ["肾脏", "非处方药", "药师沟通"],
+      "enabled": false,
+      "notes": "不输出具体药物停用或替代建议。"
+    },
+    {
+      "id": "official-cdc-emergency-kit",
+      "title": "CDC：Building an Emergency Kit",
+      "url": "https://www.cdc.gov/disability-emergency-preparedness/people-with-disabilities/build-a-kit.html",
+      "license": "public-page-summary-only",
+      "refresh_hours": 720,
+      "topics": ["应急准备", "药品清单", "健康文件"],
+      "enabled": false,
+      "notes": "储备药量与冷链方式必须遵循本地法规及医疗专业建议。"
+    },
+    {
+      "id": "official-ahrq-safe-medicine-list",
+      "title": "AHRQ：Create a Safe Medicine List Together",
+      "url": "https://www.ahrq.gov/sites/default/files/wysiwyg/professionals/quality-patient-safety/patient-family-engagement/pfeprimarycare/medicinelist-roleplay-final508.pdf",
+      "license": "public-page-summary-only",
+      "refresh_hours": 1440,
+      "topics": ["药品清单", "就医沟通", "家庭协作"],
+      "enabled": false,
+      "notes": "PDF 仅作人工摘要来源，不直接复制或自动入库。"
     }
   ]
 }

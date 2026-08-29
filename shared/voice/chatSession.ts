@@ -1,6 +1,8 @@
 export interface StoredChatEntry {
   role: 'user' | 'assistant'
   content: string
+  /** 消息创建时间；旧存档缺失时保持 undefined，避免伪造当前时间。 */
+  createdAt?: number
   sources?: string[]
   confidence?: string
   degraded?: boolean
@@ -76,7 +78,8 @@ function isEntry(value: unknown): value is StoredChatEntry {
   if (!value || typeof value !== 'object') return false
   const entry = value as Partial<StoredChatEntry>
   return (entry.role === 'user' || entry.role === 'assistant') &&
-    typeof entry.content === 'string' && entry.content.length <= MAX_CONTENT_LENGTH
+    typeof entry.content === 'string' && entry.content.length <= MAX_CONTENT_LENGTH &&
+    (entry.createdAt === undefined || (typeof entry.createdAt === 'number' && Number.isFinite(entry.createdAt) && entry.createdAt > 0))
 }
 
 function safeEntries(value: unknown): StoredChatEntry[] {
@@ -391,6 +394,7 @@ export function sessionEntryToStored(entry: StoredChatEntry): StoredChatEntry {
   return {
     role: entry.role,
     content: entry.content.slice(0, MAX_CONTENT_LENGTH),
+    createdAt: entry.createdAt,
     sources: entry.sources,
     confidence: entry.confidence,
     degraded: entry.degraded,
