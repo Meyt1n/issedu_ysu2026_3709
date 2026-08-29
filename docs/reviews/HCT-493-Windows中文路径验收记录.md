@@ -3,7 +3,7 @@
 - Issue: #555
 - Story: HCT-493
 - FR/NFR: FR-01, NFR-01, NFR-02, NFR-03, NFR-07
-- Status: Blocked
+- Status: Partially complete; manual acceptance pending
 - Date: 2026-08-29
 - Baseline: `fd8cc1be110388dcda9cc4746ec32bb9b5b0046a`
 
@@ -28,31 +28,38 @@ and OpenCV 4.14.0.
 s....s...
 ```
 
-The passing cases cover byte-buffer model loading, corrupt or missing model
-handling, and stable 503 contracts that do not expose an ONNX path or OpenCV
-implementation detail. Two inference cases were skipped because the required
-ONNX weights are absent on this machine.
+The passing cases cover byte-buffer model loading, real YuNet/SFace model
+loading from a Unicode directory, corrupt or missing model handling, and
+stable 503 contracts that do not expose an ONNX path or OpenCV implementation
+detail. All cases ran after the approved weights were copied locally.
+
+The weights are local, are ignored by Git, and are not included in this PR:
+
+```text
+models/face/face_detection_yunet_2023mar.onnx       232589 bytes
+models/face/face_recognition_sface_2021dec.onnx   38696353 bytes
+```
 
 ## Manual Acceptance Status
 
 | Required path | Result | Evidence |
 |---|---|---|
-| Register a face credential | Not run | YuNet/SFace weights unavailable |
-| Face login | Not run | YuNet/SFace weights unavailable |
-| View credential list | Not run | Registration prerequisite not met |
+| Register a face credential | Not run | Requires an authorized human participant and running API/admin portal |
+| Face login | Not run | Requires an authorized human participant and camera permission |
+| View credential list | Not run | Registration prerequisite not performed |
 
 ## Blocker
 
-`scripts/ensure_face_models.py` was run on this Windows machine. Downloading
-the first model from OpenCV Zoo failed with `ssl.SSLEOFError`, which the
-application correctly converted to `FACE_DETECTOR_UNAVAILABLE`. No model
-weight was retained locally and no biometric sample was collected.
+The first model download from OpenCV Zoo failed with `ssl.SSLEOFError`; the
+approved weights were subsequently copied into `models/face/` without adding
+them to Git. `scripts/ensure_face_models.py` now succeeds and the full
+Unicode-path regression passes. No biometric sample was collected.
 
-To continue, place the approved YuNet and SFace ONNX files in `models/face/`
-or restore network access to the model source, then run the three manual paths
-using an authorized demo participant. Record only pass/fail outcomes and
-non-sensitive failure categories. Do not add images, embeddings, PINs, session
-tokens, or full local paths to this record.
+To finish the Issue, run the three manual paths using an authorized demo
+participant: registration, face login, and credential-list verification.
+Record only pass/fail outcomes and non-sensitive failure categories. Do not
+add images, embeddings, PINs, session tokens, or full local paths to this
+record.
 
 ## Rollback
 
