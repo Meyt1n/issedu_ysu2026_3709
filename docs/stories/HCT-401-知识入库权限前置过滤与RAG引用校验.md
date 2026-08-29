@@ -3,6 +3,7 @@
 ## 任务元数据
 
 - Issue：[#64](https://github.com/Meyt1n/issedu_ysu2026_3709/issues/64)
+- 2026-08-29 来源扩充 Issue：[#613](https://github.com/Meyt1n/issedu_ysu2026_3709/issues/613)
 - FR/NFR：FR-08、NFR-02、NFR-03
 - 风险：R3
 - 当前补充范围：本地批准清单入库、幂等重跑、可重建索引校验、无相关结果结构化降级
@@ -78,6 +79,14 @@
 - 文档：crawl README（详情查看、为何未变更、三条“看到更新”路径、白名单面板）、启用指南（详情/模拟更新/排障行）。
 
 ## 测试证据
+
+### 2026-08-29 权威来源与 100 条本地知识验收增量
+
+- 受控知识抓取白名单扩展为 27 个 HTTPS 官方主机，来源清单扩展为 27 条（6 个离线夹具、21 个远程来源登记）；新增远程来源均保持 `enabled: false`，只有管理员显式启用并使用 CLI `--live` 才可进入 staging，`auto_ingest=false` 和人工审核门禁未改变。
+- 来源覆盖国家卫生健康委、中国疾控、WHO、CDC、FDA、DailyMed、NIA、NIDDK、NHLBI、AHRQ 等官方站点；每条登记摘要许可、刷新周期、主题和医疗安全备注，不复制整页内容。
+- 本机 `demo-parent` 运行时批准批次新增 100 个独立中文摘要文档；正式索引 `approved-web-100-20260829-v1` 共 108 文档、532 分块，重复 dry-run 为 100 `skip` / 0 `create`。非授权账号可见 0 文档并返回 `NO_AUTHORISED_DOCUMENTS`。
+- 10 组主题检索（用药、血压、糖尿病、跌倒、呼吸道、饮食、睡眠、心理、应急、最小必要共享）全部命中；真实搜索出口返回卫健委/中国政府官方结果，未知域名与 HTTP 继续被阻断。
+- 验收记录：[HCT-401 权威健康知识与白名单扩充验收](../reviews/HCT-401-权威健康知识与白名单扩充验收-20260829.md)。
 
 - `tests/unit/test_knowledge_crawl.py`：staging 详情（正文/标志/404/穿越 id）、模拟更新（changed→draft、demo_override、二次 bump 递增、reset 恢复、仓库夹具零改动）、新夹具登记、详情与模拟更新 API 契约（steward 403、404、reset）
 - `tests/unit/test_hct401_knowledge.py::TestDocumentDetailApi`：详情返回正文+分块、越权 404 不泄露

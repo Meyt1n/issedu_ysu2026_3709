@@ -271,6 +271,51 @@ def test_new_teaching_fixtures_registered_in_allowlist() -> None:
         assert "不构成诊断或用药建议" in text
 
 
+def test_authoritative_health_sources_are_allowlisted_but_default_off() -> None:
+    from app.knowledge_crawl import load_allowlist
+
+    allowlist = load_allowlist()
+    policy = allowlist["policy"]
+    assert policy["auto_ingest"] is False
+    assert policy["requires_human_review"] is True
+    assert {
+        "www.nhc.gov.cn",
+        "ncncd.chinacdc.cn",
+        "www.who.int",
+        "www.cdc.gov",
+        "www.fda.gov",
+        "www.nia.nih.gov",
+        "www.niddk.nih.gov",
+        "www.ahrq.gov",
+    } <= set(policy["allowed_hosts"])
+
+    sources = {source["id"]: source for source in allowlist["sources"]}
+    expected = {
+        "official-nhc-health-literacy-2024",
+        "official-chinacdc-fall-prevention",
+        "official-who-medication-without-harm",
+        "official-who-hypertension",
+        "official-who-diabetes",
+        "official-who-healthy-diet",
+        "official-who-older-mental-health",
+        "official-cdc-respiratory-prevention",
+        "official-cdc-respiratory-hygiene",
+        "official-cdc-falls",
+        "official-fda-older-medication-safety",
+        "official-fda-expiration",
+        "official-fda-disposal",
+        "official-nia-exercise",
+        "official-nia-falls",
+        "official-nia-healthy-aging",
+        "official-niddk-diabetes-management",
+        "official-niddk-kidney-medicines",
+        "official-cdc-emergency-kit",
+        "official-ahrq-safe-medicine-list",
+    }
+    assert expected <= set(sources)
+    assert all(sources[source_id]["enabled"] is False for source_id in expected)
+
+
 def test_staging_detail_and_simulate_update_api_contracts(
     client: TestClient, tmp_path: Path, monkeypatch
 ) -> None:
