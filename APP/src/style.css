@@ -14,6 +14,7 @@
   --r-card: 24px;
   --r-btn: 16px;
   --r-pill: 999px;
+  --hct-bottom-clearance: 116px;
   --speed: 0.24s;
   --ease: cubic-bezier(0.32, 0.72, 0.24, 1);
   --ease-spring: cubic-bezier(0.34, 1.45, 0.5, 1);
@@ -202,6 +203,14 @@ html[data-contrast='high'] {
 
 * { box-sizing: border-box; }
 
+html,
+body,
+#app {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
 html { font-size: calc(16px * var(--scale)); }
 
 body {
@@ -213,6 +222,8 @@ body {
   line-height: 1.55;
   text-rendering: optimizeLegibility;
   -webkit-tap-highlight-color: transparent;
+  overflow-x: hidden;
+  overflow-x: clip;
   min-height: 100vh;
   min-height: 100dvh;
   transition: background 0.4s ease, color 0.4s ease;
@@ -383,15 +394,71 @@ html[data-contrast='high'] :focus-visible { outline-width: 4px; }
 /* ---- 页面骨架与转场 ---- */
 
 .screen {
+  width: 100%;
   max-width: 560px;
   margin: 0 auto;
   padding: max(20px, var(--hct-safe-area-top)) max(18px, var(--hct-safe-area-right))
-    calc(116px + var(--hct-safe-area-bottom)) max(18px, var(--hct-safe-area-left));
+    calc(var(--hct-bottom-clearance) + var(--hct-safe-area-bottom)) max(18px, var(--hct-safe-area-left));
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 18px;
   align-content: start;
   min-width: 0;
+}
+
+/*
+ * MOB-174：横屏与折叠屏只调整可用空间，不改变路由、表单或会话状态。
+ * 所有页面继续共用单列信息流，避免在折叠/展开时发生主从布局重排；
+ * min-width: 0、可换行文本和安全区内边距共同保证不出现横向滚动。
+ */
+@media (orientation: landscape) {
+  :root { --hct-bottom-clearance: 96px; }
+
+  .screen {
+    max-width: 960px;
+    padding-top: max(14px, var(--hct-safe-area-top));
+    padding-inline: max(24px, var(--hct-safe-area-right)) max(24px, var(--hct-safe-area-left));
+    gap: 14px;
+  }
+
+  .screen > *,
+  .hero,
+  .card,
+  .hero-top,
+  .hero-stat,
+  .risk-row,
+  .section-heading {
+    min-width: 0;
+  }
+
+  .hero { padding: 18px; gap: 11px; }
+  .hero-stats { gap: 6px; }
+  .hero-stat { padding: 9px 10px; }
+  .hero-stat span { min-width: 0; overflow-wrap: anywhere; }
+  .section-heading { align-items: flex-start; }
+  .section-link { white-space: normal; text-align: right; }
+}
+
+/* 低高度横屏（常见于手机外屏/分屏）：缩短底部留白但保留触控尺寸。 */
+@media (orientation: landscape) and (max-height: 560px) {
+  :root { --hct-bottom-clearance: 82px; }
+
+  .screen { padding-inline: max(16px, var(--hct-safe-area-right)) max(16px, var(--hct-safe-area-left)); gap: 12px; }
+  .card { padding: 14px; }
+  .hero { padding: 14px 16px; gap: 9px; }
+  .tabbar-wrap { bottom: calc(8px + var(--hct-safe-area-bottom)); padding-inline: 12px; }
+  .tabbar { padding: 4px; }
+  .tabbar-item { min-height: 44px; padding: 4px 3px; }
+}
+
+/* 支持 CSS Foldables API 的 WebView：铰链分段只增加两侧安全边距。 */
+@media (horizontal-viewport-segments: 2) {
+  .screen {
+    max-width: 100%;
+    padding-inline: max(28px, var(--hct-safe-area-right)) max(28px, var(--hct-safe-area-left));
+  }
+
+  .tabbar-wrap { padding-inline: max(20px, var(--hct-safe-area-right)) max(20px, var(--hct-safe-area-left)); }
 }
 
 .page-enter-active {
