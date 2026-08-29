@@ -33,6 +33,18 @@ export const router = createRouter({
       component: () => import('@/views/AssistantView.vue'),
       meta: { title: '语音助手', requiresLiveAuth: true },
     },
+    {
+      path: '/knowledge',
+      name: 'knowledge-library',
+      component: () => import('@/views/KnowledgeLibraryView.vue'),
+      meta: { title: '知识条目', requiresLiveAuth: true },
+    },
+    {
+      path: '/knowledge/:docId',
+      name: 'knowledge-document',
+      component: () => import('@/views/KnowledgeDocumentView.vue'),
+      meta: { title: '知识条目', requiresLiveAuth: true },
+    },
     { path: '/login', name: 'login', component: () => import('@/views/LoginView.vue'), meta: { title: '登录' } },
     { path: '/me', name: 'me', component: () => import('@/views/MeView.vue'), meta: { title: '我的' } },
     {

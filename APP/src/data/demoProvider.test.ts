@@ -192,3 +192,38 @@ describe('演示模式任务操作历史（MOB-135）', () => {
     expect(await demoProvider.listTaskActionHistory('m-wang')).toHaveLength(0)
   })
 })
+
+describe('演示模式知识条目只读浏览（MOB-162）', () => {
+  it('已批准条目按顺序返回虚构分块与索引版本', async () => {
+    const doc = await demoProvider.getKnowledgeDocument('demo-doc-medication-basics')
+
+    expect(doc.approved).toBe(true)
+    expect(doc.version).toBe('demo-idx-2026-08')
+    expect(doc.chunkCount).toBe(3)
+    expect(doc.chunks.map(chunk => chunk.index)).toEqual([0, 1, 2])
+    // 演示内容必须自证是演示，且不得给出诊断或剂量建议。
+    expect(doc.chunks[0]!.text).toContain('演示')
+    expect(doc.chunks[0]!.text).toContain('不构成任何诊断')
+  })
+
+  it('未批准条目不返回正文分块', async () => {
+    const doc = await demoProvider.getKnowledgeDocument('demo-doc-staging-draft')
+
+    expect(doc.approved).toBe(false)
+    expect(doc.status).toBe('staging')
+    expect(doc.chunks).toEqual([])
+  })
+
+  it('未知条目的错误文案不泄露条目是否存在', async () => {
+    await expect(demoProvider.getKnowledgeDocument('demo-doc-missing')).rejects.toThrow(
+      '该知识条目不存在或未获授权',
+    )
+  })
+
+  it('列表只列出已批准条目，未批准草稿不出现', async () => {
+    const docs = await demoProvider.listKnowledgeDocuments()
+
+    expect(docs.map(doc => doc.id)).toEqual(['demo-doc-medication-basics'])
+    expect(docs.some(doc => doc.id === 'demo-doc-staging-draft')).toBe(false)
+  })
+})

@@ -8,6 +8,9 @@ import type {
   DataProvider,
   EnvironmentActionState,
   HouseholdOption,
+  KnowledgeChunkView,
+  KnowledgeDocumentSummaryView,
+  KnowledgeDocumentView,
   MemberDetail,
   MemberSummary,
   ProviderInfo,
@@ -26,6 +29,60 @@ import type {
 } from './types'
 
 const WEEKDAY_LABELS = ['日', '一', '二', '三', '四', '五', '六']
+
+/**
+ * MOB-162 演示用知识条目：内容全部虚构，只用于教学演示与只读页走查。
+ * `staging` 那条故意保留未批准状态，用来验证移动端不展示未批准正文。
+ */
+const DEMO_KNOWLEDGE_DOCUMENTS: (Omit<KnowledgeDocumentView, 'chunkCount'> & {
+  chunks: KnowledgeChunkView[]
+})[] = [
+  {
+    id: 'demo-doc-medication-basics',
+    title: '家庭用药记录基础须知（演示）',
+    source: '演示教学资料',
+    license: '仅课堂演示使用',
+    version: 'demo-idx-2026-08',
+    status: 'active',
+    approved: true,
+    effectiveFrom: '2026-08-01T00:00:00+08:00',
+    effectiveUntil: null,
+    chunks: [
+      {
+        id: 'demo-chunk-1',
+        index: 0,
+        text: '本资料为演示内容，不构成任何诊断、处方或剂量建议。用药安排请以医生或药师的书面医嘱为准。',
+        locator: '第 1 节',
+      },
+      {
+        id: 'demo-chunk-2',
+        index: 1,
+        text: '记录一次用药时，建议同时留下时间、药名与实际是否服下三项信息；缺一项就无法在事后核对。',
+        locator: '第 2 节',
+      },
+      {
+        id: 'demo-chunk-3',
+        index: 2,
+        text: '若家人自述漏服，先记录事实，不要自行补服或加倍剂量，改由照护人联系医生确认。',
+        locator: '第 3 节',
+      },
+    ],
+  },
+  {
+    id: 'demo-doc-staging-draft',
+    title: '待批准草稿（演示）',
+    source: '演示教学资料',
+    license: '仅课堂演示使用',
+    version: 'demo-idx-staging',
+    status: 'staging',
+    approved: false,
+    effectiveFrom: null,
+    effectiveUntil: null,
+    chunks: [
+      { id: 'demo-staging-chunk-1', index: 0, text: '未批准内容不应出现在移动端。', locator: null },
+    ],
+  },
+]
 
 function demoRiskMetadata(ruleId: string, sourceCount: number): Pick<RiskCard, 'riskFingerprint' | 'acknowledgement' | 'audit'> {
   const audit: RiskAuditMetadata = {
@@ -676,6 +733,36 @@ export const demoProvider: DataProvider = {
       total: todayTasks.length,
     })
     return points
+  },
+
+  /**
+   * MOB-162 演示模式的知识条目列表。
+   * 只列出已批准条目，未批准草稿不出现在列表里（与服务端过滤语义一致）。
+   */
+  async listKnowledgeDocuments(): Promise<KnowledgeDocumentSummaryView[]> {
+    await delay(140)
+    return DEMO_KNOWLEDGE_DOCUMENTS.filter(doc => doc.approved).map(doc => ({
+      id: doc.id,
+      title: doc.title,
+      source: doc.source,
+      version: doc.version,
+      effectiveFrom: doc.effectiveFrom,
+    }))
+  },
+
+  /**
+   * MOB-162 演示模式的知识条目只读详情。
+   * 全部为虚构教学内容；未批准条目只返回元信息，用于走查「不可查看」路径。
+   */
+  async getKnowledgeDocument(docId: string): Promise<KnowledgeDocumentView> {
+    await delay(150)
+    const doc = DEMO_KNOWLEDGE_DOCUMENTS.find(item => item.id === docId)
+    if (!doc) throw new Error('该知识条目不存在或未获授权')
+    return {
+      ...doc,
+      chunkCount: doc.chunks.length,
+      chunks: doc.approved ? doc.chunks.map(chunk => ({ ...chunk })) : [],
+    }
   },
 
   async recognizeMedicine(file: File, _memberId?: string, _mediaKind?: 'image' | 'video'): Promise<RecognitionCandidate> {

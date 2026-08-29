@@ -332,9 +332,44 @@ export interface HouseholdOption {
   name: string
 }
 
+/** 知识条目的一个只读分块；`index` 用于把助手引用定位到具体段落。 */
+export interface KnowledgeChunkView {
+  id: string
+  index: number
+  text: string
+  locator: string | null
+}
+
+/** 知识条目列表项：只有标题与版本等元信息，正文只在详情页按批准状态展示。 */
+export interface KnowledgeDocumentSummaryView {
+  id: string
+  title: string
+  source: string
+  version: string
+  effectiveFrom: string | null
+}
+
+/**
+ * 知识条目只读视图（MOB-162）。
+ * `approved` 为 false 时 `chunks` 必须为空：未批准或 staging 内容不下发到移动端，也不落盘。
+ */
+export interface KnowledgeDocumentView {
+  id: string
+  title: string
+  source: string
+  license: string
+  /** 服务端当前的索引版本；与助手引用所用版本比对可发现版本二义。 */
+  version: string
+  status: string
+  approved: boolean
+  effectiveFrom: string | null
+  effectiveUntil: string | null
+  chunkCount: number
+  chunks: KnowledgeChunkView[]
+}
+
 export interface DataProvider {
-  info(): ProviderInfo
-  /** 首页健康资讯；内容只来自家庭服务器或明确标注的本地季节日历。 */
+  info(): ProviderInfo  /** 首页健康资讯；内容只来自家庭服务器或明确标注的本地季节日历。 */
   getHealthNews(): Promise<HealthNewsResponse>
   /** 当前身份被服务端授权访问的家庭；用于显式选择，不代表任何额外权限。 */
   listHouseholds(): Promise<HouseholdOption[]>
@@ -356,4 +391,8 @@ export interface DataProvider {
   listTaskActionHistory(memberId: string): Promise<TaskActionHistoryEntry[]>
   /** 近 7 天任务完成趋势（含今天，共 7 项，时间升序）。 */
   getWeeklyTrend(memberId: string): Promise<TrendPoint[]>
+  /** MOB-162：知识条目只读详情；APP 无写入路径，未批准内容不下发正文。 */
+  getKnowledgeDocument(docId: string): Promise<KnowledgeDocumentView>
+  /** MOB-162：当前身份可见的已批准知识条目列表；服务端已做权限与批准过滤。 */
+  listKnowledgeDocuments(): Promise<KnowledgeDocumentSummaryView[]>
 }
