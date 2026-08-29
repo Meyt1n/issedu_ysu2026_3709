@@ -8,29 +8,51 @@ import ListLoadingState from '@/components/ListLoadingState.vue'
 import { presentListApiError, type ErrorPresentation } from '@/api/errors'
 import type { HealthNewsItem, HealthNewsResponse } from '@/api/types'
 import { activeProvider } from '@/data'
-import { assistantPromptForItem, itemSourceLine, presentHealthNews } from '@/utils/healthNews'
+import {
+  assistantPromptForItem,
+  itemSourceLine,
+  presentHealthNews,
+  presentHealthNewsFreshness,
+  refreshOutcomeMessage,
+} from '@/utils/healthNews'
 
 const router = useRouter()
 const news = ref<HealthNewsResponse | null>(null)
 const loading = ref(false)
 const loadError = ref<ErrorPresentation | null>(null)
+/** 刷新结果反馈；成功与「仍是缓存」都在这里说清楚，不谎报成功。 */
+const refreshMessage = ref('')
 let loadInFlight = false
 
 const view = computed(() => presentHealthNews(news.value))
+const freshness = computed(() => presentHealthNewsFreshness(news.value))
+const refreshLabel = computed(() => (loading.value ? '刷新中…' : '刷新'))
 
-async function loadNews(): Promise<void> {
+/**
+ * MOB-165：刷新只调家庭服务器，不直连外部资讯源。
+ * `loadInFlight` 保证连续点击不会发出重复请求；失败时保留旧内容，不清空列表。
+ */
+async function loadNews(options?: { refresh?: boolean }): Promise<void> {
   if (loadInFlight) return
   loadInFlight = true
   loading.value = true
   loadError.value = null
+  if (options?.refresh) refreshMessage.value = ''
   try {
+    // 整份替换而不是合并：服务端换了缓存配置指纹后，旧指纹下的内容不会残留。
     news.value = await activeProvider().getHealthNews()
+    if (options?.refresh) refreshMessage.value = refreshOutcomeMessage(news.value)
   } catch (cause) {
     loadError.value = presentListApiError(cause)
+    refreshMessage.value = ''
   } finally {
     loading.value = false
     loadInFlight = false
   }
+}
+
+function refreshNews(): void {
+  void loadNews({ refresh: true })
 }
 
 function openItem(item: HealthNewsItem): void {
@@ -53,20 +75,42 @@ onMounted(() => {
     </div>
 
     <p class="health-news-intro">{{ view.intro }}</p>
-    <p v-if="view.showRemoteMeta" class="health-news-meta" role="status">
-      {{ view.fetchedLabel }}
-      <span v-if="news?.cache_status === 'stale'"> · 这是缓存内容</span>
-      <span v-else-if="news?.cache_status === 'fresh'"> · 缓存有效</span>
+
+    <p
+      v-if="freshness.expired"
+      class="notice warn health-news-expired"
+      role="alert"
+    >
+      {{ freshness.notice }}
     </p>
+    <p v-else-if="freshness.notice" class="health-news-meta" role="status">
+      {{ freshness.notice }}
+    </p>
+
+    <div class="health-news-actions">
+      <button
+        type="button"
+        class="btn health-news-refresh"
+        :class="freshness.emphasizeRefresh ? 'btn-secondary' : 'btn-quiet'"
+        :disabled="loading"
+        :aria-busy="loading"
+        @click="refreshNews"
+      >
+        <AppIcon name="refresh" :size="16" />
+        {{ refreshLabel }}
+      </button>
+    </div>
+    <p v-if="refreshMessage" class="health-news-meta" role="status">{{ refreshMessage }}</p>
+
     <p v-if="view.degradedLabel" class="health-news-degraded" role="status">
       {{ view.degradedLabel }}
     </p>
 
     <ListLoadingState v-if="loading && !news" label="正在读取健康资讯…" :count="2" :disc="false" />
-    <ErrorNotice v-else-if="loadError && !news" :error="loadError" :busy="loading" @retry="loadNews" />
+    <ErrorNotice v-else-if="loadError && !news" :error="loadError" :busy="loading" @retry="refreshNews" />
     <p v-else-if="loadError" class="notice warn health-news-inline-error" role="status">
-      资讯刷新未完成，当前仍保留已读取的内容。
-      <button type="button" class="btn btn-quiet" :disabled="loading" @click="loadNews">
+      资讯刷新未完成（{{ loadError.message }}），当前仍保留上一次读取到的内容。
+      <button type="button" class="btn btn-quiet" :disabled="loading" @click="refreshNews">
         {{ loading ? '重试中…' : '重试' }}
       </button>
     </p>
@@ -161,6 +205,28 @@ onMounted(() => {
 
 .health-news-degraded { color: var(--c-warn-deep); }
 .health-news-disclaimer { color: var(--c-ink-faint); }
+
+.health-news-expired {
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+.health-news-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.health-news-refresh {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+  min-height: var(--tap);
+}
+
+.health-news-refresh:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 3px; }
+.health-news-refresh[disabled] { cursor: progress; }
 
 .health-news-inline-error {
   display: flex;

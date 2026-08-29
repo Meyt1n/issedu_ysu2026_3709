@@ -12,6 +12,25 @@ export interface HealthNewsPresentation {
   degradedLabel: string
 }
 
+/**
+ * MOB-165：把「这份内容有多新」单独算出来。
+ * 任何缓存呈现都必须带时间；服务端没给时间时也要显式说明无法判断新鲜度，
+ * 不允许出现没有标注的旧内容。
+ */
+export interface HealthNewsFreshness {
+  /** 内容来自服务端缓存，而不是本轮实时抓取。 */
+  fromCache: boolean
+  /** 缓存已超出有效期，内容可能已过期。 */
+  expired: boolean
+  /** 缓存或抓取时间的可读文本；服务端未返回时为空串。 */
+  whenLabel: string
+  /** 面板上的新鲜度说明句。 */
+  notice: string
+  tone: HealthNewsTone
+  /** 是否需要把刷新入口做突出处理。 */
+  emphasizeRefresh: boolean
+}
+
 const DISCLAIMER =
   '公开资讯与季节提醒仅供教学演示，不是疫情通报或诊断依据。具体不适请咨询医生或药师。'
 
@@ -85,16 +104,94 @@ function formatWhen(value: string | null | undefined): string {
   }).format(date)
 }
 
+export function presentHealthNewsFreshness(
+  news: HealthNewsResponse | null,
+): HealthNewsFreshness {
+  if (!news) {
+    return {
+      fromCache: false,
+      expired: false,
+      whenLabel: '',
+      notice: '',
+      tone: 'muted',
+      emphasizeRefresh: false,
+    }
+  }
+  const when = formatWhen(news.fetched_at)
+  const cacheStatus = news.cache_status ?? 'none'
+
+  if (cacheStatus === 'stale') {
+    return {
+      fromCache: true,
+      expired: true,
+      whenLabel: when,
+      notice: when
+        ? `这是家庭服务器的缓存内容，已超过有效期（抓取于 ${when}），可能不是最新的。请刷新重新获取。`
+        : '这是家庭服务器的缓存内容，且服务端未返回缓存时间，无法判断新鲜度。请刷新重新获取。',
+      tone: 'warn',
+      emphasizeRefresh: true,
+    }
+  }
+
+  if (cacheStatus === 'fresh') {
+    return {
+      fromCache: true,
+      expired: false,
+      whenLabel: when,
+      notice: when
+        ? `这是家庭服务器的缓存内容，仍在有效期内（抓取于 ${when}）。`
+        : '这是家庭服务器的缓存内容，但服务端未返回缓存时间；如需确认新鲜度请刷新。',
+      tone: 'ok',
+      emphasizeRefresh: false,
+    }
+  }
+
+  return {
+    fromCache: false,
+    expired: false,
+    whenLabel: when,
+    notice: when
+      ? `本轮从家庭服务器取得，抓取于 ${when}。`
+      : '当前为本地季节提醒，不来自外网抓取。',
+    tone: 'muted',
+    emphasizeRefresh: false,
+  }
+}
+
+/**
+ * MOB-165 验收 3/4：刷新完成后的反馈文案。
+ * 服务端仍然只能给出缓存时，不能说成「已取到最新内容」。
+ */
+export function refreshOutcomeMessage(news: HealthNewsResponse | null): string {
+  if (!news) return '刷新未取回内容，已保留原有资讯。'
+  const freshness = presentHealthNewsFreshness(news)
+  if (!freshness.fromCache) return '已刷新，本次是家庭服务器新取回的内容。'
+  if (freshness.expired) {
+    return freshness.whenLabel
+      ? `已重新请求，但服务端仍只能提供过期缓存（抓取于 ${freshness.whenLabel}）。`
+      : '已重新请求，但服务端仍只能提供缓存，且未返回缓存时间。'
+  }
+  return freshness.whenLabel
+    ? `已重新请求，服务端返回的仍是有效期内的缓存（抓取于 ${freshness.whenLabel}）。`
+    : '已重新请求，服务端返回的仍是缓存内容。'
+}
+
 export function presentHealthNews(news: HealthNewsResponse | null): HealthNewsPresentation {
   const status = news?.status ?? 'local_only'
   const copy = STATUS_COPY[status] ?? STATUS_COPY.error
   const fetchedLabel = formatWhen(news?.fetched_at)
   const hasRemote = (news?.items ?? []).some(item => item.source === 'remote_whitelist')
+  const freshness = presentHealthNewsFreshness(news ?? null)
+  // 缓存内容一律不使用「已更新」这类暗示实时的措辞（MOB-165 验收 1）。
+  const statusLabel = freshness.fromCache
+    ? (freshness.expired ? '缓存已过期' : '缓存资讯')
+    : copy.label
+  const statusTone = freshness.fromCache ? freshness.tone : copy.tone
   return {
     title: hasRemote ? '近期健康资讯' : '换季与季节照护提醒',
     intro: copy.intro,
-    statusLabel: copy.label,
-    statusTone: copy.tone,
+    statusLabel,
+    statusTone,
     showRemoteMeta: Boolean(fetchedLabel) && (hasRemote || status === 'stale' || status === 'ok'),
     fetchedLabel: fetchedLabel ? `抓取于 ${fetchedLabel}` : '',
     degradedLabel: news?.degraded_reason ? `降级原因：${news.degraded_reason}` : '',
