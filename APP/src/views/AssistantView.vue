@@ -7,7 +7,11 @@ import type { MemberSummary } from '@/data/types'
 import AppIcon from '@/components/AppIcon.vue'
 import AssistantEvidencePanel from '@/components/AssistantEvidencePanel.vue'
 import { ApiClientError } from '@/api/client'
-import type { AssistantCitation, AssistantResponse, EvidencePreview } from '@/api/types'
+import type {
+  AssistantCitation,
+  AssistantResponse,
+  EvidencePreview,
+} from '@/api/types'
 import { createLiveApiClient } from '@/data'
 import {
   AUTO_SEND_PRESETS,
@@ -36,6 +40,7 @@ import {
   type VoicePreferences,
 } from '@/composables/useVoiceInput'
 import { useA11y } from '@/stores/accessibility'
+import { CAPABILITY_IDS, useCapabilities } from '@/stores/capabilities'
 import { useSession } from '@/stores/session'
 import {
   assistantReplyStatusLabel,
@@ -43,6 +48,11 @@ import {
   restoreAssistantReplyStatus,
   type AssistantReplyStatus,
 } from '@/utils/assistantReply'
+import {
+  collectExternalDomains,
+  networkSearchDisabledReason as resolveNetworkSearchDisabledReason,
+  resolveNetworkSearchForTurn,
+} from '@/utils/networkSearch'
 
 interface ChatEntry {
   role: 'user' | 'assistant'
@@ -56,6 +66,8 @@ interface ChatEntry {
   suggestedQuestions?: string[]
   queryType?: string | null
   networkUsed?: boolean
+  /** 联网参考命中的来源域名；只保留服务端返回的域名，不展示完整 URL。 */
+  externalDomains?: string[]
   agentTraceSummary?: string
 }
 
@@ -69,6 +81,7 @@ const PHASE_LABELS: Record<string, string> = {
 
 const { session } = useSession()
 const { settings } = useA11y()
+const { capabilities, hasCapability } = useCapabilities()
 const route = useRoute()
 
 const history = ref<ChatEntry[]>([])
@@ -84,6 +97,8 @@ const needMicGesture = ref(false)
 const chatEnd = ref<HTMLElement | null>(null)
 const orchestrationPhase = ref<string | null>(null)
 const allowNetworkSearch = ref(false)
+/** 联网链路失败后待重试的问题；只在提供「仅用本地知识重试」入口时使用。 */
+const networkFallbackQuestion = ref('')
 const liveEvidencePreview = ref<EvidencePreview | null>(null)
 const cancelStatus = ref('')
 
@@ -132,6 +147,26 @@ const listening = computed(() =>
 const liveMode = computed(() => session.dataMode === 'live')
 const serverLabel = computed(() => session.serverBaseUrl.trim() || '（未填写服务器地址）')
 const assistantReady = computed(() => liveMode.value && Boolean(session.serverBaseUrl.trim()))
+
+/**
+ * MOB-161：只有服务端显式声明 external-web 能力时才允许打开联网搜索。
+ * 能力探测未完成、未声明或声明为不可用时一律 fail-closed，绝不静默降级成本地检索却声称联网。
+ */
+const networkSearchAvailable = computed(
+  () => liveMode.value && hasCapability(CAPABILITY_IDS.externalWeb),
+)
+const networkSearchDisabledReason = computed(() =>
+  resolveNetworkSearchDisabledReason({
+    liveMode: liveMode.value,
+    capabilityProbed: Boolean(capabilities.snapshot),
+    externalWebAvailable: hasCapability(CAPABILITY_IDS.externalWeb),
+  }),
+)
+
+// 能力从可用变为不可用时立刻关闭开关，避免把上一次的开启状态当成隐式授权继续出网。
+watch(networkSearchAvailable, (available) => {
+  if (!available) allowNetworkSearch.value = false
+}, { immediate: true })
 const thinkingText = computed(() => {
   if (orchestrationPhase.value && PHASE_LABELS[orchestrationPhase.value]) {
     return PHASE_LABELS[orchestrationPhase.value]
@@ -507,6 +542,10 @@ function summarizeAgentTrace(reply: AssistantResponse): string | undefined {
   return parts.join(' · ')
 }
 
+/**
+ * MOB-161：只从服务端返回的外部来源里取域名做展示，去重并限量。
+ * 不展示完整 URL，也不在本地解析或补全域名，避免把未经服务端核验的地址呈现给用户。
+ */
 function applyAssistantReply(entryIndex: number, reply: AssistantResponse): void {
   const entry = history.value[entryIndex]
   if (!entry) return
@@ -521,6 +560,7 @@ function applyAssistantReply(entryIndex: number, reply: AssistantResponse): void
   )
   entry.queryType = reply.query_type
   entry.networkUsed = reply.network_used
+  entry.externalDomains = reply.network_used ? collectExternalDomains(reply.external_sources) : []
   entry.agentTraceSummary = summarizeAgentTrace(reply)
   if (reply.degraded) {
     sendError.value = reply.degrade_reason
@@ -547,6 +587,7 @@ function settleCancelledReply(entryIndex: number, streamingEntry: ChatEntry): vo
     entry.citations = undefined
     entry.suggestedQuestions = undefined
     entry.networkUsed = false
+    entry.externalDomains = []
     entry.agentTraceSummary = undefined
     cancelStatus.value = keepPartialReply
       ? '已结束回复，保留已生成的内容'
@@ -560,8 +601,19 @@ function settleCancelledReply(entryIndex: number, streamingEntry: ChatEntry): vo
   scrollToEnd()
 }
 
-function retryInterruptedReply(replyIndex: number): void {
-  if (!isInterruptedAssistantReply(history.value[replyIndex]?.replyStatus)) return
+/**
+ * MOB-161 验收 4：联网被限速、超时或上游失败后，用同一个问题只走本地知识重试。
+ * 这里不改开关状态，只让这一轮强制不出网，避免用户为了拿到回答而永久关掉开关。
+ */
+function retryWithLocalKnowledgeOnly(): void {
+  const question = networkFallbackQuestion.value.trim()
+  if (!question || sending.value) return
+  networkFallbackQuestion.value = ''
+  sendError.value = ''
+  void send(question, undefined, { localOnly: true })
+}
+
+function retryInterruptedReply(replyIndex: number): void {  if (!isInterruptedAssistantReply(history.value[replyIndex]?.replyStatus)) return
   for (let index = replyIndex - 1; index >= 0; index -= 1) {
     const entry = history.value[index]
     if (entry?.role === 'user' && entry.content.trim()) {
@@ -575,10 +627,15 @@ function retryInterruptedReply(replyIndex: number): void {
   cancelStatus.value = '找不到原问题，请重新输入后再试'
 }
 
-async function send(text?: string, queryTypeOverride?: string): Promise<void> {
+async function send(
+  text?: string,
+  queryTypeOverride?: string,
+  options?: { localOnly?: boolean },
+): Promise<void> {
   const content = (text ?? draft.value).trim()
   if (!content || sending.value) return
 
+  networkFallbackQuestion.value = ''
   cancelActiveSend()
   stopVoiceInput()
   stopSpeaking()
@@ -646,11 +703,17 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
   const controller = new AbortController()
   activeSendController = controller
   const messages = history.value.map((entry) => ({ role: entry.role, content: entry.content }))
+  // 双重闸门：即使开关状态残留为开，缺少服务端 external-web 能力时也绝不请求出网。
+  const networkSearchForThisTurn = resolveNetworkSearchForTurn({
+    localOnly: options?.localOnly,
+    available: networkSearchAvailable.value,
+    userEnabled: allowNetworkSearch.value,
+  })
   const chatInput = {
     messages,
     max_tokens: 1024,
     agent_mode: 'multi_agent' as const,
-    allow_network_search: allowNetworkSearch.value,
+    allow_network_search: networkSearchForThisTurn,
     query_type_override: queryTypeOverride,
     assistant_session_id: assistantSessionId.value,
   }
@@ -684,6 +747,12 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
           onEvidencePreview: (preview) => {
             liveEvidencePreview.value = preview
             scrollToEnd()
+          },
+          onExternalSources: (sources) => {
+            const domains = collectExternalDomains(sources)
+            if (!domains.length) return
+            streamingEntry.networkUsed = true
+            streamingEntry.externalDomains = domains
           },
           onCancelled: () => {
             streamCancelled = true
@@ -721,6 +790,8 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
           ? cause.message
           : '家庭服务器暂时无法回答。请确认电脑后端已启动，且手机与电脑在同一局域网。'
       sendError.value = message
+      // 本轮请求过出网：把原问题留下来，给一个只走本地知识的重试入口（验收 4）。
+      if (networkSearchForThisTurn) networkFallbackQuestion.value = content
       const fallbackContent =
         '本地模型或其依赖当前不可用，无法生成回答。家庭事实、任务与提醒不受影响，可直接在对应页面查看。'
       const entry = history.value[entryIndex]
@@ -848,10 +919,34 @@ onBeforeUnmount(() => {
         家庭 {{ session.currentHouseholdId || '未选' }} · 成员 {{ session.currentMemberId || '未选' }}
         · 会话按身份/家庭/成员隔离（仅本标签页）
       </p>
-      <label v-if="liveMode" class="network-toggle">
-        <input v-model="allowNetworkSearch" type="checkbox" :disabled="sending" />
-        允许本次脱敏联网参考（需家庭服务器已开启搜索）
-      </label>
+      <div v-if="liveMode" class="network-search">
+        <label class="network-toggle">
+          <input
+            v-model="allowNetworkSearch"
+            type="checkbox"
+            :disabled="sending || !networkSearchAvailable"
+            :aria-describedby="networkSearchDisabledReason ? 'network-search-reason' : undefined"
+          />
+          允许本次脱敏联网参考
+        </label>
+        <p
+          v-if="networkSearchDisabledReason"
+          id="network-search-reason"
+          class="meta-line"
+          role="status"
+        >
+          {{ networkSearchDisabledReason }}联网搜索保持关闭，助手只用家庭服务器上的本地知识回答。
+        </p>
+        <details class="network-scope">
+          <summary class="network-scope-summary">出网范围说明</summary>
+          <ul class="network-scope-list">
+            <li>会出网：这一轮里被服务端判定需要外部参考的检索词。</li>
+            <li>不会出网：成员姓名、健康事件正文、用药记录、位置与家庭标识。</li>
+            <li>默认关闭。关掉后立即只用本地知识，不保留任何隐式授权。</li>
+            <li>联网结果只作参考，需人工确认，不构成诊断、处方或剂量建议。</li>
+          </ul>
+        </details>
+      </div>
     </section>
 
     <section class="card chat-card" aria-label="对话">
@@ -879,7 +974,13 @@ onBeforeUnmount(() => {
         </p>
         <p v-if="entry.degraded" class="meta-line">降级说明：{{ entry.degradeReason || '受控降级' }}</p>
         <p v-if="entry.agentTraceSummary" class="meta-line">{{ entry.agentTraceSummary }}</p>
-        <p v-if="entry.networkUsed" class="meta-line">含外部参考 · 需人工确认，不作诊断</p>
+        <p v-if="entry.networkUsed" class="meta-line">
+          已启用联网参考 · 需人工确认，不作诊断
+          <template v-if="entry.externalDomains?.length">
+            · 来源域名：{{ entry.externalDomains.join('、') }}
+          </template>
+          <template v-else>· 服务端未返回来源域名</template>
+        </p>
         <AssistantEvidencePanel
           v-if="entry.role === 'assistant' && entry.content"
           :citations="entry.citations"
@@ -967,6 +1068,14 @@ onBeforeUnmount(() => {
     <p v-if="sending" class="thinking-line" role="status" aria-live="polite">{{ thinkingText }}</p>
     <p v-if="cancelStatus" class="meta-line" role="status" aria-live="polite">{{ cancelStatus }}</p>
     <p v-if="sendError" class="error-line" role="alert">{{ sendError }}</p>
+    <button
+      v-if="networkFallbackQuestion && !sending"
+      type="button"
+      class="btn btn-secondary local-only-retry"
+      @click="retryWithLocalKnowledgeOnly"
+    >
+      仅用本地知识重试
+    </button>
     <p v-if="voiceError" class="error-line" role="status">{{ voiceError }}</p>
     <p v-if="needMicGesture && !listening" class="voice-status" role="status">
       需要一次点按开启麦克风后，才会自动等待「{{ wakePhrase }}」。
@@ -1224,6 +1333,35 @@ onBeforeUnmount(() => {
   min-height: var(--tap);
   color: var(--muted);
   font-size: 0.92rem;
+}
+.network-search {
+  display: grid;
+  gap: 4px;
+}
+.network-scope-summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.92rem;
+  min-height: var(--tap);
+  padding: 8px 0;
+}
+.network-scope-summary:focus-visible,
+.local-only-retry:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 58%, transparent);
+  outline-offset: 2px;
+}
+.network-scope-list {
+  color: var(--muted);
+  display: grid;
+  font-size: 0.92rem;
+  gap: 4px;
+  line-height: 1.55;
+  margin: 0;
+  padding-left: 20px;
+}
+.local-only-retry {
+  justify-self: start;
+  min-height: var(--tap);
 }
 .thinking-line {
   margin: 0;
