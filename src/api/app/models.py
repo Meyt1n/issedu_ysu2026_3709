@@ -452,6 +452,40 @@ class VisionTask(Base):
     )
 
 
+class VisionQualityRecord(Base):
+    """Durable, privacy-preserving record of one local quality decision.
+
+    The record is provenance only: it keeps hashes, versioned diagnostics and
+    the decision needed to explain a downstream gate, but never stores the
+    uploaded media, a filesystem path, OCR text or the signed receipt itself.
+    """
+
+    __tablename__ = "vision_quality_record"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    actor_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    input_digest: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    media_type: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    schema_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    config_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    decision: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    allow_downstream: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    thresholds: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    reasons: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    retake_prompts: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    frames: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
+    # A digest lets operators correlate a downstream receipt without exposing
+    # the bearer token to the record-reading endpoint.
+    receipt_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        server_default=func.now(),
+        index=True,
+    )
+
+
 class RiskAcknowledgement(Base):
     """Minimal receipt for acknowledging one current rule result."""
 
