@@ -3,7 +3,7 @@
 - Issue: #555
 - Story: HCT-493
 - FR/NFR: FR-01, NFR-01, NFR-02, NFR-03, NFR-07
-- Status: Partially complete; manual acceptance pending
+- Status: Complete
 - Date: 2026-08-29
 - Baseline: `fd8cc1be110388dcda9cc4746ec32bb9b5b0046a`
 
@@ -44,22 +44,23 @@ models/face/face_recognition_sface_2021dec.onnx   38696353 bytes
 
 | Required path | Result | Evidence |
 |---|---|---|
-| Register a face credential | Not run | Requires an authorized human participant and running API/admin portal |
-| Face login | Not run | Requires an authorized human participant and camera permission |
-| View credential list | Not run | Registration prerequisite not performed |
+| Register a face credential | Pass | User completed the flow in the local Windows demo |
+| Face login | Pass | User completed the flow in the local Windows demo |
+| View credential list | Pass | Screenshot shows the registered member with an active/有效 credential |
 
 ## Blocker
 
 The first model download from OpenCV Zoo failed with `ssl.SSLEOFError`; the
 approved weights were subsequently copied into `models/face/` without adding
-them to Git. `scripts/ensure_face_models.py` now succeeds and the full
-Unicode-path regression passes. No biometric sample was collected.
+them to Git. `scripts/ensure_face_models.py` now succeeds, the full
+Unicode-path regression passes, and the user completed the three manual
+acceptance paths in the local Windows demo. No biometric sample was collected
+in the repository.
 
-To finish the Issue, run the three manual paths using an authorized demo
-participant: registration, face login, and credential-list verification.
-Record only pass/fail outcomes and non-sensitive failure categories. Do not
-add images, embeddings, PINs, session tokens, or full local paths to this
-record.
+The manual acceptance is complete for this demo environment. Future changes
+to the model, camera pipeline, or threshold require a new acceptance run.
+Do not add images, embeddings, PINs, session tokens, or full local paths to
+this record.
 
 ## Rollback
 
