@@ -17,6 +17,7 @@
     "verify:android-risk-evidence": "node scripts/verify-android-risk-evidence.mjs",
     "verify:environment-action-evidence": "node scripts/verify-android-environment-evidence.mjs",
     "verify:onboarding-evidence": "node scripts/verify-android-onboarding-evidence.mjs",
+    "verify:weak-network-evidence": "node scripts/verify-android-weak-network-evidence.mjs",
     "android:sync:debug": "vite build --mode android-debug && cap sync android",
     "audit:android-security": "node scripts/audit-android-security.mjs",
     "audit:responsive": "node scripts/audit-responsive-layout.mjs",
