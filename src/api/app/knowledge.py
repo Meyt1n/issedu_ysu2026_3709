@@ -459,7 +459,9 @@ def retrieve(
                 "matched_synonyms": synonym_hits,
             })
 
-    scored.sort(key=lambda r: r["score"], reverse=True)
+    # Keep equal-score results reproducible across database backends.  Stable
+    # citation ordering matters to callers that cache the top-k chunk IDs.
+    scored.sort(key=lambda r: (-r["score"], r["document_id"], r["chunk_id"]))
     if not scored:
         raise ValueError("NO_RELEVANT_RESULTS")
     return scored[:top_k]

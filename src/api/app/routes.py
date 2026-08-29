@@ -3668,17 +3668,21 @@ def retrieve_knowledge(
     Returns a structured degrade response if no authorised documents exist
     or the index is empty — never exposes cross-family content.
     """
-    from app.knowledge import log_query, retrieve
+    from ai.rag.retrieval import LocalKnowledgeRetriever, RetrievalScope
+
+    from app.knowledge import log_query
 
     try:
-        results = retrieve(
-            session,
-            query=payload.query,
-            actor_id=actor_id,
-            household_id=payload.household_id,
-            member_id=payload.member_id,
+        hits = LocalKnowledgeRetriever(session).retrieve(
+            payload.query,
+            RetrievalScope(
+                actor_id=actor_id,
+                household_id=payload.household_id,
+                member_id=payload.member_id,
+            ),
             top_k=payload.top_k,
         )
+        results = [hit.as_dict() for hit in hits]
         log_entry = log_query(
             session,
             query_text=payload.query,
