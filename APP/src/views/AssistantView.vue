@@ -5,8 +5,9 @@ import { RouterLink, useRoute } from 'vue-router'
 import { activeProvider } from '@/data'
 import type { MemberSummary } from '@/data/types'
 import AppIcon from '@/components/AppIcon.vue'
+import AssistantEvidencePanel from '@/components/AssistantEvidencePanel.vue'
 import { ApiClientError } from '@/api/client'
-import type { AssistantResponse, EvidencePreview } from '@/api/types'
+import type { AssistantCitation, AssistantResponse, EvidencePreview } from '@/api/types'
 import { createLiveApiClient } from '@/data'
 import {
   AUTO_SEND_PRESETS,
@@ -50,6 +51,8 @@ interface ChatEntry {
   degraded?: boolean
   degradeReason?: string | null
   sources?: string[]
+  /** 只保留本次回答返回的引用；会话恢复不持久化，避免与服务端索引版本产生二义。 */
+  citations?: AssistantCitation[]
   suggestedQuestions?: string[]
   queryType?: string | null
   networkUsed?: boolean
@@ -512,6 +515,7 @@ function applyAssistantReply(entryIndex: number, reply: AssistantResponse): void
   entry.degraded = reply.degraded
   entry.degradeReason = reply.degrade_reason
   entry.sources = reply.sources
+  entry.citations = reply.citations
   entry.suggestedQuestions = (reply.suggested_questions ?? []).filter(
     (item) => typeof item === 'string' && item.trim(),
   )
@@ -540,6 +544,7 @@ function settleCancelledReply(entryIndex: number, streamingEntry: ChatEntry): vo
     entry.degraded = true
     entry.degradeReason = keepPartialReply ? 'reply_ended' : 'user_stopped'
     entry.sources = undefined
+    entry.citations = undefined
     entry.suggestedQuestions = undefined
     entry.networkUsed = false
     entry.agentTraceSummary = undefined
@@ -875,6 +880,13 @@ onBeforeUnmount(() => {
         <p v-if="entry.degraded" class="meta-line">降级说明：{{ entry.degradeReason || '受控降级' }}</p>
         <p v-if="entry.agentTraceSummary" class="meta-line">{{ entry.agentTraceSummary }}</p>
         <p v-if="entry.networkUsed" class="meta-line">含外部参考 · 需人工确认，不作诊断</p>
+        <AssistantEvidencePanel
+          v-if="entry.role === 'assistant' && entry.content"
+          :citations="entry.citations"
+          :sources="entry.sources"
+          :degraded="entry.degraded"
+          :degrade-reason="entry.degradeReason"
+        />
         <div v-if="entry.role === 'assistant' && entry.content" class="bubble-actions">
           <button
             v-if="sending && index === history.length - 1"
