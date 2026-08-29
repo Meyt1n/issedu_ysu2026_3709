@@ -170,7 +170,9 @@ async function installSyntheticApi(page: Page, terminal: 'failed' | 'succeeded')
 async function enterFamilySpace(page: Page): Promise<void> {
   await page.goto('/')
   await expect(page.getByRole('button', { name: '进入家庭空间' })).toBeVisible({ timeout: 20_000 })
-  await page.getByLabel('开发身份标识').fill('owner-1')
+  // The welcome page label differs slightly between development builds; both
+  // labels refer to the same local identity field.
+  await page.getByLabel(/(?:开发|调试)身份标识/).fill('owner-1')
   await page.getByRole('button', { name: '进入家庭空间' }).click()
   await expect(page.locator('.app-frame')).toBeVisible({ timeout: 20_000 })
 }
@@ -183,7 +185,7 @@ async function createSyntheticTask(page: Page): Promise<void> {
   await expect(page.getByText(/本地识别任务已创建/)).toBeVisible()
 }
 
-test('失败任务显示结构化原因并支持原地重新处理', async ({ page }) => {
+test('HCT-489 失败任务显示人话原因并支持原地重新处理', async ({ page }) => {
   const { calls } = await installSyntheticApi(page, 'failed')
   await enterFamilySpace(page)
   await page.getByRole('button', { name: '视觉扫描' }).click()
@@ -191,9 +193,11 @@ test('失败任务显示结构化原因并支持原地重新处理', async ({ pa
 
   const taskCard = page.locator('section.card').filter({ hasText: '本机创建的识别任务' }).last()
   await taskCard.getByRole('button', { name: '刷新' }).click()
-  await expect(taskCard).toContainText('MODEL_INFERENCE_ERROR')
-  await expect(taskCard).toContainText('synthetic worker crashed')
-  await expect(taskCard).toContainText('请确认 worker 正常运行后重新处理')
+  await expect(taskCard).toContainText('识别没有完成')
+  await expect(taskCard).toContainText('这次识别过程中遇到了问题')
+  await expect(taskCard).toContainText('请确认本地服务正常后点击“重新处理”')
+  await expect(taskCard).not.toContainText('MODEL_INFERENCE_ERROR')
+  await expect(taskCard).not.toContainText('synthetic worker crashed')
   await taskCard.getByRole('button', { name: '重新处理' }).click()
   await expect(page.getByText('任务已重新排队')).toBeVisible()
   expect(calls.filter(call => call.includes('/vision-tasks/vision-1/retry'))).toHaveLength(1)

@@ -17,6 +17,7 @@ import { askConfirm } from '../ui/confirm'
 import { formatDateTime, fusionStatusLabel, visionStatusLabel } from '../ui/labels'
 import VisionQualityPanel from '../vision/VisionQualityPanel.vue'
 import VisionResultViewer from '../components/VisionResultViewer.vue'
+import { visionErrorMessage, visionErrorNextAction, visionErrorTitle } from '../vision/visionReasons'
 import { setView } from '../store'
 
 const tasks = ref<VisionTask[]>([])
@@ -259,8 +260,8 @@ onBeforeUnmount(() => {
         <div v-if="task.error_detail" class="notice error vision-task-error" style="margin: 0">
           <AppIcon name="alert" :size="15" />
           <div>
-            <strong>{{ task.error_detail.code }}</strong>：{{ task.error_detail.message }}
-            <p class="row-meta" style="margin: 3px 0 0">下一步：{{ task.error_detail.next_action }}</p>
+            <strong>{{ visionErrorTitle(task.error_detail.code) }}</strong>：{{ visionErrorMessage(task.error_detail) }}
+            <p class="row-meta" style="margin: 3px 0 0">下一步：{{ visionErrorNextAction(task.error_detail) }}</p>
           </div>
           <button
             v-if="task.error_detail.retryable"
@@ -273,7 +274,7 @@ onBeforeUnmount(() => {
           </button>
         </div>
         <p v-else-if="task.status === 'failed' || task.status === 'timeout'" class="notice error" style="margin: 0">
-          任务失败但服务端未返回结构化原因，请保留任务编号 {{ task.id.slice(0, 8) }}… 并联系维护者。
+          识别没有完成，健康记录没有被修改。请保持药盒正面、完整入框并重新拍摄；如仍失败，请让家人检查本地服务（任务 {{ task.id.slice(0, 8) }}…）。
         </p>
         <template v-if="task.status === 'succeeded' && task.result">
           <div class="capability-chips">

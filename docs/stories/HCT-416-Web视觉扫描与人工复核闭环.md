@@ -2,7 +2,7 @@
 
 - Issue：[ #256 ](https://github.com/Meyt1n/issedu_ysu2026_3709/issues/256)
 - 绑定：FR-03、NFR-03、NFR-04、NFR-07
-- 状态：进行中；PR 合并前保持进行中，维护者 merge 代表最终人工复核
+- 状态：已合并；网页扫描、原地重处理和人工复核交接已有自动化证据，真实账号/摄像头验收仍按 R3 保留
 - 风险：R2；不改变“候选不等于健康事实”的边界
 
 ## 目标
@@ -15,6 +15,7 @@
 - `POST /api/v1/vision-tasks/{task_id}/retry` 只允许 `failed`/`timeout`，原地重新排队，保留任务 ID、文件和成员范围，不创建第二个任务。
 - 扫描页展示结构化错误和重新处理按钮；任务从 queued/running 进入 succeeded 后自动进入人工复核中心。
 - 识别详情补充 YOLO、OCR、条码、主数据版本和主数据候选；页面持续标注结果为候选。
+- 家庭成员看到的是统一的人话失败原因、融合状态和下一步建议；不展示模型路径、worker 堆栈或内部错误码。
 - 人工复核成功后发出本地刷新事件，已打开的总览、风险、计划和健康图谱重新读取服务端最终状态。
 
 ## 验收条件
@@ -33,6 +34,9 @@ npm.cmd run check:web
 npm.cmd run build:web
 git diff --check
 ```
+
+HCT-489/HCT-490 的补充证据为 `src/web/src/vision/visionReasons.test.ts` 和
+`tests/browser/hct416-vision-review.spec.ts`；浏览器回归覆盖失败任务人话提示、原地重试、不重复创建任务及复核交接。
 
 ## 回滚
 

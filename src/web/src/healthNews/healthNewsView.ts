@@ -41,7 +41,7 @@ const STATUS_COPY: Record<string, { label: string; tone: HealthNewsTone; intro: 
   egress_blocked: {
     label: '出口已拦截',
     tone: 'warn',
-    intro: '目标站点未进入白名单，已降级为本地季节提醒。',
+    intro: '当前未联网抓取或显示实时新闻：目标站点未进入白名单，仅展示本地季节提醒。',
   },
   rate_limited: {
     label: '请求限速',

@@ -699,7 +699,7 @@ export async function restoreSessionFromCookie(): Promise<boolean> {
       },
       introspected.household_id ?? '',
     )
-    return state.status === 'ready' || state.status === 'empty'
+    return (state.status as SessionStatus) === 'ready' || (state.status as SessionStatus) === 'empty'
   } catch {
     clearSessionContext()
     return false

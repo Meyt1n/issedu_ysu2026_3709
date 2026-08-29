@@ -3,6 +3,14 @@ import { computed, ref } from 'vue'
 
 import type { NormalizedEvidence, VisionTask } from '../api/types'
 import AppIcon from './AppIcon.vue'
+import {
+  findingLabel,
+  fusionReasonLabel,
+  fusionStatusHint,
+  visionErrorMessage,
+  visionErrorNextAction,
+  visionErrorTitle,
+} from '../vision/visionReasons'
 
 const props = defineProps<{
   task: VisionTask
@@ -123,6 +131,10 @@ function onImageLoad(event: Event): void {
   const img = event.target as HTMLImageElement
   naturalWidth.value = img.naturalWidth
   naturalHeight.value = img.naturalHeight
+}
+
+function candidateReasonsLabel(reasons: string[]): string {
+  return reasons.map(reason => fusionReasonLabel(reason)).join('、')
 }
 
 const FIELD_LABELS: Record<string, string> = {
@@ -308,19 +320,28 @@ const FIELD_LABELS: Record<string, string> = {
               :key="finding.code"
               class="pill"
               :class="finding.severity === 'CONFLICT' ? 'rose' : finding.severity === 'REVIEW' ? 'gold' : 'sage'"
-              :title="finding.detail"
+              :title="finding.detail || findingLabel(finding.code)"
             >
-              {{ finding.code }}
+              {{ findingLabel(finding.code) }}
             </span>
           </div>
         </template>
+
+        <div
+          v-if="task.result.fusion_readiness !== 'READY_FOR_FUSION'"
+          class="notice warn"
+          role="status"
+          style="display: block; margin-top: 10px"
+        >
+          <strong>{{ fusionStatusHint(task.result.fusion_readiness) }}</strong>
+        </div>
 
         <template v-if="masterCandidates.length > 0">
           <p class="eyebrow" style="margin: 10px 0 0">主数据核对</p>
           <ul class="evidence-chain-list">
             <li v-for="candidate in masterCandidates" :key="candidate.record_id">
               <strong>{{ candidate.record_id }}</strong>
-              <span>{{ candidate.reasons.join('、') }}</span>
+              <span>{{ candidateReasonsLabel(candidate.reasons) }}</span>
             </li>
           </ul>
         </template>
@@ -342,8 +363,14 @@ const FIELD_LABELS: Record<string, string> = {
 
       <div v-else class="section-stack" style="gap: 8px">
         <p class="eyebrow" style="margin: 0">任务状态</p>
-        <span class="rail-line text-faint">
-          {{ task.error_message ? `${task.error_code}：${task.error_message}` : '该任务没有识别结果可展示。' }}
+        <div v-if="task.error_detail" class="notice error" role="status" style="display: block; margin: 0">
+          <strong>{{ visionErrorTitle(task.error_detail.code) }}</strong>：{{ visionErrorMessage(task.error_detail) }}
+          <span class="rail-line text-faint" style="display: block; margin-top: 4px">
+            下一步：{{ visionErrorNextAction(task.error_detail) }}
+          </span>
+        </div>
+        <span v-else class="rail-line text-faint">
+          该任务没有识别结果可展示，请重新拍摄清晰的药盒正面照片后重试。
         </span>
       </div>
     </div>
