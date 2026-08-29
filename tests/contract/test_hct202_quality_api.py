@@ -86,6 +86,62 @@ def test_quality_api_retake_has_no_receipt(client) -> None:
     assert response.json()["quality_receipt"] is None
 
 
+def test_quality_api_persists_creator_scoped_provenance(client) -> None:
+    response = _check_quality(client, _encode_demo_image(), actor_id="record-owner")
+
+    assert response.status_code == 200
+    body = response.json()
+    record_id = body["quality_record_id"]
+    assert record_id
+
+    record = client.get(
+        f"/api/v1/vision-quality/records/{record_id}",
+        headers={"X-Actor-ID": "record-owner"},
+    )
+
+    assert record.status_code == 200
+    record_body = record.json()
+    assert record_body["id"] == record_id
+    assert record_body["actor_id"] == "record-owner"
+    assert record_body["input_digest"] == body["source"]["sha256"]
+    assert record_body["media_type"] == "image"
+    assert record_body["decision"] == "PASS"
+    assert record_body["allow_downstream"] is True
+    assert "quality_receipt" not in record_body
+    assert "source" not in record_body
+    assert "path" not in str(record_body).lower()
+
+
+def test_quality_api_persists_retake_without_receipt(client) -> None:
+    response = _check_quality(client, _encode_demo_image(dark=True), actor_id="retake-owner")
+
+    assert response.status_code == 200
+    body = response.json()
+    record = client.get(
+        f"/api/v1/vision-quality/records/{body['quality_record_id']}",
+        headers={"X-Actor-ID": "retake-owner"},
+    )
+
+    assert record.status_code == 200
+    record_body = record.json()
+    assert record_body["decision"] == "RETAKE"
+    assert record_body["allow_downstream"] is False
+    assert "quality_receipt" not in record_body
+
+
+def test_quality_api_record_cannot_be_read_by_another_actor(client) -> None:
+    response = _check_quality(client, _encode_demo_image(), actor_id="record-owner")
+    record_id = response.json()["quality_record_id"]
+
+    forbidden = client.get(
+        f"/api/v1/vision-quality/records/{record_id}",
+        headers={"X-Actor-ID": "different-owner"},
+    )
+
+    assert forbidden.status_code == 404
+    assert forbidden.json() == {"detail": "VISION_QUALITY_RECORD_NOT_FOUND"}
+
+
 def test_quality_api_advisory_demo_mode_allows_diagnostic_retake(client, monkeypatch) -> None:
     monkeypatch.setattr("app.routes.settings.vision_quality_enforce_retake", False)
 

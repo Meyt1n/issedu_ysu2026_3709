@@ -365,6 +365,7 @@ export interface VisionQualityMetric {
 }
 
 export interface VisionQualityResponse {
+  quality_record_id?: string | null
   schema_version: string
   config_version: string
   media_type: 'image' | 'video'
