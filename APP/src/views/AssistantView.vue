@@ -462,11 +462,6 @@ async function beginWakeListening(): Promise<void> {
   ensureDictation().startWake(draft.value)
 }
 
-async function bootstrapVoice(): Promise<void> {
-  if (!speechInputSupported) return
-  await ensureDictation().tryAutoStart()
-}
-
 function toggleVoiceInput(): void {
   if (voiceMode.value === 'wake' || voiceMode.value === 'active') {
     stopVoiceInput()
@@ -875,7 +870,9 @@ watch(
 
 onMounted(() => {
   void loadMemberHotwords()
-  void bootstrapVoice()
+  // MOB-166：即使系统之前授予过麦克风权限，也必须由用户点按后才启动识别。
+  // 这样切回助手页不会在公共场合或后台意外占用麦克风。
+  if (speechInputSupported) needMicGesture.value = true
   document.addEventListener('visibilitychange', onVisibilityChange)
 })
 
@@ -895,7 +892,7 @@ onBeforeUnmount(() => {
         <p class="eyebrow">随身助手</p>
         <h1>语音提问</h1>
         <p class="lede">
-          进入本页后会自动尝试聆听；首次需点按允许麦克风，再说「{{ wakePhrase }}」。
+          点按下方按钮开启麦克风，再说「{{ wakePhrase }}」；离开页面或切到后台会立即停止聆听。
           说完静音后会倒计时自动发送；等待时可说「取消」「继续说」，或说「发送吧」立即发送。
         </p>
       </div>
@@ -1116,7 +1113,7 @@ onBeforeUnmount(() => {
           :disabled="sending || !speechInputSupported"
           :aria-pressed="listening"
           :aria-label="listening ? '停止语音唤醒' : voiceButtonLabel"
-          :title="speechInputSupported ? '进入页面自动聆听；首次需点按允许麦克风' : '当前不支持语音输入'"
+          :title="speechInputSupported ? '点按后才会开启麦克风；离开页面会停止聆听' : '当前不支持语音输入'"
           @click="toggleVoiceInput"
         >
           <AppIcon name="mic" :size="22" />
