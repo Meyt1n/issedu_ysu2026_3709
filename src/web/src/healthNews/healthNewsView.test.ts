@@ -30,6 +30,23 @@ describe('presentHealthNews', () => {
     expect(view.title).toContain('季节')
   })
 
+  it('does not imply online news when egress is blocked', () => {
+    const view = presentHealthNews({
+      ...base,
+      status: 'egress_blocked',
+      degraded_reason: 'allowlist_rejected',
+      fetched_at: '2026-08-25T04:00:00+00:00',
+    })
+
+    expect(view.statusLabel).toBe('出口已拦截')
+    expect(view.title).toContain('季节')
+    expect(view.intro).toContain('未联网')
+    expect(view.intro).toContain('本地季节提醒')
+    expect(view.showRemoteMeta).toBe(false)
+    expect(view.fetchedLabel).toContain('抓取于')
+    expect(view.degradedLabel).toContain('allowlist_rejected')
+  })
+
   it('shows remote fetch meta for whitelist cards', () => {
     const view = presentHealthNews({
       ...base,
