@@ -17,6 +17,7 @@
     "audit:android-security": "node scripts/audit-android-security.mjs",
     "serve:controlled-https": "node scripts/controlled-https-fixture.mjs",
     "seed:live": "node scripts/seed-live-demo.mjs",
+    "demo:ready": "node scripts/mobile-demo-ready.mjs",
     "verify:linkage": "node scripts/verify-web-linkage.mjs",
     "audit:pwa": "npm run build && node scripts/audit-pwa.mjs",
     "verify:controlled-release": "node scripts/verify-controlled-release.mjs",
