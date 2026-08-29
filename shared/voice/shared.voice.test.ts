@@ -269,6 +269,33 @@ describe('hotwords and chat session', () => {
     vi.unstubAllGlobals()
   })
 
+  it('persists message timestamps while accepting legacy entries without them', () => {
+    const store = new Map<string, string>()
+    vi.stubGlobal('sessionStorage', {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => { store.set(key, value) },
+      removeItem: (key: string) => { store.delete(key) },
+      clear: () => store.clear(),
+      key: (index: number) => [...store.keys()][index] ?? null,
+      get length() { return store.size },
+    })
+    const createdAt = Date.parse('2026-08-29T07:30:00.000Z')
+    saveChatSession('a1', 'h1', 'm1', [
+      { role: 'user', content: '带时间的消息', createdAt },
+      { role: 'assistant', content: '旧格式消息' },
+    ])
+    expect(loadChatSession('a1', 'h1', 'm1')).toEqual([
+      { role: 'user', content: '带时间的消息', createdAt },
+      { role: 'assistant', content: '旧格式消息' },
+    ])
+    const sessionKey = [...store.keys()][0]!
+    const legacy = JSON.parse(store.get(sessionKey)!) as Array<Record<string, unknown>>
+    delete legacy[0]!.createdAt
+    store.set(sessionKey, JSON.stringify(legacy))
+    expect(loadChatSession('a1', 'h1', 'm1')[0]?.createdAt).toBeUndefined()
+    vi.unstubAllGlobals()
+  })
+
   it('keeps multiple threads isolated and clears deleted history', () => {
     const store = new Map<string, string>()
     vi.stubGlobal('sessionStorage', {
