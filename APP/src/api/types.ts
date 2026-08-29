@@ -311,3 +311,41 @@ export interface AssistantResponse {
   evidence_preview?: EvidencePreview | null
   retrieval_cache_hit?: boolean
 }
+
+/** 知识分块（GET /api/v1/knowledge/documents/{id} 的 chunks 项）。 */
+export interface KnowledgeChunkResponse {
+  id: string
+  document_id: string
+  chunk_index: number
+  text: string
+  locator: string | null
+}
+
+/**
+ * 知识条目列表项（GET /api/v1/knowledge/documents）。
+ * 服务端只返回 active 且当前身份有权看到的条目，不含正文。
+ */
+export interface KnowledgeDocumentSummaryResponse {
+  id: string
+  title: string
+  source: string
+  license: string
+  version: string
+  content_hash: string
+  permission_scope: Record<string, unknown>
+  status: string
+  effective_from: string | null
+  effective_until: string | null
+  created_by: string
+  created_at: string
+}
+
+/**
+ * 知识条目只读详情（HCT-401）。
+ * 未授权与不存在都返回 404，服务端不区分，因此客户端也不得推断条目是否存在。
+ */
+export interface KnowledgeDocumentDetailResponse extends KnowledgeDocumentSummaryResponse {
+  content: string
+  chunk_count: number
+  chunks: KnowledgeChunkResponse[]
+}

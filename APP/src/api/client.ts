@@ -11,6 +11,8 @@ import type {
   HealthNewsResponse,
   HealthResponse,
   Household,
+  KnowledgeDocumentDetailResponse,
+  KnowledgeDocumentSummaryResponse,
   Member,
   RequestOptions,
   RiskDetailResponse,
@@ -205,6 +207,28 @@ export class ApiClient {
 
   listHouseholds(options?: RequestOptions): Promise<Household[]> {
     return this.request('/api/v1/households', undefined, options)
+  }
+
+  /**
+   * 知识条目只读列表（HCT-401）。服务端只返回已批准且当前身份有权看到的条目。
+   */
+  listKnowledgeDocuments(options?: RequestOptions): Promise<KnowledgeDocumentSummaryResponse[]> {
+    return this.request('/api/v1/knowledge/documents', undefined, options)
+  }
+
+  /**
+   * 知识条目只读详情（HCT-401）。APP 侧没有任何知识写入路径。
+   * 未授权与不存在都由服务端统一返回 404，调用方不得据此推断条目是否存在。
+   */
+  getKnowledgeDocument(
+    docId: string,
+    options?: RequestOptions,
+  ): Promise<KnowledgeDocumentDetailResponse> {
+    return this.request(
+      `/api/v1/knowledge/documents/${encodeURIComponent(docId)}`,
+      undefined,
+      options,
+    )
   }
 
   /**

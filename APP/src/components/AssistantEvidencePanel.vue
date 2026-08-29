@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
+import { RouterLink, type RouteLocationRaw } from 'vue-router'
 
 import type { AssistantCitation } from '@/api/types'
 import {
@@ -22,7 +23,6 @@ const props = withDefaults(defineProps<{
 
 const normalizedCitations = computed(() => uniqueAssistantCitations(props.citations))
 const extraSources = computed(() => extraAssistantSources(props.sources, normalizedCitations.value))
-const selectedCitation = ref<AssistantCitation | null>(null)
 const hasEvidenceDetails = computed(() =>
   props.degraded || normalizedCitations.value.length > 0 || extraSources.value.length > 0,
 )
@@ -42,12 +42,19 @@ function citationText(citation: AssistantCitation): string {
   return citation.text || '本次响应未返回片段正文，仅保留服务端核验过的引用标识。'
 }
 
-function openCitation(citation: AssistantCitation): void {
-  selectedCitation.value = citation
-}
-
-function closeCitation(): void {
-  selectedCitation.value = null
+/**
+ * 跳转到 MOB-162 的知识条目只读页，并带上引用分块与本次回答所用索引版本。
+ * 版本作为查询参数传下去，供详情页与服务端当前版本比对、发现版本二义。
+ */
+function citationRoute(citation: AssistantCitation): RouteLocationRaw {
+  return {
+    name: 'knowledge-document',
+    params: { docId: citation.document_id },
+    query: {
+      chunk: citation.chunk_id,
+      ...(citation.version ? { version: citation.version } : {}),
+    },
+  }
 }
 </script>
 
@@ -71,14 +78,13 @@ function closeCitation(): void {
           <p class="assistant-citation-text">{{ citationText(citation) }}</p>
           <p class="meta-line">版本 {{ citationVersion(citation) }} · 片段 {{ citation.chunk_id }}</p>
           <p v-if="citation.locator" class="meta-line assistant-citation-locator">定位：{{ citation.locator }}</p>
-          <button
-            type="button"
+          <RouterLink
             class="btn btn-secondary assistant-citation-detail"
-            :aria-label="`查看${assistantCitationTitle(citation)}的只读引用详情`"
-            @click="openCitation(citation)"
+            :to="citationRoute(citation)"
+            :aria-label="`打开${assistantCitationTitle(citation)}的只读条目详情并定位到被引用分块`"
           >
-            查看只读详情
-          </button>
+            查看条目详情
+          </RouterLink>
         </li>
       </ul>
 
@@ -90,36 +96,6 @@ function closeCitation(): void {
       </p>
     </div>
   </details>
-
-  <Teleport to="body">
-    <div
-      v-if="selectedCitation"
-      class="assistant-citation-backdrop"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="assistant-citation-detail-title"
-      @click.self="closeCitation"
-    >
-      <section class="assistant-citation-dialog">
-        <div class="assistant-citation-dialog-head">
-          <div>
-            <p class="eyebrow">只读引用详情</p>
-            <h2 id="assistant-citation-detail-title">{{ assistantCitationTitle(selectedCitation) }}</h2>
-          </div>
-          <button type="button" class="btn btn-secondary" @click="closeCitation">关闭</button>
-        </div>
-        <dl class="assistant-citation-detail-meta">
-          <div><dt>文档标识</dt><dd>{{ selectedCitation.document_id }}</dd></div>
-          <div><dt>索引版本</dt><dd>{{ citationVersion(selectedCitation) }}</dd></div>
-          <div><dt>引用分块</dt><dd>{{ selectedCitation.chunk_id }}</dd></div>
-          <div v-if="selectedCitation.locator"><dt>定位</dt><dd>{{ selectedCitation.locator }}</dd></div>
-        </dl>
-        <p class="eyebrow">原文片段</p>
-        <p class="assistant-citation-detail-text">{{ citationText(selectedCitation) }}</p>
-        <p class="meta-line">内容仅供本次回答核对，移动端不支持编辑或替换服务端引用。</p>
-      </section>
-    </div>
-  </Teleport>
 </template>
 
 <style scoped>
@@ -139,8 +115,7 @@ function closeCitation(): void {
   padding: 9px 11px;
 }
 .assistant-evidence-summary:focus-visible,
-.assistant-citation-detail:focus-visible,
-.assistant-citation-dialog button:focus-visible {
+.assistant-citation-detail:focus-visible {
   outline: 3px solid color-mix(in srgb, var(--accent) 58%, transparent);
   outline-offset: 2px;
 }
@@ -169,8 +144,7 @@ function closeCitation(): void {
   gap: 2px;
   min-width: 0;
 }
-.assistant-citation-text,
-.assistant-citation-detail-text {
+.assistant-citation-text {
   line-height: 1.6;
   margin: 0;
   overflow-wrap: anywhere;
@@ -185,47 +159,9 @@ function closeCitation(): void {
   line-height: 1.55;
   margin: 0;
 }
-.assistant-citation-backdrop {
-  align-items: center;
-  background: rgb(0 0 0 / 42%);
-  display: flex;
-  inset: 0;
-  justify-content: center;
-  padding: 16px;
-  position: fixed;
-  z-index: 20;
+@media (prefers-reduced-motion: reduce) {
+  .assistant-evidence { transition: none; }
 }
-.assistant-citation-dialog {
-  background: var(--surface);
-  border: 1px solid color-mix(in srgb, var(--text) 14%, transparent);
-  border-radius: 16px;
-  display: grid;
-  gap: 12px;
-  max-height: min(84vh, 680px);
-  max-width: 620px;
-  overflow: auto;
-  padding: 18px;
-  width: min(100%, 620px);
-}
-.assistant-citation-dialog h2 { margin: 0; overflow-wrap: anywhere; }
-.assistant-citation-dialog-head {
-  align-items: flex-start;
-  display: flex;
-  gap: 12px;
-  justify-content: space-between;
-}
-.assistant-citation-detail-meta {
-  display: grid;
-  gap: 8px;
-  margin: 0;
-}
-.assistant-citation-detail-meta div {
-  display: grid;
-  gap: 2px;
-}
-.assistant-citation-detail-meta dt { color: var(--muted); font-size: 0.86rem; }
-.assistant-citation-detail-meta dd { margin: 0; overflow-wrap: anywhere; }
-.assistant-citation-dialog .eyebrow { margin: 0; }
 @media (prefers-reduced-motion: reduce) {
   .assistant-citation-backdrop { transition: none; }
 }
