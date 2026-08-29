@@ -1113,7 +1113,7 @@ onBeforeUnmount(() => {
         家庭 {{ session.currentHouseholdId || '未选' }} · 成员 {{ session.currentMemberId || '未选' }}
         · 会话按身份/家庭/成员隔离（仅本标签页）
       </p>
-      <div v-if="liveMode" class="network-search">
+      <div class="network-search">
         <label class="network-toggle">
           <input
             v-model="allowNetworkSearch"
@@ -1134,7 +1134,8 @@ onBeforeUnmount(() => {
         <details class="network-scope">
           <summary class="network-scope-summary">出网范围说明</summary>
           <ul class="network-scope-list">
-            <li>会出网：这一轮里被服务端判定需要外部参考的检索词。</li>
+            <li v-if="liveMode">会出网：这一轮里被服务端判定需要外部参考的检索词。</li>
+            <li v-else>演示模式不会出网；切换联机且服务端开放能力后，才会按本开关决定是否请求外部参考。</li>
             <li>不会出网：成员姓名、健康事件正文、用药记录、位置与家庭标识。</li>
             <li>默认关闭。关掉后立即只用本地知识，不保留任何隐式授权。</li>
             <li>联网结果只作参考，需人工确认，不构成诊断、处方或剂量建议。</li>
