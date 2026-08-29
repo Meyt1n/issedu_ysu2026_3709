@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { CareTask } from '@/data/types'
 
-import { ReminderScheduler, type ReminderPlatform } from './reminderScheduler'
+import { ReminderScheduler, REMINDER_CHANNEL, REMINDER_CHANNEL_ID, toNativeReminder, type ReminderPlatform } from './reminderScheduler'
 
 function task(overrides: Partial<CareTask> = {}): CareTask {
   return {
@@ -42,6 +42,28 @@ function platform(overrides: Partial<ReminderPlatform> = {}): ReminderPlatform &
 }
 
 describe('ReminderScheduler', () => {
+  it('使用私有计划提醒通道并固定脱敏通知载荷', () => {
+    const native = toNativeReminder({
+      id: 7,
+      at: new Date('2030-01-01T08:00:00.000Z'),
+      title: '家健镜提醒',
+      body: '请打开应用查看今日安排。',
+    })
+
+    expect(REMINDER_CHANNEL).toMatchObject({
+      id: REMINDER_CHANNEL_ID,
+      visibility: 0,
+      description: expect.not.stringMatching(/成员|药品|健康正文/),
+    })
+    expect(native).toMatchObject({
+      channelId: REMINDER_CHANNEL_ID,
+      extra: { hct_reminder: 'v1' },
+      isExactNotification: false,
+      schedule: { allowWhileIdle: true },
+    })
+    expect(native.body).toBe('请打开应用查看今日安排。')
+  })
+
   it('只调度有完整授权和版本证据的提醒，通知不含健康正文', async () => {
     const native = platform()
     const scheduler = new ReminderScheduler(native)
