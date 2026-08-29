@@ -31,6 +31,32 @@ export interface ReminderSyncResult {
 const TITLE = '家健镜提醒'
 const BODY = '请打开应用查看今日安排。'
 
+/**
+ * MOB-172：提醒必须走一个显式的私有通知通道。
+ * Android 的系统默认通道可能沿用设备的公开锁屏策略，无法证明锁屏
+ * 只显示脱敏占位；因此不再依赖插件的隐式默认通道。
+ */
+export const REMINDER_CHANNEL_ID = 'hct_reminder'
+export const REMINDER_CHANNEL = {
+  id: REMINDER_CHANNEL_ID,
+  name: '计划提醒',
+  description: '仅提示打开应用查看今日安排，不包含健康内容。',
+  importance: 3 as const,
+  visibility: 0 as const,
+  vibration: true,
+}
+
+/** Keep native notification mapping in one place so privacy fields stay testable. */
+export function toNativeReminder(notification: LocalReminder) {
+  return {
+    ...notification,
+    channelId: REMINDER_CHANNEL_ID,
+    schedule: { at: notification.at, allowWhileIdle: true },
+    isExactNotification: false,
+    extra: { hct_reminder: 'v1' },
+  }
+}
+
 function stableId(value: string): number {
   let hash = 2166136261
   for (let index = 0; index < value.length; index += 1) {
@@ -56,12 +82,12 @@ function remindersFor(task: CareTask): LocalReminder[] {
   const firstAt = new Date(policy.firstReminderAt)
   const reminders: LocalReminder[] = []
   if (firstAt.getTime() > Date.now()) {
-    reminders.push({ id: stableId(`${policy.deduplicationKey}:${policy.planVersion}:first`), at: firstAt, title: TITLE, body: BODY })
+    reminders.push({ id: stableId(`${REMINDER_CHANNEL_ID}:${policy.deduplicationKey}:${policy.planVersion}:first`), at: firstAt, title: TITLE, body: BODY })
   }
   if (policy.maxReminders === 2 && policy.repeatReminderAt) {
     const repeatAt = new Date(policy.repeatReminderAt)
     if (repeatAt.getTime() > Date.now()) {
-      reminders.push({ id: stableId(`${policy.deduplicationKey}:${policy.planVersion}:repeat`), at: repeatAt, title: TITLE, body: BODY })
+      reminders.push({ id: stableId(`${REMINDER_CHANNEL_ID}:${policy.deduplicationKey}:${policy.planVersion}:repeat`), at: repeatAt, title: TITLE, body: BODY })
     }
   }
   return reminders
@@ -133,19 +159,21 @@ export function createReminderPlatform(): ReminderPlatform {
   return {
     kind: 'android',
     async permission() {
-      const current = await LocalNotifications.checkPermissions()
-      if (current.display === 'granted') return 'granted'
-      const requested = await LocalNotifications.requestPermissions()
-      return requested.display === 'granted' ? 'granted' : 'denied'
+      try {
+        // Fail closed if the private channel cannot be created. Falling back to
+        // the plugin default could expose more than the approved lock-screen copy.
+        await LocalNotifications.createChannel(REMINDER_CHANNEL)
+        const current = await LocalNotifications.checkPermissions()
+        if (current.display === 'granted') return 'granted'
+        const requested = await LocalNotifications.requestPermissions()
+        return requested.display === 'granted' ? 'granted' : 'denied'
+      } catch {
+        return 'denied'
+      }
     },
     async schedule(notifications) {
       await LocalNotifications.schedule({
-        notifications: notifications.map(notification => ({
-          ...notification,
-          schedule: { at: notification.at, allowWhileIdle: true },
-          isExactNotification: false,
-          extra: { hct_reminder: 'v1' },
-        })),
+        notifications: notifications.map(toNativeReminder),
       })
     },
     async cancel(ids) {
