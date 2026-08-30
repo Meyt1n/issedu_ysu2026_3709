@@ -1,5 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 
+import { mockFormalSessionApi, submitFormalLogin } from './support/formalLogin'
+
 const household = {
   id: 'household-1',
   name: 'Synthetic household',
@@ -202,6 +204,7 @@ async function installSyntheticApi(page: Page): Promise<void> {
 
     return respond({ detail: `Unexpected synthetic request: ${request.method()} ${path}` }, 500)
   })
+  await mockFormalSessionApi(page)
 }
 
 function navItem(page: Page, label: string) {
@@ -214,9 +217,8 @@ function viewHeading(page: Page) {
 
 async function enterFamilySpace(page: Page): Promise<void> {
   await page.goto('/')
-  await expect(page.getByRole('button', { name: '进入家庭空间' })).toBeVisible({ timeout: 20_000 })
-  await page.getByLabel('开发身份标识').fill('owner-1')
-  await page.getByRole('button', { name: '进入家庭空间' }).click()
+  await expect(page.getByRole('button', { name: '登录家庭空间' })).toBeVisible({ timeout: 20_000 })
+  await submitFormalLogin(page, 'owner-1')
   await expect(page.locator('.app-frame')).toBeVisible({ timeout: 20_000 })
   await expect(navItem(page, '授权管理')).toBeVisible()
 }
@@ -397,12 +399,12 @@ test('家庭大屏使用脱敏聚合接口而非成员逐项汇总', async ({ pa
 
 test('本地 API 不可用时不进入家庭空间，也不渲染任何健康摘要', async ({ page }) => {
   await page.route('**/api/v1/households', route => route.abort('failed'))
+  await mockFormalSessionApi(page)
   await page.goto('/')
 
-  await page.getByLabel('开发身份标识').fill('owner-1')
-  await page.getByRole('button', { name: '进入家庭空间' }).click()
+  await submitFormalLogin(page, 'owner-1')
 
-  await expect(page.getByRole('alert')).toContainText('本地 API 服务不可用，本次没有改变任何数据。')
+  await expect(page.getByRole('alert')).toContainText('本地服务暂时连不上，本次没有改变任何数据。')
   await expect(page.locator('.app-frame')).toHaveCount(0)
   await expect(page.getByText('Synthetic member')).toHaveCount(0)
 })

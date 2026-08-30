@@ -21,69 +21,30 @@ async function installWelcomeApi(page: Page, capabilities: string[]): Promise<vo
   })
 }
 
-async function openSessionLogin(page: Page): Promise<void> {
-  await page.goto('/')
-  await page.getByRole('button', { name: '家庭账号登录' }).click()
+async function expectFormalOnlyLogin(page: Page): Promise<void> {
+  await expect(page.getByTestId('formal-login-method')).toContainText('正式账号密码登录')
+  await expect(page.getByLabel('正式账号', { exact: true })).toBeVisible()
+  await expect(page.getByLabel('密码', { exact: true })).toBeVisible()
+  await expect(page.locator('.face-family-summary')).toHaveCount(0)
+  await expect(page.locator('.face-capture')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /刷脸|人脸|数字密码|PIN/ })).toHaveCount(0)
 }
 
-test('账号密码与数字密码模式不显示本机人脸绑定提示', async ({ page }) => {
-  await installWelcomeApi(page, ['api'])
-  await openSessionLogin(page)
-
-  await page.getByRole('button', { name: '账号密码' }).click()
-  await expect(page.getByRole('textbox', { name: /本地账号/ })).toBeVisible()
-  await expect(page.locator('.face-family-summary')).toHaveCount(0)
-  await expect(page.getByText('本机还没有开启人脸登录')).toHaveCount(0)
-
-  await page.getByRole('button', { name: '数字密码' }).click()
-  await expect(page.getByRole('textbox', { name: /你的登录名/ })).toBeVisible()
-  await expect(page.locator('.face-family-summary')).toHaveCount(0)
-})
-
-test('人脸模式未绑定时显示简短引导并隐藏摄像头采集区', async ({ page }) => {
+test('HCT-498 即使本地人脸模型就绪，欢迎页也只保留正式账号密码登录', async ({ page }) => {
   await installWelcomeApi(page, ['api', 'face-recognition-local'])
-  await openSessionLogin(page)
-
-  await page.getByRole('button', { name: '刷脸进入' }).click()
-  await expect(page.getByText('本机还没有开启人脸登录')).toBeVisible()
-  await expect(page.getByText('先用账号密码进入，再到「人脸凭证」页绑定本机家庭。')).toBeVisible()
-  await expect(page.locator('.face-capture')).toHaveCount(0)
-
-  await page.getByRole('button', { name: '改用账号密码登录' }).click()
-  await expect(page.getByRole('textbox', { name: /本地账号/ })).toBeVisible()
-  await expect(page.locator('.face-family-summary')).toHaveCount(0)
+  await page.goto('/?portal=member')
+  await expectFormalOnlyLogin(page)
 })
 
-test('人脸模式已绑定时显示家庭名、不跨家说明和采集区', async ({ page }) => {
-  await installWelcomeApi(page, ['api', 'face-recognition-local'])
-  await page.addInitScript(
-    ([key, value]) => window.localStorage.setItem(key!, value!),
-    ['hct:face-family-household', JSON.stringify(boundHousehold)],
-  )
-  await openSessionLogin(page)
-
-  await expect(page.locator('.face-family-summary')).toContainText(boundHousehold.name)
-  await expect(page.getByText('只在这个家庭里认人，不会跨家搜索。')).toBeVisible()
-  await expect(page.getByText('本机已绑定这个家庭。点「刷脸进入」即可，也可以自动打开摄像头。')).toBeVisible()
-  await expect(page.getByRole('button', { name: '改用账号密码登录' })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: /^刷脸进入$/ })).toBeVisible()
-  await expect(page.locator('.face-capture')).toBeVisible()
-})
-
-test('另一个本地端口写入的同主机家庭绑定可用于成员端人脸登录', async ({ page }) => {
+test('历史本机家庭绑定不会重新暴露人脸登录入口', async ({ page }) => {
   await installWelcomeApi(page, ['api', 'face-recognition-local'])
   await page.addInitScript(
     ([key, value]) => {
-      window.localStorage.removeItem(key!)
+      window.localStorage.setItem(key!, value!)
       document.cookie = `hct-face-family-household=${encodeURIComponent(value!)}; Path=/; SameSite=Lax`
     },
     ['hct:face-family-household', JSON.stringify(boundHousehold)],
   )
-  await openSessionLogin(page)
-
-  await expect(page.locator('.face-family-summary')).toContainText(boundHousehold.name)
-  await expect(page.getByText('只在这个家庭里认人，不会跨家搜索。')).toBeVisible()
-  await expect(page.getByText('本机还没有开启人脸登录')).toHaveCount(0)
-  await expect(page.getByRole('button', { name: /^刷脸进入$/ })).toBeVisible()
-  await expect(page.locator('.face-capture')).toBeVisible()
+  await page.goto('/?portal=member')
+  await expectFormalOnlyLogin(page)
 })

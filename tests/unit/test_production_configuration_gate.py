@@ -28,8 +28,8 @@ def test_production_configuration_accepts_durable_face_challenges() -> None:
     assert settings.app_env == "production"
 
 
-def test_development_configuration_keeps_local_demo_defaults() -> None:
-    settings = Settings(app_env="development")
+def test_development_configuration_defaults_to_formal_authentication() -> None:
+    settings = Settings(app_env="development", _env_file=None)
 
-    assert settings.allow_dev_actor_header is True
+    assert settings.allow_dev_actor_header is False
     assert settings.egress_default_deny is True

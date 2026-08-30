@@ -24,13 +24,17 @@ from app.models import Base  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
-def _close_open_chat_in_tests(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep FR-08 evidence walls on in tests even though demos default open.
+def _set_explicit_test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep safety behaviour deterministic and opt legacy test identity in explicitly.
 
-    Individual tests may re-enable ``agent_open_chat`` with monkeypatch.
+    HCT-498 makes formal Bearer sessions the runtime default. Existing API
+    contract fixtures still use synthetic X-Actor-Id values as a test harness,
+    so the suite enables that legacy path here instead of relying on a runtime
+    default. Individual security tests can override either setting.
     """
     settings = get_settings()
     monkeypatch.setattr(settings, "agent_open_chat", False)
+    monkeypatch.setattr(settings, "allow_dev_actor_header", True)
 
 
 @pytest.fixture()

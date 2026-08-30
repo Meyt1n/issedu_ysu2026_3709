@@ -1,5 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 
+import { mockFormalSessionApi, submitFormalLogin } from './support/formalLogin'
+
 const household = {
   id: 'household-member-1',
   name: '爷爷奶奶家',
@@ -131,13 +133,13 @@ async function installMemberApi(page: Page): Promise<void> {
     }
     return respond({ detail: `Unexpected member portal request: ${request.method()} ${path}` }, 500)
   })
+  await mockFormalSessionApi(page)
 }
 
 test('家庭成员进入前台，只看到自己的照护入口和已确认记录', async ({ page }) => {
   await installMemberApi(page)
   await page.goto('/')
-  await page.getByLabel('开发身份标识').fill('grandma-account')
-  await page.getByRole('button', { name: '进入家庭空间' }).click()
+  await submitFormalLogin(page, 'grandma-account')
 
   await expect(page.locator('.app-frame')).toBeVisible()
   await expect(page.getByText('家庭成员', { exact: true })).toBeVisible()
@@ -213,8 +215,7 @@ test('识别失败时首页主按钮改为去重拍，快捷入口同步为重�
     })
   })
   await page.goto('/')
-  await page.getByLabel('开发身份标识').fill('grandma-account')
-  await page.getByRole('button', { name: '进入家庭空间' }).click()
+  await submitFormalLogin(page, 'grandma-account')
   await page.evaluate(() => {
     localStorage.setItem('hct-vision-tasks:grandma-account', JSON.stringify(['member-task-1']))
   })
@@ -351,14 +352,14 @@ async function installCaptureFlowApi(page: Page, state: CaptureFlowState): Promi
     }
     return respond({ detail: `Unexpected capture flow request: ${request.method()} ${path}` }, 500)
   })
+  await mockFormalSessionApi(page)
 }
 
 test('成员拍照提交后可见待确认状态，管理员确认后前台出现已确认记录', async ({ page }) => {
   const state: CaptureFlowState = { taskCreated: false, taskStatus: 'queued', adminConfirmed: false }
   await installCaptureFlowApi(page, state)
   await page.goto('/')
-  await page.getByLabel('开发身份标识').fill('grandma-account')
-  await page.getByRole('button', { name: '进入家庭空间' }).click()
+  await submitFormalLogin(page, 'grandma-account')
   await expect(page.locator('.app-frame')).toBeVisible()
 
   // 成员提交照片：检查照片 → 交给家人。

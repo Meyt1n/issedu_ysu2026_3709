@@ -12,7 +12,9 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8000
     log_level: str = "INFO"
-    allow_dev_actor_header: bool = True
+    # HCT-498: formal Bearer sessions are the default in every deployment.
+    # Tests or isolated diagnostics must opt into the legacy actor header explicitly.
+    allow_dev_actor_header: bool = False
     # HCT-453：成员前台（5173）与管理后台（5174）两个开发入口共用一个 API。
     cors_origins: str = "http://localhost:5173,http://localhost:5174"
     database_url: str = "sqlite+pysqlite:///./homecare-dev.sqlite3"

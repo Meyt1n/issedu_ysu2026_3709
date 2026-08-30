@@ -185,7 +185,6 @@ onBeforeUnmount(() => {
   </section>
 
   <VisionQualityPanel
-    :actor-id="session.actorId"
     :member-id="session.selectedMemberId || undefined"
     :access-purpose="session.accessPurpose"
     audience="admin"

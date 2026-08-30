@@ -72,7 +72,7 @@ interface VisionQueueApi {
 interface QueueVisionFileInput {
   file: File
   result: VisionQualityResponse
-  actorId: string
+  requestOptions: RequestOptions
   memberId?: string
   accessPurpose?: string
   idempotencyKey: string
@@ -90,7 +90,7 @@ export async function queuePassedVisionFile(
     throw new Error('MEMBER_REQUIRED')
   }
 
-  const requestOptions: RequestOptions = { actorId: input.actorId }
+  const requestOptions: RequestOptions = { ...input.requestOptions }
   if (input.accessPurpose) requestOptions.accessPurpose = input.accessPurpose
   const uploaded = await api.uploadFile(input.file, requestOptions)
   const cleanup = () => api

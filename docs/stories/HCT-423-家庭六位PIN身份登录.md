@@ -1,5 +1,7 @@
 # HCT-423 家庭六位 PIN 身份登录
 
+> 2026-08-29 后续决策：HCT-498 / ADR-0008 已从 Web 欢迎页移除 PIN 登录。PIN 后端契约、哈希数据与敏感操作二次确认能力继续保留，不作为正式 Web 主登录方式。
+
 - Issue：[#279](https://github.com/Meyt1n/issedu_ysu2026_3709/issues/279)
 - 父任务：[ #278](https://github.com/Meyt1n/issedu_ysu2026_3709/issues/278)
 - 状态：进行中
