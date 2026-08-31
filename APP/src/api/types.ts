@@ -259,6 +259,8 @@ export interface AssistantAgentTrace {
   agent_id: string
   role?: string
   status?: string
+  /** 服务端节点失败/降级时的机器可读原因（如 RATE_LIMITED、SEARCH_FAILED）。 */
+  reason_code?: string
   local?: boolean
   network_used?: boolean
   duration_ms?: number

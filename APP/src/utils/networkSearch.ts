@@ -1,4 +1,4 @@
-import type { AssistantExternalSource } from '@/api/types'
+import type { AssistantAgentTrace, AssistantExternalSource } from '@/api/types'
 
 /** 展示上限只影响移动端排版，不改变服务端实际使用的来源数量。 */
 export const MAX_EXTERNAL_DOMAINS = 8
@@ -51,4 +51,30 @@ export function resolveNetworkSearchForTurn(input: {
 }): boolean {
   if (input.localOnly === true) return false
   return input.available && input.userEnabled
+}
+
+/**
+ * 将服务端联网节点的降级原因转成可执行的移动端提示。
+ * 联网失败时服务端仍会返回本地回答，因此不能只依赖 HTTP 异常来提供重试入口。
+ */
+export function networkSearchFailureMessage(
+  traces?: AssistantAgentTrace[] | null,
+): string | null {
+  const trace = (traces ?? []).find(
+    item => item.agent_id === 'web_search' && item.status === 'degraded',
+  )
+  if (!trace) return null
+
+  switch (trace.reason_code) {
+    case 'RATE_LIMITED':
+      return '联网参考暂时限流，已生成本地回答；可以稍后重试，或仅用本地知识重试。'
+    case 'DEPLOYMENT_DISABLED':
+      return '当前部署未开放联网参考，已生成本地回答；可以仅用本地知识重试。'
+    case 'EGRESS_BLOCKED':
+      return '联网参考未通过出口安全校验，已生成本地回答；可以仅用本地知识重试。'
+    case 'SEARCH_FAILED':
+      return '联网参考暂时不可用（可能是超时或上游失败），已生成本地回答；可以稍后重试，或仅用本地知识重试。'
+    default:
+      return '联网参考未成功，已生成本地回答；可以稍后重试，或仅用本地知识重试。'
+  }
 }
