@@ -560,6 +560,13 @@ describe('formatError 区分真实失败原因（HCT-401 爬虫面板）', () =>
     expect(message).toContain('已被补偿更正')
     expect(message).not.toContain('其它位置被修改')
   })
+
+  it('409 ACCOUNT_EXISTS 明确引导回到正式账号登录', () => {
+    const message = formatError(new ApiClientError('ACCOUNT_EXISTS', { status: 409, code: 'HTTP_ERROR' }))
+    expect(message).toContain('正式账号已经存在')
+    expect(message).toContain('返回登录')
+    expect(message).not.toContain('其它位置被修改')
+  })
 })
 
 describe('formatError timeout vs unavailability (HCT-424)', () => {
