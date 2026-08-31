@@ -17,7 +17,7 @@ export interface StoredChatEntry {
   riskNotice?: string | null
 }
 
-/** 标签页内的对话线索（多轮会话列表项）；仅存 sessionStorage，不落后端。 */
+/** 本机对话线索（多轮会话列表项）；存 localStorage，不落后端。 */
 export interface ChatThreadMeta {
   id: string
   title: string
@@ -33,6 +33,12 @@ const SESSION_PREFIX = 'hct-assistant-session:v1:'
 const ASSISTANT_ID_PREFIX = 'hct-assistant-id:v1:'
 const THREADS_PREFIX = 'hct-assistant-threads:v1:'
 const ACTIVE_THREAD_PREFIX = 'hct-assistant-thread-active:v1:'
+const CHAT_STORAGE_PREFIXES = [
+  SESSION_PREFIX,
+  ASSISTANT_ID_PREFIX,
+  THREADS_PREFIX,
+  ACTIVE_THREAD_PREFIX,
+] as const
 
 export const DEFAULT_THREAD_ID = 'default'
 export const DEFAULT_THREAD_TITLE = '新对话'
@@ -67,12 +73,57 @@ function createAssistantSessionId(): string {
     ?? `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 18)}`
 }
 
-function storage(): Storage | null {
+function sessionStore(): Storage | null {
   try {
     return globalThis.sessionStorage ?? null
   } catch {
     return null
   }
+}
+
+function isChatStorageKey(key: string): boolean {
+  return CHAT_STORAGE_PREFIXES.some(prefix => key.startsWith(prefix))
+}
+
+/** 把旧版标签页会话迁到本机 localStorage，避免升级后刷新丢掉当前对话。 */
+function migrateSessionStorageToLocal(local: Storage): void {
+  const session = sessionStore()
+  if (!session || session === local) return
+  try {
+    const keys: string[] = []
+    for (let index = 0; index < session.length; index += 1) {
+      const key = session.key(index)
+      if (key && isChatStorageKey(key)) keys.push(key)
+    }
+    for (const key of keys) {
+      if (local.getItem(key) == null) {
+        const value = session.getItem(key)
+        if (value != null) {
+          try {
+            local.setItem(key, value)
+          } catch {
+            continue
+          }
+        }
+      }
+      session.removeItem(key)
+    }
+  } catch {
+    // Migration is best effort; new chats still persist to localStorage.
+  }
+}
+
+function storage(): Storage | null {
+  try {
+    const local = globalThis.localStorage ?? null
+    if (local) {
+      migrateSessionStorageToLocal(local)
+      return local
+    }
+  } catch {
+    // Private mode can block localStorage; keep this tab usable.
+  }
+  return sessionStore()
 }
 
 function isEntry(value: unknown): value is StoredChatEntry {
@@ -87,7 +138,7 @@ function safeEntries(value: unknown): StoredChatEntry[] {
   return value.filter(isEntry).slice(-MAX_ENTRIES)
 }
 
-/** Store only the current tab's assistant transcript; it never calls the API. */
+/** Store the assistant transcript on this device; it never calls the API. */
 export function loadChatSession(
   actorId: string,
   householdId: string,
@@ -304,12 +355,7 @@ export function clearChatSessionsForActor(actorId: string): void {
   if (!actorId) return
   const target = storage()
   if (!target) return
-  const prefixes = [
-    `${SESSION_PREFIX}${encodeURIComponent(actorId)}:`,
-    `${ASSISTANT_ID_PREFIX}${encodeURIComponent(actorId)}:`,
-    `${THREADS_PREFIX}${encodeURIComponent(actorId)}:`,
-    `${ACTIVE_THREAD_PREFIX}${encodeURIComponent(actorId)}:`,
-  ]
+  const prefixes = CHAT_STORAGE_PREFIXES.map(prefix => `${prefix}${encodeURIComponent(actorId)}:`)
   try {
     const keys: string[] = []
     for (let index = 0; index < target.length; index += 1) {
