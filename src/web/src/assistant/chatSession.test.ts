@@ -10,20 +10,39 @@ import {
   sessionEntryToStored,
 } from './chatSession'
 
-describe('assistant tab session storage', () => {
+function createMemoryStorage(): Storage {
+  const values = new Map<string, string>()
+  return {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      values.set(key, value)
+    },
+    removeItem: (key: string) => {
+      values.delete(key)
+    },
+    clear: () => values.clear(),
+    key: (index: number) => [...values.keys()][index] ?? null,
+    get length() {
+      return values.size
+    },
+  }
+}
+
+function installStorages(local = createMemoryStorage(), session = createMemoryStorage()) {
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: local,
+  })
+  Object.defineProperty(globalThis, 'sessionStorage', {
+    configurable: true,
+    value: session,
+  })
+  return { local, session }
+}
+
+describe('assistant local chat storage', () => {
   beforeEach(() => {
-    const values = new Map<string, string>()
-    Object.defineProperty(globalThis, 'sessionStorage', {
-      configurable: true,
-      value: {
-        getItem: (key: string) => values.get(key) ?? null,
-        setItem: (key: string, value: string) => values.set(key, value),
-        removeItem: (key: string) => values.delete(key),
-        clear: () => values.clear(),
-        key: (index: number) => [...values.keys()][index] ?? null,
-        get length() { return values.size },
-      },
-    })
+    installStorages()
   })
 
   it('round-trips only the current actor and scope', () => {
@@ -35,6 +54,12 @@ describe('assistant tab session storage', () => {
     expect(loadChatSession('parent-1', 'household-1', 'member-1')).toHaveLength(2)
     expect(loadChatSession('parent-2', 'household-1', 'member-1')).toEqual([])
     expect(loadChatSession('parent-1', 'household-2', 'member-1')).toEqual([])
+  })
+
+  it('keeps the transcript after a later load on the same device', () => {
+    saveChatSession('parent-1', 'household-1', 'member-1', [{ role: 'user', content: '还在吗' }])
+
+    expect(loadChatSession('parent-1', 'household-1', 'member-1')[0]?.content).toBe('还在吗')
   })
 
   it('clears the scoped transcript without touching another scope', () => {
@@ -93,5 +118,42 @@ describe('assistant tab session storage', () => {
 
     expect(loadChatSession('parent-1', 'household-1', 'member-1')[0]?.routeExplanation)
       .toBe('显式按用药安全路径检索。')
+  })
+
+  it('migrates a tab-only session into local storage once', () => {
+    const { local, session } = installStorages()
+    const key = 'hct-assistant-session:v1:parent-1:household-1:member-1'
+    session.setItem(key, JSON.stringify([{ role: 'user', content: '旧标签页对话' }]))
+
+    expect(loadChatSession('parent-1', 'household-1', 'member-1')[0]?.content).toBe('旧标签页对话')
+    expect(local.getItem(key)).toContain('旧标签页对话')
+    expect(session.getItem(key)).toBeNull()
+  })
+
+  it('does not overwrite existing local transcripts during migration', () => {
+    const { local, session } = installStorages()
+    const key = 'hct-assistant-session:v1:parent-1:household-1:member-1'
+    local.setItem(key, JSON.stringify([{ role: 'user', content: '本机已有' }]))
+    session.setItem(key, JSON.stringify([{ role: 'user', content: '过期标签页' }]))
+
+    expect(loadChatSession('parent-1', 'household-1', 'member-1')[0]?.content).toBe('本机已有')
+    expect(session.getItem(key)).toBeNull()
+  })
+
+  it('falls back to the tab store when local storage is blocked', () => {
+    const session = createMemoryStorage()
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      get() {
+        throw new Error('blocked')
+      },
+    })
+    Object.defineProperty(globalThis, 'sessionStorage', {
+      configurable: true,
+      value: session,
+    })
+
+    saveChatSession('parent-1', 'household-1', 'member-1', [{ role: 'user', content: '临时' }])
+    expect(loadChatSession('parent-1', 'household-1', 'member-1')[0]?.content).toBe('临时')
   })
 })

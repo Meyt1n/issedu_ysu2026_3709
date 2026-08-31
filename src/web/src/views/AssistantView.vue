@@ -1298,7 +1298,7 @@ onBeforeUnmount(() => {
       </ul>
       <p class="assistant-rail-note">
         <AppIcon name="lock" :size="12" />
-        对话只保存在当前标签页，退出登录即清除。
+        对话保存在这台电脑上，不上传；退出登录后清除。
       </p>
     </aside>
 

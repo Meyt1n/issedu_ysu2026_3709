@@ -24,6 +24,16 @@ describe('sidebar navigation uniqueness (HCT-447)', () => {
     expect(memberAssistant?.group).toBe('我的照护')
   })
 
+  it('gives face credentials a distinct icon from authorization and medication safety', () => {
+    const items = visibleNavItemsFor('admin', false)
+    const authorizations = items.find(item => item.view === 'authorizations')
+    const credentials = items.find(item => item.view === 'face-credentials')
+    const risks = items.find(item => item.view === 'risks')
+    expect(credentials?.icon).toBe('lock')
+    expect(credentials?.icon).not.toBe(authorizations?.icon)
+    expect(credentials?.icon).not.toBe(risks?.icon)
+  })
+
   it.each([
     ['admin', true],
     ['admin', false],
