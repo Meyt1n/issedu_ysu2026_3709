@@ -85,7 +85,7 @@ function bindCurrentHouseholdToDevice(): void {
   const household = session.households.find(item => item.id === householdId)
   bindFaceHousehold(householdId, household?.name ?? '')
   boundFaceHouseholdId.value = householdId
-    pushToast('success', '本机人脸凭证家庭已绑定。该能力仅用于受控实验与历史凭证管理，不作为 Web 登录入口。')
+  pushToast('success', '本机人脸凭证家庭已绑定。成员前台可用已录入的人脸凭证刷脸登录；该能力仍属受控实验。')
 }
 
 function clearDeviceFaceHousehold(): void {
@@ -244,8 +244,8 @@ async function registerCredential(): Promise<void> {
     )
     const actorLabel = actorOptions.value.find(option => option.id === targetActorId)?.label ?? targetActorId
     registrationSuccess.value = wasRebind
-      ? `重新绑定成功：${actorLabel} 的人脸已更新。该凭证仅保留给受控实验和历史兼容，不作为 Web 登录入口。`
-      : `录入成功：${actorLabel} 的人脸已保存。该凭证仅保留给受控实验和历史兼容，不作为 Web 登录入口。`
+      ? `重新绑定成功：${actorLabel} 的人脸已更新。成员前台可用该凭证刷脸登录；该能力仍属受控实验。`
+      : `录入成功：${actorLabel} 的人脸已保存。成员前台可用该凭证刷脸登录；该能力仍属受控实验。`
     pushToast('success', registrationSuccess.value)
     resetForm()
     selectedActorId.value = targetActorId

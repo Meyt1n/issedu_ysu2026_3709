@@ -125,7 +125,7 @@ Copy-Item .env.example .env    # 若已有 .env，对照模板补项即可
 
 scripts/start.ps1 setup
 uv run python scripts/setup_vision_demo.py      # 教学主数据 demo-cn-en-v1
-uv run python scripts/ensure_face_models.py     # YuNet + SFace（历史人脸凭证实验能力，不作为 Web 登录入口）
+uv run python scripts/ensure_face_models.py     # YuNet + SFace（本地人脸凭证与成员前台刷脸登录，仍属实验能力）
 ```
 
 确认 Docker Desktop 已运行。若本机 **3307** 被其他容器占用（常见于其它 worktree 的 MySQL），先释放端口或改 `.env` 的 `MYSQL_PORT` 与 `DATABASE_URL` 保持一致。
@@ -176,7 +176,7 @@ EGRESS_WEATHER_WHITELIST=uapis.cn
 HEALTH_NEWS_ADAPTER=enabled
 HEALTH_NEWS_ALLOWED_DOMAINS=www.who.int,www.nhc.gov.cn,www.chinacdc.cn
 
-# ── 历史人脸凭证实验能力（不作为 Web 登录入口）──
+# ── 本地人脸凭证与成员前台刷脸登录（实验能力）──
 FACE_MODEL_DIR=./models/face
 FACE_MODEL_AUTO_DOWNLOAD=true
 BIOMETRIC_ENCRYPTION_KEY=dev-only-biometric-key-change-me
@@ -244,7 +244,7 @@ scripts/start.ps1 web-admin
 
 | 入口 | 地址 | 适用身份 |
 |---|---|---|
-| 成员前台 | http://127.0.0.1:5173 | 家庭成员：正式账号密码 |
+| 成员前台 | http://127.0.0.1:5173 | 家庭成员：正式账号密码、已配置 PIN/人脸；账号密码方式可注册 |
 | 管理后台 | http://127.0.0.1:5174 | 家庭管理员：正式账号密码（如 `demo-parent`） |
 | API | http://127.0.0.1:8000/docs | — |
 
@@ -301,7 +301,7 @@ watching queued tasks ... api=http://127.0.0.1:8000/api/v1
 | **external-web（夹具）** | `AGENT_WEB_SEARCH_PROVIDER=fixture` | 重启 API | `web_search_ready=true` 但 capabilities **无** `external-web`；徽标「教学夹具 · 不出网」 |
 | **开放演示助手** | `AGENT_OPEN_CHAT=true` | 重启 API | agents 中 `open_chat=true`；可问「今天几号」 |
 | **本地 LLM** | `OLLAMA_MODEL=<本机模型名>` | 本机 `ollama serve` + 重启 API | 助手真实回答，非结构化降级 |
-| **人脸凭证实验能力（非 Web 登录）** | `FACE_MODEL_*` | `ensure_face_models.py` | capabilities 含 `face-recognition-local` |
+| **本地人脸凭证与成员前台刷脸登录（实验能力）** | `FACE_MODEL_*` | `ensure_face_models.py` | capabilities 含 `face-recognition-local`，绑定后成员前台可刷脸 |
 | **天气行动卡** | `WEATHER_ADAPTER=enabled` + 白名单 | 重启 API | `GET /api/v1/weather/action-cards?city_code=130600` |
 | **健康资讯出网** | `HEALTH_NEWS_ADAPTER=enabled` + 域名白名单 | 重启 API | `GET /api/v1/health-news` → `status=ok` |
 | **知识爬虫** | `KNOWLEDGE_ADMIN_ACTORS`（可选） | 无需额外进程 | 知识文档页「一键教学闭环」；详见[联网搜索与知识库刷新启用指南](docs/demo/联网搜索与知识库刷新启用指南.md) |
@@ -389,7 +389,7 @@ curl http://localhost:8000/api/v1/meta/capabilities
 
 按 [路径 C：本机全功能演示栈](#路径-c本机全功能演示栈windowsstart-demops1) 配齐 `.env` 并启动 vision worker 后，`vision-inference`、`external-web`（真实 DuckDuckGo）、`face-recognition-local`、`master-data-teaching-demo` 等会进入 `available`。
 
-页面只提供正式账号密码登录；登录成功后所有业务请求使用短期 Bearer 会话，401 或到期会清空页面内的家庭、成员和健康上下文。账号通过受控 API/脚本预置，不在登录页自助注册。开发身份头默认关闭，且正式 Web 不提供开启入口。
+成员前台提供正式账号密码、已配置的数字密码（PIN）和人脸凭证三种正式登录方式，并可从账号密码方式注册本地账号；管理后台以正式账号密码为主。登录成功后所有业务请求使用短期 Bearer 会话，401 或到期会清空页面内的家庭、成员和健康上下文。开发身份头默认关闭，正式 Web 不提供开发 Actor ID 入口。
 
 ### 基础档默认可用（不需要额外配置）
 
@@ -417,8 +417,8 @@ uv run python -m app.care_plan_worker --loop
 
 | 功能 | 需要准备 | 关键 `.env` 项 | 如何验证 | 未配置时行为 |
 |---|---|---|---|---|
-| 正式账号密码登录 | 通过受控 API/脚本预置账号（演示可运行 `seed_formal_demo_health.py`） | `CURSOR_SIGNING_KEY`（生产必须换） | 两个入口都只显示正式账号、密码和用途；请求使用 Bearer 且无 `X-Actor-Id` | 未开户时登录失败，不回退开发身份 |
-| 人脸凭证实验能力（不作为 Web 登录入口） | 本地 YuNet+SFace ONNX 模型：`uv run python scripts/ensure_face_models.py` | `FACE_MODEL_DIR`、`FACE_MODEL_AUTO_DOWNLOAD`、`FACE_MATCH_THRESHOLD_SFACE`、`BIOMETRIC_ENCRYPTION_KEY` | capabilities 可出现 `face-recognition-local`；历史凭证管理和后端契约保留 | 欢迎页仍只显示账号密码 |
+| 正式账号密码登录与注册 | 通过受控 API/脚本预置账号（演示可运行 `seed_formal_demo_health.py`），也可从成员前台账号密码方式注册 | `CURSOR_SIGNING_KEY`（生产必须换） | 成员前台和管理后台均使用正式账号密码；成员前台还可切换 PIN/人脸；请求使用 Bearer 且无 `X-Actor-Id` | 未开户时登录失败，不回退开发身份 |
+| 本地人脸凭证与成员前台刷脸登录（实验能力） | 本地 YuNet+SFace ONNX 模型：`uv run python scripts/ensure_face_models.py` | `FACE_MODEL_DIR`、`FACE_MODEL_AUTO_DOWNLOAD`、`FACE_MATCH_THRESHOLD_SFACE`、`BIOMETRIC_ENCRYPTION_KEY` | capabilities 可出现 `face-recognition-local`；管理页录入加密凭证后，成员前台可刷脸进入 | 未准备模型或未绑定凭证时，成员前台保留账号密码/PIN 回退 |
 | 视觉识别闭环（OCR/条码/YOLO） | 独立 PaddleOCR Python + `scripts/vision_worker.py`（权重不进 Git） | `OCR_VERSION`（≠`unavailable` 时 capabilities 亮 `vision-inference`）、`VISION_ADAPTER_SIGNING_KEY`（= worker 的 `HCT_ADAPTER_SIGNING_KEY`）、`MASTER_DATA_APPROVED_VERSIONS` | 上传合成药盒后任务进入四态并转人工复核；worker 日志 `ocr:true` | 任务保持排队/降级，质量门控与人工复核仍可用 |
 | 教学演示主数据（HCT-201 教学路径） | `uv run python scripts/setup_vision_demo.py` 生成合成快照 | `MASTER_DATA_APPROVED_VERSIONS=demo-cn-en-v1` | capabilities 出现 `master-data-teaching-demo` | fail-closed 不加载；`hct201-formal-drug-set` 恒为 unavailable |
 | 本地助手真实生成（Ollama） | 本机 Ollama 及模型，或增强档容器（`$env:COMPOSE_PROFILE='enhanced'` 后 `up`，容器内仍需 `ollama pull`） | `OLLAMA_BASE_URL`、`OLLAMA_MODEL`；本地默认 `AGENT_OPEN_CHAT=true`（见 [助手开放演示模式](docs/助手开放演示模式.md)） | 助手页真实回答；开放模式下少被证据墙打断 | 结构化降级，档案/规则/知识链路不受影响 |
