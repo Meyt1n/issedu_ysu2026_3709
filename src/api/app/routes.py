@@ -3536,6 +3536,14 @@ def _crawl_config_missing_error(exc: FileNotFoundError) -> HTTPException:
     )
 
 
+def _crawl_config_invalid_error(exc: ValueError) -> HTTPException:
+    """Translate malformed allowlist JSON into an actionable 503."""
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="KNOWLEDGE_CRAWL_CONFIG_INVALID",
+    )
+
+
 @router.get("/knowledge/crawl/staging")
 def list_knowledge_staging(actor_id: str = Depends(get_actor_id)) -> dict:
     from app.knowledge_crawl import list_staging
@@ -3580,6 +3588,8 @@ def knowledge_crawl_status(actor_id: str = Depends(get_actor_id)) -> dict:
         return crawl_ops_status()
     except FileNotFoundError as exc:
         raise _crawl_config_missing_error(exc) from exc
+    except ValueError as exc:
+        raise _crawl_config_invalid_error(exc) from exc
 
 
 @router.post("/knowledge/crawl/simulate-update")
@@ -3600,6 +3610,8 @@ def simulate_knowledge_fixture_update(
         return simulate_fixture_update(actor_id=actor_id, reset=reset)
     except FileNotFoundError as exc:
         raise _crawl_config_missing_error(exc) from exc
+    except ValueError as exc:
+        raise _crawl_config_invalid_error(exc) from exc
 
 
 @router.post("/knowledge/crawl/run")
@@ -3615,6 +3627,8 @@ def run_knowledge_crawl(
         return run_crawl(live=False, due_only=due_only)
     except FileNotFoundError as exc:
         raise _crawl_config_missing_error(exc) from exc
+    except ValueError as exc:
+        raise _crawl_config_invalid_error(exc) from exc
 
 
 @router.post("/knowledge/crawl/staging/{source_id}/review")

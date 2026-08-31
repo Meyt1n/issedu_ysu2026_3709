@@ -13,7 +13,9 @@ import re
 from datetime import UTC, datetime
 from html.parser import HTMLParser
 from pathlib import Path
+from socket import timeout as SocketTimeout
 from typing import Any
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
@@ -33,6 +35,82 @@ STAGING_DISCLAIMER = (
     "staging 草稿仅供人工审核，不是正式检索证据；"
     "批准晋升并 dry-run 入库后才会参与本地 RAG 检索。"
 )
+
+# Error codes are part of the crawl report contract.  Keep messages actionable
+# for the knowledge page without exposing URLs, filesystem paths, or raw
+# urllib/HTML parser details to callers.
+_CRAWL_ERROR_COPY: dict[str, tuple[str, bool, str]] = {
+    "ALLOWLIST_INVALID": (
+        "知识爬虫白名单格式无效，请修复 allowlist.json 后重试。",
+        False,
+        "检查 docs/knowledge/crawl/allowlist.json",
+    ),
+    "FIXTURE_NOT_FOUND": (
+        "本地演示夹具缺失，请重新构建 API 镜像或补齐夹具文件。",
+        False,
+        "检查 docs/knowledge/crawl/fixtures",
+    ),
+    "HOST_MISSING": (
+        "来源地址缺少有效域名，请检查白名单配置。",
+        False,
+        "修正来源 URL",
+    ),
+    "HOST_NOT_ALLOWLISTED": (
+        "来源域名不在允许列表中，已阻止抓取。",
+        False,
+        "检查 policy.allowed_hosts",
+    ),
+    "HTTPS_ONLY": (
+        "远程来源必须使用 HTTPS，已阻止抓取。",
+        False,
+        "改用 HTTPS 来源",
+    ),
+    "LIVE_FETCH_DISABLED": (
+        "网页端仅支持本地夹具；远程来源请在受控终端使用 --live。",
+        False,
+        "使用 CLI --live",
+    ),
+    "SOURCE_DISABLED": (
+        "该远程来源尚未启用，请先完成白名单审核。",
+        False,
+        "将来源设为 enabled 后再用 CLI --live",
+    ),
+    "PAGE_TOO_LARGE": (
+        "来源页面超过抓取大小限制，未写入 staging。",
+        False,
+        "检查来源页面或抓取大小策略",
+    ),
+    "UPSTREAM_FORBIDDEN": (
+        "来源拒绝了抓取请求（403），请检查许可和访问策略。",
+        False,
+        "检查来源许可或稍后联系维护者",
+    ),
+    "UPSTREAM_RATE_LIMITED": (
+        "来源限制访问（429），请降低刷新频率后重试。",
+        True,
+        "稍后重试",
+    ),
+    "UPSTREAM_TIMEOUT": (
+        "来源响应超时，尚未生成新的 staging 草稿。",
+        True,
+        "稍后重试或检查远程站点",
+    ),
+    "UPSTREAM_UNAVAILABLE": (
+        "来源暂时不可用，尚未生成新的 staging 草稿。",
+        True,
+        "稍后重试并检查远程站点",
+    ),
+    "SOURCE_CONTENT_INVALID": (
+        "来源内容无法解析，请人工检查页面格式。",
+        False,
+        "检查来源返回内容",
+    ),
+    "CRAWL_FAILED": (
+        "来源抓取失败，请检查来源配置后重试。",
+        True,
+        "查看来源配置并重试",
+    ),
+}
 
 
 class _TextExtractor(HTMLParser):
@@ -65,6 +143,52 @@ class _TextExtractor(HTMLParser):
 
 def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _crawl_error_code(exc: BaseException) -> str:
+    """Map implementation exceptions to a stable, privacy-safe error code."""
+    if isinstance(exc, HTTPError):
+        if exc.code == 403:
+            return "UPSTREAM_FORBIDDEN"
+        if exc.code == 429:
+            return "UPSTREAM_RATE_LIMITED"
+        if exc.code >= 500:
+            return "UPSTREAM_UNAVAILABLE"
+        return "CRAWL_FAILED"
+    if isinstance(exc, (TimeoutError, SocketTimeout)):
+        return "UPSTREAM_TIMEOUT"
+    if isinstance(exc, URLError):
+        reason = exc.reason
+        if isinstance(reason, (TimeoutError, SocketTimeout)):
+            return "UPSTREAM_TIMEOUT"
+        return "UPSTREAM_UNAVAILABLE"
+    if isinstance(exc, FileNotFoundError):
+        if "FIXTURE_NOT_FOUND" in str(exc):
+            return "FIXTURE_NOT_FOUND"
+        return "ALLOWLIST_INVALID"
+    if isinstance(exc, UnicodeError):
+        return "SOURCE_CONTENT_INVALID"
+    if isinstance(exc, ValueError):
+        raw_code = str(exc).split(":", 1)[0]
+        if raw_code in _CRAWL_ERROR_COPY:
+            return raw_code
+        return "SOURCE_CONTENT_INVALID"
+    return "CRAWL_FAILED"
+
+
+def friendly_crawl_error(source_id: str, exc: BaseException) -> dict[str, Any]:
+    """Return the user-facing error shape used by CLI, API and future Web UI."""
+    code = _crawl_error_code(exc)
+    message, retryable, action = _CRAWL_ERROR_COPY[code]
+    return {
+        "source_id": source_id,
+        # Keep ``error`` as the legacy field consumed by existing summaries.
+        "error": code,
+        "code": code,
+        "message": message,
+        "retryable": retryable,
+        "action": action,
+    }
 
 
 def _relpath(path: Path) -> str:
@@ -314,13 +438,13 @@ def run_crawl(
         ]
 
     results: list[dict[str, Any]] = []
-    errors: list[dict[str, str]] = []
+    errors: list[dict[str, Any]] = []
     for source in selected:
         try:
             results.append(crawl_source(source, policy=policy, live=live, now=stamp))
         except Exception as exc:  # noqa: BLE001 — collect per-source failures
             logger.exception("knowledge crawl failed for %s", source.get("id"))
-            errors.append({"source_id": str(source.get("id")), "error": str(exc)})
+            errors.append(friendly_crawl_error(str(source.get("id")), exc))
 
     report = {
         "ok": not errors,

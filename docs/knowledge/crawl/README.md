@@ -50,6 +50,25 @@ uv run python scripts/crawl_knowledge_sources.py --live --due-only
 - Web：「知识文档」→「知识爬虫 / Staging」（含「一键教学闭环：抓取 → 批准 → 晋升」）
 - CI：`.github/workflows/knowledge-crawl-refresh.yml`（每周一 + 手动）
 
+## 失败原因与处理
+
+抓取报告的 `errors` 不返回原始异常、URL 或服务器路径，而是为每个来源提供稳定的
+`error`/`code`、人话 `message`、`retryable` 和下一步 `action` 字段。常见结果如下：
+
+| code | 含义 | 是否可重试 |
+|---|---|---|
+| `UPSTREAM_FORBIDDEN` | 来源返回 403，拒绝抓取 | 否，先检查许可和访问策略 |
+| `UPSTREAM_RATE_LIMITED` | 来源返回 429，触发限流 | 是，降低频率后重试 |
+| `UPSTREAM_TIMEOUT` | 来源响应超时 | 是，稍后重试或检查站点 |
+| `UPSTREAM_UNAVAILABLE` | 来源暂时不可用或网关错误 | 是，稍后重试 |
+| `PAGE_TOO_LARGE` | 页面超过大小策略 | 否，检查来源或策略 |
+| `FIXTURE_NOT_FOUND` | 本地夹具缺失 | 否，补齐夹具或重建镜像 |
+| `HOST_NOT_ALLOWLISTED` | 域名不在允许列表 | 否，修正白名单配置 |
+
+API 运行目录缺少白名单/夹具时，`/knowledge/crawl/status` 和 `/knowledge/crawl/run`
+返回 503 `KNOWLEDGE_CRAWL_CONFIG_MISSING`；白名单格式损坏时返回 503
+`KNOWLEDGE_CRAWL_CONFIG_INVALID`。两者都不会静默显示成“暂无草稿”。
+
 ## 查看抓取内容与已入库文档
 
 - **staging 草稿**：Web 端点击草稿标题或「查看」按钮，可看到抓取正文（Markdown 原文）、来源 URL、
