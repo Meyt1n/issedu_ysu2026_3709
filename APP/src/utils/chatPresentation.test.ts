@@ -15,6 +15,10 @@ afterEach(() => {
 })
 
 describe('chat presentation', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('formats today, yesterday, same-year and cross-year timestamps', () => {
     expect(formatChatTimestamp(new Date(2026, 7, 29, 8, 9).getTime(), reference)).toBe('今天 08:09')
     expect(formatChatTimestamp(new Date(2026, 7, 28, 20, 10).getTime(), reference)).toBe('昨天 20:10')

@@ -1579,7 +1579,9 @@ onBeforeUnmount(() => {
   min-height: 220px;
   max-height: min(52vh, 480px);
   overflow: auto;
-  padding: 10px;
+  /* 固定底部导航遮住 WebView 边缘时，最后一条消息仍可完整滚动到可视区域。 */
+  padding: 10px 10px calc(10px + var(--hct-bottom-clearance));
+  scroll-padding-bottom: calc(10px + var(--hct-bottom-clearance));
 }
 .empty-hint { color: var(--muted); margin: 0; line-height: 1.5; }
 .bubble {
