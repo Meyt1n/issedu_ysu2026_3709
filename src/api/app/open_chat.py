@@ -37,7 +37,8 @@ def local_clock_context(*, when: datetime | None = None) -> str:
     return (
         f"【本机时间】{local.strftime('%Y年%m月%d日')}（星期{weekday}）"
         f" {local.strftime('%H:%M')}，时区 {local.tzinfo}。"
-        "回答「今天几号/星期几」时请直接使用上述日期，不要说无法提供。"
+        "被问到「今天几号/星期几」时直接使用上述日期，不要说无法提供；"
+        "其它问题不要主动报日期或时间，那会让回答显得跑题。"
     )
 
 

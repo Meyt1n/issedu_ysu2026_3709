@@ -6,6 +6,7 @@ import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from ai.safety.lexicon import TEACHING_REMINDER
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
@@ -129,17 +130,25 @@ class TestParameterValidation:
 
 
 class TestMedicalSafety:
-    def test_diagnosis_keyword_blocked(self):
-        violations = _check_medical_boundary("建议诊断结果为高血压")
+    """The boundary list was narrowed to prescription blocks and commerce.
+
+    General medical explanation — what a symptom means, why to stop a drug,
+    when to see a doctor — is ordinary teaching content and is no longer
+    treated as a violation.  Individual dose numbers remain the hard limit and
+    are covered by the dose tests below.
+    """
+
+    def test_prescription_block_blocked(self):
+        violations = _check_medical_boundary("处方：阿莫西林 0.5g")
         assert len(violations) > 0
 
-    def test_prescription_keyword_blocked(self):
-        violations = _check_medical_boundary("建议处方：阿莫西林 0.5g")
-        assert len(violations) > 0
+    def test_commerce_solicitation_blocked(self):
+        assert _check_medical_boundary("点击购买同款降压药")
+        assert _check_medical_boundary("加我微信帮你开药")
 
-    def test_dosage_decision_blocked(self):
-        violations = _check_medical_boundary("你应当停药并换药")
-        assert len(violations) > 0
+    def test_general_medical_explanation_allowed(self):
+        assert _check_medical_boundary("血压持续偏高需要医生诊断后再决定治疗方案") == []
+        assert _check_medical_boundary("副作用明显时可以和医生讨论停药或换药") == []
 
     def test_external_link_detected(self):
         assert _contains_external_links("请访问 https://example.com") is True
@@ -536,7 +545,7 @@ def test_run_assistant_requires_live_tool_citations(
     assert result["route"] == "EVIDENCE_REQUIRED"
 
 
-def test_run_assistant_rejects_fabricated_sources(
+def test_run_assistant_drops_fabricated_sources_but_keeps_answer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def fabricated(_self: OllamaClient, **_kwargs: object) -> dict:
@@ -560,10 +569,14 @@ def test_run_assistant_rejects_fabricated_sources(
         messages=[{"role": "user", "content": "总结合成照护证据"}],
         actor_id="owner-a",
     )
-    assert result["degraded"] is True
-    assert result["degrade_reason"] == "CITATION_NOT_FOUND"
+    # A forged chunk id is dropped from the source list; the prose itself is
+    # still delivered instead of being replaced by a degrade wall.
+    assert result["degraded"] is False
+    assert result["degrade_reason"] is None
     assert result["citations"] == []
-    assert result["route"] == "EVIDENCE_REQUIRED"
+    assert result["sources"] == []
+    assert "forged-chunk" not in result["answer"]
+    assert result["answer"]
 
 
 def _add_confirmed_medication_fixture(
@@ -822,11 +835,46 @@ def test_dose_decision_refuses_before_model_call(monkeypatch: pytest.MonkeyPatch
     assert "医生或药师" in result["answer"]
     assert result["risk_notice"]
 
-def test_medical_boundary_blocks_stop_medication_synonyms() -> None:
+def test_stop_medication_advice_is_no_longer_blocked() -> None:
+    """Stop / switch discussion is answerable teaching content now."""
     from app.tool_call import _check_medical_boundary
 
-    assert _check_medical_boundary("建议你别再吃这个药")
-    assert _check_medical_boundary("可以停用阿莫西林")
+    assert _check_medical_boundary("如果副作用明显，可以先停用并联系医生") == []
+    assert _check_medical_boundary("换药这件事要由开药的医生决定") == []
+
+
+def test_dose_number_is_still_the_hard_limit() -> None:
+    """Only concrete individual dose quantities are stripped from answers."""
+    from ai.safety.lexicon import sanitize_answer_sentences
+
+    cleaned, reasons = sanitize_answer_sentences(
+        "布洛芬可以缓解发热带来的不适。每次吃两片就行。"
+    )
+    assert reasons == ["DOSE_NUMBER"]
+    assert "每次吃两片" not in cleaned
+    assert "缓解发热" in cleaned
+
+    kept, no_reasons = sanitize_answer_sentences(
+        "血压偏高需要医生诊断后再决定方案；副作用明显时可以和医生讨论停药。"
+    )
+    assert no_reasons == []
+    assert kept.startswith("血压偏高")
+
+
+def test_dose_filter_leaves_lifestyle_quantities_alone() -> None:
+    """Volume / package units are a dose only when medicine is in the sentence."""
+    from ai.safety.lexicon import output_dose_directive_hits, sanitize_answer_sentences
+
+    # Hydration and nutrition advice keeps its numbers.
+    assert output_dose_directive_hits("每天喝1500毫升水，少量多次。") == []
+    assert output_dose_directive_hits("每天喝2袋牛奶补充蛋白质。") == []
+    cleaned, reasons = sanitize_answer_sentences("每天喝1500毫升水，少量多次。")
+    assert reasons == []
+    assert "1500毫升" in cleaned
+
+    # The same shape is a dose once the sentence is about a drug.
+    assert output_dose_directive_hits("这个口服液每次喝10毫升。")
+    assert output_dose_directive_hits("每天吃3片布洛芬。")
 
 
 def test_health_assistant_output_rejects_placeholder_answer() -> None:
@@ -904,7 +952,10 @@ def test_medication_safety_requires_reviewed_knowledge_and_exposes_risk_notice(
     assert result["risk_notice"] and "医生或药师" in result["risk_notice"]
     assert result["sources"] == [chunk.id]
     assert result["citations"][0]["version"] == "approved-v1"
-    assert "教学提醒" in result["answer"]
+    # A medication-safety answer keeps the short one-line dosing reminder, but
+    # the old 【风险说明】 block is gone entirely.
+    assert "风险说明" not in result["answer"]
+    assert TEACHING_REMINDER in result["answer"]
 
 
 def test_symptom_medication_answers_from_knowledge_without_household_drugs(
@@ -1005,17 +1056,22 @@ def test_symptom_medication_answers_from_knowledge_without_household_drugs(
     assert result["degraded"] is False
     assert result["query_type"] == "SYMPTOM_MEDICATION"
     assert result["sources"] == [chunk.id]
-    assert "教学提醒" in result["answer"]
-    assert "青霉素" in result["answer"] or result["risk_notice"]
+    # A symptom-material answer is ordinary teaching content now: it keeps the
+    # model's own wording without a warning banner or appended boilerplate.
+    assert result["risk_notice"] is None
+    assert "风险说明" not in result["answer"]
+    assert "过敏" in result["answer"]
 
 
-def test_medication_safety_without_reviewed_knowledge_answers_with_risk_note(
+def test_medication_safety_without_reviewed_knowledge_still_answers(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Decision 2B: co-administration questions without reviewed knowledge are
-    answered (no EVIDENCE_REQUIRED wall) with an explicit low-evidence risk
-    statement appended by the server."""
+    """Co-administration questions without reviewed knowledge are answered.
+
+    Answering from general pharmacology is the normal case now, so no
+    low-evidence warning block is appended — only the side-channel notice
+    remains."""
     household, member, _events = _add_confirmed_medication_fixture(db_session)
 
     def scripted_chat(_self: OllamaClient, **kwargs: object) -> dict:
@@ -1061,10 +1117,9 @@ def test_medication_safety_without_reviewed_knowledge_answers_with_risk_note(
     assert result["degrade_reason"] is None
     assert result["query_type"] == "MEDICATION_SAFETY"
     assert result["sources"] == []
-    # 2B: the answer survives with the unified server-appended risk texts.
+    # The draft survives verbatim; no low-evidence block is stacked on it.
     assert "无法判断" in result["answer"]
-    assert "风险说明" in result["answer"]
-    assert "教学提醒" in result["answer"]
+    assert "风险说明" not in result["answer"]
     assert result["risk_notice"]
 
 
@@ -1120,19 +1175,19 @@ def test_symptom_medication_empty_library_answers_with_risk_note(
     assert result["degrade_reason"] is None
     assert result["escalate"] is False
     assert "鼻塞" in result["answer"]
-    assert "风险说明" in result["answer"]
-    assert "教学提醒" in result["answer"]
+    assert "风险说明" not in result["answer"]
     assert "缺少可核验的本地知识引用" not in result["answer"]
     assert result["suggested_questions"]
     assert result["citations"] == []
 
 
-def test_symptom_medication_uncited_answer_keeps_draft_with_risk_note(
+def test_symptom_medication_uncited_answer_is_delivered_verbatim(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Decision 2B: an uncited model draft for SYMPTOM_MEDICATION is kept and
-    delivered with the low-evidence risk statement — the reader can see it is
-    not evidence-backed instead of losing the whole answer."""
+    """An uncited SYMPTOM_MEDICATION draft is delivered as the model wrote it.
+
+    Uncited general knowledge is expected behaviour now, so the answer carries
+    neither a low-evidence block nor an appended reminder."""
 
     def scripted_chat(_self: OllamaClient, **kwargs: object) -> dict:
         return {
@@ -1156,5 +1211,5 @@ def test_symptom_medication_uncited_answer_keeps_draft_with_risk_note(
     assert result["degraded"] is False
     assert result["degrade_reason"] is None
     assert result["escalate"] is False
-    assert "风险说明" in result["answer"]
-    assert "教学提醒" in result["answer"]
+    assert result["answer"].strip() == "感冒了多喝热水，可以吃点常备药看看。"
+    assert result["risk_notice"] is None

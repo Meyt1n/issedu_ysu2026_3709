@@ -27,8 +27,11 @@ def test_symptom_gap_answer_is_topic_aware_for_diarrhea() -> None:
 
 def test_symptom_gap_answer_keeps_seasonal_for_generic_cold() -> None:
     answer = build_symptom_knowledge_gap_answer(user_text="我有点感冒")
-    # Generic cold may still use seasonal framing; must mention empty library.
-    assert "知识卡" in answer or "知识库" in answer
+    # This path runs only when the local model is unreachable, so the copy
+    # gives real care advice and says the model is offline instead of blaming
+    # an empty knowledge library.
+    assert "模型" in answer
+    assert any(token in answer for token in ("休息", "补水", "保暖"))
 
 
 def test_open_chat_raises_token_floor(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -91,8 +94,10 @@ def test_open_chat_skips_symptom_short_circuit(monkeypatch: pytest.MonkeyPatch) 
 def test_open_chat_no_longer_bypasses_safety_sanitisation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """8C: open-chat is experience-only — boundary sentences and dose numbers
-    are removed in open-chat mode too, and the risk notice is populated."""
+    """Open-chat is experience-only: the dose limit applies there too.
+
+    Stop / switch discussion now survives (it is teaching content), but a
+    concrete per-serving quantity is still stripped in every mode."""
     from app import local_agents
 
     settings = get_settings()
@@ -124,10 +129,11 @@ def test_open_chat_no_longer_bypasses_safety_sanitisation(
     )
 
     assert result["degraded"] is False
-    assert "建议你停药" not in result["answer"]
     assert "每次吃2片" not in result["answer"]
     assert "布洛芬可以缓解不适" in result["answer"]
-    assert "安全提示" in result["answer"]  # sentence-sanitiser footnote
+    # Stop / switch wording is no longer censored out of the draft.
+    assert "建议你停药" in result["answer"]
+    assert "已略去" in result["answer"]  # dose-sanitiser footnote
     assert result["risk_notice"], "open-chat must expose the risk notice too"
 
 
