@@ -64,6 +64,7 @@ import {
 } from '@/utils/assistantReply'
 import {
   collectExternalDomains,
+  networkSearchFailureMessage,
   networkSearchDisabledReason as resolveNetworkSearchDisabledReason,
   resolveNetworkSearchForTurn,
 } from '@/utils/networkSearch'
@@ -757,6 +758,18 @@ function applyAssistantReply(entryIndex: number, reply: AssistantResponse): void
   }
 }
 
+/**
+ * 服务端联网节点可能在 HTTP 成功后以 degraded trace 返回本地回答；
+ * 这条路径也必须保留原问题并提供本地重试入口（不能只处理网络异常）。
+ */
+function applyNetworkSearchFailure(reply: AssistantResponse, question: string, optedIn: boolean): void {
+  if (!optedIn) return
+  const message = networkSearchFailureMessage(reply.agent_trace)
+  if (!message) return
+  sendError.value = message
+  networkFallbackQuestion.value = question
+}
+
 /** 取消/结束回复的收尾：保留已显示内容并明确标记为不完整。 */
 function settleCancelledReply(entryIndex: number, streamingEntry: ChatEntry): void {
   const entry = history.value[entryIndex]
@@ -947,6 +960,7 @@ async function send(
         requestOpts,
       )
       applyAssistantReply(entryIndex, reply)
+      applyNetworkSearchFailure(reply, content, networkSearchForThisTurn)
     } catch (streamError) {
       if (controller.signal.aborted || streamCancelled || isAssistantCancellation(streamError)) {
         settleCancelledReply(entryIndex, streamingEntry)
@@ -964,6 +978,7 @@ async function send(
       }
       const reply = await client.assistantChat(chatInput, householdId, memberId, requestOpts)
       applyAssistantReply(entryIndex, reply)
+      applyNetworkSearchFailure(reply, content, networkSearchForThisTurn)
     }
   } catch (cause) {
     if (controller.signal.aborted || isAssistantCancellation(cause)) {
@@ -1564,7 +1579,9 @@ onBeforeUnmount(() => {
   min-height: 220px;
   max-height: min(52vh, 480px);
   overflow: auto;
-  padding: 10px;
+  /* 固定底部导航遮住 WebView 边缘时，最后一条消息仍可完整滚动到可视区域。 */
+  padding: 10px 10px calc(10px + var(--hct-bottom-clearance));
+  scroll-padding-bottom: calc(10px + var(--hct-bottom-clearance));
 }
 .empty-hint { color: var(--muted); margin: 0; line-height: 1.5; }
 .bubble {

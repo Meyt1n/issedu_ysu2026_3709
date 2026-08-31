@@ -83,8 +83,15 @@
   --deco-leaf: rgba(47, 109, 90, 0.16);
 }
 
-html[data-font-scale='large'] { --scale: 1.15; }
-html[data-font-scale='xlarge'] { --scale: 1.32; }
+html[data-font-scale='large'] {
+  --scale: 1.15;
+  --hct-bottom-clearance: 144px;
+}
+html[data-font-scale='xlarge'] {
+  --scale: 1.32;
+  /* 特大字号时标签栏会随文字增高；给可滚动页面保留完整触控和阅读空间。 */
+  --hct-bottom-clearance: 288px;
+}
 
 html[data-elder='on'] {
   --tap: 60px;

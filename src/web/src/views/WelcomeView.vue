@@ -7,7 +7,6 @@ import type { Household } from '../api/types'
 import AppIcon from '../components/AppIcon.vue'
 import FaceVideoCapture from '../components/FaceVideoCapture.vue'
 import {
-  connect,
   connectWithFamilyFace,
   connectWithPin,
   connectWithPassword,
@@ -20,7 +19,6 @@ import {
   refreshCapabilities,
   session,
 } from '../store'
-import { SHOW_DEV_LOGIN } from '../ui/featureFlags'
 import {
   activePortalEntryMode,
   crossPortalPortsHint,
@@ -55,18 +53,11 @@ const householdId = ref(initialBoundFaceHouseholdId)
 const boundFaceHouseholdName = ref(getBoundFaceHouseholdName())
 const pin = ref('')
 const faceFrames = ref<File[]>([])
-// 开发演示入口默认只在开发环境出现；本地教学 Compose 构建通过
-// VITE_SHOW_DEV_LOGIN=true 显式保留（与后端 ALLOW_DEV_ACTOR_HEADER 对齐）。
-const showDevelopmentEntry = SHOW_DEV_LOGIN
-
 // HCT-453：成员前台 / 管理后台分端口入口。auto 表示裸开发入口，
 // 保持原欢迎页；member/admin 使用各自品牌文案与凭据默认值。
 const entryMode = activePortalEntryMode()
 const entryBranding = portalEntryBranding(entryMode)
 
-const authMode = ref<'development' | 'session'>(
-  entryBranding ? 'session' : showDevelopmentEntry ? session.authMode : 'session',
-)
 const credentialMode = ref<'password' | 'pin' | 'face'>(
   entryBranding
     ? initialBoundFaceHouseholdId && entryBranding.credentialOrder[0] === 'face'
@@ -82,8 +73,7 @@ const CREDENTIAL_LABELS: Record<'face' | 'password' | 'pin', string> = {
   password: '账号密码',
   pin: '数字密码',
 }
-// 成员前台把账号密码收进「其他方式」：tab 只保留刷脸 / 数字密码，
-// 强调这是家人自己的个人前台，不是后台账号系统。
+// 正式账号密码、人脸和数字密码都走同一套正式会话；成员前台默认展示全部可用方式。
 const credentialTabs = computed(() =>
   (entryBranding?.credentialOrder ?? (['face', 'password', 'pin'] as const))
     .filter(mode => !(entryBranding?.passwordBehindOtherWays && mode === 'password'))
@@ -182,8 +172,8 @@ const canCreate = computed(
 )
 
 watch(
-  [actorId, accessPurpose, credentialMode, authMode],
-  ([nextActorId, nextAccessPurpose, nextCredentialMode, nextAuthMode]) => {
+  [actorId, accessPurpose, credentialMode],
+  ([nextActorId, nextAccessPurpose, nextCredentialMode]) => {
     if (householdsTimer) clearTimeout(householdsTimer)
     householdsRequest?.abort()
     householdsRequest = null
@@ -196,7 +186,7 @@ watch(
     pinIdentityPreview.value = ''
 
     // 人脸 tab 的绑定状态由 faceBinding 卡片展示；这里只为 PIN 登录加载家庭列表。
-    if (nextAuthMode !== 'session' || nextCredentialMode !== 'pin') return
+    if (nextCredentialMode !== 'pin') return
     const actor = nextActorId.trim()
     const purpose = nextAccessPurpose.trim()
     if (!actor || !purpose || !accessPurposeValid.value) return
@@ -283,16 +273,6 @@ onBeforeUnmount(() => {
 function announcePortalEntry(): void {
   if (session.status !== 'ready') return
   pushToast('success', portalWelcomeMessage())
-}
-
-async function submitConnect(): Promise<void> {
-  connecting.value = true
-  try {
-    await connect(actorId.value, accessPurpose.value)
-    announcePortalEntry()
-  } finally {
-    connecting.value = false
-  }
 }
 
 async function submitSession(): Promise<void> {
@@ -442,7 +422,7 @@ async function submitCreate(): Promise<void> {
       <section
         v-if="!showCreateForm"
         class="welcome-form-card"
-        :class="{ 'welcome-form-card--face': authMode === 'session' && credentialMode === 'face' }"
+        :class="{ 'welcome-form-card--face': credentialMode === 'face' }"
       >
         <span v-if="entryMode === 'member'" class="portal-mark member">
           <AppIcon name="members" :size="14" />
@@ -478,48 +458,13 @@ async function submitCreate(): Promise<void> {
             </ol>
           </div>
         </div>
-        <div class="segmented-control" role="group" aria-label="选择登录方式">
-          <button v-if="showDevelopmentEntry" type="button" :class="{ active: authMode === 'development' }" @click="authMode = 'development'">调试身份</button>
-          <button type="button" :class="{ active: authMode === 'session' }" @click="authMode = 'session'">家庭账号登录</button>
+        <p v-if="entryBranding" class="form-sub">登录信息只留在当前页面，关掉后需要重新登录；可按需要使用账号密码、人脸或数字密码。</p>
+        <p v-else class="form-sub">使用正式家庭账号登录。登录信息只留在当前页面，关掉后需要重新登录。</p>
+        <div class="notice" data-testid="formal-login-method" role="note">
+          <AppIcon name="lock" :size="16" />
+          <span><strong>正式账号密码登录</strong> · 也可按入口配置使用已启用的人脸或数字密码</span>
         </div>
-        <p v-if="authMode === 'development' && entryMode === 'member'" class="form-sub">
-          仅本机调试。请填<strong>家庭成员</strong>登录名（如 grandma-demo）；创建家庭的管理员会被引导去管理后台。
-        </p>
-        <p v-else-if="authMode === 'development'" class="form-sub">仅用于本机调试身份；不会建立正式会话。</p>
-        <p v-else-if="entryBranding" class="form-sub">登录信息只留在当前页面，关掉后需要重新登录。</p>
-        <p v-else class="form-sub">用家里的账号进入。登录信息只留在当前页面，关掉后需要重新登录。</p>
-        <form v-if="authMode === 'development'" class="section-stack" @submit.prevent="submitConnect">
-          <label v-if="authMode === 'development'" class="field">
-            调试身份标识
-            <input
-              v-model="actorId"
-              autocomplete="off"
-              :placeholder="entryMode === 'member' ? '例如 grandma-demo' : '例如 demo-parent'"
-              required
-            />
-          </label>
-          <label v-if="authMode === 'development'" class="field">
-            访问用途代码
-            <input
-              v-model="accessPurpose"
-              autocomplete="off"
-              placeholder="family-care"
-              aria-label="访问用途代码"
-              aria-describedby="purpose-format-hint"
-              :aria-invalid="accessPurpose.trim().length > 0 && !accessPurposeValid"
-            />
-            <small id="purpose-format-hint">照护者访问被授权数据时，需要与授权中登记的用途一致；格式为小写字母、数字和连字符。</small>
-          </label>
-          <p v-if="session.error && !session.entryConflict" class="notice error" role="alert">
-            <AppIcon name="alert" :size="16" />
-            {{ session.error }}
-          </p>
-          <button type="submit" class="btn btn-primary" :disabled="!canConnect">
-            {{ connecting ? '正在进入' : '进入家庭空间' }}
-            <AppIcon v-if="!connecting" name="arrow-right" :size="17" />
-          </button>
-        </form>
-        <form v-else class="section-stack" @submit.prevent="submitSession">
+        <form class="section-stack" @submit.prevent="submitSession">
           <div class="segmented-control" role="group" aria-label="选择账号登录凭据">
             <button
               v-for="tab in credentialTabs"
@@ -538,7 +483,7 @@ async function submitCreate(): Promise<void> {
             账号密码主要供管理员或特殊情况使用；家人日常推荐刷脸或数字密码。
           </p>
           <label v-if="credentialMode === 'password'" class="field">
-            本地账号
+            正式账号
             <input v-model="actorId" autocomplete="username" placeholder="例如 parent-1" required />
           </label>
           <label v-if="credentialMode === 'pin'" class="field">
@@ -625,7 +570,7 @@ async function submitCreate(): Promise<void> {
             <AppIcon name="check" :size="16" />
             正在识别，请稍等…
           </p>
-          <label v-if="authMode === 'development'" class="field">
+          <label class="field">
             访问用途代码
             <input
               v-model="accessPurpose"

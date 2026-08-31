@@ -85,7 +85,7 @@ function bindCurrentHouseholdToDevice(): void {
   const household = session.households.find(item => item.id === householdId)
   bindFaceHousehold(householdId, household?.name ?? '')
   boundFaceHouseholdId.value = householdId
-    pushToast('success', '本机人脸登录家庭已绑定。成员前台可直接刷脸进入；请确认家人已录入人脸。')
+  pushToast('success', '本机人脸凭证家庭已绑定。成员前台可用已录入的人脸凭证刷脸登录；该能力仍属受控实验。')
 }
 
 function clearDeviceFaceHousehold(): void {
@@ -244,8 +244,8 @@ async function registerCredential(): Promise<void> {
     )
     const actorLabel = actorOptions.value.find(option => option.id === targetActorId)?.label ?? targetActorId
     registrationSuccess.value = wasRebind
-      ? `重新绑定成功：${actorLabel} 的人脸已更新。请确认本机已绑定家庭，家人可在成员前台直接刷脸进入。`
-      : `录入成功：${actorLabel} 的人脸已保存。请确认本机已绑定家庭，家人可在成员前台直接刷脸进入。`
+      ? `重新绑定成功：${actorLabel} 的人脸已更新。成员前台可用该凭证刷脸登录；该能力仍属受控实验。`
+      : `录入成功：${actorLabel} 的人脸已保存。成员前台可用该凭证刷脸登录；该能力仍属受控实验。`
     pushToast('success', registrationSuccess.value)
     resetForm()
     selectedActorId.value = targetActorId
@@ -339,7 +339,7 @@ onMounted(() => {
       <section class="card">
         <div class="card-heading"><div><p class="eyebrow">明确同意与二次确认</p><h3 class="card-title">注册或重新绑定</h3></div></div>
         <p class="card-note">打开语音后按屏幕提示一步步拍摄，家人可在旁协助；画面只在本机处理，不上传照片。</p>
-        <p v-if="session.authMode !== 'session'" class="notice warn" role="status"><AppIcon name="lock" :size="16" /> 调试身份只能读取家庭数据；注册人脸凭证需要家庭账号登录。</p>
+        <p v-if="session.authMode !== 'session'" class="notice warn" role="status"><AppIcon name="lock" :size="16" /> 注册人脸凭证需要正式账号会话。</p>
         <form class="section-stack" @submit.prevent="registerCredential">
           <label class="field">家庭登录名<select v-model="selectedActorId" required><option v-for="option in actorOptions" :key="option.id" :value="option.id">{{ option.label }}</option></select></label>
           <FaceVideoCapture
@@ -405,7 +405,7 @@ onMounted(() => {
       <div class="section-stack">
         <section class="card">
           <div class="card-heading"><div><p class="eyebrow">本机登录范围</p><h3 class="card-title">绑定一个家庭</h3></div><AppIcon name="home" :size="20" style="color: var(--sky)" /></div>
-          <p class="card-note">人脸识别只在绑定家庭的成员中进行，不跨家庭搜索；绑定后欢迎页可直接识别成员进入对应账号。</p>
+          <p class="card-note">人脸识别只在绑定家庭的成员中进行，不跨家庭搜索；该能力仅保留给受控实验和历史兼容，欢迎页只提供正式账号密码登录。</p>
           <p class="notice" :class="boundFaceHouseholdId === session.selectedHouseholdId ? 'ok' : 'warn'" role="status">
             <AppIcon :name="boundFaceHouseholdId ? 'check' : 'info'" :size="16" />
             {{ boundFaceHouseholdId ? `当前绑定家庭：${boundFaceHouseholdLabel}` : '本机尚未绑定家庭' }}

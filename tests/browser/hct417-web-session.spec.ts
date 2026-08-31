@@ -1,5 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 
+import { submitFormalLogin } from './support/formalLogin'
+
 const household = {
   id: 'session-household',
   name: 'Synthetic session household',
@@ -20,8 +22,9 @@ async function installSessionApi(
   page: Page,
   expireDuringScope = false,
   expiresInMs = 1_800_000_000_000,
-): Promise<string[]> {
+): Promise<{ requests: string[]; businessHeaders: Array<Record<string, string>> }> {
   const requests: string[] = []
+  const businessHeaders: Array<Record<string, string>> = []
   let scopeRequestCount = 0
 
   await page.route('**/api/v1/**', async route => {
@@ -44,7 +47,10 @@ async function installSessionApi(
       })
     }
     if (request.method() === 'POST' && path === '/api/v1/auth/logout') return respond({ status: 'logged_out' })
-    if (request.method() === 'GET' && path === '/api/v1/households') return respond([household])
+    if (request.method() === 'GET' && path === '/api/v1/households') {
+      businessHeaders.push(request.headers())
+      return respond([household])
+    }
     if (request.method() === 'GET' && path.endsWith('/members')) {
       scopeRequestCount += 1
       if (expireDuringScope && scopeRequestCount === 1) return respond({ detail: 'AUTH_REQUIRED' }, 401)
@@ -79,19 +85,16 @@ async function installSessionApi(
     return respond([])
   })
 
-  return requests
+  return { requests, businessHeaders }
 }
 
 async function chooseFormalLogin(page: Page): Promise<void> {
   await page.goto('/')
-  await page.getByRole('button', { name: '家庭账号登录' }).click()
-  await page.getByLabel('本地账号').fill('session-owner')
-  await page.getByLabel('密码').fill('synthetic-password-123')
-  await page.getByRole('button', { name: '登录', exact: true }).click()
+  await submitFormalLogin(page, 'session-owner')
 }
 
 test('正式登录使用 Bearer 会话，登出后清空家庭界面', async ({ page }) => {
-  const requests = await installSessionApi(page)
+  const { requests, businessHeaders } = await installSessionApi(page)
   await chooseFormalLogin(page)
 
   await expect(page.locator('.app-frame')).toBeVisible()
@@ -99,10 +102,13 @@ test('正式登录使用 Bearer 会话，登出后清空家庭界面', async ({ 
   await page.getByRole('button', { name: '退出当前身份' }).click()
 
   await expect(page.locator('.app-frame')).toHaveCount(0)
-  await expect(page.getByRole('heading', { name: '进入家庭空间' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '正式账号登录' })).toBeVisible()
   expect(requests).toContain('POST /api/v1/auth/login')
   expect(requests).toContain('POST /api/v1/auth/logout')
-  expect(requests.some(path => path.includes('synthetic-password-123'))).toBe(false)
+  expect(requests.some(path => path.includes('password-123'))).toBe(false)
+  expect(businessHeaders.length).toBeGreaterThan(0)
+  expect(businessHeaders.every(headers => headers.authorization?.startsWith('Bearer '))).toBe(true)
+  expect(businessHeaders.every(headers => headers['x-actor-id'] === undefined)).toBe(true)
 })
 
 test('受保护请求返回 401 时清除会话和成员上下文', async ({ page }) => {
@@ -114,7 +120,7 @@ test('受保护请求返回 401 时清除会话和成员上下文', async ({ pag
   await expect(page.getByText('Synthetic session member')).toHaveCount(0)
 })
 
-test('姝ｅ紡浼氳瘽鍒版湡鍚庣綉椤佃嚜鍔ㄦ竻闄ゅ搴笂涓嬫枃', async ({ page }) => {
+test('正式会话到期后网页自动清除家庭上下文', async ({ page }) => {
   await installSessionApi(page, false, 1200)
   await chooseFormalLogin(page)
 

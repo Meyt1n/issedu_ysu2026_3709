@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   chatEntryAriaLabel,
@@ -10,7 +10,15 @@ import {
 
 const reference = new Date(2026, 7, 29, 15, 4, 0).getTime()
 
+afterEach(() => {
+  vi.useRealTimers()
+})
+
 describe('chat presentation', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('formats today, yesterday, same-year and cross-year timestamps', () => {
     expect(formatChatTimestamp(new Date(2026, 7, 29, 8, 9).getTime(), reference)).toBe('今天 08:09')
     expect(formatChatTimestamp(new Date(2026, 7, 28, 20, 10).getTime(), reference)).toBe('昨天 20:10')
@@ -25,6 +33,8 @@ describe('chat presentation', () => {
   })
 
   it('provides a speaker/content/time label for TalkBack', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(reference)
     const timestamp = new Date(2026, 7, 29, 8, 9).getTime()
     expect(chatEntryAriaLabel({ role: 'assistant', content: '请先确认计划', createdAt: timestamp }, reference))
       .toBe('助手：请先确认计划，今天 08:09')

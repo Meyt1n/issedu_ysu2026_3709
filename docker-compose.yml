@@ -31,7 +31,7 @@ services:
     profiles: ["basic", "enhanced", "dev"]
     environment:
       APP_ENV: ${APP_ENV:-development}
-      ALLOW_DEV_ACTOR_HEADER: ${ALLOW_DEV_ACTOR_HEADER:-true}
+      ALLOW_DEV_ACTOR_HEADER: ${ALLOW_DEV_ACTOR_HEADER:-false}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:5174}
       DEFAULT_HOUSEHOLD_TIME_ZONE: ${DEFAULT_HOUSEHOLD_TIME_ZONE:-UTC}
       DATABASE_URL: mysql+pymysql://${MYSQL_USER:-homecare}:${MYSQL_PASSWORD:-change-me}@db:3306/${MYSQL_DATABASE:-homecare}?charset=utf8mb4

@@ -38,14 +38,14 @@ scripts/start.ps1 health
 
 | 入口 | 地址 |
 |---|---|
-| 成员前台（家人：人脸 / PIN） | http://localhost:8080 |
-| 管理后台（管理员：账号密码） | http://localhost:8081 |
+| 成员前台（家人正式账号密码） | http://localhost:8080 |
+| 管理后台（管理员正式账号密码） | http://localhost:8081 |
 | API 健康检查 | http://localhost:8000/health |
 | OpenAPI | http://localhost:8000/docs |
 
-前台/后台是同一容器、同一构建产物的两个监听端口（HCT-453），共用同一个 API 和授权真相；账号与入口不匹配时会被登出并指引到另一入口。两个登录页外观明显不同（HCT-455）：成员前台是「我的健康日常」个人登录页，人脸/家庭 PIN 为主、账号密码收在「其他方式」里；管理后台保持管理员账号密码登录。
+前台/后台是同一容器、同一构建产物的两个监听端口（HCT-453），共用同一个 API、正式 Bearer 会话和同一授权真相；账号与入口不匹配时会被登出并指引到另一入口。两个登录页保留成员/管理员品牌差异，但不提供开发 Actor ID；成员前台恢复正式账号密码、已配置 PIN/人脸和注册入口，管理员仍以正式账号密码为主（HCT-498 修订）。
 
-开发身份：页面填写 Actor ID，或请求头 `X-Actor-ID`（仅 `ALLOW_DEV_ACTOR_HEADER=true` 时可用）。生产前必须换成真实认证。
+首次本地演示先运行 `uv run python scripts/seed_formal_demo_health.py`，再用正式演示账号 `demo-parent` 登录；脚本的教学默认密码为 `DemoOnly-ChangeMe!`，仅限本机虚构数据演示，共享/正式部署必须改为独立强密码。`ALLOW_DEV_ACTOR_HEADER` 缺省为 `false`，只有隔离 API 测试或诊断才可显式临时开启，Web 永不暴露该入口。
 
 端口冲突时改 `.env` 的 `API_PORT`、`WEB_PORT`、`ADMIN_WEB_PORT`、`MYSQL_PORT` 后重新 `up`。
 
@@ -97,7 +97,7 @@ scripts/start.ps1 web-admin
 1. 终端 1：`scripts/start.ps1 api`（或 `scripts/start.sh api`）
 2. 终端 2：`scripts/start.ps1 web-member`（**不要**只用 `web`；`web` 是调试单入口）
 3. 浏览器打开 http://127.0.0.1:5173（Compose 则用 http://localhost:8080）
-4. 用**家庭成员**账号登录（人脸 / 家庭 PIN；演示身份如 `grandma-demo` / `grandpa-demo`）
+4. 用已预置的**家庭成员正式账号密码**登录（演示账号如 `grandma-demo` / `grandpa-demo`，密码由受控开户脚本或管理员设置）
 5. **不要**用家庭管理员（创建家庭的人，如 `demo-parent`）进成员前台——会被入口锁登出并指引去管理后台 5174/8081
 
 本机代理固定走 `127.0.0.1`，避免 `localhost` 解析到 IPv6。多人联调可设 `HCT_API_PROXY`（后端）、`HCT_WEB_PORT`（前台端口）和 `HCT_ADMIN_WEB_PORT`（后台端口）。
@@ -125,7 +125,7 @@ Copy-Item .env.example .env    # 若已有 .env，对照模板补项即可
 
 scripts/start.ps1 setup
 uv run python scripts/setup_vision_demo.py      # 教学主数据 demo-cn-en-v1
-uv run python scripts/ensure_face_models.py     # YuNet + SFace（人脸登录）
+uv run python scripts/ensure_face_models.py     # YuNet + SFace（本地人脸凭证与成员前台刷脸登录，仍属实验能力）
 ```
 
 确认 Docker Desktop 已运行。若本机 **3307** 被其他容器占用（常见于其它 worktree 的 MySQL），先释放端口或改 `.env` 的 `MYSQL_PORT` 与 `DATABASE_URL` 保持一致。
@@ -136,7 +136,7 @@ uv run python scripts/ensure_face_models.py     # YuNet + SFace（人脸登录�
 
 ```dotenv
 # ── 基础 / 双入口（HCT-453）──
-ALLOW_DEV_ACTOR_HEADER=true
+ALLOW_DEV_ACTOR_HEADER=false
 CORS_ORIGINS=http://localhost:5173,http://localhost:5174,http://localhost:8080,http://localhost:8081
 MYSQL_PORT=3307
 DATABASE_URL=mysql+pymysql://homecare:change-me@127.0.0.1:3307/homecare?charset=utf8mb4
@@ -176,7 +176,7 @@ EGRESS_WEATHER_WHITELIST=uapis.cn
 HEALTH_NEWS_ADAPTER=enabled
 HEALTH_NEWS_ALLOWED_DOMAINS=www.who.int,www.nhc.gov.cn,www.chinacdc.cn
 
-# ── 人脸登录 ──
+# ── 本地人脸凭证与成员前台刷脸登录（实验能力）──
 FACE_MODEL_DIR=./models/face
 FACE_MODEL_AUTO_DOWNLOAD=true
 BIOMETRIC_ENCRYPTION_KEY=dev-only-biometric-key-change-me
@@ -244,8 +244,8 @@ scripts/start.ps1 web-admin
 
 | 入口 | 地址 | 适用身份 |
 |---|---|---|
-| 成员前台 | http://127.0.0.1:5173 | 家庭成员：人脸 / PIN（如 `grandma-demo`） |
-| 管理后台 | http://127.0.0.1:5174 | 家庭管理员：账号密码（如 `demo-parent`） |
+| 成员前台 | http://127.0.0.1:5173 | 家庭成员：正式账号密码、已配置 PIN/人脸；账号密码方式可注册 |
+| 管理后台 | http://127.0.0.1:5174 | 家庭管理员：正式账号密码（如 `demo-parent`） |
 | API | http://127.0.0.1:8000/docs | — |
 
 #### 停止
@@ -259,7 +259,11 @@ scripts/start.ps1 web-admin
 
 ```powershell
 curl.exe http://127.0.0.1:8000/api/v1/meta/capabilities
-curl.exe http://127.0.0.1:8000/api/v1/assistant/agents -H "X-Actor-ID: demo-parent"
+$login = Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/v1/auth/login `
+  -ContentType 'application/json' `
+  -Body (@{ actor_id = 'demo-parent'; password = 'DemoOnly-ChangeMe!' } | ConvertTo-Json)
+Invoke-RestMethod -Uri http://127.0.0.1:8000/api/v1/assistant/agents `
+  -Headers @{ Authorization = "Bearer $($login.session_token)" }
 ```
 
 全功能配置下，`available` 应包含（节选）：
@@ -297,7 +301,7 @@ watching queued tasks ... api=http://127.0.0.1:8000/api/v1
 | **external-web（夹具）** | `AGENT_WEB_SEARCH_PROVIDER=fixture` | 重启 API | `web_search_ready=true` 但 capabilities **无** `external-web`；徽标「教学夹具 · 不出网」 |
 | **开放演示助手** | `AGENT_OPEN_CHAT=true` | 重启 API | agents 中 `open_chat=true`；可问「今天几号」 |
 | **本地 LLM** | `OLLAMA_MODEL=<本机模型名>` | 本机 `ollama serve` + 重启 API | 助手真实回答，非结构化降级 |
-| **人脸登录** | `FACE_MODEL_*` | `ensure_face_models.py` | capabilities 含 `face-recognition-local` |
+| **本地人脸凭证与成员前台刷脸登录（实验能力）** | `FACE_MODEL_*` | `ensure_face_models.py` | capabilities 含 `face-recognition-local`，绑定后成员前台可刷脸 |
 | **天气行动卡** | `WEATHER_ADAPTER=enabled` + 白名单 | 重启 API | `GET /api/v1/weather/action-cards?city_code=130600` |
 | **健康资讯出网** | `HEALTH_NEWS_ADAPTER=enabled` + 域名白名单 | 重启 API | `GET /api/v1/health-news` → `status=ok` |
 | **知识爬虫** | `KNOWLEDGE_ADMIN_ACTORS`（可选） | 无需额外进程 | 知识文档页「一键教学闭环」；详见[联网搜索与知识库刷新启用指南](docs/demo/联网搜索与知识库刷新启用指南.md) |
@@ -385,7 +389,7 @@ curl http://localhost:8000/api/v1/meta/capabilities
 
 按 [路径 C：本机全功能演示栈](#路径-c本机全功能演示栈windowsstart-demops1) 配齐 `.env` 并启动 vision worker 后，`vision-inference`、`external-web`（真实 DuckDuckGo）、`face-recognition-local`、`master-data-teaching-demo` 等会进入 `available`。
 
-页面身份有两种：开发身份（欢迎页填 Actor ID，或请求头 `X-Actor-ID`，仅 `ALLOW_DEV_ACTOR_HEADER=true` 时可用）和正式账号会话（欢迎页「正式账号登录」注册密码/PIN/人脸）。演示用 `demo-` / `test-` 前缀身份；生产必须关闭开发身份头（`APP_ENV=production` 时配置校验会强制 fail-closed）。
+成员前台提供正式账号密码、已配置的数字密码（PIN）和人脸凭证三种正式登录方式，并可从账号密码方式注册本地账号；管理后台以正式账号密码为主。登录成功后所有业务请求使用短期 Bearer 会话，401 或到期会清空页面内的家庭、成员和健康上下文。开发身份头默认关闭，正式 Web 不提供开发 Actor ID 入口。
 
 ### 基础档默认可用（不需要额外配置）
 
@@ -413,14 +417,14 @@ uv run python -m app.care_plan_worker --loop
 
 | 功能 | 需要准备 | 关键 `.env` 项 | 如何验证 | 未配置时行为 |
 |---|---|---|---|---|
-| 正式账号 / PIN 登录 | 无（数据库会话已内置） | `CURSOR_SIGNING_KEY`（生产必须换） | 欢迎页「正式账号登录」注册后用密码或 PIN 登录 | 仍可用开发身份 |
-| 人脸登录与本机家庭绑定 | 本地 YuNet+SFace ONNX 模型：`uv run python scripts/ensure_face_models.py` | `FACE_MODEL_DIR`、`FACE_MODEL_AUTO_DOWNLOAD`、`FACE_MATCH_THRESHOLD_SFACE`、`BIOMETRIC_ENCRYPTION_KEY` | capabilities 出现 `face-recognition-local`；欢迎页人脸入口可用，本机家庭绑定卡仅人脸登录后显示 | 欢迎页提示改用 PIN/密码 |
+| 正式账号密码登录与注册 | 通过受控 API/脚本预置账号（演示可运行 `seed_formal_demo_health.py`），也可从成员前台账号密码方式注册 | `CURSOR_SIGNING_KEY`（生产必须换） | 成员前台和管理后台均使用正式账号密码；成员前台还可切换 PIN/人脸；请求使用 Bearer 且无 `X-Actor-Id` | 未开户时登录失败，不回退开发身份 |
+| 本地人脸凭证与成员前台刷脸登录（实验能力） | 本地 YuNet+SFace ONNX 模型：`uv run python scripts/ensure_face_models.py` | `FACE_MODEL_DIR`、`FACE_MODEL_AUTO_DOWNLOAD`、`FACE_MATCH_THRESHOLD_SFACE`、`BIOMETRIC_ENCRYPTION_KEY` | capabilities 可出现 `face-recognition-local`；管理页录入加密凭证后，成员前台可刷脸进入 | 未准备模型或未绑定凭证时，成员前台保留账号密码/PIN 回退 |
 | 视觉识别闭环（OCR/条码/YOLO） | 独立 PaddleOCR Python + `scripts/vision_worker.py`（权重不进 Git） | `OCR_VERSION`（≠`unavailable` 时 capabilities 亮 `vision-inference`）、`VISION_ADAPTER_SIGNING_KEY`（= worker 的 `HCT_ADAPTER_SIGNING_KEY`）、`MASTER_DATA_APPROVED_VERSIONS` | 上传合成药盒后任务进入四态并转人工复核；worker 日志 `ocr:true` | 任务保持排队/降级，质量门控与人工复核仍可用 |
 | 教学演示主数据（HCT-201 教学路径） | `uv run python scripts/setup_vision_demo.py` 生成合成快照 | `MASTER_DATA_APPROVED_VERSIONS=demo-cn-en-v1` | capabilities 出现 `master-data-teaching-demo` | fail-closed 不加载；`hct201-formal-drug-set` 恒为 unavailable |
 | 本地助手真实生成（Ollama） | 本机 Ollama 及模型，或增强档容器（`$env:COMPOSE_PROFILE='enhanced'` 后 `up`，容器内仍需 `ollama pull`） | `OLLAMA_BASE_URL`、`OLLAMA_MODEL`；本地默认 `AGENT_OPEN_CHAT=true`（见 [助手开放演示模式](docs/助手开放演示模式.md)） | 助手页真实回答；开放模式下少被证据墙打断 | 结构化降级，档案/规则/知识链路不受影响 |
 | 可选联网搜索（HCT-430） | 夹具：完全不出网；真实：HTTPS 白名单 | 夹具：`AGENT_WEB_SEARCH_PROVIDER=fixture`；真实：`duckduckgo_html` + `AGENT_WEB_SEARCH_URL` + `AGENT_WEB_SEARCH_ALLOWED_DOMAINS`（见[专文](docs/demo/联网搜索与知识库刷新启用指南.md)） | 夹具：`web_search_ready=true` 但 capabilities **无** `external-web`；真实：capabilities **有** `external-web`；每次提问还需勾选「补充联网参考」 | 默认关闭（`DEPLOYMENT_DISABLED`），结果只是「外部参考」 |
 | 知识入库与受控爬虫 | 知识管理员身份（`demo-` 前缀即可演示） | `KNOWLEDGE_ADMIN_ACTORS`（正式部署） | 「知识文档」页「一键教学闭环：抓取 → 批准 → 晋升」；`GET /api/v1/knowledge/crawl/status` | 爬虫默认离线夹具、**永不 auto_ingest**；非管理员看到明确提示 |
-| 演示造数与课堂剧本（HCT-452） | 演示身份 `demo-parent` | `ALLOW_DEV_ACTOR_HEADER=true`（或正式演示账号） | 「家庭与研发 → 演示造数」一键补种（幂等）；`POST /api/v1/demo/formal-health-seed`、`GET /api/v1/demo/classroom-scenarios` | 非演示身份被 403 `DEMO_SEED_FORBIDDEN` 拒绝（守卫生效，不是故障） |
+| 演示造数与课堂剧本（HCT-499） | 正式演示账号 `demo-parent` | 运行 `uv run python scripts/seed_formal_demo_health.py` 预置账号和虚构数据 | 「家庭与研发 → 演示造数」一键补种（幂等）；`POST /api/v1/demo/formal-health-seed`、`GET /api/v1/demo/classroom-scenarios` | 非演示身份被 403 `DEMO_SEED_FORBIDDEN` 拒绝（守卫生效，不是故障） |
 | 天气行动卡（HCT-305） | 白名单天气源 | `WEATHER_ADAPTER=enabled`、`WEATHER_API_URL`、`WEATHER_DEFAULT_CITY_CODE`、`WEATHER_LOCATION_WHITELIST`、`EGRESS_WEATHER_WHITELIST` | `GET /api/v1/weather/action-cards` | 默认 `disabled`，返回结构化空响应；只允许发送 6 位行政区划代码 |
 | 健康资讯真实抓取（HCT-445） | 白名单资讯域名 | `HEALTH_NEWS_ADAPTER=enabled`、`HEALTH_NEWS_ALLOWED_DOMAINS` | `GET /api/v1/health-news` 返回白名单来源条目 | 默认 `local` 仅季节提醒，不出网 |
 
@@ -433,7 +437,7 @@ uv run python -m app.care_plan_worker --loop
 - 微调 GGUF（v5）未完成正式评估，输出仅教学演示；HCT-408 三档部署/备份恢复演练仍在进行中。
 - 随身版 Android APP 在 [`APP/`](APP/README.md) 独立维护，联机同一 FastAPI 后端；构建与验收以其自述文档为准。
 
-**安全提醒：** 不提交 `.env`、真实健康数据、密钥、模型权重与运行日志；`change-me` / `dev-only-*` 占位密钥仅限本机开发；开发身份头是教学便利，不是生产认证——生产部署必须关闭 `ALLOW_DEV_ACTOR_HEADER` 并替换全部签名/加密密钥。
+**安全提醒：** 不提交 `.env`、真实健康数据、账号密码、密钥、模型权重与运行日志；`change-me` / `dev-only-*` 占位密钥仅限本机开发；`ALLOW_DEV_ACTOR_HEADER` 必须保持关闭并替换全部签名/加密密钥。当前本地短期会话仍不等于互联网生产认证。
 
 ## 核心价值
 

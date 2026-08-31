@@ -1,4 +1,6 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
+
+import { FORMAL_TEST_PASSWORD } from './support/formalLogin'
 
 /**
  * 真实后端联调冒烟：走「新身份 → 创建家庭 → 手工记录健康事实 → 时间线与当前事实可见」全链路。
@@ -8,6 +10,7 @@ import { expect, test, type Page } from '@playwright/test'
  */
 
 const API_HEALTH = 'http://127.0.0.1:8000/health'
+const API_BASE = 'http://127.0.0.1:8000'
 
 async function localApiAvailable(): Promise<boolean> {
   try {
@@ -21,18 +24,27 @@ async function localApiAvailable(): Promise<boolean> {
   }
 }
 
-async function enterAsNewOwner(page: Page, actorId: string): Promise<void> {
+async function enterAsNewOwner(
+  page: Page,
+  request: APIRequestContext,
+  actorId: string,
+): Promise<void> {
+  const registered = await request.post(`${API_BASE}/api/v1/auth/register`, {
+    data: { actor_id: actorId, password: FORMAL_TEST_PASSWORD },
+  })
+  expect(registered.status()).toBe(201)
   await page.goto('/')
-  await expect(page.getByRole('button', { name: '进入家庭空间' })).toBeVisible({ timeout: 20_000 })
-  await page.getByLabel('开发身份标识').fill(actorId)
-  await page.getByRole('button', { name: '进入家庭空间' }).click()
+  await expect(page.getByRole('button', { name: '登录家庭空间' })).toBeVisible({ timeout: 20_000 })
+  await page.getByLabel('正式账号', { exact: true }).fill(actorId)
+  await page.getByLabel('密码', { exact: true }).fill(FORMAL_TEST_PASSWORD)
+  await page.getByRole('button', { name: '登录家庭空间' }).click()
 }
 
-test('真实后端：创建家庭并记录一条健康事实的完整闭环', async ({ page }) => {
+test('真实后端：创建家庭并记录一条健康事实的完整闭环', async ({ page, request }) => {
   test.skip(!(await localApiAvailable()), '本地 API 不可达，跳过真实后端冒烟')
 
   const actorId = `smoke-${Date.now()}`
-  await enterAsNewOwner(page, actorId)
+  await enterAsNewOwner(page, request, actorId)
 
   // 新身份没有家庭：进入创建家庭流程
   await expect(page.getByRole('heading', { name: '创建你的家庭' })).toBeVisible()

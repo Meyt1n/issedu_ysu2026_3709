@@ -1,6 +1,8 @@
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page } from '@playwright/test'
 
+import { FORMAL_TEST_PASSWORD, mockFormalSessionApi, submitFormalLogin } from './support/formalLogin'
+
 // HCT-409 frontend accessibility acceptance: keyboard, focus visibility,
 // form errors, contrast, responsive layout, and screen-reader landmarks.
 // All data below is synthetic; no real health data is loaded.
@@ -111,11 +113,11 @@ async function installSyntheticApi(page: Page): Promise<void> {
 
     return respond({ detail: `Unexpected synthetic request: ${request.method()} ${path}` }, 500)
   })
+  await mockFormalSessionApi(page)
 }
 
 async function loadOwnerView(page: Page): Promise<void> {
-  await page.getByLabel('开发身份标识').fill('owner-1')
-  await page.getByRole('button', { name: '进入家庭空间' }).click()
+  await submitFormalLogin(page, 'owner-1')
   await expect(page.getByRole('heading', { name: '家庭总览' })).toBeVisible()
 }
 
@@ -169,10 +171,10 @@ test.describe('axe automated WCAG 2.1 AA scans', () => {
 
   test('offline error state has no violations', async ({ page }) => {
     await page.route('**/api/v1/households', route => route.abort('failed'))
+    await mockFormalSessionApi(page)
     await page.goto('/')
-    await page.getByLabel('开发身份标识').fill('owner-1')
-    await page.getByRole('button', { name: '进入家庭空间' }).click()
-    await expect(page.getByRole('alert')).toContainText('本地 API 服务不可用')
+    await submitFormalLogin(page, 'owner-1')
+    await expect(page.getByRole('alert')).toContainText('本地服务暂时连不上')
     const results = await axeScan(page)
     expect(results.violations).toEqual([])
   })
@@ -188,23 +190,23 @@ test.describe('axe automated WCAG 2.1 AA scans', () => {
 })
 
 test.describe('keyboard path and focus visibility', () => {
-  test('the identity form is operable with keyboard only', async ({ page }) => {
+  test('the formal login form is operable with keyboard only', async ({ page }) => {
     await installSyntheticApi(page)
     await page.goto('/')
 
     await page.keyboard.press('Tab')
-    await expect(page.getByRole('button', { name: '调试身份' })).toBeFocused()
-    await page.keyboard.press('Tab')
-    await expect(page.getByRole('button', { name: '家庭账号登录' })).toBeFocused()
-    await page.keyboard.press('Tab')
-    await expect(page.getByLabel('开发身份标识')).toBeFocused()
+    await expect(page.getByLabel('正式账号', { exact: true })).toBeFocused()
     await page.keyboard.type('owner-1')
+
+    await page.keyboard.press('Tab')
+    await expect(page.getByLabel('密码', { exact: true })).toBeFocused()
+    await page.keyboard.type(FORMAL_TEST_PASSWORD)
 
     await page.keyboard.press('Tab')
     await expect(page.getByLabel('访问用途代码')).toBeFocused()
 
     await page.keyboard.press('Tab')
-    await expect(page.getByRole('button', { name: '进入家庭空间' })).toBeFocused()
+    await expect(page.getByRole('button', { name: '登录家庭空间' })).toBeFocused()
 
     await page.keyboard.press('Enter')
     await expect(page.getByRole('heading', { name: '家庭总览' })).toBeVisible()
@@ -231,7 +233,7 @@ test.describe('keyboard path and focus visibility', () => {
     await installSyntheticApi(page)
     await page.goto('/')
 
-    const identity = page.getByLabel('开发身份标识')
+    const identity = page.getByLabel('正式账号', { exact: true })
     await identity.focus()
     const outline = await identity.evaluate(element => {
       const style = window.getComputedStyle(element)
@@ -243,11 +245,11 @@ test.describe('keyboard path and focus visibility', () => {
 })
 
 test.describe('form errors', () => {
-  test('an empty identity cannot be submitted', async ({ page }) => {
+  test('an incomplete formal login cannot be submitted', async ({ page }) => {
     await installSyntheticApi(page)
     await page.goto('/')
 
-    await expect(page.getByRole('button', { name: '进入家庭空间' })).toBeDisabled()
+    await expect(page.getByRole('button', { name: '登录家庭空间' })).toBeDisabled()
   })
 
   test('the purpose field exposes its format hint and validity to assistive tech', async ({ page }) => {

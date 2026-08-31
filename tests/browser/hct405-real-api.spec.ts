@@ -2,7 +2,7 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 
 // HCT-405 real-API browser coverage: drive the current Vue portal against a locally
 // running FastAPI backend with NO route mocks. Labels match the Chinese UI shipped
-// with HCT-439 (开发身份标识 / 进入家庭空间 / 侧栏导航).
+// with HCT-439/HCT-498 (正式账号密码 / Bearer 会话 / 侧栏导航).
 //
 // Prerequisites (see docs/stories/HCT-405-core-e2e.md):
 //   1. alembic upgrade head
@@ -21,8 +21,12 @@ function runId(): string {
 
 interface Bootstrap {
   ownerId: string
+  ownerPassword: string
+  ownerToken: string
   caregiverId: string
+  caregiverPassword: string
   memberActorId: string
+  memberPassword: string
   householdId: string
   memberId: string
   memberName: string
@@ -32,12 +36,30 @@ function navItem(page: Page, label: string) {
   return page.locator('aside.sidebar button.nav-item', { hasText: label })
 }
 
-async function enterDevIdentity(page: Page, actorId: string): Promise<void> {
+async function enterFormalIdentity(page: Page, actorId: string, password: string): Promise<void> {
   await page.goto('/')
-  await expect(page.getByRole('button', { name: '进入家庭空间' })).toBeVisible({ timeout: 20_000 })
-  await page.getByLabel('开发身份标识').fill(actorId)
-  await page.getByRole('button', { name: '进入家庭空间' }).click()
+  await expect(page.getByRole('button', { name: '登录家庭空间' })).toBeVisible({ timeout: 20_000 })
+  await page.getByLabel('正式账号', { exact: true }).fill(actorId)
+  await page.getByLabel('密码', { exact: true }).fill(password)
+  await page.getByLabel('访问用途代码', { exact: true }).fill('family-care')
+  await page.getByRole('button', { name: '登录家庭空间' }).click()
   await expect(page.locator('.app-frame')).toBeVisible({ timeout: 20_000 })
+}
+
+async function provisionAccount(
+  request: APIRequestContext,
+  actorId: string,
+  password: string,
+): Promise<string> {
+  const registered = await request.post(`${API_BASE}/api/v1/auth/register`, {
+    data: { actor_id: actorId, password },
+  })
+  expect(registered.status(), `formal account ${actorId} must register`).toBe(201)
+  const loggedIn = await request.post(`${API_BASE}/api/v1/auth/login`, {
+    data: { actor_id: actorId, password },
+  })
+  expect(loggedIn.status(), `formal account ${actorId} must login`).toBe(200)
+  return (await loggedIn.json()).session_token as string
 }
 
 async function bootstrapPortalHousehold(request: APIRequestContext, id: string): Promise<Bootstrap> {
@@ -45,9 +67,15 @@ async function bootstrapPortalHousehold(request: APIRequestContext, id: string):
   const caregiverId = `e2e-caregiver-${id}`
   const memberActorId = `e2e-member-${id}`
   const memberName = `合成成员 ${id}`
+  const ownerPassword = `Owner-${id}-Pass!`
+  const caregiverPassword = `Care-${id}-Pass!`
+  const memberPassword = `Member-${id}-Pass!`
+  const ownerToken = await provisionAccount(request, ownerId, ownerPassword)
+  await provisionAccount(request, caregiverId, caregiverPassword)
+  await provisionAccount(request, memberActorId, memberPassword)
 
   const householdResponse = await request.post(`${API_BASE}/api/v1/households`, {
-    headers: { 'X-Actor-Id': ownerId },
+    headers: { Authorization: `Bearer ${ownerToken}` },
     data: { name: `合成家庭 ${id}` },
   })
   expect(householdResponse.status(), 'household bootstrap must succeed').toBe(201)
@@ -56,7 +84,7 @@ async function bootstrapPortalHousehold(request: APIRequestContext, id: string):
   const memberResponse = await request.post(
     `${API_BASE}/api/v1/households/${household.id}/members`,
     {
-      headers: { 'X-Actor-Id': ownerId },
+      headers: { Authorization: `Bearer ${ownerToken}` },
       data: {
         display_name: memberName,
         role: 'DEPENDENT',
@@ -69,8 +97,12 @@ async function bootstrapPortalHousehold(request: APIRequestContext, id: string):
 
   return {
     ownerId,
+    ownerPassword,
+    ownerToken,
     caregiverId,
+    caregiverPassword,
     memberActorId,
+    memberPassword,
     householdId: household.id,
     memberId: member.id,
     memberName,
@@ -81,7 +113,7 @@ test('管理员创建并撤回授权，审计链与服务端状态一致', async
   const id = runId()
   const scope = await bootstrapPortalHousehold(request, id)
 
-  await enterDevIdentity(page, scope.ownerId)
+  await enterFormalIdentity(page, scope.ownerId, scope.ownerPassword)
   await expect(page.getByText('家庭管理员后台', { exact: true })).toBeVisible()
 
   await navItem(page, '授权管理').click()
@@ -110,7 +142,7 @@ test('管理员创建并撤回授权，审计链与服务端状态一致', async
 
   const auditResponse = await request.get(
     `${API_BASE}/api/v1/households/${scope.householdId}/authorization-audits`,
-    { headers: { 'X-Actor-Id': scope.ownerId } },
+    { headers: { Authorization: `Bearer ${scope.ownerToken}` } },
   )
   expect(auditResponse.status()).toBe(200)
   const audits: Array<{ operation: string }> = await auditResponse.json()
@@ -126,7 +158,7 @@ test('授权照护者进入成员前台且看不到后台入口；撤回后失�
   const grantResponse = await request.post(
     `${API_BASE}/api/v1/households/${scope.householdId}/authorizations`,
     {
-      headers: { 'X-Actor-Id': scope.ownerId },
+      headers: { Authorization: `Bearer ${scope.ownerToken}` },
       data: {
         member_id: scope.memberId,
         grantee_actor_id: scope.caregiverId,
@@ -140,7 +172,7 @@ test('授权照护者进入成员前台且看不到后台入口；撤回后失�
   expect(grantResponse.status()).toBe(201)
   const grant = await grantResponse.json()
 
-  await enterDevIdentity(page, scope.caregiverId)
+  await enterFormalIdentity(page, scope.caregiverId, scope.caregiverPassword)
   await expect(page.getByText('家庭成员', { exact: true })).toBeVisible()
   await expect(navItem(page, '授权管理')).toHaveCount(0)
   await expect(page.getByText(scope.memberName)).toBeVisible()
@@ -148,13 +180,13 @@ test('授权照护者进入成员前台且看不到后台入口；撤回后失�
   const revokeResponse = await request.post(
     `${API_BASE}/api/v1/households/${scope.householdId}/authorizations/${grant.id}/revoke`,
     {
-      headers: { 'X-Actor-Id': scope.ownerId },
+      headers: { Authorization: `Bearer ${scope.ownerToken}` },
       data: { expected_version: grant.version },
     },
   )
   expect(revokeResponse.status()).toBe(200)
 
-  await enterDevIdentity(page, scope.caregiverId)
+  await enterFormalIdentity(page, scope.caregiverId, scope.caregiverPassword)
   await expect(page.getByText(/还没有可见的家庭/)).toBeVisible()
 })
 
@@ -165,7 +197,7 @@ test('绑定成员账号进入成员前台；已确认事件只出现在成员�
   const eventResponse = await request.post(
     `${API_BASE}/api/v1/households/${scope.householdId}/events`,
     {
-      headers: { 'X-Actor-Id': scope.ownerId },
+      headers: { Authorization: `Bearer ${scope.ownerToken}` },
       data: {
         member_id: scope.memberId,
         event_type: 'medication_added',
@@ -178,7 +210,7 @@ test('绑定成员账号进入成员前台；已确认事件只出现在成员�
   )
   expect(eventResponse.status(), 'owner confirmed event must persist').toBe(201)
 
-  await enterDevIdentity(page, scope.memberActorId)
+  await enterFormalIdentity(page, scope.memberActorId, scope.memberPassword)
   await expect(page.getByText('家庭成员', { exact: true })).toBeVisible()
   await expect(navItem(page, '人工复核')).toHaveCount(0)
 
@@ -193,7 +225,7 @@ test('管理员确认过敏与药品后，成员前台显示需要留意的情�
   const scope = await bootstrapPortalHousehold(request, id)
 
   const allergy = await request.post(`${API_BASE}/api/v1/households/${scope.householdId}/events`, {
-    headers: { 'X-Actor-Id': scope.ownerId },
+    headers: { Authorization: `Bearer ${scope.ownerToken}` },
     data: {
       member_id: scope.memberId,
       event_type: 'allergy_added',
@@ -206,7 +238,7 @@ test('管理员确认过敏与药品后，成员前台显示需要留意的情�
   expect(allergy.status()).toBe(201)
 
   const drug = await request.post(`${API_BASE}/api/v1/households/${scope.householdId}/events`, {
-    headers: { 'X-Actor-Id': scope.ownerId },
+    headers: { Authorization: `Bearer ${scope.ownerToken}` },
     data: {
       member_id: scope.memberId,
       event_type: 'medication_added',
@@ -218,7 +250,7 @@ test('管理员确认过敏与药品后，成员前台显示需要留意的情�
   })
   expect(drug.status()).toBe(201)
 
-  await enterDevIdentity(page, scope.memberActorId)
+  await enterFormalIdentity(page, scope.memberActorId, scope.memberPassword)
   await expect(page.getByRole('heading', { name: '需要留意的情况' })).toBeVisible()
   await expect(page.getByText(/aspirin/i)).toBeVisible()
   await expect(page.getByText('请先问家人或医生')).toBeVisible()
@@ -226,8 +258,12 @@ test('管理员确认过敏与药品后，成员前台显示需要留意的情�
   await expect(page.getByText('SEVERE')).toHaveCount(0)
 })
 
-test('未知身份看不到家庭与健康摘要', async ({ page }) => {
-  await enterDevIdentity(page, `e2e-stranger-${runId()}`)
+test('未知正式账号看不到家庭与健康摘要', async ({ page, request }) => {
+  const id = runId()
+  const actorId = `e2e-stranger-${id}`
+  const password = `Stranger-${id}-Pass!`
+  await provisionAccount(request, actorId, password)
+  await enterFormalIdentity(page, actorId, password)
   await expect(page.getByText(/还没有可见的家庭/)).toBeVisible()
   await expect(page.locator('.app-frame')).toHaveCount(0)
 })

@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiClientError, apiClient } from './api/client'
 import {
-  connect,
   connectWithFamilyFace,
   connectWithPassword,
   connectWithPin,
@@ -20,6 +19,16 @@ import {
   signOut,
 } from './store'
 import { overridePortalEntryModeForTest } from './ui/portalEntry'
+
+async function loginAs(actorId: string): Promise<void> {
+  if (!vi.isMockFunction(apiClient.login)) vi.spyOn(apiClient, 'login')
+  vi.mocked(apiClient.login).mockResolvedValueOnce({
+    actor_id: actorId,
+    session_token: `${actorId}-formal-session-token`.padEnd(48, 's'),
+    expires_at: (Date.now() + 60_000) / 1000,
+  })
+  await connectWithPassword(actorId, 'password-123', 'family-care')
+}
 
 describe('session expiry handling', () => {
   beforeEach(() => {
@@ -57,6 +66,19 @@ describe('session expiry handling', () => {
 
     expect(session.error).toBe('')
     expect(session.status).toBe('signed-out')
+  })
+
+  it('registers a formal account before establishing its session', async () => {
+    const register = vi.spyOn(apiClient, 'registerAccount').mockResolvedValue({
+      status: 'registered',
+      actor_id: 'new-owner',
+    })
+
+    await connectWithPassword('new-owner', 'password-123', 'family-care', true)
+
+    expect(register).toHaveBeenCalledWith('new-owner', 'password-123')
+    expect(apiClient.login).toHaveBeenCalledWith('new-owner', 'password-123')
+    expect(session.status).toBe('empty')
   })
 })
 
@@ -289,7 +311,7 @@ describe('portal view guards (HCT-439)', () => {
       unavailable: [],
     })
 
-    await connect('grandma-account', 'family-care')
+    await loginAs('grandma-account')
     expect(session.portal).toBe('member')
     setView('review')
     expect(session.currentView).toBe('member-home')
@@ -323,7 +345,7 @@ describe('portal view guards (HCT-439)', () => {
       unavailable: [],
     })
 
-    await connect('parent-admin', 'family-care')
+    await loginAs('parent-admin')
     expect(session.portal).toBe('admin')
     setView('member-capture')
     expect(session.currentView).toBe('overview')
@@ -400,14 +422,14 @@ describe('portal entry lock (HCT-453)', () => {
 
   it('lets matching accounts through on their own entry', async () => {
     overridePortalEntryModeForTest('member')
-    await connect('grandma-account', 'family-care')
+    await loginAs('grandma-account')
     expect(session.status).toBe('ready')
     expect(session.portal).toBe('member')
     expect(session.entryConflict).toBeNull()
     signOut()
 
     overridePortalEntryModeForTest('admin')
-    await connect('parent-admin', 'family-care')
+    await loginAs('parent-admin')
     expect(session.status).toBe('ready')
     expect(session.portal).toBe('admin')
     expect(session.entryConflict).toBeNull()
@@ -415,7 +437,7 @@ describe('portal entry lock (HCT-453)', () => {
 
   it('keeps the legacy auto entry role-based (HCT-439 behaviour)', async () => {
     overridePortalEntryModeForTest('auto')
-    await connect('parent-admin', 'family-care')
+    await loginAs('parent-admin')
     expect(session.status).toBe('ready')
     expect(session.portal).toBe('admin')
     expect(session.entryConflict).toBeNull()
@@ -432,7 +454,7 @@ describe('portal entry lock (HCT-453)', () => {
     await connectWithPin('grandma-account', household.id, '135790', 'family-care')
     expect(session.entryConflict).toBe('need-member-entry')
 
-    await connect('parent-admin', 'family-care')
+    await loginAs('parent-admin')
     expect(session.status).toBe('ready')
     expect(session.entryConflict).toBeNull()
   })
@@ -449,7 +471,7 @@ describe('portal entry lock (HCT-453)', () => {
     vi.spyOn(apiClient, 'createMember').mockResolvedValue(grandma)
     vi.spyOn(apiClient, 'logout').mockResolvedValue({ status: 'logged_out' })
 
-    await connect('parent-admin', 'family-care')
+    await loginAs('parent-admin')
     expect(session.status).toBe('empty')
 
     await createHouseholdAndEnter('入口测试家庭', [
@@ -513,11 +535,12 @@ describe('formatError 区分真实失败原因（HCT-401 爬虫面板）', () =>
     expect(message).not.toContain('无法连接')
   })
 
-  it('501 REAL_AUTH_REQUIRED 提示调试身份入口已关闭', () => {
+  it('501 REAL_AUTH_REQUIRED 提示重新建立正式会话', () => {
     const message = formatError(
       new ApiClientError('REAL_AUTH_REQUIRED', { status: 501, code: 'HTTP_ERROR' }),
     )
-    expect(message).toContain('调试身份')
+    expect(message).toContain('正式会话')
+    expect(message).toContain('账号密码')
     expect(message).not.toContain('ALLOW_DEV_ACTOR_HEADER')
   })
 

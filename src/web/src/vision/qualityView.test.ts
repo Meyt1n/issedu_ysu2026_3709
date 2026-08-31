@@ -66,7 +66,7 @@ describe('vision quality view rules', () => {
     await expect(queuePassedVisionFile({
       file: new File(['image'], 'box.png', { type: 'image/png' }),
       result: qualityResult({ decision: 'RETAKE', allow_downstream: false, quality_receipt: null }),
-      actorId: 'owner-a',
+      requestOptions: { sessionToken: 'formal-token-a' },
       idempotencyKey: 'request-1',
       isCurrent: () => true,
     }, api)).rejects.toThrow('QUALITY_GATE_REQUIRED')
@@ -81,7 +81,7 @@ describe('vision quality view rules', () => {
     await expect(queuePassedVisionFile({
       file: new File(['image'], 'box.png', { type: 'image/png' }),
       result: qualityResult(),
-      actorId: 'owner-a',
+      requestOptions: { sessionToken: 'formal-token-a' },
       idempotencyKey: 'request-without-member',
       isCurrent: () => true,
     }, api)).rejects.toThrow('MEMBER_REQUIRED')
@@ -90,7 +90,7 @@ describe('vision quality view rules', () => {
     expect(api.createVisionTask).not.toHaveBeenCalled()
   })
 
-  it('uses the immutable actor to clean an upload after identity changes', async () => {
+  it('uses the immutable formal session to clean an upload after identity changes', async () => {
     let current = true
     const api = queueApi()
     api.uploadFile.mockImplementation(async () => {
@@ -101,7 +101,7 @@ describe('vision quality view rules', () => {
     const task = await queuePassedVisionFile({
       file: new File(['image'], 'box.png', { type: 'image/png' }),
       result: qualityResult(),
-      actorId: 'owner-before-switch',
+      requestOptions: { sessionToken: 'formal-token-before-switch' },
       memberId: 'member-before-switch',
       accessPurpose: 'family-care',
       idempotencyKey: 'request-2',
@@ -112,7 +112,7 @@ describe('vision quality view rules', () => {
     expect(api.createVisionTask).not.toHaveBeenCalled()
     expect(api.deleteUploadedFile).toHaveBeenCalledWith(
       'stored.png',
-      { actorId: 'owner-before-switch', accessPurpose: 'family-care' },
+      { sessionToken: 'formal-token-before-switch', accessPurpose: 'family-care' },
     )
   })
 
@@ -121,22 +121,22 @@ describe('vision quality view rules', () => {
     const input = {
       file: new File(['image'], 'box.png', { type: 'image/png' }),
       result: qualityResult(),
-      actorId: 'owner-a',
+      requestOptions: { sessionToken: 'formal-token-a' },
       memberId: 'member-a',
       idempotencyKey: 'request-3',
       isCurrent: () => true,
     }
 
     await expect(queuePassedVisionFile(input, mismatchApi)).rejects.toThrow('UPLOAD_DIGEST_MISMATCH')
-    expect(mismatchApi.deleteUploadedFile).toHaveBeenCalledWith('stored.png', { actorId: 'owner-a' })
+    expect(mismatchApi.deleteUploadedFile).toHaveBeenCalledWith('stored.png', { sessionToken: 'formal-token-a' })
 
     const failingApi = queueApi()
     failingApi.createVisionTask.mockRejectedValue(new Error('TASK_FAILED'))
     await expect(queuePassedVisionFile(input, failingApi)).rejects.toThrow('TASK_FAILED')
-    expect(failingApi.deleteUploadedFile).toHaveBeenCalledWith('stored.png', { actorId: 'owner-a' })
+    expect(failingApi.deleteUploadedFile).toHaveBeenCalledWith('stored.png', { sessionToken: 'formal-token-a' })
   })
 
-  it('keeps an already-created task bound to the immutable actor during a late switch', async () => {
+  it('keeps an already-created task bound to the immutable formal session during a late switch', async () => {
     let current = true
     const api = queueApi()
     api.createVisionTask.mockImplementation(async () => {
@@ -147,7 +147,7 @@ describe('vision quality view rules', () => {
     const task = await queuePassedVisionFile({
       file: new File(['image'], 'box.png', { type: 'image/png' }),
       result: qualityResult(),
-      actorId: 'owner-before-switch',
+      requestOptions: { sessionToken: 'formal-token-before-switch' },
       memberId: 'member-before-switch',
       idempotencyKey: 'request-4',
       isCurrent: () => current,
@@ -156,7 +156,7 @@ describe('vision quality view rules', () => {
     expect(task?.status).toBe('queued')
     expect(api.createVisionTask).toHaveBeenCalledWith(
       expect.objectContaining({ member_id: 'member-before-switch' }),
-      { actorId: 'owner-before-switch' },
+      { sessionToken: 'formal-token-before-switch' },
     )
     expect(api.deleteUploadedFile).not.toHaveBeenCalled()
   })

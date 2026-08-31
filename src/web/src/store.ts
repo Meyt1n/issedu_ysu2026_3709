@@ -113,7 +113,7 @@ const state = reactive<SessionState>({
   actorId: '',
   sessionToken: '',
   sessionExpiresAt: null,
-  authMode: 'development',
+  authMode: 'session',
   accessPurpose: 'family-care',
   status: 'signed-out',
   error: '',
@@ -138,7 +138,6 @@ let sessionExpiryTimer: ReturnType<typeof setTimeout> | null = null
 export const session = readonly(state)
 
 export const requestOptions = computed<RequestOptions>(() => ({
-  actorId: state.sessionToken ? undefined : state.actorId.trim() || undefined,
   sessionToken: state.sessionToken || undefined,
   accessPurpose: state.accessPurpose.trim() || undefined,
 }))
@@ -186,7 +185,7 @@ export function formatError(cause: unknown): string {
       )
     }
     if (cause.message === 'REAL_AUTH_REQUIRED') {
-      return '当前部署已关闭调试身份入口，请改用家庭账号登录。'
+      return '当前请求缺少正式会话，请重新使用账号密码登录。'
     }
     if (cause.status === 401) {
       if (cause.message === 'SESSION_REQUIRED' || cause.message === 'AUTH_REQUIRED') {
@@ -222,9 +221,7 @@ export function formatError(cause: unknown): string {
       if (cause.message === 'FACE_AUTH_FAILED' || cause.message === 'FACE_MATCH_FAILED') {
         return '这次没有认出来。请重拍，或改用数字密码登录。'
       }
-      return state.authMode === 'session'
-        ? '账号、密码或会话无效，请重新登录。'
-        : '需要先填写登录身份才能继续这次请求。'
+      return '账号、密码或会话无效，请重新登录。'
     }
     if (cause.status === 403) {
       if (cause.message === 'CONFIRMATION_FAILED') return '二次确认失败，请检查当前账号的数字密码或登录密码后重试。'
@@ -490,41 +487,6 @@ function rejectPortalEntry(conflict: PortalEntryConflict): void {
   signOut()
   state.entryConflict = conflict
   state.error = notice.message
-}
-
-export async function connect(actorId: string, accessPurpose: string): Promise<void> {
-  clearSessionContext()
-  state.actorId = actorId.trim()
-  state.accessPurpose = accessPurpose.trim()
-  state.authMode = 'development'
-  if (!state.actorId) {
-    state.status = 'signed-out'
-    state.error = '请先填写开发身份。'
-    return
-  }
-
-  state.status = 'loading'
-  state.error = ''
-  state.households = []
-  state.selectedHouseholdId = ''
-  state.members = []
-  state.selectedMemberId = ''
-  state.isOwnerView = false
-  state.portal = 'member'
-  try {
-    state.households = await apiClient.listHouseholds(requestOptions.value)
-    if (state.households.length === 0) {
-      state.status = 'empty'
-      return
-    }
-    state.selectedHouseholdId = state.households[0]?.id ?? ''
-    await loadHouseholdScope()
-    if (sessionIsSignedOut()) return
-    state.status = 'ready'
-  } catch (cause) {
-    state.status = 'error'
-    state.error = formatError(cause)
-  }
 }
 
 function parseBoundFaceHousehold(raw: string): BoundFaceHousehold | null {

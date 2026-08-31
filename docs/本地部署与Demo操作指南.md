@@ -45,9 +45,9 @@ chmod +x scripts/start.sh
 
 增强档（额外启动 Ollama 容器）在启动前设置 `$env:COMPOSE_PROFILE='enhanced'`（Bash：`export COMPOSE_PROFILE=enhanced`）。容器内仍需自行拉取或创建模型；未配置 `OLLAMA_MODEL` 时助手保持结构化降级。
 
-### 1.3 人脸识别本地模型（HCT-424/425）
+### 1.3 人脸凭证实验模型（HCT-424/425，非 Web 登录入口）
 
-人脸登录使用本地 OpenCV YuNet + SFace ONNX，**权重不进 Git**。首次部署请先准备模型：
+仓库保留本地 OpenCV YuNet + SFace ONNX 的人脸凭证、校准和受控实验能力，**权重不进 Git**。HCT-498 修订后，开发 Actor ID 入口仍关闭；成员前台可使用正式账号密码、已配置的 PIN/人脸和注册入口，管理后台以正式账号密码为主。需要维护人脸凭证或执行受控实验时再准备模型：
 
 ```bash
 uv run python scripts/ensure_face_models.py
@@ -59,9 +59,9 @@ uv run python scripts/ensure_face_models.py
 - `FACE_MODEL_AUTO_DOWNLOAD=true`（或改为 false 并手工拷贝 ONNX）
 - `FACE_MATCH_THRESHOLD_SFACE` / `FACE_MATCH_MARGIN_SFACE`（见下方本机标定）
 
-`/api/v1/meta/capabilities` 在模型就绪时会包含 `face-recognition-local`；未就绪时欢迎页会提示改用 PIN/密码。旧灰度 v1/v2 凭证仍可登录，管理员页会提示重新绑定升级。
+`/api/v1/meta/capabilities` 在模型就绪时会包含 `face-recognition-local`。该能力声明不代表 Web 登录已开启；旧灰度 v1/v2 凭证与后端契约只为历史兼容和受控回滚保留，管理员页可继续完成凭证治理。
 
-完整的录入/刷脸登录逐步操作、常见错误速查与排障请看专文：[人脸凭证录入与登录操作手册](demo/人脸凭证录入与登录操作手册.md)。
+历史录入/识别能力的操作、常见错误与排障请看专文：[人脸凭证录入与登录操作手册](demo/人脸凭证录入与登录操作手册.md)。该手册不是当前 Web 登录指引。
 
 **Windows 中文路径注意（2026-08-26 修复）**：此前仓库路径含中文（如 `C:\...\多模态医疗\...`）时，OpenCV 在 Windows 上无法读取 YuNet/SFace ONNX 文件，注册/登录报 HTTP 500 并把本机路径泄漏进提示。现已改为 Python 读取权重字节 + OpenCV 内存缓冲加载，中文路径可正常工作；残余加载失败只返回 503 `FACE_DETECTOR_UNAVAILABLE` 与中文指引。仍建议仓库使用纯英文路径（其它工具链如 Docker 卷挂载对中文路径的兼容性无法保证）；排查步骤见操作手册 §3。
 
@@ -92,7 +92,7 @@ FACE_MATCH_THRESHOLD_SFACE=...
 FACE_MATCH_MARGIN_SFACE=...
 ```
 
-未完成本机标定前，可将人脸登录视为“可用但未按家庭场景验收”；正式演示或 R3 前应完成上述步骤。
+未完成本机标定前，不得把人脸实验能力宣称为家庭场景已验收；当前正式 Web 演示不依赖该模型或阈值。
 
 ### 1.2 本地进程开发路径
 
@@ -114,10 +114,10 @@ scripts/start.ps1 api
 
 | 我是谁 | 应该打开 | 本地进程（路径 1.2） | Compose（路径 1.1） | 登录方式 |
 |---|---|---|---|---|
-| 家庭成员（长辈/家人） | 成员前台 | `http://127.0.0.1:5173`（`scripts/start web-member`） | `http://localhost:8080` | 人脸 / 家庭 PIN（账号密码收在「其他方式」里） |
-| 家庭管理员（owner） | 管理后台 | `http://127.0.0.1:5174`（`scripts/start web-admin`） | `http://localhost:8081` | 账号密码（PIN/人脸主要供家人使用） |
+| 家庭成员（长辈/家人） | 成员前台 | `http://127.0.0.1:5173`（`scripts/start web-member`） | `http://localhost:8080` | 正式账号密码 |
+| 家庭管理员（owner） | 管理后台 | `http://127.0.0.1:5174`（`scripts/start web-admin`） | `http://localhost:8081` | 正式账号密码 |
 
-- 两个登录页长得明显不同（HCT-455）：成员前台是「我的健康日常」个人登录页，只有人脸 / 家庭 PIN 两个主选项，主按钮是「进入我的前台」；管理后台是「家庭管理后台」管理员登录页，账号密码为主，主按钮是「进入管理后台」。页脚互跳链接会自动带上 `?portal=member|admin`，即使目标端口没有注入入口模式也按正确品牌显示。
+- 两个登录页保持明显的入口品牌差异（HCT-455），并共用正式会话：成员前台提供账号密码、数字密码和已绑定人脸入口，管理后台默认展示账号密码；首次使用者可在账号密码方式下注册本地正式账号。页脚互跳链接会自动带上 `?portal=member|admin`，即使目标端口没有注入入口模式也按正确品牌显示。
 - 走错入口不会泄露或损坏任何数据：登录成功后系统发现账号与入口不匹配，会立刻退出本次登录，并在页面上给出「去管理后台登录 / 回成员前台登录」按钮。
 - 入口只是界面锁；谁能看什么、谁能改什么仍完全由服务端授权（HCT-439/HCT-102）决定。
 - 端口自定义：本地进程 `HCT_WEB_PORT`（前台）/ `HCT_ADMIN_WEB_PORT`（后台）；Compose `.env` 的 `WEB_PORT` / `ADMIN_WEB_PORT`。非默认端口部署可在构建时设置 `VITE_MEMBER_PORTAL_URL` / `VITE_ADMIN_PORTAL_URL` 让跨端按钮指向正确公开地址。
@@ -127,7 +127,7 @@ scripts/start.ps1 api
 
 1. `scripts/start.ps1|sh api` + `scripts/start.ps1|sh web-member`
 2. 打开 `http://127.0.0.1:5173`（Compose：`http://localhost:8080`）
-3. 用**成员**账号刷脸或 PIN（演示如 `grandma-demo`）；管理员 `demo-parent` 请用 `web-admin` → 5174/8081
+3. 用已预置的**成员正式账号密码**登录（演示账号如 `grandma-demo`）；管理员 `demo-parent` 请用 `web-admin` → 5174/8081
 
 欢迎页在成员入口会显示同一清单；用管理员账号误进成员前台会被登出，并提示改去管理后台或换成员账号。
 
@@ -201,8 +201,11 @@ uv run python scripts/hct202_quality_demo.py --iterations 50
 启动 API 后，直接把当前用户选择的图片提交给质量接口；接口不会通过 `file_id` 读取共享文件区：
 
 ```powershell
+$login = Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/v1/auth/login `
+  -ContentType 'application/json' `
+  -Body (@{ actor_id = 'demo-parent'; password = 'DemoOnly-ChangeMe!' } | ConvertTo-Json)
 curl.exe -X POST http://localhost:8000/api/v1/vision-quality/check `
-  -H "X-Actor-ID: demo-owner" `
+  -H "Authorization: Bearer $($login.session_token)" `
   -F "media_type=image" `
   -F "file=@C:\path\to\demo.png;type=image/png"
 ```
@@ -219,7 +222,7 @@ Web Demo 可直接演示同一流程：
 .\scripts\start.ps1 web
 ```
 
-打开 `http://127.0.0.1:5173`，填写开发身份后，在“先检查图片，再进入识别”区域选择 JPEG/PNG。页面只在浏览器内生成预览；`RETAKE` 明确停止，`PASS` 后由用户点击创建本地 OCR 任务。页面会核对质量检查与持久化上传的 SHA-256，并且不会显示服务端路径、文件摘要或质量凭证。切换身份或替换图片会使旧结果失效。
+打开 `http://127.0.0.1:5173`，使用已预置的正式账号密码登录后，在“先检查图片，再进入识别”区域选择 JPEG/PNG。页面只在浏览器内生成预览；`RETAKE` 明确停止，`PASS` 后由用户点击创建本地 OCR 任务。页面会核对质量检查与持久化上传的 SHA-256，并且不会显示服务端路径、文件摘要或质量凭证。退出会话或替换图片会使旧结果失效。
 
 Windows 本地开发代理固定使用 `127.0.0.1`，避免 `localhost` 解析为 IPv6 而 API 仅监听 IPv4。API 启动脚本和容器必须同时包含 `src/api` 与 `src` 的 Python 导入路径，否则质量模块无法加载。
 
@@ -275,7 +278,11 @@ open 模式不再要求域名白名单，改为「公开 HTTPS + SSRF 公网校�
 验证命令（重启 API 后）：
 
 ```powershell
-curl.exe http://localhost:8000/api/v1/assistant/agents -H "X-Actor-ID: demo-parent"
+$login = Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/v1/auth/login `
+  -ContentType 'application/json' `
+  -Body (@{ actor_id = 'demo-parent'; password = 'DemoOnly-ChangeMe!' } | ConvertTo-Json)
+Invoke-RestMethod -Uri http://localhost:8000/api/v1/assistant/agents `
+  -Headers @{ Authorization = "Bearer $($login.session_token)" }
 # 期望 web_search_ready=true 且 web_search_unavailable_reason=OPT_IN_REQUIRED
 ```
 
@@ -337,15 +344,15 @@ curl http://localhost:8000/api/v1/meta/capabilities
 通过。快照的加载校验（版本白名单、schema、SHA-256、批准/撤销状态）不会因教学范围放宽；识别候选
 仍必须人工确认后才能入档。
 
-### 4.5 演示造数与课堂剧本（一键补种，HCT-452）
+### 4.5 演示造数与课堂剧本（一键补种，HCT-499）
 
 「演示造数」页可一键补种正式演示家庭（爷爷奶奶家）的虚构病史、过敏、药品、指标、计划与提醒闭环事件，全部标注「演示」，不含真实健康数据。补种使用固定幂等键，重复点击或超时重试都不会产生重复数据。
 
 **前置与步骤：**
 
 1. 先把 API 和 Web 跑起来（§1.1 Compose 或 §1.2 本地进程均可）；本地进程路径要求 API 在 8000 端口、`scripts/start.ps1 web`（或 `.sh`）在 5173。
-2. 用演示身份进入家庭空间：开发身份填 `demo-parent`（或其它 `demo-` / `test-` 前缀账号；开发身份头需要 `ALLOW_DEV_ACTOR_HEADER=true`）。要走正式账号会话，可先在欢迎页「正式账号登录 → 注册」为 `demo-parent` 设置本地密码；命令行 `uv run python scripts/seed_formal_demo_health.py` 不带 `--dev-header` 时会自动注册并使用默认教学密码 `DemoOnly-ChangeMe!`。非演示身份会被后端 403 `DEMO_SEED_FORBIDDEN` 拒绝，页面会引导改用演示身份——这是守卫生效，不是 API 故障。
-3. 打开「家庭与研发 → 演示造数」，点击「补种 / 重置演示健康数据」。成功后页面展示 `events_touched` 报告并自动切到演示家庭；课堂剧本三条固定路径可直接跳转对应页面。等价命令行：`curl -X POST http://localhost:8000/api/v1/demo/formal-health-seed -H "X-Actor-ID: demo-parent"`。
+2. 运行 `uv run python scripts/seed_formal_demo_health.py`，受控预置/复用 `demo-parent` 正式演示账号并完成虚构健康数据补种；本地默认教学密码为 `DemoOnly-ChangeMe!`，也可用 `--password` 指定。登录页不提供自助注册，也不提供开发身份头入口。非演示账号会被后端 403 `DEMO_SEED_FORBIDDEN` 拒绝——这是守卫生效，不是 API 故障。
+3. 用 `demo-parent` 的正式账号密码登录管理后台，打开「家庭与研发 → 演示造数」，点击「补种 / 重置演示健康数据」。成功后页面展示 `events_touched` 报告并自动切到演示家庭；课堂剧本三条固定路径可直接跳转对应页面。命令行调用同样必须先通过 `/auth/login` 获取短期 Bearer 会话，再请求 `/api/v1/demo/formal-health-seed`。
 
 **红条排障对照（错误分层）：**
 
@@ -354,7 +361,7 @@ curl http://localhost:8000/api/v1/meta/capabilities
 | 本地 API 服务不可用…请确认 API 已在 8000 端口运行 | 浏览器拿不到任何 API 响应，或代理（Vite dev / Nginx）连不上 API 进程 | 本地进程：确认 `scripts/start api` 终端仍在运行；Compose：`scripts/start.ps1 health` 检查 api 服务 healthy；远程隧道检查隧道连通 |
 | 当前身份无权补种演示数据：请改用 demo-parent… | 后端 `DEMO_SEED_FORBIDDEN` 守卫拒绝非演示身份，API 正常 | 切换为 `demo-parent` 或其它 `demo-` / `test-` 前缀身份 |
 | 课堂剧本加载失败：… | 只读剧本接口失败，与补种无关；红条显示在剧本卡片并带「重新加载剧本」按钮 | 按提示排查 API 连接后点「重新加载剧本」 |
-| 需要先填写开发身份才能继续这次请求。 | 请求没有携带身份（401） | 回到欢迎页填写开发身份或登录正式账号 |
+| 正式登录已失效，请重新登录。 | 请求没有携带有效 Bearer 会话或会话已过期（401） | 回到欢迎页，用正式账号密码重新登录 |
 
 ## 5. 后续必须补齐
 
