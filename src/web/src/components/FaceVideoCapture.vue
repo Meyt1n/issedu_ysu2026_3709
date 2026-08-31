@@ -215,14 +215,14 @@ async function capture(): Promise<void> {
   } catch (cause) {
     stopSpeaking()
     error.value = cause instanceof DOMException && cause.name === 'NotAllowedError'
-      ? '摄像头权限被拒绝。请家人在浏览器地址栏点一下允许摄像头，或改用数字密码登录。'
+      ? '摄像头权限被拒绝，请允许摄像头或改用账号密码。'
       : cause instanceof DOMException && cause.name === 'NotFoundError'
-        ? '没有找到摄像头。请接好摄像头，或改用数字密码登录。'
+        ? '没有找到摄像头，请改用账号密码。'
         : cause instanceof Error && cause.message === 'CAMERA_RESOLUTION_TOO_LOW'
-          ? '这个摄像头的画面太小，拍不清人脸。请换一个更清晰的摄像头，或改用数字密码登录。'
+          ? '摄像头画面太小，请改用账号密码。'
           : props.mode === 'registration'
-            ? '摄像头打不开。请检查权限后重试，也可以让家人帮忙。'
-            : '摄像头打不开或画面不好，请改用数字密码登录，也可以让家人帮忙。'
+            ? '摄像头打不开，请检查权限后重试。'
+            : '摄像头打不开，请改用账号密码。'
     speak(error.value)
     if (props.showFallback) emit('fallback')
   } finally {
@@ -369,14 +369,11 @@ onBeforeUnmount(() => {
         :disabled="capturing"
         @click="useFallback"
       >
-        改用数字密码
+        改用账号密码
       </button>
     </div>
     <p class="face-capture-footnote">
-      <template v-if="compact">画面只在本机处理，不会上传照片。</template>
-      <template v-else>
-        画面只在本机内存里处理，不会上传人脸照片。听不清或不会操作时，请点“改用数字密码”，让家人帮忙也可以。
-      </template>
+      画面只在本机处理，不会上传照片。
     </p>
   </div>
 </template>

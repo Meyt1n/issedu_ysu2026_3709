@@ -21,23 +21,23 @@ async function installWelcomeApi(page: Page, capabilities: string[]): Promise<vo
   })
 }
 
-async function expectFormalCredentialLogin(page: Page): Promise<void> {
-  await expect(page.getByTestId('formal-login-method')).toContainText('正式账号密码登录')
+async function expectMemberCredentialLogin(page: Page): Promise<void> {
+  await expect(page.getByTestId('formal-login-method')).toHaveCount(0)
   await expect(page.getByRole('group', { name: '选择账号登录凭据' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '刷脸进入' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '数字密码' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '账号密码' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '刷脸进入', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '账号密码', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '数字密码' })).toHaveCount(0)
   await expect(page.locator('.face-family-summary')).toHaveCount(0)
   await expect(page.locator('.face-capture')).toHaveCount(0)
 }
 
-test('成员欢迎页保留正式账号密码、PIN 和人脸三种认证方式', async ({ page }) => {
+test('成员欢迎页提供刷脸与账号密码，不再把 PIN 当作登录方式', async ({ page }) => {
   await installWelcomeApi(page, ['api', 'face-recognition-local'])
   await page.goto('/?portal=member')
-  await expectFormalCredentialLogin(page)
+  await expectMemberCredentialLogin(page)
 })
 
-test('历史本机家庭绑定仍可恢复正式人脸登录入口', async ({ page }) => {
+test('历史本机家庭绑定仍可恢复刷脸登录入口', async ({ page }) => {
   await installWelcomeApi(page, ['api', 'face-recognition-local'])
   await page.addInitScript(
     ([key, value]) => {
@@ -48,7 +48,7 @@ test('历史本机家庭绑定仍可恢复正式人脸登录入口', async ({ pa
   )
   await page.goto('/?portal=member')
   await expect(page.getByRole('group', { name: '选择账号登录凭据' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '刷脸进入' })).toHaveClass(/active/)
+  await expect(page.getByRole('button', { name: '刷脸进入', exact: true })).toHaveClass(/active/)
   await expect(page.locator('.face-family-summary')).toBeVisible()
   await expect(page.locator('.face-capture')).toBeVisible()
 })

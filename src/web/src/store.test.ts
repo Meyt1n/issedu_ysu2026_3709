@@ -690,7 +690,7 @@ describe('formatError timeout vs unavailability (HCT-424)', () => {
 
     expect(message).toContain('人脸功能暂时不可用')
     expect(message).toContain('没有改变任何数据')
-    expect(message).toContain('数字密码')
+    expect(message).toContain('账号密码')
     expect(message).not.toContain('ensure_face_models')
     expect(message).not.toContain('scripts/')
     expect(message).not.toContain('ONNX')
@@ -706,7 +706,7 @@ describe('formatError face login failure buckets (HCT-425)', () => {
     }))
 
     expect(message).toContain('转头')
-    expect(message).toContain('数字密码')
+    expect(message).toContain('账号密码')
     expect(message).not.toContain('匹配失败')
   })
 
@@ -717,7 +717,7 @@ describe('formatError face login failure buckets (HCT-425)', () => {
         code: 'HTTP_ERROR',
       }))
       expect(message).toContain('这次没有认出来')
-      expect(message).toContain('数字密码')
+      expect(message).toContain('账号密码')
       expect(message).not.toContain('没匹配到人')
     }
   })
@@ -728,7 +728,7 @@ describe('formatError face login failure buckets (HCT-425)', () => {
       code: 'HTTP_ERROR',
     }))
 
-    expect(message).toContain('太像')
+    expect(message).toContain('确认是谁')
   })
 
   it('does not leak 422 English codes or 500 detail to family UI', () => {

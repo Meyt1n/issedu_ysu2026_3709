@@ -102,7 +102,7 @@ test('正式登录使用 Bearer 会话，登出后清空家庭界面', async ({ 
   await page.getByRole('button', { name: '退出当前身份' }).click()
 
   await expect(page.locator('.app-frame')).toHaveCount(0)
-  await expect(page.getByRole('heading', { name: '正式账号登录' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '登录' })).toBeVisible()
   expect(requests).toContain('POST /api/v1/auth/login')
   expect(requests).toContain('POST /api/v1/auth/logout')
   expect(requests.some(path => path.includes('password-123'))).toBe(false)

@@ -62,10 +62,8 @@ export function faceCaptureIntro(mode: FaceCaptureMode): { title: string; speech
       title: '我们一起录入人脸，大约十几秒',
       speech: '开始录入，听提示慢慢做。',
       bullets: [
-        '请坐到光线明亮、正对摄像头的位置',
-        '把整张脸放进中间圆圈，不要太近也不要太远',
-        '听到提示后再慢慢转头，一共拍三张',
-        '不会了可以点“改用数字密码”，家人可以帮忙',
+        '把脸放进圆圈，看着镜头',
+        '听到提示后轻轻转头，拍三张',
       ],
     }
   }
@@ -74,10 +72,8 @@ export function faceCaptureIntro(mode: FaceCaptureMode): { title: string; speech
     title: '刷脸进入',
     speech: '',
     bullets: [
-      '把脸放进中间圆圈，看着镜头',
+      '把脸放进圆圈，看着镜头',
       '听到提示后轻轻转一下头',
-      '拍完两张会自动继续',
-      '不方便时请点“改用数字密码”',
     ],
   }
 }
