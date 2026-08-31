@@ -21,22 +21,23 @@ async function installWelcomeApi(page: Page, capabilities: string[]): Promise<vo
   })
 }
 
-async function expectFormalOnlyLogin(page: Page): Promise<void> {
+async function expectFormalCredentialLogin(page: Page): Promise<void> {
   await expect(page.getByTestId('formal-login-method')).toContainText('正式账号密码登录')
-  await expect(page.getByLabel('正式账号', { exact: true })).toBeVisible()
-  await expect(page.getByLabel('密码', { exact: true })).toBeVisible()
+  await expect(page.getByRole('group', { name: '选择账号登录凭据' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '刷脸进入' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '数字密码' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '账号密码' })).toBeVisible()
   await expect(page.locator('.face-family-summary')).toHaveCount(0)
   await expect(page.locator('.face-capture')).toHaveCount(0)
-  await expect(page.getByRole('button', { name: /刷脸|人脸|数字密码|PIN/ })).toHaveCount(0)
 }
 
-test('HCT-498 即使本地人脸模型就绪，欢迎页也只保留正式账号密码登录', async ({ page }) => {
+test('成员欢迎页保留正式账号密码、PIN 和人脸三种认证方式', async ({ page }) => {
   await installWelcomeApi(page, ['api', 'face-recognition-local'])
   await page.goto('/?portal=member')
-  await expectFormalOnlyLogin(page)
+  await expectFormalCredentialLogin(page)
 })
 
-test('历史本机家庭绑定不会重新暴露人脸登录入口', async ({ page }) => {
+test('历史本机家庭绑定仍可恢复正式人脸登录入口', async ({ page }) => {
   await installWelcomeApi(page, ['api', 'face-recognition-local'])
   await page.addInitScript(
     ([key, value]) => {
@@ -46,5 +47,8 @@ test('历史本机家庭绑定不会重新暴露人脸登录入口', async ({ pa
     ['hct:face-family-household', JSON.stringify(boundHousehold)],
   )
   await page.goto('/?portal=member')
-  await expectFormalOnlyLogin(page)
+  await expect(page.getByRole('group', { name: '选择账号登录凭据' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '刷脸进入' })).toHaveClass(/active/)
+  await expect(page.locator('.face-family-summary')).toBeVisible()
+  await expect(page.locator('.face-capture')).toBeVisible()
 })
