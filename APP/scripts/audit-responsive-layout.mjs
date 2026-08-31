@@ -14,8 +14,12 @@ import { fileURLToPath } from 'node:url'
 const appRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)))
 const stylePath = path.join(appRoot, 'src', 'style.css')
 const tabBarPath = path.join(appRoot, 'src', 'components', 'AppTabBar.vue')
-const styleSource = readFileSync(stylePath, 'utf8')
-const tabBarSource = readFileSync(tabBarPath, 'utf8')
+// Git checks out text files with the platform's line ending. Normalize before
+// matching multi-line contracts so the gate behaves identically on Windows
+// (CRLF) and Linux/macOS (LF).
+const normalizeLineEndings = (source) => source.replace(/\r\n?/g, '\n')
+const styleSource = normalizeLineEndings(readFileSync(stylePath, 'utf8'))
+const tabBarSource = normalizeLineEndings(readFileSync(tabBarPath, 'utf8'))
 const failures = []
 
 function assert(condition, message) {
