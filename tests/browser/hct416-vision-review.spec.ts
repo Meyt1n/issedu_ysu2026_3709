@@ -179,6 +179,23 @@ async function enterFamilySpace(page: Page): Promise<void> {
 
 async function createSyntheticTask(page: Page): Promise<void> {
   await page.locator('input[type="file"]').setInputFiles({ name: 'box.png', mimeType: 'image/png', buffer: sourceBytes })
+  const preview = page.locator('.capture-zone.has-preview img')
+  await expect(preview).toBeVisible()
+  const previewFit = await preview.evaluate(el => {
+    const zone = el.closest('.capture-zone')
+    if (!(el instanceof HTMLImageElement) || !(zone instanceof HTMLElement)) {
+      throw new Error('preview zone missing')
+    }
+    const imageBox = el.getBoundingClientRect()
+    const zoneBox = zone.getBoundingClientRect()
+    return {
+      objectFit: getComputedStyle(el).objectFit,
+      imageHeight: imageBox.height,
+      zoneHeight: zoneBox.height,
+    }
+  })
+  expect(previewFit.objectFit).toBe('contain')
+  expect(previewFit.imageHeight).toBeGreaterThan(previewFit.zoneHeight * 0.8)
   await page.getByRole('button', { name: '检查图片质量' }).click()
   await expect(page.getByText(/图片质量通过/)).toBeVisible()
   await page.getByRole('button', { name: /通过并创建识别任务/ }).click()

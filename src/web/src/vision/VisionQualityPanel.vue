@@ -6,6 +6,7 @@ import type { VisionQualityResponse, VisionTask } from '../api/types'
 import AppIcon from '../components/AppIcon.vue'
 import captureExampleUrl from '../assets/vision-capture-example-v2.png'
 import { requestOptions } from '../store'
+import { runVisionQualityCheckWithRepair } from './imageRepair'
 import {
   canCreateVisionTask,
   formatMetricValue,
@@ -30,6 +31,7 @@ const selectedFile = ref<File | null>(null)
 const previewUrl = ref('')
 const qualityResult = ref<VisionQualityResponse | null>(null)
 const createdTask = ref<VisionTask | null>(null)
+const autoRepaired = ref(false)
 const state = ref<QualityFlowState>('idle')
 const error = ref('')
 const guideOpen = ref(false)
@@ -94,7 +96,14 @@ function resetEvidence(): void {
   requestGeneration += 1
   qualityResult.value = null
   createdTask.value = null
+  autoRepaired.value = false
   error.value = ''
+}
+
+function replaceSelectedFile(file: File): void {
+  selectedFile.value = file
+  if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
+  previewUrl.value = URL.createObjectURL(file)
 }
 
 function clearFile(): void {
@@ -179,13 +188,20 @@ async function checkQuality(): Promise<void> {
   const generation = ++requestGeneration
   qualityResult.value = null
   createdTask.value = null
+  autoRepaired.value = false
   error.value = ''
   state.value = 'checking'
   try {
-    const result = await apiClient.checkVisionQuality(file, requestOptions.value)
-    if (generation !== requestGeneration || file !== selectedFile.value) return
-    qualityResult.value = result
-    state.value = canCreateVisionTask(result) ? 'passed' : 'retake'
+    const outcome = await runVisionQualityCheckWithRepair({
+      file,
+      check: current => apiClient.checkVisionQuality(current, requestOptions.value),
+      isCurrent: () => generation === requestGeneration,
+      onFileChanged: replaceSelectedFile,
+    })
+    if (!outcome || generation !== requestGeneration) return
+    qualityResult.value = outcome.result
+    autoRepaired.value = outcome.repaired && canCreateVisionTask(outcome.result)
+    state.value = canCreateVisionTask(outcome.result) ? 'passed' : 'retake'
   } catch (cause) {
     if (generation !== requestGeneration) return
     state.value = 'error'
@@ -298,7 +314,7 @@ watch(() => [props.actorId, props.memberId, props.accessPurpose], () => {
     </p>
 
     <div class="grid-two capture-layout">
-      <label class="capture-zone" :class="{ checking: state === 'checking' }" :aria-disabled="isBusy">
+      <label class="capture-zone" :class="{ checking: state === 'checking', 'has-preview': Boolean(previewUrl) }" :aria-disabled="isBusy">
         <img v-if="previewUrl" :src="previewUrl" alt="当前待检查药盒图片的本地预览" />
         <template v-else>
           <div class="capture-empty">
@@ -402,7 +418,15 @@ watch(() => [props.actorId, props.memberId, props.accessPurpose], () => {
         <template v-if="qualityResult?.decision === 'PASS'">
           <div class="notice ok" role="status">
             <AppIcon name="check" :size="16" />
-            {{ isMemberView ? '照片清楚，可以交给家人确认。' : `图片质量通过（配置 ${qualityResult.config_version}），可以创建本地识别任务。` }}
+            {{
+              isMemberView
+                ? (autoRepaired ? '已帮你调清楚一点，可以交给家人确认。' : '照片清楚，可以交给家人确认。')
+                : (
+                  autoRepaired
+                    ? `已自动调整清晰度和曝光后再检查通过（配置 ${qualityResult.config_version}），可以创建本地识别任务。`
+                    : `图片质量通过（配置 ${qualityResult.config_version}），可以创建本地识别任务。`
+                )
+            }}
           </div>
           <dl v-if="!isMemberView" class="quality-metrics">
             <div v-for="item in visibleMetrics" :key="item.key">
