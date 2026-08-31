@@ -4,7 +4,7 @@
 - 关联：HCT-417（正式会话）、HCT-423（PIN 后端）、HCT-425（人脸 1:N）、HCT-427（逐步确认）、HCT-453（双端口入口锁）、HCT-456（进入指引）、HCT-498（正式 Web 认证）、HCT-509（PIN 找回密码）
 - FR/NFR：FR-01；NFR-07（可理解的家庭级交互）；支撑 NFR-01
 - 风险等级：R2（认证入口 UX；不改后端契约、会话签发或授权判定）
-- 状态：进行中
+- 状态：实现与自动验证完成，待维护者合并复核
 
 ## 1. Story
 
@@ -82,8 +82,15 @@ npm run check:web
 npm run test:web
 npx playwright test tests/browser/hct409-accessibility.spec.ts tests/browser/hct417-web-session.spec.ts tests/browser/hct423-pin-portal.spec.ts tests/browser/hct425-welcome-face-binding.spec.ts tests/browser/hct453-portal-entry.spec.ts --config playwright.config.ts --project chromium
 npm run build:web
-git diff --check
 ```
+
+本环境验证（2026-08-31）：
+
+- `npm run check:web`：通过
+- `npm run test:web`：29 files / 267 tests passed
+- Playwright chromium 上述 5 个 spec：27 passed
+- `npm run build:web`：通过
+
 
 ## 7. 风险与回滚
 

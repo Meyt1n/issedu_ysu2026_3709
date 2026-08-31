@@ -168,7 +168,8 @@ test('管理后台可用本人六位数字密码重置忘记的正式密码', as
   await page.goto('/?portal=admin')
 
   await page.getByTestId('forgot-password').click()
-  await expect(page.getByText('本地忘记密码恢复')).toBeVisible()
+  await expect(page.getByRole('heading', { name: '忘记密码' })).toBeVisible()
+  await expect(page.getByLabel('本人六位数字密码', { exact: true })).toBeVisible()
   await page.getByLabel('正式账号', { exact: true }).fill('parent-admin')
   await page.getByLabel('家庭编号', { exact: true }).fill(household.id)
   await page.getByLabel('本人六位数字密码', { exact: true }).fill('042006')

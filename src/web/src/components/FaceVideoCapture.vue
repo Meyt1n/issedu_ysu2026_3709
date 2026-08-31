@@ -224,7 +224,6 @@ async function capture(): Promise<void> {
             ? '摄像头打不开，请检查权限后重试。'
             : '摄像头打不开，请改用账号密码。'
     speak(error.value)
-    if (props.showFallback) emit('fallback')
   } finally {
     stopCamera()
     capturing.value = false

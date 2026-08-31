@@ -389,7 +389,7 @@ async function submitCreate(): Promise<void> {
           <AppIcon name="key" :size="14" />
           管理后台
         </span>
-        <h2>{{ entryBranding ? entryBranding.formTitle : '登录' }}</h2>
+        <h2>{{ recoveryMode ? '忘记密码' : entryBranding ? entryBranding.formTitle : '登录' }}</h2>
         <p v-if="entryBranding?.formIdentityHint" class="portal-identity-hint">{{ entryBranding.formIdentityHint }}</p>
         <div v-if="entryConflictNotice" class="notice warn entry-conflict" role="alert">
           <AppIcon name="info" :size="16" />
