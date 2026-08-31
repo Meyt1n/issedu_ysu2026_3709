@@ -1574,6 +1574,25 @@ button:focus-visible, a:focus-visible {
   max-width: 100%;
 }
 
+.capture-zone.has-preview {
+  min-height: 300px;
+}
+
+.capture-zone.has-preview img {
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  height: calc(100% - 24px);
+  inset: 12px;
+  left: 12px;
+  max-height: none;
+  max-width: none;
+  object-fit: contain;
+  object-position: center;
+  position: absolute;
+  top: 12px;
+  width: calc(100% - 24px);
+}
+
 .capture-guide {
   display: grid;
   gap: 8px;

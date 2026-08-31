@@ -11,6 +11,7 @@ import {
   visionErrorNextAction,
   visionErrorTitle,
 } from '../vision/visionReasons'
+import { YOLO_OVERLAY_MIN_CONFIDENCE, yoloBoxesForOverlay } from '../vision/yoloOverlay'
 
 const props = defineProps<{
   task: VisionTask
@@ -49,9 +50,10 @@ function toggleChannel(channel: string): void {
 }
 
 const yoloBoxes = computed(() => boxedEvidence.value.filter(item => item.channel === 'yolo'))
+const overlayYoloBoxes = computed(() => yoloBoxesForOverlay(yoloBoxes.value))
 const otherBoxes = computed(() => boxedEvidence.value.filter(item => item.channel !== 'yolo'))
 
-const visibleYoloBoxes = computed(() => (channelVisible.value.yolo ? yoloBoxes.value : []))
+const visibleYoloBoxes = computed(() => (channelVisible.value.yolo ? overlayYoloBoxes.value : []))
 const visibleOtherBoxes = computed(() =>
   otherBoxes.value.filter(item => channelVisible.value[item.channel] ?? true),
 )
@@ -74,10 +76,14 @@ const pipeline = computed(() => {
     { label: '质量门控', count: null as number | null, state: 'done', hint: '上传前本地质量检查已通过' },
     {
       label: 'YOLO 包装定位',
-      count: yoloBoxes.value.length,
+      count: overlayYoloBoxes.value.length,
       state: yoloBoxes.value.length > 0 ? 'yolo' : 'off',
       hint: yoloBoxes.value.length > 0
-        ? '本地 YOLO11n 检测出药盒包装区域，为后续识别圈定重点'
+        ? (
+          overlayYoloBoxes.value.length > 0
+            ? `本地 YOLO11n 检测出药盒包装区域；图上只画置信度 ≥ ${Math.round(YOLO_OVERLAY_MIN_CONFIDENCE * 100)}% 的定位框`
+            : `检出包装区域，但置信度未达到 ${Math.round(YOLO_OVERLAY_MIN_CONFIDENCE * 100)}% 展示阈值`
+        )
         : '本任务处理时未启用 YOLO 权重',
     },
     {
@@ -240,14 +246,16 @@ const FIELD_LABELS: Record<string, string> = {
             :key="channel"
             type="button"
             class="channel-chip"
-            :class="{ off: !(channelVisible[channel] ?? true), highlight: channel === 'yolo' && yoloBoxes.length > 0 }"
+            :class="{ off: !(channelVisible[channel] ?? true), highlight: channel === 'yolo' && overlayYoloBoxes.length > 0 }"
             :style="{ '--ch': meta.color }"
-            :title="`点击${(channelVisible[channel] ?? true) ? '隐藏' : '显示'}${meta.label}标注`"
+            :title="channel === 'yolo'
+              ? `仅显示置信度 ≥ ${Math.round(YOLO_OVERLAY_MIN_CONFIDENCE * 100)}% 的定位框，点击${(channelVisible[channel] ?? true) ? '隐藏' : '显示'}`
+              : `点击${(channelVisible[channel] ?? true) ? '隐藏' : '显示'}${meta.label}标注`"
             @click="toggleChannel(channel)"
           >
             <i />
             {{ meta.label }}
-            <b>{{ channelCounts[channel] ?? 0 }}</b>
+            <b>{{ channel === 'yolo' ? overlayYoloBoxes.length : (channelCounts[channel] ?? 0) }}</b>
           </button>
         </div>
 
