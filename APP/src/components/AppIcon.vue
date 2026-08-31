@@ -12,6 +12,7 @@ export type IconName =
   | 'alert'
   | 'chevron-right'
   | 'arrow-left'
+  | 'arrow-up'
   | 'settings'
   | 'phone'
   | 'refresh'
@@ -46,6 +47,7 @@ const PATHS: Record<IconName, string[]> = {
   alert: ['M12 3L22 20H2z', 'M12 9.5V14', 'M12 16.8v.4'],
   'chevron-right': ['M9 5l7 7-7 7'],
   'arrow-left': ['M19 12H5', 'M11 5l-7 7 7 7'],
+  'arrow-up': ['M12 19V5', 'M5 12l7-7 7 7'],
   settings: [
     'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
     'M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5 5l2.1 2.1M16.9 16.9L19 19M19 5l-2.1 2.1M7.1 16.9L5 19',
