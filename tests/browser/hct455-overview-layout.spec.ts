@@ -1,5 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 
+import { submitFormalLogin } from './support/formalLogin'
+
 /**
  * HCT-455 总览排版修复（图二 / 图三 / 图四）。
  *
@@ -118,9 +120,7 @@ async function signInAsAdmin(page: Page): Promise<void> {
   await page.setViewportSize({ width: 1280, height: 800 })
   await installOverviewApi(page)
   await page.goto('/?portal=admin')
-  await page.getByLabel('本地账号').fill('parent-admin')
-  await page.getByLabel('密码').fill('synthetic-password-123')
-  await page.getByRole('button', { name: '进入管理后台' }).click()
+  await submitFormalLogin(page, 'parent-admin')
   await expect(page.locator('.app-frame')).toBeVisible()
   await expect(page.locator('.weather-action-panel')).toBeVisible()
 }

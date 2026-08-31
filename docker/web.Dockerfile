@@ -6,13 +6,10 @@ RUN npm ci
 COPY src/web ./src/web
 # Web 助手朗读依赖仓库根 shared/voice（@hct/voice），构建镜像必须一并打入。
 COPY shared ./shared
-# 本地教学 Compose 档默认保留「开发演示」登录入口（与 compose 默认的
-# ALLOW_DEV_ACTOR_HEADER=true 对齐）；正式部署请用 --build-arg 关闭，
-# 「模型实验室」等研发入口默认在生产构建中隐藏（HCT-439）。
-ARG VITE_SHOW_DEV_LOGIN=true
+# HCT-498：所有 Web 构建只提供正式账号密码登录；不再编译开发身份入口。
+# 「模型实验室」等研发入口仍默认在生产构建中隐藏（HCT-439）。
 ARG VITE_SHOW_ADVANCED_LAB=false
-ENV VITE_SHOW_DEV_LOGIN=${VITE_SHOW_DEV_LOGIN} \
-    VITE_SHOW_ADVANCED_LAB=${VITE_SHOW_ADVANCED_LAB}
+ENV VITE_SHOW_ADVANCED_LAB=${VITE_SHOW_ADVANCED_LAB}
 RUN npm run build:web
 
 FROM nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10

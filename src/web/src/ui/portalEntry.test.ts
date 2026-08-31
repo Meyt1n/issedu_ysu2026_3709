@@ -127,27 +127,22 @@ describe('portalEntryBranding', () => {
     expect(portalEntryBranding('auto')).toBeNull()
   })
 
-  it('brands the member entry as a personal front door around face/PIN', () => {
+  it('brands the member entry as a personal front door with formal password login', () => {
     const branding = portalEntryBranding('member')!
-    expect(branding.formTitle).toContain('我的健康日常')
+    expect(branding.formTitle).toContain('正式登录')
     expect(branding.heroTitle).toContain('我的健康日常')
-    expect(branding.formIdentityHint).toContain('自己的身份')
-    expect(branding.credentialOrder[0]).toBe('face')
-    expect(branding.defaultCredential).toBe('pin')
-    expect(branding.passwordBehindOtherWays).toBe(true)
-    expect(branding.ctaLabel).toBe('进入我的前台')
+    expect(branding.formIdentityHint).toContain('正式账号')
+    expect(branding.formIdentityHint).toContain('密码')
+    expect(branding.ctaLabel).toBe('登录成员前台')
     expect(branding.crossLinkTarget).toBe('admin')
   })
 
-  it('brands the admin entry around whole-family management with password first', () => {
+  it('brands the admin entry around whole-family management with the same formal login', () => {
     const branding = portalEntryBranding('admin')!
     expect(branding.formTitle).toContain('家庭管理后台')
     expect(branding.formIdentityHint).toContain('整个家庭')
-    expect(branding.credentialOrder[0]).toBe('password')
-    expect(branding.credentialOrder).toEqual(['password'])
-    expect(branding.defaultCredential).toBe('password')
-    expect(branding.passwordBehindOtherWays).toBe(false)
-    expect(branding.ctaLabel).toBe('进入管理后台')
+    expect(branding.formIdentityHint).toContain('账号密码')
+    expect(branding.ctaLabel).toBe('登录管理后台')
     expect(branding.crossLinkTarget).toBe('member')
   })
 
@@ -169,7 +164,7 @@ describe('portalEntryConflictNotice', () => {
     const notice = portalEntryConflictNotice('need-admin-entry')
     expect(notice.message).toContain('家庭成员前台')
     expect(notice.message).toContain('管理员')
-    expect(notice.message).toContain('数字密码')
+    expect(notice.message).toContain('正式账号密码')
     expect(notice.message).not.toContain('demo-parent')
     expect(notice.crossLinkTarget).toBe('admin')
   })
@@ -185,7 +180,7 @@ describe('portalEntryConflictNotice', () => {
     const notice = portalEntryConflictNotice('need-member-entry')
     expect(notice.message).toContain('管理后台')
     expect(notice.message).toContain('成员前台')
-    expect(notice.message).toContain('数字密码')
+    expect(notice.message).toContain('正式账号密码')
     expect(notice.crossLinkTarget).toBe('member')
   })
 
@@ -194,6 +189,6 @@ describe('portalEntryConflictNotice', () => {
     expect(MEMBER_PORTAL_ENTRY_STEPS[0]).toContain('成员前台')
     expect(MEMBER_PORTAL_ENTRY_STEPS[0]).not.toContain('scripts/')
     expect(MEMBER_PORTAL_ENTRY_STEPS[1]).toContain('5173')
-    expect(MEMBER_PORTAL_ENTRY_STEPS[2]).toContain('数字密码')
+    expect(MEMBER_PORTAL_ENTRY_STEPS[2]).toContain('正式账号密码')
   })
 })

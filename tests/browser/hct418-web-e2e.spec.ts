@@ -1,5 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 
+import { mockFormalSessionApi, submitFormalLogin } from './support/formalLogin'
+
 const household = {
   id: 'e2e-household',
   name: 'Synthetic E2E household',
@@ -202,14 +204,14 @@ async function installSyntheticApi(page: Page, qualityDecision: 'PASS' | 'RETAKE
 
     return respond([])
   })
+  await mockFormalSessionApi(page)
 
   return requests
 }
 
 async function enterFamilySpace(page: Page): Promise<void> {
   await page.goto('/')
-  await page.getByLabel(/(?:开发|调试)身份标识/).fill('e2e-owner')
-  await page.getByRole('button', { name: '进入家庭空间' }).click()
+  await submitFormalLogin(page, 'e2e-owner')
   await expect(page.locator('.app-frame')).toBeVisible()
 }
 
@@ -234,9 +236,10 @@ test('扫描质量门控到人工确认：候选不先写入健康事实', async
   await navItem(page, '人工复核').click()
   await expect(page.getByText('识别结果仅为候选')).toBeVisible()
   await expect(page.getByText('Synthetic medicine')).toBeVisible()
-  await page.getByRole('button', { name: '确认候选' }).click()
-  await page.getByRole('button', { name: '提交' }).click()
-  await expect(page.getByText(/确认候选「Synthetic medicine」/)).toBeVisible()
+  await page.getByRole('button', { name: '确认保存' }).click()
+  await page.getByRole('button', { name: '确认保存' }).last().click()
+  await expect(page.getByText('Synthetic medicine 已确认', { exact: true })).toBeVisible()
+  expect(requests.some(path => path.endsWith('/confirm'))).toBe(true)
 })
 
 test('质量门控失败时不给下游上传和任务创建机会', async ({ page }) => {
@@ -374,10 +377,10 @@ test('模型实验室展示发布阻断，不把候选版本伪装成已发布',
 
 test('离线时不进入家庭空间，也不渲染旧健康摘要', async ({ page }) => {
   await page.route('**/api/v1/households', route => route.abort('failed'))
+  await mockFormalSessionApi(page)
   await page.goto('/')
-  await page.getByLabel('开发身份标识').fill('e2e-owner')
-  await page.getByRole('button', { name: '进入家庭空间' }).click()
-  await expect(page.getByRole('alert')).toContainText('本地 API 服务不可用')
+  await submitFormalLogin(page, 'e2e-owner')
+  await expect(page.getByRole('alert')).toContainText('本地服务暂时连不上')
   await expect(page.locator('.app-frame')).toHaveCount(0)
   await expect(page.getByText('Synthetic E2E member')).toHaveCount(0)
 })
@@ -388,31 +391,31 @@ test('空数据、未授权和服务异常都显示恢复入口', async ({ page 
     contentType: 'application/json',
     body: JSON.stringify([]),
   }))
+  await mockFormalSessionApi(page)
   await page.goto('/')
-  await page.getByLabel('开发身份标识').fill('e2e-empty')
-  await page.getByRole('button', { name: '进入家庭空间' }).click()
+  await submitFormalLogin(page, 'e2e-empty')
   await expect(page.getByRole('heading', { name: '创建你的家庭' })).toBeVisible()
   await expect(page.locator('.app-frame')).toHaveCount(0)
 
-  await page.reload()
   await page.unroute('**/api/v1/households')
   await page.route('**/api/v1/households', async route => route.fulfill({
     status: 401,
     contentType: 'application/json',
     body: JSON.stringify({ detail: 'AUTH_REQUIRED' }),
   }))
-  await page.getByLabel('开发身份标识').fill('e2e-unauthorized')
-  await page.getByRole('button', { name: '进入家庭空间' }).click()
-  await expect(page.getByRole('alert')).toContainText('需要先填写开发身份')
-
+  await page.evaluate(() => window.localStorage.removeItem('hct:auth-session'))
+  await page.context().clearCookies()
   await page.reload()
+  await submitFormalLogin(page, 'e2e-unauthorized')
+  await expect(page.getByRole('alert')).toContainText('会话已过期或已被撤销，请重新登录。')
+
   await page.unroute('**/api/v1/households')
   await page.route('**/api/v1/households', async route => route.fulfill({
     status: 504,
     contentType: 'application/json',
     body: JSON.stringify({ detail: 'UPSTREAM_TIMEOUT' }),
   }))
-  await page.getByLabel('开发身份标识').fill('e2e-timeout')
-  await page.getByRole('button', { name: '进入家庭空间' }).click()
-  await expect(page.getByRole('alert')).toContainText('请求未能完成')
+  await page.reload()
+  await submitFormalLogin(page, 'e2e-timeout')
+  await expect(page.getByRole('alert')).toContainText('本地服务暂时连不上')
 })

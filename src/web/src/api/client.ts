@@ -804,7 +804,7 @@ export class ApiClient {
     )
   }
 
-  /** 携带开发身份头下载文件字节（<img> 无法带请求头，需转 blob URL）。 */
+  /** 携带认证请求头下载文件字节（<img> 无法带请求头，需转 blob URL）。 */
   async fetchFileBlob(storageKey: string, options: RequestOptions = {}): Promise<Blob> {
     const headers = new Headers()
     if (options.sessionToken) headers.set('Authorization', `Bearer ${options.sessionToken}`)

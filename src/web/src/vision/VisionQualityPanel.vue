@@ -5,6 +5,7 @@ import { ApiClientError, apiClient } from '../api/client'
 import type { VisionQualityResponse, VisionTask } from '../api/types'
 import AppIcon from '../components/AppIcon.vue'
 import captureExampleUrl from '../assets/vision-capture-example-v2.png'
+import { requestOptions } from '../store'
 import {
   canCreateVisionTask,
   formatMetricValue,
@@ -16,7 +17,6 @@ import {
 } from './qualityView'
 
 const props = defineProps<{
-  actorId: string
   memberId?: string
   accessPurpose?: string
   audience?: 'member' | 'admin'
@@ -37,7 +37,7 @@ let requestGeneration = 0
 
 const isBusy = computed(() => state.value === 'checking' || state.value === 'queueing')
 const isMemberView = computed(() => props.audience === 'member')
-const canCheck = computed(() => Boolean(selectedFile.value && props.actorId && !isBusy.value))
+const canCheck = computed(() => Boolean(selectedFile.value && requestOptions.value.sessionToken && !isBusy.value))
 const canQueue = computed(
   () => (
     canCreateVisionTask(qualityResult.value)
@@ -170,9 +170,9 @@ function explainError(cause: unknown): string {
 async function checkQuality(): Promise<void> {
   const file = selectedFile.value
   if (!file) return
-  if (!props.actorId) {
+  if (!requestOptions.value.sessionToken) {
     state.value = 'error'
-    error.value = '请先进入家庭空间。'
+    error.value = '正式会话已失效，请重新登录。'
     return
   }
 
@@ -182,7 +182,7 @@ async function checkQuality(): Promise<void> {
   error.value = ''
   state.value = 'checking'
   try {
-    const result = await apiClient.checkVisionQuality(file, { actorId: props.actorId })
+    const result = await apiClient.checkVisionQuality(file, requestOptions.value)
     if (generation !== requestGeneration || file !== selectedFile.value) return
     qualityResult.value = result
     state.value = canCreateVisionTask(result) ? 'passed' : 'retake'
@@ -196,10 +196,9 @@ async function checkQuality(): Promise<void> {
 async function queueVisionTask(): Promise<void> {
   const file = selectedFile.value
   const result = qualityResult.value
-  if (!file || !props.actorId || !canCreateVisionTask(result) || !result?.quality_receipt) return
+  if (!file || !requestOptions.value.sessionToken || !canCreateVisionTask(result) || !result?.quality_receipt) return
 
   const generation = ++requestGeneration
-  const actorId = props.actorId
   const memberId = props.memberId
   error.value = ''
   state.value = 'queueing'
@@ -207,7 +206,7 @@ async function queueVisionTask(): Promise<void> {
     const task = await queuePassedVisionFile({
       file,
       result,
-      actorId,
+      requestOptions: requestOptions.value,
       memberId,
       accessPurpose: props.accessPurpose,
       idempotencyKey: globalThis.crypto?.randomUUID?.() ?? `web-${Date.now()}`,

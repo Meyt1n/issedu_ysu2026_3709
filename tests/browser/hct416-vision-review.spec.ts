@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto'
 
 import { expect, test, type Page } from '@playwright/test'
 
+import { mockFormalSessionApi, submitFormalLogin } from './support/formalLogin'
+
 const household = {
   id: 'household-1',
   name: 'Synthetic household',
@@ -163,17 +165,15 @@ async function installSyntheticApi(page: Page, terminal: 'failed' | 'succeeded')
     }
     return respond({ detail: `Unexpected synthetic request: ${request.method()} ${path}` }, 500)
   })
+  await mockFormalSessionApi(page)
 
   return { calls }
 }
 
 async function enterFamilySpace(page: Page): Promise<void> {
   await page.goto('/')
-  await expect(page.getByRole('button', { name: '进入家庭空间' })).toBeVisible({ timeout: 20_000 })
-  // The welcome page label differs slightly between development builds; both
-  // labels refer to the same local identity field.
-  await page.getByLabel(/(?:开发|调试)身份标识/).fill('owner-1')
-  await page.getByRole('button', { name: '进入家庭空间' }).click()
+  await expect(page.getByRole('button', { name: '登录家庭空间' })).toBeVisible({ timeout: 20_000 })
+  await submitFormalLogin(page, 'owner-1')
   await expect(page.locator('.app-frame')).toBeVisible({ timeout: 20_000 })
 }
 
