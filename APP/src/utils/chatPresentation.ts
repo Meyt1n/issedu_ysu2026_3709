@@ -40,10 +40,10 @@ export function chatTimestampIso(value: number | undefined): string | undefined 
   return validDate(value)?.toISOString()
 }
 
-export function chatEntryAriaLabel(entry: ChatPresentationEntry): string {
+export function chatEntryAriaLabel(entry: ChatPresentationEntry, now = Date.now()): string {
   const speaker = entry.role === 'user' ? '我' : '助手'
   const content = entry.content.trim() || '正在生成回答'
-  const time = formatChatTimestamp(entry.createdAt)
+  const time = formatChatTimestamp(entry.createdAt, now)
   return `${speaker}：${content}${time ? `，${time}` : ''}`
 }
 

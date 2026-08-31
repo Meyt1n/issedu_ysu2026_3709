@@ -26,7 +26,7 @@ describe('chat presentation', () => {
 
   it('provides a speaker/content/time label for TalkBack', () => {
     const timestamp = new Date(2026, 7, 29, 8, 9).getTime()
-    expect(chatEntryAriaLabel({ role: 'assistant', content: '请先确认计划', createdAt: timestamp }))
+    expect(chatEntryAriaLabel({ role: 'assistant', content: '请先确认计划', createdAt: timestamp }, reference))
       .toBe('助手：请先确认计划，今天 08:09')
   })
 
