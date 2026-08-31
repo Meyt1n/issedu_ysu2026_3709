@@ -32,7 +32,7 @@ defineProps<{ state: ReminderSyncResult }>()
 .reminder-status { margin-top: 10px; display: grid; gap: 10px; }
 .reminder-heading { display: flex; align-items: flex-start; gap: 10px; }
 h2 { margin: 0; font-size: 1rem; }
-.reminder-help { border-top: 1px solid var(--line); padding-top: 8px; }
+.reminder-help { border-top: 1px solid var(--c-line); padding-top: 8px; }
 .reminder-help summary { cursor: pointer; font-weight: 700; }
 .reminder-help ol { margin: 8px 0; padding-left: 22px; }
 .reminder-help li + li { margin-top: 5px; }
