@@ -1,10 +1,11 @@
 # HCT-509 正式账号密码修改与 PIN 本地恢复
 
 - Issue：[#637](https://github.com/Meyt1n/issedu_ysu2026_3709/issues/637)
+- PR：[#639](https://github.com/Meyt1n/issedu_ysu2026_3709/pull/639)
 - 关联：HCT-417（正式会话）、HCT-423（家庭 PIN）、HCT-428（持久化与会话轮换）、HCT-498（正式 Web 登录）
 - FR/NFR：FR-01；NFR-01、NFR-03、NFR-04、NFR-07
 - 风险等级：R3（认证凭据变更与全会话撤销）
-- 状态：实现完成，待 PR 与维护者复核
+- 状态：实现与验证完成，待维护者合并复核
 
 ## 1. Story
 
