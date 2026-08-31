@@ -46,6 +46,7 @@ from app.audit_pagination import decode_audit_cursor, encode_audit_cursor
 from app.auth import (
     authenticate,
     authenticate_with_pin,
+    change_account_password,
     check_face_rate_limit,
     clear_face_challenge_rate_limit,
     clear_face_failures,
@@ -62,6 +63,7 @@ from app.auth import (
     introspect_session,
     logout,
     record_face_failure,
+    recover_account_password_with_pin,
     register_account,
     revoke_household_sessions,
     set_account_pin,
@@ -225,6 +227,8 @@ from app.schemas import (
     OutboxDispatchRead,
     OutboxDispatchRequest,
     OutboxRead,
+    PasswordChangeRequest,
+    PasswordRecoveryRequest,
     PinLoginCredentials,
     PinSetRequest,
     PlanAutomationRead,
@@ -379,6 +383,60 @@ def _record_authentication_audit(
             purpose="authentication",
             outcome=outcome,
             reason=reason[:64],
+        )
+    )
+    session.commit()
+
+
+def _account_audit_household(session: Session, actor_id: str) -> str | None:
+    """Find one non-deleted household for account-security audit metadata."""
+    owned = session.scalar(
+        select(Household.id)
+        .where(Household.created_by == actor_id, Household.deleted_at.is_(None))
+        .order_by(Household.id.asc())
+        .limit(1)
+    )
+    if owned is not None:
+        return owned
+    return session.scalar(
+        select(Member.household_id)
+        .join(Household, Household.id == Member.household_id)
+        .where(
+            Member.actor_id == actor_id,
+            Member.deleted_at.is_(None),
+            Household.deleted_at.is_(None),
+        )
+        .order_by(Member.household_id.asc())
+        .limit(1)
+    )
+
+
+def _record_account_security_audit(
+    session: Session,
+    *,
+    actor_id: str,
+    action: str,
+    outcome: str,
+    reason: str,
+    household_id: str | None = None,
+) -> None:
+    """Persist password-change metadata without storing any credential."""
+    audit_household_id = household_id or _account_audit_household(session, actor_id)
+    household = session.get(Household, audit_household_id) if audit_household_id else None
+    if _is_erased(household):
+        return
+    session.add(
+        AccessAudit(
+            household_id=audit_household_id,
+            authorization_id=None,
+            actor_id=actor_id,
+            operation="AUTHENTICATION",
+            action=action,
+            data_field="account_password",
+            purpose="authentication",
+            outcome=outcome,
+            reason=reason[:64],
+            request_id=current_request_id(),
         )
     )
     session.commit()
@@ -1902,6 +1960,85 @@ def auth_login(
         "actor_id": payload.actor_id,
         **authentication,
     }
+
+
+@router.post("/auth/change-password", response_model=AuthSessionRead)
+def auth_change_password(
+    payload: PasswordChangeRequest,
+    actor_id: str = Depends(get_actor_id),
+    session_token: str = Depends(require_session_token),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    """Rotate the current actor's password and all of its live sessions."""
+    try:
+        authentication = change_account_password(
+            actor_id,
+            payload.current_password,
+            payload.new_password,
+            session_token,
+            session,
+        )
+    except HTTPException as exc:
+        _record_account_security_audit(
+            session,
+            actor_id=actor_id,
+            action="PASSWORD_CHANGE",
+            outcome="FAILED",
+            reason=str(exc.detail).split(":", 1)[0],
+        )
+        raise
+    _record_account_security_audit(
+        session,
+        actor_id=actor_id,
+        action="PASSWORD_CHANGE",
+        outcome="SUCCESS",
+        reason="PASSWORD_ROTATED",
+    )
+    return {"actor_id": actor_id, **authentication}
+
+
+@router.post("/auth/recover-password", response_model=AuthSessionRead)
+def auth_recover_password(
+    payload: PasswordRecoveryRequest,
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    """Recover a formal account locally with its own household PIN.
+
+    No email/SMS or cloud reset channel exists in this local-only product. The
+    PIN must belong to the same actor and household as the account being reset.
+    """
+    try:
+        authentication = recover_account_password_with_pin(
+            payload.actor_id,
+            payload.household_id,
+            payload.pin,
+            payload.new_password,
+            eligible=_actor_belongs_to_household(
+                session,
+                payload.household_id,
+                payload.actor_id,
+            ),
+            session=session,
+        )
+    except HTTPException as exc:
+        _record_account_security_audit(
+            session,
+            actor_id=payload.actor_id,
+            household_id=payload.household_id,
+            action="PASSWORD_RECOVERY",
+            outcome="FAILED",
+            reason=str(exc.detail).split(":", 1)[0],
+        )
+        raise
+    _record_account_security_audit(
+        session,
+        actor_id=payload.actor_id,
+        household_id=payload.household_id,
+        action="PASSWORD_RECOVERY",
+        outcome="SUCCESS",
+        reason="PASSWORD_RECOVERED_WITH_PIN",
+    )
+    return {"actor_id": payload.actor_id, **authentication}
 
 
 @router.post("/auth/pin-login", response_model=AuthSessionRead)

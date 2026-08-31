@@ -43,6 +43,8 @@
 | GET | `/api/v1/meta/capabilities` | 系统能力元数据 | ✅ |
 | POST | `/api/v1/auth/register` | 使用 JSON 请求体注册本地账号 | ✅ |
 | POST | `/api/v1/auth/login` | 使用 JSON 请求体建立短期 Bearer 会话 | ✅ |
+| POST | `/api/v1/auth/change-password` | Bearer + 当前密码修改正式账号密码，撤销全部旧会话并返回新会话 | ✅ |
+| POST | `/api/v1/auth/recover-password` | 使用同一账号在同一家庭已配置的 PIN 本地恢复密码，统一失败响应 | — |
 | POST | `/api/v1/auth/logout` | 撤销当前短期会话 | ✅ |
 | POST | `/api/v1/auth/session` | Bearer 会话续验，返回操作者、家庭范围、签发时间和到期时间；不返回令牌 | ✅ |
 | GET | `/api/v1/households` | 列出当前用户可见的家庭 | ✅ |

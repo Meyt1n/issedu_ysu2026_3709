@@ -55,6 +55,21 @@ async function installEntryApi(page: Page): Promise<void> {
         expires_at: (Date.now() + 1_800_000) / 1000,
       })
     }
+    if (request.method() === 'POST' && path === '/api/v1/auth/change-password') {
+      return respond({
+        actor_id: 'parent-admin',
+        session_token: 'n'.repeat(48),
+        expires_at: (Date.now() + 1_800_000) / 1000,
+      })
+    }
+    if (request.method() === 'POST' && path === '/api/v1/auth/recover-password') {
+      return respond({
+        actor_id: 'parent-admin',
+        household_id: household.id,
+        session_token: 'r'.repeat(48),
+        expires_at: (Date.now() + 1_800_000) / 1000,
+      })
+    }
     if (request.method() === 'POST' && path === '/api/v1/auth/pin-login') {
       return respond({
         actor_id: grandmaMember.actor_id,
@@ -150,6 +165,63 @@ test('管理后台入口展示全家管理品牌，并复用同一正式登录�
   const crossLink = page.getByRole('link', { name: /我是家庭成员，回成员前台/ })
   await expect(crossLink).toBeVisible()
   await expect(crossLink).toHaveAttribute('href', 'http://127.0.0.1:5173/?portal=member')
+})
+
+test('管理后台可用本人六位数字密码重置忘记的正式密码', async ({ page }) => {
+  await installEntryApi(page)
+  await page.goto('/?portal=admin')
+
+  await page.getByTestId('forgot-password').click()
+  await expect(page.getByText('本地忘记密码恢复')).toBeVisible()
+  await page.getByLabel('正式账号', { exact: true }).fill('parent-admin')
+  await page.getByLabel('家庭编号', { exact: true }).fill(household.id)
+  await page.getByLabel('本人六位数字密码', { exact: true }).fill('042006')
+  await page.getByLabel('新密码', { exact: true }).fill('new-password-456')
+  await page.getByLabel('再次输入新密码', { exact: true }).fill('new-password-456')
+
+  const submitted = page.waitForRequest(request =>
+    request.method() === 'POST'
+    && new URL(request.url()).pathname === '/api/v1/auth/recover-password')
+  await page.getByRole('button', { name: '重置密码并登录' }).click()
+  const request = await submitted
+
+  expect(request.postDataJSON()).toEqual({
+    actor_id: 'parent-admin',
+    household_id: household.id,
+    pin: '042006',
+    new_password: 'new-password-456',
+  })
+  expect(request.url()).not.toContain('042006')
+  await expect(page.locator('.app-frame')).toBeVisible()
+})
+
+test('登录后可修改密码并保持在新会话中', async ({ page }) => {
+  await installEntryApi(page)
+  await page.goto('/?portal=admin')
+  await submitFormalLogin(page, 'parent-admin')
+  await expect(page.locator('.app-frame')).toBeVisible()
+
+  await page.getByRole('button', { name: '修改账号密码' }).click()
+  const dialog = page.getByRole('dialog', { name: '修改正式账号密码' })
+  await expect(dialog).toBeVisible()
+  await dialog.getByLabel('当前密码', { exact: true }).fill('password-123')
+  await dialog.getByLabel('新密码', { exact: true }).fill('new-password-456')
+  await dialog.getByLabel('再次输入新密码', { exact: true }).fill('new-password-456')
+
+  const submitted = page.waitForRequest(request =>
+    request.method() === 'POST'
+    && new URL(request.url()).pathname === '/api/v1/auth/change-password')
+  await dialog.getByRole('button', { name: '确认修改' }).click()
+  const request = await submitted
+
+  expect(request.postDataJSON()).toEqual({
+    current_password: 'password-123',
+    new_password: 'new-password-456',
+  })
+  expect(request.headers().authorization).toBe(`Bearer ${'o'.repeat(48)}`)
+  await expect(dialog).toBeHidden()
+  await expect(page.getByText('密码已修改，其他设备上的旧会话已退出。')).toBeVisible()
+  await expect(page.locator('.app-frame')).toBeVisible()
 })
 
 test('成员前台与管理后台的欢迎页明显不同（标语、徽标、主按钮互不出现）', async ({ page }) => {

@@ -247,6 +247,7 @@ export function formatError(cause: unknown): string {
       return '数据已在其它位置被修改，请刷新后再试。'
     }
     if (cause.status === 422) {
+      if (cause.message === 'PASSWORD_REUSE') return '新密码不能与当前密码相同，请换一个新密码。'
       if (cause.message === 'FACE_FRAME_LOW_QUALITY') {
         return '摄像头画面太小或过暗过亮：请改善光线后重新采集；也可以改用数字密码。'
       }
@@ -699,6 +700,55 @@ export async function connectWithPassword(
     state.status = 'signed-out'
     if (sessionExpired) return
     state.error = formatError(cause)
+  }
+}
+
+export async function changeCurrentPassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<void> {
+  if (!state.sessionToken) {
+    throw new ApiClientError('SESSION_REQUIRED', {
+      status: 401,
+      code: 'UNAUTHENTICATED',
+    })
+  }
+  const preferredHouseholdId = state.selectedHouseholdId
+  const rotated = await apiClient.changePassword(
+    currentPassword,
+    newPassword,
+    {
+      ...requestOptions.value,
+      // A wrong current password is a failed confirmation, not evidence that
+      // the already validated Bearer session has expired.
+      suppressUnauthorizedHandler: true,
+    },
+  )
+  await enterAuthenticatedSession(rotated, preferredHouseholdId)
+}
+
+export async function recoverPasswordWithPin(
+  actorId: string,
+  householdId: string,
+  pin: string,
+  newPassword: string,
+  accessPurpose: string,
+): Promise<void> {
+  const actor = actorId.trim()
+  const household = householdId.trim()
+  clearSessionContext()
+  state.authMode = 'session'
+  state.actorId = actor
+  state.accessPurpose = accessPurpose.trim()
+  state.status = 'loading'
+  try {
+    const recovered = await apiClient.recoverPassword(actor, household, pin, newPassword)
+    await enterAuthenticatedSession(recovered, household)
+  } catch (cause) {
+    clearSessionContext()
+    state.authMode = 'session'
+    state.status = 'signed-out'
+    throw cause
   }
 }
 

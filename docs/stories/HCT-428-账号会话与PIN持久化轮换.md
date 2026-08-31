@@ -61,6 +61,7 @@
 ### 本地验收证据（2026-08-24）
 
 - `tests/safety/test_hct428_persistent_auth.py`：跨 Session 持久化、Bearer 摘要、PIN challenge、限流和密码登录轮换通过。
+- 2026-08-31：HCT-509（[#637](https://github.com/Meyt1n/issedu_ysu2026_3709/issues/637)）补齐真实改密码/PIN 恢复触发的 actor 全会话撤销；旧 token、旧密码和跨身份恢复均有集成回归。
 - `tests/integration/test_hct417_web_session.py::test_auth_session_is_committed_across_request_boundaries`：文件型 SQLite + 每请求新 Session 验证注册、登录、Bearer 业务请求和登出跨请求提交；修复 FastAPI `get_session` 正常请求未提交导致下一请求误报 `SESSION_INVALID` 的边界。
 - HCT-107、HCT-427 及人脸/擦除相关契约测试通过。
 - `uv run alembic upgrade head` 成功，`0018_hct428_auth_persistence` 为单一 migration head。

@@ -51,6 +51,22 @@ class AuthCredentials(BaseModel):
     password: str = Field(min_length=8, max_length=256)
 
 
+class PasswordChangeRequest(BaseModel):
+    """Current-session password rotation; plaintext is request-only."""
+
+    current_password: str = Field(min_length=8, max_length=256)
+    new_password: str = Field(min_length=8, max_length=256)
+
+
+class PasswordRecoveryRequest(BaseModel):
+    """Local recovery authenticated by the same actor's household PIN."""
+
+    actor_id: str = Field(min_length=1, max_length=120, pattern=ACTOR_ID_PATTERN)
+    household_id: str = Field(min_length=1, max_length=120)
+    pin: str = Field(pattern=r"^[0-9]{6}$")
+    new_password: str = Field(min_length=8, max_length=256)
+
+
 class PinLoginCredentials(BaseModel):
     household_id: str = Field(min_length=1, max_length=120)
     actor_id: str = Field(min_length=1, max_length=120)

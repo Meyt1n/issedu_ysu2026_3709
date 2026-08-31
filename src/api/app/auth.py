@@ -296,6 +296,105 @@ def authenticate(actor_id: str, password: str, session: Session | None = None) -
         return _create_session(db, actor_id, rotate_existing=True)
 
 
+def revoke_actor_sessions(actor_id: str, session: Session | None = None) -> int:
+    """Revoke every active session for an actor after a credential change."""
+    with _session_scope(session) as db:
+        records = list(
+            db.scalars(
+                select(AuthSession).where(
+                    AuthSession.actor_id == actor_id,
+                    AuthSession.revoked_at.is_(None),
+                )
+            ).all()
+        )
+        now = _now()
+        for record in records:
+            record.revoked_at = now
+        return len(records)
+
+
+def change_account_password(
+    actor_id: str,
+    current_password: str,
+    new_password: str,
+    session_token: str,
+    session: Session | None = None,
+) -> dict[str, Any]:
+    """Change a password from a live session and rotate all actor sessions."""
+    with _session_scope(session) as db:
+        rate_key = f"password-change:{actor_id}"
+        _check_rate_limit(db, rate_key)
+        account = db.get(AuthAccount, actor_id)
+        hashed = account.password_hash if account is not None else _DUMMY_PASSWORD_HASH
+        if account is None or not verify_password(current_password, hashed):
+            _record_failure(db, rate_key)
+            db.commit()
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="AUTH_FAILED")
+        if current_password == new_password:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="PASSWORD_REUSE",
+            )
+
+        current_session = _session_record(db, session_token)
+        household_id = current_session.household_id
+        account.password_hash = hash_password(new_password)
+        account.updated_at = _now()
+        revoke_actor_sessions(actor_id, db)
+        _clear_failures(db, rate_key)
+        return {
+            **_create_session(db, actor_id, household_id=household_id),
+            "household_id": household_id,
+        }
+
+
+def recover_account_password_with_pin(
+    actor_id: str,
+    household_id: str,
+    pin: str,
+    new_password: str,
+    *,
+    eligible: bool,
+    session: Session | None = None,
+) -> dict[str, Any]:
+    """Recover a local account with that same actor's household PIN.
+
+    Household membership is supplied as ``eligible`` but evaluated only after
+    the same rate-limit and dummy-bcrypt work. A missing account or PIN follows
+    the same generic 401 path, so the recovery endpoint cannot enumerate them.
+    """
+    _validate_pin(pin)
+    with _session_scope(session) as db:
+        rate_keys = [
+            f"pin:{household_id}:{actor_id}",
+            f"password-recovery:{household_id}:{actor_id}",
+        ]
+        for rate_key in rate_keys:
+            _check_rate_limit(db, rate_key)
+        account = db.get(AuthAccount, actor_id)
+        credential = db.get(AuthPin, {"household_id": household_id, "actor_id": actor_id})
+        pin_hash = credential.pin_hash if credential is not None else _DUMMY_PIN_HASH
+        # Always perform both bcrypt checks before deciding, so the endpoint
+        # does not reveal whether the account or PIN row exists.
+        verify_password("account-existence-probe", _DUMMY_PASSWORD_HASH)
+        pin_valid = verify_password(pin, pin_hash)
+        if not eligible or account is None or credential is None or not pin_valid:
+            for rate_key in rate_keys:
+                _record_failure(db, rate_key)
+            db.commit()
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="AUTH_FAILED")
+
+        account.password_hash = hash_password(new_password)
+        account.updated_at = _now()
+        revoke_actor_sessions(actor_id, db)
+        for rate_key in rate_keys:
+            _clear_failures(db, rate_key)
+        return {
+            **_create_session(db, actor_id, household_id=household_id),
+            "household_id": household_id,
+        }
+
+
 def create_face_challenge(
     actor_id: str, household_id: str, session: Session | None = None
 ) -> dict[str, Any]:

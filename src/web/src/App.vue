@@ -2,6 +2,7 @@
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
 
 import AppIcon from './components/AppIcon.vue'
+import AccountSecurityDialog from './components/AccountSecurityDialog.vue'
 import CommandPalette from './components/CommandPalette.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import SkeletonList from './components/SkeletonList.vue'
@@ -135,6 +136,7 @@ const toastIcon: Record<string, string> = {
 /* ── 命令面板（Ctrl+K） ── */
 
 const paletteRef = ref<InstanceType<typeof CommandPalette> | null>(null)
+const accountSecurityOpen = ref(false)
 
 /* ── 主题切换 ── */
 
@@ -393,6 +395,15 @@ onBeforeUnmount(() => {
             <span class="role-tag" :class="{ caregiver: !session.isOwnerView }">
               {{ session.isOwnerView ? '家庭管理员后台' : session.portal === 'member' ? '家庭成员' : '照护者后台' }}
             </span>
+            <button
+              type="button"
+              class="icon-button"
+              title="修改账号密码"
+              aria-label="修改账号密码"
+              @click="accountSecurityOpen = true"
+            >
+              <AppIcon name="key" :size="17" />
+            </button>
             <button type="button" class="icon-button" title="退出当前身份" @click="signOut">
               <AppIcon name="signout" :size="17" />
             </button>
@@ -429,6 +440,7 @@ onBeforeUnmount(() => {
   </div>
 
   <ConfirmDialog />
+  <AccountSecurityDialog :open="accountSecurityOpen" @close="accountSecurityOpen = false" />
   <CommandPalette v-if="session.status === 'ready'" ref="paletteRef" :nav-items="visibleNavItems" />
 
   <div class="toast-region" role="status" aria-live="polite">
