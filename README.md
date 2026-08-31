@@ -43,7 +43,7 @@ scripts/start.ps1 health
 | API 健康检查 | http://localhost:8000/health |
 | OpenAPI | http://localhost:8000/docs |
 
-前台/后台是同一容器、同一构建产物的两个监听端口（HCT-453），共用同一个 API、同一个正式账号密码登录方式和同一授权真相；账号与入口不匹配时会被登出并指引到另一入口。两个登录页保留成员/管理员品牌差异，但不再提供开发 Actor ID、注册、PIN、人脸或“其他登录方式”（HCT-498）。
+前台/后台是同一容器、同一构建产物的两个监听端口（HCT-453），共用同一个 API、正式 Bearer 会话和同一授权真相；账号与入口不匹配时会被登出并指引到另一入口。两个登录页保留成员/管理员品牌差异，但不提供开发 Actor ID；成员前台恢复正式账号密码、已配置 PIN/人脸和注册入口，管理员仍以正式账号密码为主（HCT-498 修订）。
 
 首次本地演示先运行 `uv run python scripts/seed_formal_demo_health.py`，再用正式演示账号 `demo-parent` 登录；脚本的教学默认密码为 `DemoOnly-ChangeMe!`，仅限本机虚构数据演示，共享/正式部署必须改为独立强密码。`ALLOW_DEV_ACTOR_HEADER` 缺省为 `false`，只有隔离 API 测试或诊断才可显式临时开启，Web 永不暴露该入口。
 

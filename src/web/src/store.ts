@@ -672,6 +672,7 @@ export async function connectWithPassword(
   actorId: string,
   password: string,
   accessPurpose: string,
+  register = false,
 ): Promise<void> {
   clearSessionContext()
   state.authMode = 'session'
@@ -686,6 +687,7 @@ export async function connectWithPassword(
   state.status = 'loading'
   state.error = ''
   try {
+    if (register) await apiClient.registerAccount(state.actorId, password)
     await enterAuthenticatedSession(await apiClient.login(state.actorId, password))
   } catch (cause) {
     const sessionExpired = sessionIsSignedOut() && state.error.includes('会话已过期')

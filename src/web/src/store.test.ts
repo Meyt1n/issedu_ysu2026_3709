@@ -67,6 +67,19 @@ describe('session expiry handling', () => {
     expect(session.error).toBe('')
     expect(session.status).toBe('signed-out')
   })
+
+  it('registers a formal account before establishing its session', async () => {
+    const register = vi.spyOn(apiClient, 'registerAccount').mockResolvedValue({
+      status: 'registered',
+      actor_id: 'new-owner',
+    })
+
+    await connectWithPassword('new-owner', 'password-123', 'family-care', true)
+
+    expect(register).toHaveBeenCalledWith('new-owner', 'password-123')
+    expect(apiClient.login).toHaveBeenCalledWith('new-owner', 'password-123')
+    expect(session.status).toBe('empty')
+  })
 })
 
 describe('family face entry context', () => {

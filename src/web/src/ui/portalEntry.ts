@@ -168,7 +168,7 @@ export function crossPortalPortsHint(target: 'member' | 'admin'): string {
     : '本地开发 5173/5183 端口 / Compose 8080 端口'
 }
 
-/** 欢迎页按入口模式呈现的品牌；两个入口共享同一正式账号密码登录方式。 */
+/** 欢迎页按入口模式呈现的品牌；所有凭据仍走正式认证接口。 */
 export interface PortalEntryBranding {
   /** 表单卡标题。 */
   formTitle: string
@@ -181,7 +181,13 @@ export interface PortalEntryBranding {
   heroLede: string
   /** 左侧信息栏的三枚承诺胶囊（两端文案不同，避免两个入口长得一样）。 */
   chips: ReadonlyArray<{ icon: string; text: string }>
-  /** 主按钮文案；身份验证方式统一为正式账号密码。 */
+  /** 凭据 tab 顺序（首个为默认推荐）。 */
+  credentialOrder: ReadonlyArray<'face' | 'pin' | 'password'>
+  /** 未绑定人脸时的默认凭据 tab。 */
+  defaultCredential: 'face' | 'pin' | 'password'
+  /** 是否把账号密码收进“其他方式”（成员前台默认不隐藏）。 */
+  passwordBehindOtherWays: boolean
+  /** 主按钮文案。 */
   ctaLabel: string
   /** 跨端指引文字与目标入口；auto 模式为空。 */
   crossLinkLabel: string
@@ -190,7 +196,7 @@ export interface PortalEntryBranding {
 
 const MEMBER_BRANDING: PortalEntryBranding = {
   formTitle: '家庭成员前台 · 正式登录',
-  formIdentityHint: '使用分配给本人的正式账号和密码登录，只查看自己的提醒、记录与帮助。',
+  formIdentityHint: '使用分配给本人的正式账号密码登录；也可使用已配置的人脸或数字密码，只查看自己的提醒、记录与帮助。',
   badge: '成员前台 · 每位家人自己的健康日常',
   heroTitle: '我的健康日常，安全登录后查看',
   heroLede:
@@ -198,8 +204,11 @@ const MEMBER_BRANDING: PortalEntryBranding = {
   chips: [
     { icon: 'sun', text: '今天的提醒，一眼看到' },
     { icon: 'scan', text: '拍个药盒，家人核对' },
-    { icon: 'lock', text: '正式会话，权限按成员隔离' },
+    { icon: 'heart', text: '账号、数字密码、人脸均可用' },
   ],
+  credentialOrder: ['face', 'pin', 'password'],
+  defaultCredential: 'pin',
+  passwordBehindOtherWays: false,
   ctaLabel: '登录成员前台',
   crossLinkLabel: '我是家庭管理员，去管理后台',
   crossLinkTarget: 'admin',
@@ -216,6 +225,9 @@ const ADMIN_BRANDING: PortalEntryBranding = {
     { icon: 'review', text: '识别候选，复核后才入档' },
     { icon: 'key', text: '谁能看什么，授权说了算' },
   ],
+  credentialOrder: ['password'],
+  defaultCredential: 'password',
+  passwordBehindOtherWays: false,
   ctaLabel: '登录管理后台',
   crossLinkLabel: '我是家庭成员，回成员前台',
   crossLinkTarget: 'member',
@@ -232,7 +244,7 @@ export function portalEntryBranding(mode: PortalEntryMode): PortalEntryBranding 
 export const MEMBER_PORTAL_ENTRY_STEPS: ReadonlyArray<string> = [
   '先启动本地服务，再打开成员前台（开发端口 5173，或 Compose 的 8080）',
   '打开 http://127.0.0.1:5173（Compose 用 http://localhost:8080）',
-  '使用家庭成员的正式账号密码登录；管理员请改去管理后台 5174/8081',
+  '使用家庭成员正式账号密码登录；已配置的人脸或数字密码也可使用；管理员请改去管理后台 5174/8081',
 ]
 
 /** 入口/门户不匹配时的用户可读提示。 */

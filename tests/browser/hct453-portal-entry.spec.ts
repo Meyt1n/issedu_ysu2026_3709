@@ -8,7 +8,7 @@ import { submitFormalLogin } from './support/formalLogin'
  * 生产形态是两个端口（成员前台 5173/8080、管理后台 5174/8081）；
  * 本套用例通过 `?portal=member|admin` 查询覆盖在同一 dev server 上
  * 复现两种入口模式（portalEntry.ts 的解析优先级保证两者等价），
- * 断言：入口品牌、唯一正式账号密码登录、入口/门户不匹配拦截与跨端指引。
+ * 断言：入口品牌、正式认证方式（账号密码/PIN/人脸）、入口/门户不匹配拦截与跨端指引。
  */
 
 const household = {
@@ -101,7 +101,7 @@ async function installEntryApi(page: Page): Promise<void> {
   })
 }
 
-test('成员前台入口展示个人前台品牌，并且只提供正式账号密码登录', async ({ page }) => {
+test('成员前台入口展示个人前台品牌，并保留正式认证方式与注册入口', async ({ page }) => {
   await installEntryApi(page)
   await page.goto('/?portal=member')
 
@@ -109,15 +109,19 @@ test('成员前台入口展示个人前台品牌，并且只提供正式账号�
   await expect(page.getByRole('heading', { name: /我的健康日常/ }).first()).toBeVisible()
   await expect(page.getByText('成员前台 · 每位家人自己的健康日常')).toBeVisible()
   await expect(page.getByText('成员前台 · 个人身份')).toBeVisible()
-  await expect(page.getByText(/使用分配给本人的正式账号和密码登录/)).toBeVisible()
+  await expect(page.getByText(/使用分配给本人的正式账号密码登录/)).toBeVisible()
 
   await expect(page.getByTestId('formal-login-method')).toContainText('正式账号密码登录')
-  await expect(page.getByLabel('正式账号', { exact: true })).toBeVisible()
-  await expect(page.getByLabel('密码', { exact: true })).toBeVisible()
   await expect(page.getByLabel('访问用途代码', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: '登录成员前台' })).toBeVisible()
-  await expect(page.getByRole('group', { name: '选择账号登录凭据' })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: /注册|刷脸|数字密码|其他方式/ })).toHaveCount(0)
+  await expect(page.getByRole('group', { name: '选择账号登录凭据' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '刷脸进入' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '数字密码' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '账号密码' })).toBeVisible()
+  await page.getByRole('button', { name: '账号密码' }).click()
+  await expect(page.getByLabel('正式账号', { exact: true })).toBeVisible()
+  await expect(page.getByLabel('密码', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: /注册本地账号/ })).toBeVisible()
   await expect(page.getByTestId('member-portal-entry-guide')).toContainText('正确进入成员前台')
   await expect(page.getByTestId('member-portal-entry-guide')).toContainText('成员前台')
 
@@ -140,7 +144,8 @@ test('管理后台入口展示全家管理品牌，并复用同一正式登录�
   await expect(page.getByLabel('密码', { exact: true })).toBeVisible()
   await expect(page.getByLabel('访问用途代码', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: '登录管理后台' })).toBeVisible()
-  await expect(page.getByRole('button', { name: /注册|刷脸|数字密码|其他方式/ })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '账号密码' })).toBeVisible()
+  await expect(page.getByRole('button', { name: /注册本地账号/ })).toBeVisible()
 
   const crossLink = page.getByRole('link', { name: /我是家庭成员，回成员前台/ })
   await expect(crossLink).toBeVisible()

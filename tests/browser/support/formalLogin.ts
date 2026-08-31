@@ -31,6 +31,20 @@ export async function mockFormalSessionApi(page: Page): Promise<void> {
       })
     }
 
+    if (request.method() === 'POST' && path === '/api/v1/auth/pin-login') {
+      const body = request.postDataJSON() as { actor_id?: string; household_id?: string }
+      const actorId = body.actor_id?.trim() ?? ''
+      const householdId = body.household_id?.trim() ?? ''
+      const token = `pin-${actorId}-${'p'.repeat(48)}`
+      sessions.set(token, actorId)
+      return respond({
+        actor_id: actorId,
+        household_id: householdId,
+        session_token: token,
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+      })
+    }
+
     if (request.method() === 'POST' && path === '/api/v1/auth/session') {
       const token = request.headers().authorization?.replace(/^Bearer\s+/i, '') ?? ''
       const actorId = sessions.get(token)
@@ -52,6 +66,8 @@ export async function submitFormalLogin(
   actorId: string,
   purpose = 'family-care',
 ): Promise<void> {
+  const passwordTab = page.getByRole('button', { name: '账号密码', exact: true })
+  if (await passwordTab.count()) await passwordTab.click()
   await page.getByLabel('正式账号', { exact: true }).fill(actorId)
   await page.getByLabel('密码', { exact: true }).fill(FORMAL_TEST_PASSWORD)
   await page.getByLabel('访问用途代码', { exact: true }).fill(purpose)
