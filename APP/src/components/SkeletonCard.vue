@@ -50,11 +50,11 @@ withDefaults(
 .sk-lines { flex: 1; display: grid; gap: 9px; padding-top: 3px; }
 .sk-line { height: 12px; }
 
-html[data-contrast='high'] .skeleton-card { border: 2px solid #000; }
-html[data-contrast='high'] .sk { background: #e5e5e5; }
+:global(html[data-contrast='high'] .skeleton-card) { border: 2px solid #000; }
+:global(html[data-contrast='high'] .sk) { background: #e5e5e5; }
 
 /* 减少动效时保留静态占位，不播放扫光或闪烁。 */
-html[data-motion='reduced'] .skeleton-card::after { display: none; }
+:global(html[data-motion='reduced'] .skeleton-card::after) { display: none; }
 
 @media (prefers-reduced-motion: reduce) {
   .skeleton-card::after { display: none; }

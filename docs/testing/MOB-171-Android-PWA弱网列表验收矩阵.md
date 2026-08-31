@@ -2,7 +2,9 @@
 
 > 状态：待 Android/PWA 弱网真机验收。本文件是可填写的签收模板，不是通过证据；浏览器开发者工具、模拟器、Cloud Agent 和静态测试不能替代设备持有人在受控网络下的记录。完成后须在 `APP/` 目录执行 `npm run verify:weak-network-evidence -- ../docs/testing/MOB-171-Android-PWA弱网列表验收矩阵.md`。
 
-关联：[MOB-171 Story](../stories/MOB-171-手机弱网骨架屏与重试文案.md)、[MOB-112 Story](../stories/MOB-112-API错误展示统一.md)、[MOB-113 Story](../stories/MOB-113-请求防重复与刷新策略.md)。
+关联：[MOB-171 Story](../stories/MOB-171-手机弱网骨架屏与重试文案.md)、[Android 真机局部走查记录](MOB-171-Android真机局部走查记录-20260831.md)、[MOB-112 Story](../stories/MOB-112-API错误展示统一.md)、[MOB-113 Story](../stories/MOB-113-请求防重复与刷新策略.md)。
+
+2026-08-31 已补充一份荣耀 AAP-AN00 演示模式局部走查记录；该记录只覆盖加载骨架和状态播报等可在演示数据下观察的事实，不填充本矩阵的真机签收字段，也不改变下方“待验收”结论。完整受控弱网、PWA、TalkBack 和附件哈希仍须由设备持有人执行。
 
 ## 签收规则
 
