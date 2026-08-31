@@ -1433,7 +1433,9 @@ def _execute_get_applied_rules(
             "rule_id": alert.rule_id,
             "level": alert.level,
             "source_event_ids": list(dict.fromkeys(alert.source_event_ids)),
-            "deduplication_key": getattr(alert, "deduplication_key", None) or deduplication_key(alert),
+            "deduplication_key": (
+                getattr(alert, "deduplication_key", None) or deduplication_key(alert)
+            ),
             "merged_count": max(int(alert.merged_count or 1), 1),
         }
         for alert in alerts
@@ -1601,7 +1603,9 @@ def _execute_retrieve_knowledge(
     member_id: str | None,
     arguments: dict[str, Any],
 ) -> dict[str, Any]:
-    from app.knowledge import log_query, retrieve
+    from ai.rag.retrieval import LocalKnowledgeRetriever, RetrievalScope
+
+    from app.knowledge import log_query
 
     # An unscoped route may still search actor-owned/global approved
     # documents, but the model must not invent a household/member filter to
@@ -1626,14 +1630,16 @@ def _execute_retrieve_knowledge(
         top_k = 5
     top_k = max(1, min(top_k, 10))
     try:
-        results = retrieve(
-            session,
-            query=query,
-            actor_id=actor_id,
-            household_id=bound_household,
-            member_id=bound_member,
+        hits = LocalKnowledgeRetriever(session).retrieve(
+            query,
+            RetrievalScope(
+                actor_id=actor_id,
+                household_id=bound_household,
+                member_id=bound_member,
+            ),
             top_k=top_k,
         )
+        results = [hit.as_dict() for hit in hits]
         log_query(
             session,
             query_text=query,
