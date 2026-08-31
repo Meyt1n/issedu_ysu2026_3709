@@ -8,7 +8,7 @@ import { submitFormalLogin } from './support/formalLogin'
  * 生产形态是两个端口（成员前台 5173/8080、管理后台 5174/8081）；
  * 本套用例通过 `?portal=member|admin` 查询覆盖在同一 dev server 上
  * 复现两种入口模式（portalEntry.ts 的解析优先级保证两者等价），
- * 断言：入口品牌、正式认证方式（账号密码/PIN/人脸）、入口/门户不匹配拦截与跨端指引。
+ * 断言：入口品牌、成员刷脸/账号密码、管理员账号密码、入口/门户不匹配拦截与跨端指引。
  */
 
 const household = {
@@ -116,53 +116,49 @@ async function installEntryApi(page: Page): Promise<void> {
   })
 }
 
-test('成员前台入口展示个人前台品牌，并保留正式认证方式与注册入口', async ({ page }) => {
+test('成员前台入口展示个人前台品牌，并保留刷脸与账号密码', async ({ page }) => {
   await installEntryApi(page)
   await page.goto('/?portal=member')
 
-  // HCT-455：成员前台是「一位家人自己的个人前台」，不是后台账号系统。
   await expect(page.getByRole('heading', { name: /我的健康日常/ }).first()).toBeVisible()
-  await expect(page.getByText('成员前台 · 每位家人自己的健康日常')).toBeVisible()
-  await expect(page.getByText('成员前台 · 个人身份')).toBeVisible()
-  await expect(page.getByText(/使用分配给本人的正式账号密码登录/)).toBeVisible()
-
-  await expect(page.getByTestId('formal-login-method')).toContainText('正式账号密码登录')
-  await expect(page.getByLabel('访问用途代码', { exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: '登录成员前台' })).toBeVisible()
+  await expect(page.getByText('成员前台 · 每位家人自己的健康日常')).toHaveCount(0)
+  await expect(page.getByText('成员前台 · 个人身份')).toHaveCount(0)
+  await expect(page.getByTestId('formal-login-method')).toHaveCount(0)
+  await expect(page.getByLabel('访问用途代码', { exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '进入前台', exact: true })).toBeVisible()
   await expect(page.getByRole('group', { name: '选择账号登录凭据' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '刷脸进入' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '数字密码' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '账号密码' })).toBeVisible()
-  await page.getByRole('button', { name: '账号密码' }).click()
+  await expect(page.getByRole('button', { name: '刷脸进入', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '数字密码' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '账号密码', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '账号密码', exact: true }).click()
   await expect(page.getByLabel('正式账号', { exact: true })).toBeVisible()
   await expect(page.getByLabel('密码', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: /注册本地账号/ })).toBeVisible()
-  await expect(page.getByTestId('member-portal-entry-guide')).toContainText('正确进入成员前台')
-  await expect(page.getByTestId('member-portal-entry-guide')).toContainText('成员前台')
+  await expect(page.getByTestId('member-portal-entry-guide')).toHaveCount(0)
 
-  // 跨端指引指向管理后台端口，并显式带上 ?portal=admin 覆盖。
-  const crossLink = page.getByRole('link', { name: /我是家庭管理员，去管理后台/ })
+  const crossLink = page.getByRole('link', { name: '管理员登录' })
   await expect(crossLink).toBeVisible()
   await expect(crossLink).toHaveAttribute('href', 'http://127.0.0.1:5174/?portal=admin')
 })
 
-test('管理后台入口展示全家管理品牌，并复用同一正式登录表单', async ({ page }) => {
+test('管理后台入口展示全家管理品牌，并只提供账号密码', async ({ page }) => {
   await installEntryApi(page)
   await page.goto('/?portal=admin')
 
-  await expect(page.getByRole('heading', { name: /家庭管理后台/ })).toBeVisible()
-  await expect(page.getByText('家庭管理后台 · 成员档案 / 复核 / 授权')).toBeVisible()
-  await expect(page.getByText('管理后台 · 全家管理')).toBeVisible()
+  await expect(page.getByRole('heading', { name: /家庭档案与授权/ })).toBeVisible()
+  await expect(page.getByText('家庭管理后台 · 成员档案 / 复核 / 授权')).toHaveCount(0)
+  await expect(page.getByText('管理后台 · 全家管理')).toHaveCount(0)
 
-  await expect(page.getByTestId('formal-login-method')).toContainText('正式账号密码登录')
+  await expect(page.getByTestId('formal-login-method')).toHaveCount(0)
   await expect(page.getByLabel('正式账号', { exact: true })).toBeVisible()
   await expect(page.getByLabel('密码', { exact: true })).toBeVisible()
-  await expect(page.getByLabel('访问用途代码', { exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: '登录管理后台' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '账号密码' })).toBeVisible()
+  await expect(page.getByLabel('访问用途代码', { exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '进入管理后台', exact: true })).toBeVisible()
+  await expect(page.getByRole('group', { name: '选择账号登录凭据' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '刷脸进入' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: /注册本地账号/ })).toBeVisible()
 
-  const crossLink = page.getByRole('link', { name: /我是家庭成员，回成员前台/ })
+  const crossLink = page.getByRole('link', { name: '家人登录' })
   await expect(crossLink).toBeVisible()
   await expect(crossLink).toHaveAttribute('href', 'http://127.0.0.1:5173/?portal=member')
 })
@@ -172,7 +168,8 @@ test('管理后台可用本人六位数字密码重置忘记的正式密码', as
   await page.goto('/?portal=admin')
 
   await page.getByTestId('forgot-password').click()
-  await expect(page.getByText('本地忘记密码恢复')).toBeVisible()
+  await expect(page.getByRole('heading', { name: '忘记密码' })).toBeVisible()
+  await expect(page.getByLabel('本人六位数字密码', { exact: true })).toBeVisible()
   await page.getByLabel('正式账号', { exact: true }).fill('parent-admin')
   await page.getByLabel('家庭编号', { exact: true }).fill(household.id)
   await page.getByLabel('本人六位数字密码', { exact: true }).fill('042006')
@@ -229,13 +226,13 @@ test('成员前台与管理后台的欢迎页明显不同（标语、徽标、�
 
   await page.goto('/?portal=member')
   await expect(page.getByRole('heading', { name: /我的健康日常/ }).first()).toBeVisible()
-  await expect(page.getByRole('heading', { name: /管好一家人的健康档案/ })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: '登录管理后台' })).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: /家庭档案与授权/ })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '进入管理后台', exact: true })).toHaveCount(0)
 
   await page.goto('/?portal=admin')
-  await expect(page.getByRole('heading', { name: /管好一家人的健康档案/ })).toBeVisible()
+  await expect(page.getByRole('heading', { name: /家庭档案与授权/ })).toBeVisible()
   await expect(page.getByRole('heading', { name: /我的健康日常/ })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: '登录成员前台' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '进入前台', exact: true })).toHaveCount(0)
 })
 
 test('成员前台入口拦截管理员账号：登出并指向管理后台，不渲染后台界面', async ({ page }) => {
@@ -245,13 +242,13 @@ test('成员前台入口拦截管理员账号：登出并指向管理后台，�
   await submitFormalLogin(page, 'parent-admin')
 
   // 不落在管理后台：无应用框架、无后台导航。
-  await expect(page.getByRole('alert')).toContainText('这是家庭成员前台')
+  await expect(page.getByRole('alert')).toContainText('这是成员前台')
   await expect(page.getByRole('alert')).toContainText('管理后台')
   await expect(page.locator('.app-frame')).toHaveCount(0)
   await expect(page.getByRole('button', { name: '人工复核' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '家庭总览' })).toHaveCount(0)
 
-  const crossLink = page.getByRole('link', { name: '去管理后台登录' })
+  const crossLink = page.getByRole('link', { name: '去管理后台' })
   await expect(crossLink).toBeVisible()
   await expect(crossLink).toHaveAttribute('href', 'http://127.0.0.1:5174/?portal=admin')
 })
@@ -262,12 +259,12 @@ test('管理后台入口拦截成员账号：登出并指向成员前台，不�
 
   await submitFormalLogin(page, grandmaMember.actor_id)
 
-  await expect(page.getByRole('alert')).toContainText('这是家庭管理后台')
+  await expect(page.getByRole('alert')).toContainText('这是管理后台')
   await expect(page.getByRole('alert')).toContainText('成员前台')
   await expect(page.locator('.app-frame')).toHaveCount(0)
   await expect(page.getByRole('button', { name: '拍照录药' })).toHaveCount(0)
 
-  const crossLink = page.getByRole('link', { name: '回成员前台登录' })
+  const crossLink = page.getByRole('link', { name: '去成员前台' })
   await expect(crossLink).toBeVisible()
   await expect(crossLink).toHaveAttribute('href', 'http://127.0.0.1:5173/?portal=member')
 })

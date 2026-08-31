@@ -168,11 +168,11 @@ export function crossPortalPortsHint(target: 'member' | 'admin'): string {
     : '本地开发 5173/5183 端口 / Compose 8080 端口'
 }
 
-/** 欢迎页按入口模式呈现的品牌；所有凭据仍走正式认证接口。 */
+/** 欢迎页按入口模式呈现的品牌；成员前台刷脸，管理后台账号密码。 */
 export interface PortalEntryBranding {
   /** 表单卡标题。 */
   formTitle: string
-  /** 表单卡标题下方的一句身份说明。 */
+  /** 表单卡标题下方的一句身份说明；空字符串则不渲染。 */
   formIdentityHint: string
   /** 顶部徽标文字。 */
   badge: string
@@ -181,11 +181,11 @@ export interface PortalEntryBranding {
   heroLede: string
   /** 左侧信息栏的三枚承诺胶囊（两端文案不同，避免两个入口长得一样）。 */
   chips: ReadonlyArray<{ icon: string; text: string }>
-  /** 凭据 tab 顺序（首个为默认推荐）。 */
-  credentialOrder: ReadonlyArray<'face' | 'pin' | 'password'>
+  /** 凭据 tab 顺序（首个为人脸时，本机已绑定家庭则默认刷脸）。 */
+  credentialOrder: ReadonlyArray<'face' | 'password'>
   /** 未绑定人脸时的默认凭据 tab。 */
-  defaultCredential: 'face' | 'pin' | 'password'
-  /** 是否把账号密码收进“其他方式”（成员前台默认不隐藏）。 */
+  defaultCredential: 'face' | 'password'
+  /** 是否把账号密码收进“其他方式”。 */
   passwordBehindOtherWays: boolean
   /** 主按钮文案。 */
   ctaLabel: string
@@ -195,41 +195,40 @@ export interface PortalEntryBranding {
 }
 
 const MEMBER_BRANDING: PortalEntryBranding = {
-  formTitle: '家庭成员前台 · 正式登录',
-  formIdentityHint: '使用分配给本人的正式账号密码登录；也可使用已配置的人脸或数字密码，只查看自己的提醒、记录与帮助。',
-  badge: '成员前台 · 每位家人自己的健康日常',
-  heroTitle: '我的健康日常，安全登录后查看',
-  heroLede:
-    '这里是每位家人自己的个人前台：使用正式账号密码进入，看今天的提醒、拍药盒交给家人核对。管理档案和授权的事，交给家庭管理后台。',
+  formTitle: '家人登录',
+  formIdentityHint: '',
+  badge: '成员前台',
+  heroTitle: '我的健康日常',
+  heroLede: '刷脸进入，查看今天的提醒和记录。',
   chips: [
-    { icon: 'sun', text: '今天的提醒，一眼看到' },
-    { icon: 'scan', text: '拍个药盒，家人核对' },
-    { icon: 'heart', text: '账号、数字密码、人脸均可用' },
+    { icon: 'sun', text: '今天的提醒' },
+    { icon: 'scan', text: '拍药盒核对' },
+    { icon: 'heart', text: '刷脸就能进' },
   ],
-  credentialOrder: ['face', 'pin', 'password'],
-  defaultCredential: 'pin',
+  credentialOrder: ['face', 'password'],
+  defaultCredential: 'password',
   passwordBehindOtherWays: false,
-  ctaLabel: '登录成员前台',
-  crossLinkLabel: '我是家庭管理员，去管理后台',
+  ctaLabel: '进入前台',
+  crossLinkLabel: '管理员登录',
   crossLinkTarget: 'admin',
 }
 
 const ADMIN_BRANDING: PortalEntryBranding = {
-  formTitle: '家庭管理后台 · 管理员登录',
-  formIdentityHint: '使用正式账号密码以家庭管理员身份进入：管理的是整个家庭的档案、复核与授权，不是某位家人的个人前台。',
-  badge: '家庭管理后台 · 成员档案 / 复核 / 授权',
-  heroTitle: '管好一家人的健康档案与授权',
-  heroLede: '使用管理员账号密码登录，处理成员档案、药品复核、用药安全与授权；家人日常请使用成员前台。',
+  formTitle: '管理员登录',
+  formIdentityHint: '',
+  badge: '管理后台',
+  heroTitle: '家庭档案与授权',
+  heroLede: '使用管理员账号进入。',
   chips: [
-    { icon: 'members', text: '成员档案，集中管理' },
-    { icon: 'review', text: '识别候选，复核后才入档' },
-    { icon: 'key', text: '谁能看什么，授权说了算' },
+    { icon: 'members', text: '成员档案' },
+    { icon: 'review', text: '复核入档' },
+    { icon: 'key', text: '授权管理' },
   ],
   credentialOrder: ['password'],
   defaultCredential: 'password',
   passwordBehindOtherWays: false,
-  ctaLabel: '登录管理后台',
-  crossLinkLabel: '我是家庭成员，回成员前台',
+  ctaLabel: '进入管理后台',
+  crossLinkLabel: '家人登录',
   crossLinkTarget: 'member',
 }
 
@@ -239,13 +238,6 @@ export function portalEntryBranding(mode: PortalEntryMode): PortalEntryBranding 
   if (mode === 'admin') return ADMIN_BRANDING
   return null
 }
-
-/** 欢迎页「正确进入成员前台」短清单（HCT-456）。 */
-export const MEMBER_PORTAL_ENTRY_STEPS: ReadonlyArray<string> = [
-  '先启动本地服务，再打开成员前台（开发端口 5173，或 Compose 的 8080）',
-  '打开 http://127.0.0.1:5173（Compose 用 http://localhost:8080）',
-  '使用家庭成员正式账号密码登录；已配置的人脸或数字密码也可使用；管理员请改去管理后台 5174/8081',
-]
 
 /** 入口/门户不匹配时的用户可读提示。 */
 export function portalEntryConflictNotice(
@@ -259,23 +251,20 @@ export function portalEntryConflictNotice(
   if (conflict === 'need-admin-entry') {
     if (context.afterCreate) {
       return {
-        message:
-          '家庭已创建。创建者是家庭管理员，成员前台不会停留在管理界面。请改用管理后台（5174/8081）完成配置；家人日常再用各自的正式账号密码登录成员前台。',
-        crossLinkLabel: '去管理后台登录',
+        message: '家庭已创建。请到管理后台继续设置。',
+        crossLinkLabel: '去管理后台',
         crossLinkTarget: 'admin',
       }
     }
     return {
-      message:
-        '这是家庭成员前台。当前账号是家庭管理员（创建家庭的人）。请改用管理后台（5174/8081）登录；若要进本页，请换用家庭成员的正式账号密码。',
-      crossLinkLabel: '去管理后台登录',
+      message: '这是成员前台。当前账号是管理员，请改用管理后台。',
+      crossLinkLabel: '去管理后台',
       crossLinkTarget: 'admin',
     }
   }
   return {
-    message:
-      '这是家庭管理后台。当前账号是家庭成员。请打开成员前台（5173/8080），使用该成员的正式账号密码登录；不要用管理员账号进成员前台。',
-    crossLinkLabel: '回成员前台登录',
+    message: '这是管理后台。当前账号是家庭成员，请改用成员前台。',
+    crossLinkLabel: '去成员前台',
     crossLinkTarget: 'member',
   }
 }

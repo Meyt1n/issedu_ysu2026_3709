@@ -70,6 +70,9 @@ export async function submitFormalLogin(
   if (await passwordTab.count()) await passwordTab.click()
   await page.getByLabel('正式账号', { exact: true }).fill(actorId)
   await page.getByLabel('密码', { exact: true }).fill(FORMAL_TEST_PASSWORD)
-  await page.getByLabel('访问用途代码', { exact: true }).fill(purpose)
-  await page.getByRole('button', { name: /^登录(?:成员前台|管理后台|家庭空间)$/ }).click()
+  const purposeField = page.getByLabel('访问用途代码', { exact: true })
+  if (await purposeField.count()) await purposeField.fill(purpose)
+  await page.getByRole('button', {
+    name: /^(?:登录(?:成员前台|管理后台|家庭空间)?|进入(?:前台|管理后台))$/,
+  }).click()
 }

@@ -38,12 +38,12 @@ scripts/start.ps1 health
 
 | 入口 | 地址 |
 |---|---|
-| 成员前台（家人正式账号密码） | http://localhost:8080 |
-| 管理后台（管理员正式账号密码） | http://localhost:8081 |
+| 成员前台（刷脸或账号密码） | http://localhost:8080 |
+| 管理后台（管理员账号密码） | http://localhost:8081 |
 | API 健康检查 | http://localhost:8000/health |
 | OpenAPI | http://localhost:8000/docs |
 
-前台/后台是同一容器、同一构建产物的两个监听端口（HCT-453），共用同一个 API、正式 Bearer 会话和同一授权真相；账号与入口不匹配时会被登出并指引到另一入口。两个登录页保留成员/管理员品牌差异，但不提供开发 Actor ID；成员前台恢复正式账号密码、已配置 PIN/人脸和注册入口，管理员仍以正式账号密码为主（HCT-498 修订）。
+前台/后台是同一容器、同一构建产物的两个监听端口（HCT-453），共用同一个 API、正式 Bearer 会话和同一授权真相；账号与入口不匹配时会被登出并指引到另一入口。两个登录页保留成员/管理员品牌差异，但不提供开发 Actor ID。成员前台：本机已绑定家庭时可刷脸，否则用账号密码；管理后台只用账号密码。六位数字密码不是 Web 登录方式，只用于忘记密码恢复和登录后逐步确认（HCT-510）。
 
 首次本地演示先运行 `uv run python scripts/seed_formal_demo_health.py`，再用正式演示账号 `demo-parent` 登录；脚本的教学默认密码为 `DemoOnly-ChangeMe!`，仅限本机虚构数据演示，共享/正式部署必须改为独立强密码。`ALLOW_DEV_ACTOR_HEADER` 缺省为 `false`，只有隔离 API 测试或诊断才可显式临时开启，Web 永不暴露该入口。
 
@@ -97,8 +97,8 @@ scripts/start.ps1 web-admin
 1. 终端 1：`scripts/start.ps1 api`（或 `scripts/start.sh api`）
 2. 终端 2：`scripts/start.ps1 web-member`（**不要**只用 `web`；`web` 是调试单入口）
 3. 浏览器打开 http://127.0.0.1:5173（Compose 则用 http://localhost:8080）
-4. 用已预置的**家庭成员正式账号密码**登录（演示账号如 `grandma-demo` / `grandpa-demo`，密码由受控开户脚本或管理员设置）
-5. **不要**用家庭管理员（创建家庭的人，如 `demo-parent`）进成员前台——会被入口锁登出并指引去管理后台 5174/8081
+4. 本机已绑定家庭时可**刷脸进入**，否则用**家庭成员正式账号密码**（演示账号如 `grandma-demo` / `grandpa-demo`，密码由受控开户脚本或管理员设置）
+5. **不要**用家庭管理员（创建家庭的人，如 `demo-parent`）进成员前台——会被入口锁登出并指引去管理后台
 
 本机代理固定走 `127.0.0.1`，避免 `localhost` 解析到 IPv6。多人联调可设 `HCT_API_PROXY`（后端）、`HCT_WEB_PORT`（前台端口）和 `HCT_ADMIN_WEB_PORT`（后台端口）。
 
@@ -244,8 +244,8 @@ scripts/start.ps1 web-admin
 
 | 入口 | 地址 | 适用身份 |
 |---|---|---|
-| 成员前台 | http://127.0.0.1:5173 | 家庭成员：正式账号密码、已配置 PIN/人脸；账号密码方式可注册 |
-| 管理后台 | http://127.0.0.1:5174 | 家庭管理员：正式账号密码（如 `demo-parent`） |
+| 成员前台 | http://127.0.0.1:5173 | 家庭成员：刷脸（本机已绑定家庭）或账号密码；账号密码方式可注册 |
+| 管理后台 | http://127.0.0.1:5174 | 家庭管理员：账号密码（如 `demo-parent`） |
 | API | http://127.0.0.1:8000/docs | — |
 
 #### 停止
@@ -389,7 +389,7 @@ curl http://localhost:8000/api/v1/meta/capabilities
 
 按 [路径 C：本机全功能演示栈](#路径-c本机全功能演示栈windowsstart-demops1) 配齐 `.env` 并启动 vision worker 后，`vision-inference`、`external-web`（真实 DuckDuckGo）、`face-recognition-local`、`master-data-teaching-demo` 等会进入 `available`。
 
-成员前台提供正式账号密码、已配置的数字密码（PIN）和人脸凭证三种正式登录方式，并可从账号密码方式注册本地账号；管理后台以正式账号密码为主。账号密码页可用本人已配置的家庭 PIN 本地恢复忘记的密码，登录后可从右上角身份区修改密码；两种成功路径都会撤销该账号的全部旧会话并签发新会话。未设置 PIN 时不提供无验证重置，请联系家庭管理员或维护人员走受控恢复流程。登录成功后所有业务请求使用短期 Bearer 会话，401 或到期会清空页面内的家庭、成员和健康上下文。开发身份头默认关闭，正式 Web 不提供开发 Actor ID 入口。
+成员前台提供刷脸（本机已绑定家庭）和账号密码两种登录方式，并可从账号密码方式注册本地账号；管理后台只用账号密码。六位数字密码不是登录方式：账号密码页可用本人已配置的家庭 PIN 本地恢复忘记的密码，登录后可从右上角身份区修改密码；两种成功路径都会撤销该账号的全部旧会话并签发新会话。未设置 PIN 时不提供无验证重置，请联系家庭管理员或维护人员走受控恢复流程。登录成功后所有业务请求使用短期 Bearer 会话，401 或到期会清空页面内的家庭、成员和健康上下文。开发身份头默认关闭，正式 Web 不提供开发 Actor ID 入口。
 
 ### 基础档默认可用（不需要额外配置）
 
@@ -417,8 +417,8 @@ uv run python -m app.care_plan_worker --loop
 
 | 功能 | 需要准备 | 关键 `.env` 项 | 如何验证 | 未配置时行为 |
 |---|---|---|---|---|
-| 正式账号密码登录与注册 | 通过受控 API/脚本预置账号（演示可运行 `seed_formal_demo_health.py`），也可从成员前台账号密码方式注册 | `CURSOR_SIGNING_KEY`（生产必须换） | 成员前台和管理后台均使用正式账号密码；成员前台还可切换 PIN/人脸；请求使用 Bearer 且无 `X-Actor-Id` | 未开户时登录失败，不回退开发身份 |
-| 本地人脸凭证与成员前台刷脸登录（实验能力） | 本地 YuNet+SFace ONNX 模型：`uv run python scripts/ensure_face_models.py` | `FACE_MODEL_DIR`、`FACE_MODEL_AUTO_DOWNLOAD`、`FACE_MATCH_THRESHOLD_SFACE`、`BIOMETRIC_ENCRYPTION_KEY` | capabilities 可出现 `face-recognition-local`；管理页录入加密凭证后，成员前台可刷脸进入 | 未准备模型或未绑定凭证时，成员前台保留账号密码/PIN 回退 |
+| 正式账号密码登录与注册 | 通过受控 API/脚本预置账号（演示可运行 `seed_formal_demo_health.py`），也可从成员前台账号密码方式注册 | `CURSOR_SIGNING_KEY`（生产必须换） | 管理后台使用账号密码；成员前台可刷脸或账号密码；请求使用 Bearer 且无 `X-Actor-Id` | 未开户时登录失败，不回退开发身份 |
+| 本地人脸凭证与成员前台刷脸登录（实验能力） | 本地 YuNet+SFace ONNX 模型：`uv run python scripts/ensure_face_models.py` | `FACE_MODEL_DIR`、`FACE_MODEL_AUTO_DOWNLOAD`、`FACE_MATCH_THRESHOLD_SFACE`、`BIOMETRIC_ENCRYPTION_KEY` | capabilities 可出现 `face-recognition-local`；管理页录入加密凭证并绑定本机家庭后，成员前台可刷脸进入 | 未准备模型或未绑定凭证时，成员前台改用账号密码 |
 | 视觉识别闭环（OCR/条码/YOLO） | 独立 PaddleOCR Python + `scripts/vision_worker.py`（权重不进 Git） | `OCR_VERSION`（≠`unavailable` 时 capabilities 亮 `vision-inference`）、`VISION_ADAPTER_SIGNING_KEY`（= worker 的 `HCT_ADAPTER_SIGNING_KEY`）、`MASTER_DATA_APPROVED_VERSIONS` | 上传合成药盒后任务进入四态并转人工复核；worker 日志 `ocr:true` | 任务保持排队/降级，质量门控与人工复核仍可用 |
 | 教学演示主数据（HCT-201 教学路径） | `uv run python scripts/setup_vision_demo.py` 生成合成快照 | `MASTER_DATA_APPROVED_VERSIONS=demo-cn-en-v1` | capabilities 出现 `master-data-teaching-demo` | fail-closed 不加载；`hct201-formal-drug-set` 恒为 unavailable |
 | 本地助手真实生成（Ollama） | 本机 Ollama 及模型，或增强档容器（`$env:COMPOSE_PROFILE='enhanced'` 后 `up`，容器内仍需 `ollama pull`） | `OLLAMA_BASE_URL`、`OLLAMA_MODEL`；本地默认 `AGENT_OPEN_CHAT=true`（见 [助手开放演示模式](docs/助手开放演示模式.md)） | 助手页真实回答；开放模式下少被证据墙打断 | 结构化降级，档案/规则/知识链路不受影响 |

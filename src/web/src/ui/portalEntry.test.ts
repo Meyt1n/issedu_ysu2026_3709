@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 
 import {
   crossPortalUrl,
-  MEMBER_PORTAL_ENTRY_STEPS,
   portalEntryBranding,
   portalEntryConflict,
   portalEntryConflictNotice,
@@ -122,32 +121,33 @@ describe('crossPortalUrl', () => {
   })
 })
 
-describe('portalEntryBranding', () => {
+describe('portalEntryBranding (HCT-510)', () => {
   it('keeps the legacy welcome page for the auto entry', () => {
     expect(portalEntryBranding('auto')).toBeNull()
   })
 
-  it('brands the member entry as a personal front door with formal password login', () => {
+  it('brands the member entry as family login with face then password', () => {
     const branding = portalEntryBranding('member')!
-    expect(branding.formTitle).toContain('正式登录')
+    expect(branding.formTitle).toBe('家人登录')
     expect(branding.heroTitle).toContain('我的健康日常')
-    expect(branding.formIdentityHint).toContain('正式账号')
-    expect(branding.formIdentityHint).toContain('密码')
-    expect(branding.credentialOrder).toEqual(['face', 'pin', 'password'])
-    expect(branding.defaultCredential).toBe('pin')
+    expect(branding.formIdentityHint).toBe('')
+    expect(branding.credentialOrder).toEqual(['face', 'password'])
+    expect(branding.defaultCredential).toBe('password')
     expect(branding.passwordBehindOtherWays).toBe(false)
-    expect(branding.ctaLabel).toBe('登录成员前台')
+    expect(branding.ctaLabel).toBe('进入前台')
+    expect(branding.crossLinkLabel).toBe('管理员登录')
     expect(branding.crossLinkTarget).toBe('admin')
   })
 
-  it('brands the admin entry around whole-family management with the same formal login', () => {
+  it('brands the admin entry as password-only family management', () => {
     const branding = portalEntryBranding('admin')!
-    expect(branding.formTitle).toContain('家庭管理后台')
-    expect(branding.formIdentityHint).toContain('整个家庭')
-    expect(branding.formIdentityHint).toContain('账号密码')
+    expect(branding.formTitle).toBe('管理员登录')
+    expect(branding.heroTitle).toBe('家庭档案与授权')
+    expect(branding.formIdentityHint).toBe('')
     expect(branding.credentialOrder).toEqual(['password'])
     expect(branding.defaultCredential).toBe('password')
-    expect(branding.ctaLabel).toBe('登录管理后台')
+    expect(branding.ctaLabel).toBe('进入管理后台')
+    expect(branding.crossLinkLabel).toBe('家人登录')
     expect(branding.crossLinkTarget).toBe('member')
   })
 
@@ -164,36 +164,30 @@ describe('portalEntryBranding', () => {
   })
 })
 
-describe('portalEntryConflictNotice', () => {
+describe('portalEntryConflictNotice (HCT-510)', () => {
   it('explains the member-entry block and links to the admin entry', () => {
     const notice = portalEntryConflictNotice('need-admin-entry')
-    expect(notice.message).toContain('家庭成员前台')
-    expect(notice.message).toContain('管理员')
-    expect(notice.message).toContain('正式账号密码')
+    expect(notice.message).toBe('这是成员前台。当前账号是管理员，请改用管理后台。')
+    expect(notice.message).not.toContain('5174')
+    expect(notice.message).not.toContain('正式账号密码')
     expect(notice.message).not.toContain('demo-parent')
+    expect(notice.crossLinkLabel).toBe('去管理后台')
     expect(notice.crossLinkTarget).toBe('admin')
   })
 
   it('explains creating a household on the member entry then switching to admin', () => {
     const notice = portalEntryConflictNotice('need-admin-entry', { afterCreate: true })
-    expect(notice.message).toContain('家庭已创建')
-    expect(notice.message).toContain('管理后台')
+    expect(notice.message).toBe('家庭已创建。请到管理后台继续设置。')
+    expect(notice.crossLinkLabel).toBe('去管理后台')
     expect(notice.crossLinkTarget).toBe('admin')
   })
 
   it('explains the admin-entry block and links back to the member entry', () => {
     const notice = portalEntryConflictNotice('need-member-entry')
-    expect(notice.message).toContain('管理后台')
-    expect(notice.message).toContain('成员前台')
-    expect(notice.message).toContain('正式账号密码')
+    expect(notice.message).toBe('这是管理后台。当前账号是家庭成员，请改用成员前台。')
+    expect(notice.message).not.toContain('5173')
+    expect(notice.message).not.toContain('正式账号密码')
+    expect(notice.crossLinkLabel).toBe('去成员前台')
     expect(notice.crossLinkTarget).toBe('member')
-  })
-
-  it('lists the three steps for entering the member portal', () => {
-    expect(MEMBER_PORTAL_ENTRY_STEPS).toHaveLength(3)
-    expect(MEMBER_PORTAL_ENTRY_STEPS[0]).toContain('成员前台')
-    expect(MEMBER_PORTAL_ENTRY_STEPS[0]).not.toContain('scripts/')
-    expect(MEMBER_PORTAL_ENTRY_STEPS[1]).toContain('5173')
-    expect(MEMBER_PORTAL_ENTRY_STEPS[2]).toContain('正式账号密码')
   })
 })

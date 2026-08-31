@@ -41,7 +41,6 @@ async function enterFormalIdentity(page: Page, actorId: string, password: string
   await expect(page.getByRole('button', { name: '登录家庭空间' })).toBeVisible({ timeout: 20_000 })
   await page.getByLabel('正式账号', { exact: true }).fill(actorId)
   await page.getByLabel('密码', { exact: true }).fill(password)
-  await page.getByLabel('访问用途代码', { exact: true }).fill('family-care')
   await page.getByRole('button', { name: '登录家庭空间' }).click()
   await expect(page.locator('.app-frame')).toBeVisible({ timeout: 20_000 })
 }

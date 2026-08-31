@@ -21,7 +21,7 @@ import { formatDateTime } from '../ui/labels'
 const credentials = ref<FaceCredential[]>([])
 const visibleCredentials = computed(() => credentials.value.filter(credential => credential.status !== 'DELETED'))
 const selectedActorId = ref('')
-const confirmationMethod = ref<'pin' | 'password'>('pin')
+const confirmationMethod = ref<'password'>('password')
 const confirmationCode = ref('')
 const selectedFrames = ref<File[]>([])
 const consent = ref(false)
@@ -45,18 +45,16 @@ const accountBindingError = ref('')
 const boundFaceHouseholdId = ref(getBoundFaceHouseholdId())
 const confirmationCodeValid = computed(() => {
   const code = confirmationCode.value.trim()
-  return confirmationMethod.value === 'pin' ? /^\d{6}$/.test(code) : code.length >= 8 && code.length <= 256
+  return code.length >= 8 && code.length <= 256
 })
 const registrationBlockReason = computed(() => {
-  if (session.authMode !== 'session') return '当前是调试身份，请返回欢迎页切换到“家庭账号登录”。'
+  if (session.authMode !== 'session') return '请先用家庭账号登录。'
   if (!session.isOwnerView) return '只有家庭管理员可以注册人脸凭证。'
   if (!session.selectedHouseholdId) return '请先选择一个家庭。'
-  if (!selectedActorId.value) return '请先选择要绑定人脸的家庭登录名。'
-  if (selectedFrames.value.length < 2) return '请先点大按钮开始录入，听语音把脸放进圆圈并拍满三张。'
-  if (!confirmationCodeValid.value) {
-    return confirmationMethod.value === 'pin' ? '请输入已设置的六位数字密码。' : '请输入当前家庭账号密码（至少八位）。'
-  }
-  if (!consent.value) return '请先勾选本人明确同意，才能注册人脸凭证。'
+  if (!selectedActorId.value) return '请先选择要绑定人脸的登录名。'
+  if (selectedFrames.value.length < 2) return '请先完成三张采集。'
+  if (!confirmationCodeValid.value) return '请输入当前账号密码。'
+  if (!consent.value) return '请先勾选本人明确同意。'
   return ''
 })
 const canRegisterCredential = computed(() => !saving.value && !registrationBlockReason.value)
@@ -85,7 +83,7 @@ function bindCurrentHouseholdToDevice(): void {
   const household = session.households.find(item => item.id === householdId)
   bindFaceHousehold(householdId, household?.name ?? '')
   boundFaceHouseholdId.value = householdId
-  pushToast('success', '本机人脸凭证家庭已绑定。成员前台可用已录入的人脸凭证刷脸登录；该能力仍属受控实验。')
+  pushToast('success', '本机已绑定，成员前台可刷脸进入。')
 }
 
 function clearDeviceFaceHousehold(): void {
@@ -159,7 +157,7 @@ async function savePin(): Promise<void> {
   pinSaving.value = true
   try {
     await apiClient.setPin(householdId, pin, requestOptions.value)
-    pinSuccess.value = `已为当前身份 ${session.actorId} 设置家庭 ${householdId} 的 PIN。`
+    pinSuccess.value = '已保存找回密码用的六位数字。'
     pinDraft.value = ''
     pinConfirmation.value = ''
   } catch (cause) {
@@ -190,7 +188,7 @@ function onFramesCaptured(frames: File[]): void {
   selectedFrames.value = frames
   error.value = ''
   registrationSuccess.value = ''
-  pushToast('success', '三张照片已拍好。请填写 PIN（或密码），勾选同意后点下方“完成注册”。')
+  pushToast('success', '三张已拍好，请输入密码后完成注册。')
 }
 
 async function bindMemberAccount(): Promise<void> {
@@ -244,8 +242,8 @@ async function registerCredential(): Promise<void> {
     )
     const actorLabel = actorOptions.value.find(option => option.id === targetActorId)?.label ?? targetActorId
     registrationSuccess.value = wasRebind
-      ? `重新绑定成功：${actorLabel} 的人脸已更新。成员前台可用该凭证刷脸登录；该能力仍属受控实验。`
-      : `录入成功：${actorLabel} 的人脸已保存。成员前台可用该凭证刷脸登录；该能力仍属受控实验。`
+      ? `重新绑定成功：${actorLabel} 的人脸已更新。成员前台可刷脸进入。`
+      : `录入成功：${actorLabel} 的人脸已保存。成员前台可刷脸进入。`
     pushToast('success', registrationSuccess.value)
     resetForm()
     selectedActorId.value = targetActorId
@@ -316,7 +314,9 @@ onMounted(() => {
       <div>
         <p class="eyebrow">家庭账号安全</p>
         <h1>人脸凭证注册</h1>
-        <p class="page-subtitle">为家人采集三张动态画面；系统只保存加密特征，不保存照片原片。</p>
+        <p class="page-subtitle">
+          这里登记人脸和找回密码用的数字密码。成员前台在本机已绑定家庭后可刷脸进入；管理后台只用账号密码。
+        </p>
       </div>
       <button type="button" class="btn btn-ghost" :disabled="loading" @click="loadCredentials"><AppIcon name="refresh" :size="15" /> 刷新</button>
     </div>
@@ -338,7 +338,7 @@ onMounted(() => {
       <div class="section-stack">
       <section class="card">
         <div class="card-heading"><div><p class="eyebrow">明确同意与二次确认</p><h3 class="card-title">注册或重新绑定</h3></div></div>
-        <p class="card-note">打开语音后按屏幕提示一步步拍摄，家人可在旁协助；画面只在本机处理，不上传照片。</p>
+        <p class="card-note">登记完成后，成员前台可刷脸进入。人脸不能单独完成注册。</p>
         <p v-if="session.authMode !== 'session'" class="notice warn" role="status"><AppIcon name="lock" :size="16" /> 注册人脸凭证需要正式账号会话。</p>
         <form class="section-stack" @submit.prevent="registerCredential">
           <label class="field">家庭登录名<select v-model="selectedActorId" required><option v-for="option in actorOptions" :key="option.id" :value="option.id">{{ option.label }}</option></select></label>
@@ -350,10 +350,17 @@ onMounted(() => {
           />
           <p v-if="selectedFrames.length > 0" class="notice ok" role="status">
             <AppIcon name="check" :size="16" />
-            三张照片已拍好。请确认下方数字密码（或登录密码）与同意项，再点「完成注册」。
+            三张照片已拍好。请输入账号密码并勾选同意后，再点「完成注册」。
           </p>
-          <fieldset><legend>二次确认方式</legend><label class="check-row"><input v-model="confirmationMethod" type="radio" value="pin" /> 数字密码</label><label class="check-row"><input v-model="confirmationMethod" type="radio" value="password" /> 账号密码</label></fieldset>
-          <label class="field">{{ confirmationMethod === 'pin' ? '六位数字密码' : '账号密码' }}<input v-model="confirmationCode" type="password" :inputmode="confirmationMethod === 'pin' ? 'numeric' : 'text'" autocomplete="off" required /></label>
+          <label class="field">
+            账号密码
+            <input
+              v-model="confirmationCode"
+              type="password"
+              autocomplete="current-password"
+              required
+            />
+          </label>
           <label class="check-row"><input v-model="replaceExisting" type="checkbox" /> 已有凭证时重新绑定</label>
           <label class="check-row"><input v-model="consent" type="checkbox" required /> 我已获得本人明确同意，允许为所选家庭账号注册人脸凭证。</label>
           <p v-if="registrationBlockReason" class="notice warn" role="status"><AppIcon name="info" :size="16" /> {{ registrationBlockReason }}</p>
@@ -405,7 +412,7 @@ onMounted(() => {
       <div class="section-stack">
         <section class="card">
           <div class="card-heading"><div><p class="eyebrow">本机登录范围</p><h3 class="card-title">绑定一个家庭</h3></div><AppIcon name="home" :size="20" style="color: var(--sky)" /></div>
-          <p class="card-note">人脸识别只在绑定家庭的成员中进行，不跨家庭搜索；该能力仅保留给受控实验和历史兼容，欢迎页只提供正式账号密码登录。</p>
+          <p class="card-note">绑定后，成员前台在这台电脑上可以刷脸进入。</p>
           <p class="notice" :class="boundFaceHouseholdId === session.selectedHouseholdId ? 'ok' : 'warn'" role="status">
             <AppIcon :name="boundFaceHouseholdId ? 'check' : 'info'" :size="16" />
             {{ boundFaceHouseholdId ? `当前绑定家庭：${boundFaceHouseholdLabel}` : '本机尚未绑定家庭' }}
@@ -418,7 +425,7 @@ onMounted(() => {
 
         <section v-if="unboundMembers.length > 0" class="card">
           <div class="card-heading"><div><p class="eyebrow">先绑定家庭登录名</p><h3 class="card-title">给成员分配登录名</h3></div><AppIcon name="members" :size="20" style="color: var(--sky)" /></div>
-          <p class="card-note">成员有登录名后，才能用刷脸或数字密码进入自己的家庭账号。</p>
+          <p class="card-note">成员有登录名后，才能刷脸或用账号密码进入。</p>
           <form class="section-stack" @submit.prevent="bindMemberAccount">
             <label class="field">成员<select v-model="accountMemberId" required><option value="" disabled>请选择成员</option><option v-for="member in unboundMembers" :key="member.id" :value="member.id">{{ member.display_name }}</option></select></label>
             <label class="field">登录名<input v-model="accountActorId" autocomplete="username" required placeholder="例如 grandpa-1" /><small>只用于本地家庭登录，不是姓名，也不要填密码。</small></label>
@@ -428,8 +435,8 @@ onMounted(() => {
         </section>
 
         <section class="card">
-          <div class="card-heading"><div><p class="eyebrow">家庭账号安全</p><h3 class="card-title">设置数字密码</h3></div></div>
-          <p class="form-sub">数字密码绑定当前登录名与当前家庭；每个家庭登录名可分别设置六位数字密码。</p>
+          <div class="card-heading"><div><p class="eyebrow">家庭账号安全</p><h3 class="card-title">找回密码用的数字密码</h3></div></div>
+          <p class="form-sub">忘记登录密码时，用这组六位数字重置。不是登录方式。</p>
           <form class="section-stack" @submit.prevent="savePin">
             <label class="field">六位数字密码<input v-model="pinDraft" type="password" inputmode="numeric" autocomplete="new-password" pattern="[0-9]{6}" maxlength="6" required placeholder="例如 123456" /></label>
             <label class="field">再次输入数字密码<input v-model="pinConfirmation" type="password" inputmode="numeric" autocomplete="new-password" pattern="[0-9]{6}" maxlength="6" required placeholder="再次输入六位数字" /></label>

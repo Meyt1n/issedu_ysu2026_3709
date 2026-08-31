@@ -193,19 +193,19 @@ export function formatError(cause: unknown): string {
       }
       // Face login returns desensitized buckets on 401 (not a generic FACE_AUTH_FAILED).
       if (cause.message === 'LIVENESS_FAILED' || cause.message === 'FACE_LIVENESS_FAILED') {
-        return '这次没有认出有效的转头变化。请正对镜头、按提示轻轻转一下头后重拍；也可以改用数字密码。'
+        return '这次没有认出有效的转头变化。请正对镜头、轻轻转一下头后重拍，或改用账号密码。'
       }
       if (cause.message === 'FRAME_QUALITY_INVALID' || cause.message === 'FACE_FRAME_LOW_QUALITY') {
-        return '画面太暗、太亮或太小。请改善光线后重拍；也可以改用数字密码。'
+        return '画面太暗、太亮或太小。请改善光线后重拍，或改用账号密码。'
       }
       if (cause.message === 'NO_MATCH') {
-        return '这次没有认出来。请正对镜头、光线均匀后重拍；也可以改用数字密码。'
+        return '这次没有认出来。请正对镜头后重拍，或改用账号密码。'
       }
       if (cause.message === 'AMBIGUOUS_MATCH') {
-        return '家里有两张脸太像，没法自动确认是谁。请改用数字密码或账号密码登录。'
+        return '没法自动确认是谁，请改用账号密码。'
       }
       if (cause.message === 'CREDENTIAL_UNAVAILABLE') {
-        return '这个家庭还没有可用的人脸资料。请管理员先在「人脸凭证」页录入，或改用数字密码登录。'
+        return '这个家庭还没有人脸资料，请改用账号密码。'
       }
       if (cause.message === 'CHALLENGE_INVALID') {
         return '这次验证已过期或已使用，请重新点「刷脸进入」。'
@@ -216,15 +216,15 @@ export function formatError(cause: unknown): string {
         || cause.message === 'FRAME_SIZE_INVALID'
         || cause.message === 'FRAME_MAGIC_INVALID'
       ) {
-        return '这次采集不完整，请重新点「刷脸进入」完成短采集；也可以改用数字密码。'
+        return '这次采集不完整，请重新刷脸，或改用账号密码。'
       }
       if (cause.message === 'FACE_AUTH_FAILED' || cause.message === 'FACE_MATCH_FAILED') {
-        return '这次没有认出来。请重拍，或改用数字密码登录。'
+        return '这次没有认出来。请重拍，或改用账号密码。'
       }
       return '账号、密码或会话无效，请重新登录。'
     }
     if (cause.status === 403) {
-      if (cause.message === 'CONFIRMATION_FAILED') return '二次确认失败，请检查当前账号的数字密码或登录密码后重试。'
+      if (cause.message === 'CONFIRMATION_FAILED') return '二次确认失败，请检查登录密码后重试。'
       if (cause.message === 'STEP_UP_FAILED') return '二次确认未通过，请重新发起确认后重试。'
       return '当前账号没有执行此操作的权限。'
     }
@@ -249,7 +249,7 @@ export function formatError(cause: unknown): string {
     if (cause.status === 422) {
       if (cause.message === 'PASSWORD_REUSE') return '新密码不能与当前密码相同，请换一个新密码。'
       if (cause.message === 'FACE_FRAME_LOW_QUALITY') {
-        return '摄像头画面太小或过暗过亮：请改善光线后重新采集；也可以改用数字密码。'
+        return '摄像头画面太小或过暗过亮，请改善光线后重拍，或改用账号密码。'
       }
       if (cause.message === 'FACE_TOO_SMALL') return '人脸在画面中太小，请靠近摄像头，让整张脸约占画面六分之一以上。'
       if (cause.message === 'FACE_TOO_LARGE') return '人脸在画面中过大或贴边，请稍退后，保证整张脸完整入画。'
@@ -258,30 +258,29 @@ export function formatError(cause: unknown): string {
       if (cause.message === 'FACE_NOT_FOUND') return '没有检测到清晰人脸，请重新拍摄正面照片。'
       if (cause.message === 'FACE_MULTIPLE_SUBJECTS') return '检测到多张人脸，请只保留要绑定的一个人。'
       if (cause.message === 'FACE_LIVENESS_FAILED') {
-        return '没有形成有效的转头变化，请正对镜头后按提示轻轻转头，再重新采集；也可以改用数字密码。'
+        return '没有形成有效的转头变化，请正对镜头轻轻转头后重拍，或改用账号密码。'
       }
       // Never dump raw English validation codes to family-facing UI.
       return '这次提交的内容不符合要求，请按页面提示检查后重试。'
     }
     if (cause.status === 503 && cause.message === 'FACE_DETECTOR_UNAVAILABLE') {
       return (
-        '人脸功能暂时不可用，本次没有改变任何数据。'
-        + '请改用数字密码或账号密码登录；需要恢复人脸时请家人按《人脸凭证录入与登录操作手册》排查。'
+        '人脸功能暂时不可用，本次没有改变任何数据。请改用账号密码登录。'
       )
     }
     if (cause.status === 503 && cause.message === 'FACE_AUTH_UNAVAILABLE') {
-      return '人脸识别暂时不可用，本次未进入家庭；请改用数字密码或账号密码登录。'
+      return '人脸识别暂时不可用，请改用账号密码。'
     }
     if (cause.status === 429) {
       const lockMatch = /^LOCKED:(\d+)$/.exec(cause.message)
       if (lockMatch) {
         const waitMinutes = Math.max(1, Math.ceil(Number(lockMatch[1]) / 60))
-        return `连续失败次数过多，已临时锁定，请约 ${waitMinutes} 分钟后再试，或改用数字密码 / 账号密码登录。`
+        return `连续失败次数过多，已临时锁定，请约 ${waitMinutes} 分钟后再试，或改用账号密码。`
       }
       if (cause.message === 'FACE_CHALLENGE_RATE_LIMITED') {
-        return '刷脸尝试过于频繁，请稍后再试，或改用数字密码登录。'
+        return '刷脸尝试过于频繁，请稍后再试，或改用账号密码。'
       }
-      return '尝试过于频繁，请稍后再试，或改用数字密码登录。'
+      return '尝试过于频繁，请稍后再试，或改用账号密码。'
     }
     if (cause.status >= 500) {
       // Do not leak raw server detail (paths, stack fragments) to family UI.

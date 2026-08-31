@@ -203,9 +203,6 @@ test.describe('keyboard path and focus visibility', () => {
     await page.keyboard.type(FORMAL_TEST_PASSWORD)
 
     await page.keyboard.press('Tab')
-    await expect(page.getByLabel('访问用途代码')).toBeFocused()
-
-    await page.keyboard.press('Tab')
     await expect(page.getByRole('button', { name: '登录家庭空间' })).toBeFocused()
 
     await page.keyboard.press('Enter')
@@ -250,18 +247,6 @@ test.describe('form errors', () => {
     await page.goto('/')
 
     await expect(page.getByRole('button', { name: '登录家庭空间' })).toBeDisabled()
-  })
-
-  test('the purpose field exposes its format hint and validity to assistive tech', async ({ page }) => {
-    await installSyntheticApi(page)
-    await page.goto('/')
-
-    const purpose = page.getByLabel('访问用途代码')
-    await expect(purpose).toHaveAttribute('aria-describedby', 'purpose-format-hint')
-    await expect(purpose).toHaveAttribute('aria-invalid', 'false')
-
-    await purpose.fill('无效 purpose ！')
-    await expect(purpose).toHaveAttribute('aria-invalid', 'true')
   })
 })
 
