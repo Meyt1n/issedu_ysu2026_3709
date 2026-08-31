@@ -7,6 +7,7 @@ import { presentApiError } from '@/api/errors'
 import { familyAuthAdapter } from '@/data/authAdapter'
 import { useAuth } from '@/stores/auth'
 import { useSession } from '@/stores/session'
+import { faceLoginDisabledReason } from '@/utils/faceLogin'
 
 const route = useRoute()
 const router = useRouter()
@@ -27,6 +28,8 @@ const REASON_NOTICE: Record<string, string> = {
 
 const reasonNotice = computed(() => REASON_NOTICE[auth.reason] ?? '')
 const serverLabel = computed(() => session.serverBaseUrl || '同源（与页面相同的地址）')
+// HCT-505 尚未完成；保持 fail-closed，不触发摄像头或任何人脸请求。
+const faceLoginReason = faceLoginDisabledReason({ thresholdCalibrated: false })
 /** 与 HCT-107 `AuthCredentials` 的 `password: min_length=8` 对齐，避免把长度问题报成契约不一致。 */
 const PASSWORD_MIN_LENGTH = 8
 const canSubmit = computed(
@@ -113,6 +116,27 @@ function useDemoMode(): void {
           {{ submitting ? '正在登录…' : '登录' }}
         </button>
       </form>
+    </section>
+
+    <section class="card" aria-labelledby="face-login-title">
+      <div class="h-icon-row">
+        <span class="row-icon" data-tone="calm" aria-hidden="true"><AppIcon name="shield" :size="16" /></span>
+        <h2 id="face-login-title">刷脸登录（尚未开放）</h2>
+      </div>
+      <p id="face-login-help" class="meta-line">
+        {{ faceLoginReason }}移动端当前不会请求摄像头，也不会上传或保存人脸信息。
+        请使用账号密码登录；登录后如需高风险操作，仍按既有流程使用家庭 PIN 或二维码二次确认。
+      </p>
+      <button
+        type="button"
+        class="btn btn-quiet btn-block"
+        disabled
+        aria-disabled="true"
+        aria-describedby="face-login-help"
+      >
+        刷脸登录暂未开放
+      </button>
+      <p class="meta-line">这是教学演示级、非生产级生物识别能力，可随时改用其它登录方式。</p>
     </section>
 
     <section class="card" aria-labelledby="login-alt-title">
