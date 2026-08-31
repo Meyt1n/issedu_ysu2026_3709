@@ -424,7 +424,7 @@ uv run python -m app.care_plan_worker --loop
 | 本地助手真实生成（Ollama） | 本机 Ollama 及模型，或增强档容器（`$env:COMPOSE_PROFILE='enhanced'` 后 `up`，容器内仍需 `ollama pull`） | `OLLAMA_BASE_URL`、`OLLAMA_MODEL`；本地默认 `AGENT_OPEN_CHAT=true`（见 [助手开放演示模式](docs/助手开放演示模式.md)） | 助手页真实回答；开放模式下少被证据墙打断 | 结构化降级，档案/规则/知识链路不受影响 |
 | 可选联网搜索（HCT-430） | 夹具：完全不出网；真实：HTTPS 白名单 | 夹具：`AGENT_WEB_SEARCH_PROVIDER=fixture`；真实：`duckduckgo_html` + `AGENT_WEB_SEARCH_URL` + `AGENT_WEB_SEARCH_ALLOWED_DOMAINS`（见[专文](docs/demo/联网搜索与知识库刷新启用指南.md)） | 夹具：`web_search_ready=true` 但 capabilities **无** `external-web`；真实：capabilities **有** `external-web`；每次提问还需勾选「补充联网参考」 | 默认关闭（`DEPLOYMENT_DISABLED`），结果只是「外部参考」 |
 | 知识入库与受控爬虫 | 知识管理员身份（`demo-` 前缀即可演示） | `KNOWLEDGE_ADMIN_ACTORS`（正式部署） | 「知识文档」页「一键教学闭环：抓取 → 批准 → 晋升」；`GET /api/v1/knowledge/crawl/status` | 爬虫默认离线夹具、**永不 auto_ingest**；非管理员看到明确提示 |
-| 演示造数与课堂剧本（HCT-452） | 正式演示账号 `demo-parent` | 运行 `uv run python scripts/seed_formal_demo_health.py` 预置账号和虚构数据 | 「家庭与研发 → 演示造数」一键补种（幂等）；`POST /api/v1/demo/formal-health-seed`、`GET /api/v1/demo/classroom-scenarios` | 非演示身份被 403 `DEMO_SEED_FORBIDDEN` 拒绝（守卫生效，不是故障） |
+| 演示造数与课堂剧本（HCT-499） | 正式演示账号 `demo-parent` | 运行 `uv run python scripts/seed_formal_demo_health.py` 预置账号和虚构数据 | 「家庭与研发 → 演示造数」一键补种（幂等）；`POST /api/v1/demo/formal-health-seed`、`GET /api/v1/demo/classroom-scenarios` | 非演示身份被 403 `DEMO_SEED_FORBIDDEN` 拒绝（守卫生效，不是故障） |
 | 天气行动卡（HCT-305） | 白名单天气源 | `WEATHER_ADAPTER=enabled`、`WEATHER_API_URL`、`WEATHER_DEFAULT_CITY_CODE`、`WEATHER_LOCATION_WHITELIST`、`EGRESS_WEATHER_WHITELIST` | `GET /api/v1/weather/action-cards` | 默认 `disabled`，返回结构化空响应；只允许发送 6 位行政区划代码 |
 | 健康资讯真实抓取（HCT-445） | 白名单资讯域名 | `HEALTH_NEWS_ADAPTER=enabled`、`HEALTH_NEWS_ALLOWED_DOMAINS` | `GET /api/v1/health-news` 返回白名单来源条目 | 默认 `local` 仅季节提醒，不出网 |
 
