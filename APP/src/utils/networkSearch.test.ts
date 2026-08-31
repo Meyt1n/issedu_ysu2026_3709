@@ -5,6 +5,7 @@ import {
   collectExternalDomains,
   MAX_EXTERNAL_DOMAINS,
   networkSearchDisabledReason,
+  networkSearchFailureMessage,
   resolveNetworkSearchForTurn,
 } from './networkSearch'
 
@@ -78,5 +79,25 @@ describe('单轮是否出网的决策', () => {
     expect(
       resolveNetworkSearchForTurn({ localOnly: true, available: true, userEnabled: true }),
     ).toBe(false)
+  })
+})
+
+describe('联网失败后的可恢复提示', () => {
+  it('服务端以降级 trace 返回限流时仍提供本地重试语义', () => {
+    expect(networkSearchFailureMessage([
+      { agent_id: 'web_search', status: 'degraded', reason_code: 'RATE_LIMITED' },
+    ])).toContain('仅用本地知识重试')
+  })
+
+  it('搜索失败（含超时/上游失败）映射为可恢复提示', () => {
+    expect(networkSearchFailureMessage([
+      { agent_id: 'web_search', status: 'degraded', reason_code: 'SEARCH_FAILED' },
+    ])).toContain('超时或上游失败')
+  })
+
+  it('没有降级的联网节点时不误报失败', () => {
+    expect(networkSearchFailureMessage([
+      { agent_id: 'web_search', status: 'completed', reason_code: 'RATE_LIMITED' },
+    ])).toBeNull()
   })
 })
