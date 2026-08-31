@@ -230,6 +230,9 @@ export function formatError(cause: unknown): string {
     }
     if (cause.status === 404) return '当前身份无权访问该资源，或资源不存在。'
     if (cause.status === 409) {
+      if (cause.message === 'ACCOUNT_EXISTS') {
+        return '这个正式账号已经存在，请点“已有账号？返回登录”，或换一个新的登录名。'
+      }
       if (cause.message === 'FACE_CREDENTIAL_EXISTS') {
         return '当前身份已经有有效的人脸凭证；如需替换，请勾选“已有凭证时重新绑定”。'
       }
