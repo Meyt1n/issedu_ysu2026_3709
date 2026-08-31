@@ -343,6 +343,8 @@ export interface RequestOptions {
    * 不等同于「API 不可用」）；连接失败才返回 `DEPENDENCY_UNAVAILABLE`。
    */
   timeoutMs?: number
+  /** Keep an existing session when a credential-confirmation request returns 401. */
+  suppressUnauthorizedHandler?: boolean
 }
 
 export interface AuthSession {

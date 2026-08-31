@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiClientError, apiClient } from './api/client'
 import {
+  changeCurrentPassword,
   connectWithFamilyFace,
   connectWithPassword,
   connectWithPin,
@@ -13,6 +14,7 @@ import {
   getBoundFaceHouseholdName,
   portalWelcomeMessage,
   refreshCapabilities,
+  recoverPasswordWithPin,
   selectedMember,
   session,
   setView,
@@ -78,6 +80,91 @@ describe('session expiry handling', () => {
 
     expect(register).toHaveBeenCalledWith('new-owner', 'password-123')
     expect(apiClient.login).toHaveBeenCalledWith('new-owner', 'password-123')
+    expect(session.status).toBe('empty')
+  })
+})
+
+describe('formal password rotation and recovery', () => {
+  beforeEach(() => {
+    vi.spyOn(apiClient, 'listHouseholds').mockResolvedValue([])
+    vi.spyOn(apiClient, 'logout').mockResolvedValue({ status: 'logged_out' })
+  })
+
+  afterEach(() => {
+    signOut()
+    vi.restoreAllMocks()
+  })
+
+  it('replaces the current bearer session after an authenticated password change', async () => {
+    vi.spyOn(apiClient, 'login').mockResolvedValue({
+      actor_id: 'password-owner',
+      session_token: 'o'.repeat(48),
+      expires_at: (Date.now() + 60_000) / 1000,
+    })
+    await connectWithPassword('password-owner', 'current-password', 'family-care')
+    vi.spyOn(apiClient, 'changePassword').mockResolvedValue({
+      actor_id: 'password-owner',
+      session_token: 'n'.repeat(48),
+      expires_at: (Date.now() + 120_000) / 1000,
+    })
+
+    await changeCurrentPassword('current-password', 'new-password')
+
+    expect(apiClient.changePassword).toHaveBeenCalledWith(
+      'current-password',
+      'new-password',
+      expect.objectContaining({
+        sessionToken: 'o'.repeat(48),
+        suppressUnauthorizedHandler: true,
+      }),
+    )
+    expect(session.sessionToken).toBe('n'.repeat(48))
+    expect(session.status).toBe('empty')
+  })
+
+  it('keeps the existing session state when current-password confirmation fails', async () => {
+    vi.spyOn(apiClient, 'login').mockResolvedValue({
+      actor_id: 'password-owner',
+      session_token: 'o'.repeat(48),
+      expires_at: (Date.now() + 60_000) / 1000,
+    })
+    await connectWithPassword('password-owner', 'current-password', 'family-care')
+    vi.spyOn(apiClient, 'changePassword').mockRejectedValue(
+      new ApiClientError('AUTH_FAILED', { status: 401, code: 'UNAUTHENTICATED' }),
+    )
+
+    await expect(changeCurrentPassword('wrong-password', 'new-password')).rejects.toMatchObject({
+      status: 401,
+    })
+
+    expect(session.sessionToken).toBe('o'.repeat(48))
+    expect(session.actorId).toBe('password-owner')
+  })
+
+  it('enters a fresh session after PIN-backed forgotten-password recovery', async () => {
+    vi.spyOn(apiClient, 'recoverPassword').mockResolvedValue({
+      actor_id: 'recovery-owner',
+      household_id: 'household-1',
+      session_token: 'r'.repeat(48),
+      expires_at: (Date.now() + 60_000) / 1000,
+    })
+
+    await recoverPasswordWithPin(
+      'recovery-owner',
+      'household-1',
+      '042006',
+      'new-password',
+      'family-care',
+    )
+
+    expect(apiClient.recoverPassword).toHaveBeenCalledWith(
+      'recovery-owner',
+      'household-1',
+      '042006',
+      'new-password',
+    )
+    expect(session.sessionToken).toBe('r'.repeat(48))
+    expect(session.actorId).toBe('recovery-owner')
     expect(session.status).toBe('empty')
   })
 })

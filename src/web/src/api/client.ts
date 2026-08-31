@@ -222,7 +222,9 @@ export class ApiClient {
     }
 
     if (!response.ok) {
-      if (response.status === 401) this.unauthorizedHandler?.()
+      if (response.status === 401 && !options.suppressUnauthorizedHandler) {
+        this.unauthorizedHandler?.()
+      }
       if (isGatewayUnavailable(response.status, text)) {
         throw new ApiClientError('API service is unavailable behind the local proxy', {
           status: response.status,
@@ -246,6 +248,37 @@ export class ApiClient {
     return this.request('/api/v1/auth/login', {
       method: 'POST',
       body: JSON.stringify({ actor_id: actorId, password }),
+    })
+  }
+
+  changePassword(
+    currentPassword: string,
+    newPassword: string,
+    options?: RequestOptions,
+  ): Promise<AuthSession> {
+    return this.request('/api/v1/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({
+        current_password: currentPassword,
+        new_password: newPassword,
+      }),
+    }, options)
+  }
+
+  recoverPassword(
+    actorId: string,
+    householdId: string,
+    pin: string,
+    newPassword: string,
+  ): Promise<AuthSession> {
+    return this.request('/api/v1/auth/recover-password', {
+      method: 'POST',
+      body: JSON.stringify({
+        actor_id: actorId,
+        household_id: householdId,
+        pin,
+        new_password: newPassword,
+      }),
     })
   }
 

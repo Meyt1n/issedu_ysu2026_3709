@@ -16,6 +16,7 @@ import {
   getBoundFaceHouseholdName,
   portalWelcomeMessage,
   pushToast,
+  recoverPasswordWithPin,
   refreshCapabilities,
   session,
 } from '../store'
@@ -122,6 +123,12 @@ const entryConflictUrl = computed(() =>
   entryConflictNotice.value ? crossPortalUrl(entryConflictNotice.value.crossLinkTarget) : '',
 )
 const registerMode = ref(false)
+const recoveryMode = ref(false)
+const recoveryHouseholdId = ref('')
+const recoveryPin = ref('')
+const recoveryNewPassword = ref('')
+const recoveryConfirmPassword = ref('')
+const recovering = ref(false)
 const connecting = ref(false)
 const creating = ref(false)
 const createError = ref('')
@@ -352,6 +359,68 @@ function usePasswordFallback(): void {
   credentialMode.value = 'password'
 }
 
+function openPasswordRecovery(): void {
+  registerMode.value = false
+  recoveryMode.value = true
+  recoveryHouseholdId.value = householdId.value.trim()
+  password.value = ''
+  localError.value = ''
+}
+
+function closePasswordRecovery(): void {
+  recoveryMode.value = false
+  recoveryPin.value = ''
+  recoveryNewPassword.value = ''
+  recoveryConfirmPassword.value = ''
+  localError.value = ''
+}
+
+async function submitPasswordRecovery(): Promise<void> {
+  localError.value = ''
+  if (!actorId.value.trim() || !recoveryHouseholdId.value.trim()) {
+    localError.value = '请输入正式账号和家庭编号。'
+    return
+  }
+  if (!/^\d{6}$/.test(recoveryPin.value)) {
+    localError.value = '请输入本人已设置的六位数字密码。'
+    return
+  }
+  if (recoveryNewPassword.value.length < 8) {
+    localError.value = '新密码至少需要 8 个字符。'
+    return
+  }
+  if (recoveryNewPassword.value !== recoveryConfirmPassword.value) {
+    localError.value = '两次输入的新密码不一致。'
+    return
+  }
+  if (!accessPurposeValid.value) {
+    localError.value = '访问用途代码需使用小写字母开头，并只包含小写字母、数字和连字符。'
+    return
+  }
+  recovering.value = true
+  try {
+    await recoverPasswordWithPin(
+      actorId.value,
+      recoveryHouseholdId.value,
+      recoveryPin.value,
+      recoveryNewPassword.value,
+      accessPurpose.value,
+    )
+    recoveryPin.value = ''
+    recoveryNewPassword.value = ''
+    recoveryConfirmPassword.value = ''
+    recoveryMode.value = false
+    if (session.status === 'ready') {
+      pushToast('success', '密码已重置，旧会话已全部退出。')
+      announcePortalEntry()
+    }
+  } catch (cause) {
+    localError.value = formatError(cause)
+  } finally {
+    recovering.value = false
+  }
+}
+
 async function submitCreate(): Promise<void> {
   if (!canCreate.value) return
   creating.value = true
@@ -464,7 +533,92 @@ async function submitCreate(): Promise<void> {
           <AppIcon name="lock" :size="16" />
           <span><strong>正式账号密码登录</strong> · 也可按入口配置使用已启用的人脸或数字密码</span>
         </div>
-        <form class="section-stack" @submit.prevent="submitSession">
+        <form v-if="recoveryMode" class="section-stack password-recovery-form" @submit.prevent="submitPasswordRecovery">
+          <div class="notice" role="note">
+            <AppIcon name="key" :size="16" />
+            <span>
+              <strong>本地忘记密码恢复</strong> · 使用这个账号本人在该家庭已设置的六位数字密码验证
+            </span>
+          </div>
+          <p class="form-sub">
+            系统不会发送邮件或短信。恢复成功后会退出这个账号在其他设备上的旧会话；如果从未设置数字密码，请联系家庭管理员或维护人员走受控恢复流程。
+          </p>
+          <label class="field">
+            正式账号
+            <input v-model="actorId" autocomplete="username" placeholder="例如 parent-1" required />
+          </label>
+          <label class="field">
+            家庭编号
+            <input
+              v-model="recoveryHouseholdId"
+              autocomplete="off"
+              placeholder="请输入家庭唯一编号（请问家人）"
+              required
+            />
+          </label>
+          <label class="field">
+            本人六位数字密码
+            <input
+              v-model="recoveryPin"
+              type="password"
+              inputmode="numeric"
+              autocomplete="one-time-code"
+              pattern="[0-9]{6}"
+              maxlength="6"
+              required
+            />
+          </label>
+          <label class="field">
+            新密码
+            <input
+              v-model="recoveryNewPassword"
+              type="password"
+              autocomplete="new-password"
+              aria-label="新密码"
+              minlength="8"
+              required
+            />
+            <small>至少 8 个字符。</small>
+          </label>
+          <label class="field">
+            再次输入新密码
+            <input
+              v-model="recoveryConfirmPassword"
+              type="password"
+              autocomplete="new-password"
+              aria-label="再次输入新密码"
+              minlength="8"
+              required
+            />
+          </label>
+          <label class="field">
+            访问用途代码
+            <input
+              v-model="accessPurpose"
+              autocomplete="off"
+              placeholder="family-care"
+              aria-label="访问用途代码"
+              :aria-invalid="accessPurpose.trim().length > 0 && !accessPurposeValid"
+            />
+            <small>使用小写字母开头，例如 family-care。</small>
+          </label>
+          <p v-if="localError" class="notice error" role="alert">
+            <AppIcon name="alert" :size="16" />
+            {{ localError }}
+          </p>
+          <button
+            type="submit"
+            class="btn btn-primary"
+            :disabled="recovering || !actorId.trim() || !recoveryHouseholdId.trim() || !/^\d{6}$/.test(recoveryPin) || recoveryNewPassword.length < 8 || recoveryNewPassword !== recoveryConfirmPassword || !accessPurposeValid"
+          >
+            {{ recovering ? '正在重置…' : '重置密码并登录' }}
+            <AppIcon v-if="!recovering" name="arrow-right" :size="17" />
+          </button>
+          <button type="button" class="btn btn-ghost btn-small" :disabled="recovering" @click="closePasswordRecovery">
+            返回账号登录
+          </button>
+        </form>
+        <form v-else class="section-stack" @submit.prevent="submitSession">
           <div class="segmented-control" role="group" aria-label="选择账号登录凭据">
             <button
               v-for="tab in credentialTabs"
@@ -592,6 +746,15 @@ async function submitCreate(): Promise<void> {
           </button>
           <button v-if="credentialMode === 'password'" type="button" class="btn btn-ghost btn-small" @click="registerMode = !registerMode">
             {{ registerMode ? '已有账号？返回登录' : '首次使用？注册本地账号' }}
+          </button>
+          <button
+            v-if="credentialMode === 'password' && !registerMode"
+            type="button"
+            class="btn btn-ghost btn-small"
+            data-testid="forgot-password"
+            @click="openPasswordRecovery"
+          >
+            忘记密码？用六位数字密码重置
           </button>
           <button
             v-if="passwordBehindOtherWays && credentialMode !== 'password'"

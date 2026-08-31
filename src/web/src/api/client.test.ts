@@ -134,6 +134,60 @@ describe('ApiClient authorization contract', () => {
     expect(JSON.parse(String(requests[1]?.init.body))).toEqual({ session_token: 's'.repeat(40) })
   })
 
+  it('changes and recovers passwords through body-only credential requests', async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = []
+    const client = new ApiClient({
+      baseUrl: 'http://local.test',
+      fetcher: async (input, init) => {
+        requests.push({ url: String(input), init: init ?? {} })
+        return new Response(JSON.stringify({
+          actor_id: 'owner',
+          household_id: 'household-1',
+          session_token: 'n'.repeat(40),
+          expires_at: 123,
+        }), { status: 200 })
+      },
+    })
+
+    await client.changePassword('current-password', 'new-password', {
+      sessionToken: 's'.repeat(40),
+      suppressUnauthorizedHandler: true,
+    })
+    await client.recoverPassword('owner', 'household-1', '042006', 'recovered-password')
+
+    expect(requests[0]?.url).toBe('http://local.test/api/v1/auth/change-password')
+    expect(requests[0]?.url).not.toContain('current-password')
+    expect(new Headers(requests[0]?.init.headers).get('Authorization')).toBe(`Bearer ${'s'.repeat(40)}`)
+    expect(JSON.parse(String(requests[0]?.init.body))).toEqual({
+      current_password: 'current-password',
+      new_password: 'new-password',
+    })
+    expect(requests[1]?.url).toBe('http://local.test/api/v1/auth/recover-password')
+    expect(requests[1]?.url).not.toContain('042006')
+    expect(JSON.parse(String(requests[1]?.init.body))).toEqual({
+      actor_id: 'owner',
+      household_id: 'household-1',
+      pin: '042006',
+      new_password: 'recovered-password',
+    })
+  })
+
+  it('does not clear a live session when current-password confirmation fails', async () => {
+    const client = new ApiClient({
+      fetcher: async () =>
+        new Response(JSON.stringify({ detail: 'AUTH_FAILED' }), { status: 401 }),
+    })
+    const onUnauthorized = vi.fn()
+    client.setUnauthorizedHandler(onUnauthorized)
+
+    await expect(client.changePassword('wrong-password', 'new-password', {
+      sessionToken: 's'.repeat(40),
+      suppressUnauthorizedHandler: true,
+    })).rejects.toMatchObject({ status: 401 })
+
+    expect(onUnauthorized).not.toHaveBeenCalled()
+  })
+
   it('creates a face challenge and sends frames as multipart without URL secrets', async () => {
     const requests: Array<{ url: string; init: RequestInit }> = []
     const client = new ApiClient({
