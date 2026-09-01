@@ -282,11 +282,16 @@ export class ApiClient {
     })
   }
 
-  loginWithPin(householdId: string, actorId: string, pin: string): Promise<AuthSession> {
+  loginWithPin(
+    householdId: string,
+    actorId: string,
+    pin: string,
+    options?: RequestOptions,
+  ): Promise<AuthSession> {
     return this.request('/api/v1/auth/pin-login', {
       method: 'POST',
       body: JSON.stringify({ household_id: householdId, actor_id: actorId, pin }),
-    })
+    }, options)
   }
 
   createFaceChallenge(householdId: string, actorId: string): Promise<FaceChallenge> {
@@ -337,11 +342,31 @@ export class ApiClient {
     )
   }
 
-  setPin(householdId: string, pin: string, options?: RequestOptions): Promise<{ status: string; household_id: string }> {
+  setPin(
+    householdId: string,
+    pin: string,
+    options?: RequestOptions,
+    targetActorId?: string,
+  ): Promise<{ status: string; household_id: string }> {
     return this.request('/api/v1/auth/pin', {
       method: 'POST',
-      body: JSON.stringify({ household_id: householdId, pin }),
+      body: JSON.stringify({
+        household_id: householdId,
+        pin,
+        ...(targetActorId ? { actor_id: targetActorId } : {}),
+      }),
     }, options)
+  }
+
+  listPinStatus(
+    householdId: string,
+    options?: RequestOptions,
+  ): Promise<{ household_id: string; configured_actor_ids: string[] }> {
+    return this.request(
+      `/api/v1/households/${encodeURIComponent(householdId)}/pin-status`,
+      undefined,
+      options,
+    )
   }
 
   logout(sessionToken: string): Promise<{ status: string }> {

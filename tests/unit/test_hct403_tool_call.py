@@ -880,6 +880,21 @@ def test_dose_filter_leaves_lifestyle_quantities_alone() -> None:
 def test_health_assistant_output_rejects_placeholder_answer() -> None:
     with pytest.raises(ValidationError):
         HealthAssistantOutput(answer="unknown", sources=[], confidence="low", escalate=False)
+    with pytest.raises(ValidationError):
+        HealthAssistantOutput(answer="回答正文", sources=[], confidence="low", escalate=False)
+
+
+def test_parse_assistant_output_rejects_orchestration_leak() -> None:
+    from app.tool_call import _parse_assistant_output, answer_leaks_orchestration
+
+    assert answer_leaks_orchestration("database_agent 返回 TOOL_SCOPE_DENIED")
+    assert _parse_assistant_output(
+        '{"answer":"回答正文","sources":[],"confidence":"low","escalate":false}'
+    ) is None
+    assert _parse_assistant_output(
+        '{"answer":"上一稿没有在 sources 中引用 chunk_id","sources":[],'
+        '"confidence":"low","escalate":false}'
+    ) is None
 
 
 def test_health_assistant_output_rejects_non_enum_confidence() -> None:

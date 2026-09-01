@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  consumeAssistantSeed,
   consumeAssistantSeedPrompt,
   openAssistantWithPrompt,
   session,
@@ -14,5 +15,20 @@ describe('assistant seed prompt', () => {
     expect(session.currentView).toBe('assistant')
     expect(consumeAssistantSeedPrompt()).toContain('换季')
     expect(consumeAssistantSeedPrompt()).toBe('')
+  })
+
+  it('lets health-news jumps start a new thread with network search on', () => {
+    openAssistantWithPrompt(
+      '请阅读这篇公开网页后再回答：https://www.who.int/zh/example\n首页看到公开资讯「示例标题」，这件事和家里的日常照护有关系吗？',
+      {
+        allowNetworkSearch: true,
+        newThread: true,
+      },
+    )
+    const seeded = consumeAssistantSeed()
+    expect(seeded.prompt).toContain('https://www.who.int/zh/example')
+    expect(seeded.prompt).toContain('公开资讯')
+    expect(seeded.allowNetworkSearch).toBe(true)
+    expect(seeded.newThread).toBe(true)
   })
 })

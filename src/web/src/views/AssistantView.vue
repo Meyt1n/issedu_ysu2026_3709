@@ -8,7 +8,6 @@ import type {
   AssistantExternalSource,
 } from '../api/types'
 import {
-  clearChatSession,
   createChatThread,
   deleteChatThread,
   getActiveChatThreadId,
@@ -26,6 +25,7 @@ import {
 import { buildAssistantChatInput } from '../assistant/chatPayload'
 import { normalizeSuggestedQuestions } from '../assistant/followUp'
 import {
+  canRecheckMedicationSafety,
   confidenceLabel,
   extraFactSources,
   routeSummary,
@@ -39,41 +39,20 @@ import {
   webSearchSkipDetail,
 } from '../assistant/webSearchAvailability'
 import {
-  AUTO_SEND_PRESETS,
-  createAutoSendScheduler,
-  createDictationController,
   getSpeakingIndex,
   getSpeakingSegments,
-  inspectChineseVoicePacks,
-  isSpeechInputSupported,
   isSpeechOutputSupported,
   jumpSpeakingSegment,
-  listChineseVoices,
-  loadVoicePreferences,
-  memberNameHotwordPairs,
-  runVoicePreflight,
-  saveVoicePreferences,
-  SILENCE_PRESETS,
   skipSpeakingSegment,
   speakText,
   stopSpeaking,
-  validateWakePhrase,
-  WAKE_PHRASE_PRESETS,
-  type DictationController,
-  type DictationMode,
-  type SpeechVoiceLike,
-  type VoiceCommandId,
-  type VoicePackReport,
-  type VoicePreflightReport,
-  type VoicePreferences,
 } from '../assistant/voice'
 import AppIcon from '../components/AppIcon.vue'
 import {
-  consumeAssistantSeedPrompt,
+  consumeAssistantSeed,
   formatError,
   requestOptions,
   selectMember,
-  selectedMember,
   session,
 } from '../store'
 import { relativeTime } from '../ui/labels'
@@ -125,14 +104,13 @@ const history = ref<ChatEntry[]>([])
 const draft = ref('')
 const sending = ref(false)
 const sendError = ref('')
-const voiceError = ref('')
+const speechError = ref('')
 const allowNetworkSearch = ref(false)
 const webSearchAvailable = ref<boolean | null>(null)
 const webSearchReason = ref<string | null>(null)
 const webSearchHint = ref<string | null>(null)
 const webSearchFixture = ref(false)
 const webSearchProvider = ref<string | null>(null)
-const showWebSearchHelp = ref(false)
 const workflowTrace = ref<AssistantAgentTrace[]>([])
 const selectedAgentId = ref<string | null>(null)
 const workflowExpanded = ref(false)
@@ -142,222 +120,15 @@ const stopStatus = ref('')
 const assistantSessionId = ref('')
 const threads = ref<ChatThreadMeta[]>([])
 const activeThreadId = ref('')
-const settingsOpen = ref(false)
-type VoiceMode = DictationMode
-
-const voiceMode = ref<VoiceMode>('off')
-const listening = computed(() =>
-  voiceMode.value === 'wake' || voiceMode.value === 'active' || voiceMode.value === 'command',
-)
-const voicePreview = ref('')
 const speakingIndex = ref<number | null>(null)
 const speakingProgress = ref('')
-const needMicGesture = ref(false)
 const chatWindow = ref<HTMLElement | null>(null)
 const draftInput = ref<HTMLTextAreaElement | null>(null)
-const sendButton = ref<HTMLButtonElement | null>(null)
-const voicePrefs = ref<VoicePreferences>(loadVoicePreferences())
-const wakePhraseDraft = ref(voicePrefs.value.wakePhrase)
-const voiceSendHint = ref('')
-const voicePackReport = ref<VoicePackReport | null>(null)
-const voicePackChecking = ref(false)
-const voiceOptions = ref<SpeechVoiceLike[]>([])
-const preflightReport = ref<VoicePreflightReport | null>(null)
-const preflightRunning = ref(false)
 const speakingSegmentIndex = ref(0)
-// The generic label is replaced by the model name the API reports with each
-// reply, so the UI never hardcodes a runtime model.
-const modelLabel = ref('本地模型')
-
-const wakePhrase = computed(() => voicePrefs.value.wakePhrase)
-
-const memberHotwordExtras = computed(() =>
-  memberNameHotwordPairs(session.members.map(member => member.display_name)),
-)
 
 const activeSpeakingSegments = computed(() =>
   speakingIndex.value !== null ? [...getSpeakingSegments()] : [],
 )
-
-const silencePresetId = computed(() => {
-  const match = SILENCE_PRESETS.find(
-    preset => preset.silenceMs === voicePrefs.value.silenceMs
-      && preset.continuationSilenceMs === voicePrefs.value.continuationSilenceMs,
-  )
-  return match?.id ?? 'custom'
-})
-
-const sendConfirmGate = createAutoSendScheduler({
-  onArmed: (delayMs) => {
-    const sec = Math.round(delayMs / 1000)
-    voiceSendHint.value = `无新输入，约 ${sec} 秒后自动发送；可说「取消」或「继续说」`
-    if (loadVoicePreferences().confirmSound) speakText(`${sec} 秒后发送，可说取消`)
-  },
-  onTick: (remainMs) => {
-    if (remainMs <= 0) return
-    const sec = Math.max(1, Math.ceil(remainMs / 1000))
-    voiceSendHint.value = `无新输入，${sec} 秒后自动发送；可说「取消」「继续说」，或说「发送吧」立即发送`
-  },
-  onAutoSend: (content) => {
-    voiceSendHint.value = ''
-    if (content.trim() && !sending.value) void send(content)
-  },
-  onCancelled: () => {
-    voiceSendHint.value = '已取消自动发送'
-  },
-})
-
-function applySilencePreset(presetId: string): void {
-  const preset = SILENCE_PRESETS.find(item => item.id === presetId)
-  if (!preset) return
-  voicePrefs.value = saveVoicePreferences({
-    silenceMs: preset.silenceMs,
-    continuationSilenceMs: preset.continuationSilenceMs,
-  })
-}
-
-function applyAutoSendPreset(presetId: string): void {
-  const preset = AUTO_SEND_PRESETS.find(item => item.id === presetId)
-  if (!preset) return
-  voicePrefs.value = saveVoicePreferences({ autoSendDelayMs: preset.delayMs })
-  sendConfirmGate.reset()
-  voiceSendHint.value = ''
-}
-
-function toggleVoicePref<K extends keyof VoicePreferences>(key: K, value: VoicePreferences[K]): void {
-  voicePrefs.value = saveVoicePreferences({ [key]: value })
-}
-
-function applyWakePreset(phrase: string): void {
-  wakePhraseDraft.value = phrase
-  saveWakePhrase()
-}
-
-function saveWakePhrase(): void {
-  const checked = validateWakePhrase(wakePhraseDraft.value)
-  if (!checked.ok) {
-    voiceError.value = checked.message
-    wakePhraseDraft.value = voicePrefs.value.wakePhrase
-    return
-  }
-  voiceError.value = ''
-  voicePrefs.value = saveVoicePreferences({ wakePhrase: checked.phrase })
-  wakePhraseDraft.value = checked.phrase
-  // 更换唤醒词后重新进入唤醒聆听，避免旧词残留提示。
-  if (listening.value || voiceMode.value === 'command' || voiceMode.value === 'ready') {
-    void beginWakeListening()
-  }
-}
-
-function repeatLastAnswer(): void {
-  const last = [...history.value].reverse().find(entry => entry.role === 'assistant' && entry.content.trim())
-  if (!last) {
-    voiceError.value = '还没有可朗读的回答。'
-    return
-  }
-  const index = history.value.lastIndexOf(last)
-  toggleSpeech(index, last.content)
-}
-
-function armAutoSend(draftText?: string): void {
-  const delay = loadVoicePreferences().autoSendDelayMs
-  if (!delay || delay <= 0) {
-    voiceSendHint.value = '已听完，请确认后点发送；也可说「发送吧」立即发送'
-    return
-  }
-  sendConfirmGate.start(draftText ?? draft.value, delay)
-}
-
-function handleVoiceCommand(command: VoiceCommandId): void {
-  if (command === 'confirm_send') {
-    if (!draft.value.trim() || sending.value) {
-      voiceError.value = '没有可发送的草稿。'
-      return
-    }
-    sendConfirmGate.reset()
-    voiceSendHint.value = ''
-    void send()
-    return
-  }
-  if (command === 'cancel_send') {
-    sendConfirmGate.cancel()
-    return
-  }
-  if (command === 'repeat_answer') {
-    sendConfirmGate.cancel()
-    repeatLastAnswer()
-    return
-  }
-  if (command === 'stop_speaking') {
-    stopSpeaking()
-    speakingIndex.value = null
-    speakingProgress.value = ''
-    return
-  }
-  if (command === 'redo_dictation') {
-    sendConfirmGate.reset()
-    ensureDictation().redoDictation()
-    return
-  }
-  if (command === 'resume_dictation') {
-    sendConfirmGate.cancel()
-    ensureDictation().resumeDictation()
-  }
-}
-
-async function refreshVoiceOptions(): Promise<void> {
-  if (!isSpeechOutputSupported()) return
-  voiceOptions.value = await listChineseVoices()
-}
-
-function applyPreferredVoice(name: string): void {
-  voicePrefs.value = saveVoicePreferences({ preferredVoiceName: name })
-}
-
-function previewPreferredVoice(): void {
-  if (!isSpeechOutputSupported()) return
-  stopSpeaking()
-  speakingIndex.value = null
-  speakingProgress.value = ''
-  speakText('您好，我会用这个声音朗读回答。')
-}
-
-async function checkVoicePacks(): Promise<void> {
-  voicePackChecking.value = true
-  try {
-    voicePackReport.value = await inspectChineseVoicePacks()
-  } finally {
-    voicePackChecking.value = false
-  }
-}
-
-async function runPreflight(): Promise<void> {
-  preflightRunning.value = true
-  try {
-    preflightReport.value = await runVoicePreflight()
-  } finally {
-    preflightRunning.value = false
-  }
-}
-
-function onDraftFocus(): void {
-  if (voiceMode.value === 'active' || voiceMode.value === 'wake') {
-    ensureDictation().pause()
-  }
-  // 手动改字时取消自动发送，避免改到一半被发出。
-  sendConfirmGate.cancel()
-}
-
-function editDraftLine(): void {
-  sendConfirmGate.cancel()
-  ensureDictation().pause()
-  void nextTick(() => draftInput.value?.focus())
-}
-
-function redoVoiceDraft(): void {
-  sendConfirmGate.reset()
-  ensureDictation().redoDictation()
-}
 
 function jumpSpeechSegment(index: number): void {
   if (jumpSpeakingSegment(index)) {
@@ -365,16 +136,9 @@ function jumpSpeechSegment(index: number): void {
   }
 }
 
-function formatModelLabel(model?: string | null): string {
-  if (!model || model === 'unavailable') return '本地模型未配置'
-  return model
-}
-
 let streamTimer: ReturnType<typeof setInterval> | null = null
 let stopStatusTimer: ReturnType<typeof setTimeout> | null = null
-let dictation: DictationController | null = null
 
-const speechInputSupported = isSpeechInputSupported()
 const speechOutputSupported = isSpeechOutputSupported()
 let activeSendController: AbortController | null = null
 let userRequestedStop = false
@@ -395,16 +159,6 @@ function clearRemoteAssistantSession(sessionId: string): void {
   })
 }
 
-function rotateAssistantSession(): void {
-  clearRemoteAssistantSession(assistantSessionId.value)
-  assistantSessionId.value = regenerateAssistantSessionId(
-    session.actorId,
-    session.selectedHouseholdId,
-    session.selectedMemberId,
-    activeThreadId.value,
-  )
-}
-
 function isAssistantCancellation(cause: unknown): boolean {
   return cause instanceof ApiClientError
     && (cause.code === 'CANCELLED' || cause.message.includes('CANCELLED'))
@@ -418,95 +172,6 @@ function showStoppedStatus(text = '已停止'): void {
     stopStatus.value = ''
   }, 2400)
 }
-
-function ensureDictation(): DictationController {
-  if (dictation) return dictation
-  dictation = createDictationController({
-    onModeChange: (mode) => {
-      voiceMode.value = mode
-      if (mode === 'active') {
-        // 续说回到听写态（含指令期非指令语音回流）：取消倒计时，避免草稿被中途发出。
-        sendConfirmGate.reset()
-        voiceSendHint.value = ''
-      }
-    },
-    onPreview: (text) => {
-      voicePreview.value = text
-    },
-    onDraft: (text) => {
-      draft.value = text
-    },
-    onError: (message) => {
-      voiceError.value = message
-    },
-    onNeedGesture: () => {
-      needMicGesture.value = true
-    },
-    onUtteranceComplete: (utteranceDraft) => {
-      needMicGesture.value = false
-      void nextTick(() => {
-        sendButton.value?.focus()
-      })
-      armAutoSend(utteranceDraft || draft.value)
-    },
-    onCommand: (command) => {
-      handleVoiceCommand(command)
-    },
-  }, {
-    getHotwordExtras: () => memberHotwordExtras.value,
-    getPreferences: () => loadVoicePreferences(),
-  })
-  return dictation
-}
-
-function stopVoiceInput(): void {
-  dictation?.stop()
-  voicePreview.value = ''
-  needMicGesture.value = false
-  sendConfirmGate.reset()
-  voiceSendHint.value = ''
-}
-
-async function beginWakeListening(): Promise<void> {
-  if (!speechInputSupported) {
-    voiceError.value = '当前浏览器不支持语音输入，请改用文字输入。'
-    return
-  }
-  if (speakingIndex.value !== null) {
-    stopSpeaking()
-    speakingIndex.value = null
-    speakingProgress.value = ''
-  }
-  needMicGesture.value = false
-  voiceError.value = ''
-  ensureDictation().startWake(draft.value)
-}
-
-async function bootstrapVoice(): Promise<void> {
-  if (!speechInputSupported) return
-  await ensureDictation().tryAutoStart()
-}
-
-const voiceStatusText = computed(() => {
-  if (voiceMode.value === 'wake') return `正在聆听唤醒词：“${wakePhrase.value}”`
-  if (voiceMode.value === 'active') return '已唤醒，识别中的文字会实时填入草稿'
-  if (voiceMode.value === 'ready' || voiceMode.value === 'command') {
-    return voiceSendHint.value || '说完后会倒计时自动发送；可说取消、继续说，或发送吧立即发送'
-  }
-  return needMicGesture.value ? '点按下方按钮一次以开启麦克风聆听' : ''
-})
-
-const autoSendPresetId = computed(() => {
-  const match = AUTO_SEND_PRESETS.find(preset => preset.delayMs === voicePrefs.value.autoSendDelayMs)
-  return match?.id ?? 'custom'
-})
-
-const voiceButtonLabel = computed(() => {
-  if (voiceMode.value === 'wake') return '等待唤醒'
-  if (voiceMode.value === 'active') return '停止语音'
-  if (voiceMode.value === 'ready' || voiceMode.value === 'command') return '重新聆听'
-  return needMicGesture.value ? '允许麦克风并聆听' : '开启唤醒'
-})
 
 const canSend = computed(() => draft.value.trim().length > 0 && !sending.value)
 
@@ -717,10 +382,9 @@ function refreshThreads(): void {
   threads.value = listChatThreads(session.actorId, session.selectedHouseholdId, session.selectedMemberId)
 }
 
-/** 切换/新建线索前的公共收尾：停掉请求、语音与打字机。 */
+/** 切换/新建线索前的公共收尾：停掉请求、朗读与打字机。 */
 function suspendActiveConversation(): void {
   cancelActiveSend()
-  stopVoiceInput()
   if (speakingIndex.value !== null) {
     stopSpeaking()
     speakingIndex.value = null
@@ -809,34 +473,6 @@ function removeThread(threadId: string): void {
 
 function threadTimeLabel(thread: ChatThreadMeta): string {
   return relativeTime(new Date(thread.updatedAt).toISOString())
-}
-
-function clearConversation(): void {
-  cancelActiveSend()
-  rotateAssistantSession()
-  stopVoiceInput()
-  if (speakingIndex.value !== null) {
-    stopSpeaking()
-    speakingIndex.value = null
-  }
-  if (streamTimer) {
-    clearInterval(streamTimer)
-    streamTimer = null
-  }
-  clearChatSession(session.actorId, session.selectedHouseholdId, session.selectedMemberId, activeThreadId.value)
-  history.value = []
-  workflowTrace.value = []
-  orchestrationPhase.value = null
-  workflowRouteExplanation.value = null
-  draft.value = ''
-  sendError.value = ''
-  stopStatus.value = ''
-  if (stopStatusTimer) {
-    clearTimeout(stopStatusTimer)
-    stopStatusTimer = null
-  }
-  voiceError.value = ''
-  sending.value = false
 }
 
 function useSuggestedQuestion(question: string): void {
@@ -977,35 +613,31 @@ const webSearchDisabledText = computed(() => webSearchDisabledLabel(webSearchSta
 // 「教学夹具 · 不出网」vs「真实联网 · 白名单出口」badge beside the checkbox.
 const webSearchBadge = computed(() => webSearchModeBadge(webSearchState.value))
 
-function onVisibilityChange(): void {
-  if (document.visibilityState === 'hidden') stopVoiceInput()
-}
-
-watch(settingsOpen, (open) => {
-  if (open) void refreshVoiceOptions()
-})
-
 onMounted(() => {
   void loadAgentCatalog()
-  void bootstrapVoice()
-  void refreshVoiceOptions()
-  document.addEventListener('visibilitychange', onVisibilityChange)
-  const seeded = consumeAssistantSeedPrompt()
-  if (seeded) {
-    draft.value = seeded
-    void send(seeded)
-  }
 })
 
-function toggleVoiceInput(): void {
-  if (voiceMode.value === 'wake' || voiceMode.value === 'active') {
-    stopVoiceInput()
-    return
+watch(
+  () => session.assistantSeedPrompt,
+  prompt => {
+    if (prompt) void applyAssistantSeed()
+  },
+  { immediate: true },
+)
+
+async function applyAssistantSeed(): Promise<void> {
+  const seeded = consumeAssistantSeed()
+  if (!seeded.prompt) return
+  if (webSearchAvailable.value === null) await loadAgentCatalog()
+  if (seeded.newThread) startNewThread()
+  if (seeded.allowNetworkSearch) {
+    allowNetworkSearch.value = true
   }
-  void beginWakeListening()
+  draft.value = seeded.prompt
+  await send(seeded.prompt)
 }
 
-function startReplySpeech(index: number, content: string, resumeListeningAfter: boolean): boolean {
+function startReplySpeech(index: number, content: string): boolean {
   speakingProgress.value = ''
   speakingSegmentIndex.value = 0
   const started = speakText(content, {
@@ -1014,10 +646,6 @@ function startReplySpeech(index: number, content: string, resumeListeningAfter: 
         speakingIndex.value = null
         speakingProgress.value = ''
         speakingSegmentIndex.value = 0
-      }
-      // 播报真正结束后再回到唤醒聆听，避免开麦把播报掐断。
-      if (resumeListeningAfter && !sending.value && !needMicGesture.value) {
-        void beginWakeListening()
       }
     },
     onProgress: (progress) => {
@@ -1036,20 +664,10 @@ function toggleSpeech(index: number, content: string): void {
     speakingProgress.value = ''
     return
   }
-  voiceError.value = ''
-  if (listening.value) stopVoiceInput()
-  if (!startReplySpeech(index, content, false)) {
-    voiceError.value = '当前浏览器不支持语音回复，请阅读文字回答。'
+  speechError.value = ''
+  if (!startReplySpeech(index, content)) {
+    speechError.value = '当前浏览器不支持语音回复，请阅读文字回答。'
   }
-}
-
-/** 决策 3A：开启「语音回复」后，回答完成自动播报；播完再回听，期间可打断。 */
-function autoSpeakReply(index: number, content: string): void {
-  if (!speechOutputSupported) return
-  if (!loadVoicePreferences().autoSpeakReplies) return
-  if (!content.trim()) return
-  if (listening.value) stopVoiceInput()
-  startReplySpeech(index, content, true)
 }
 
 function skipCurrentSpeechSegment(): void {
@@ -1079,7 +697,6 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
   if (!content || sending.value) return
 
   cancelActiveSend()
-  stopVoiceInput()
   if (speakingIndex.value !== null) {
     stopSpeaking()
     speakingIndex.value = null
@@ -1135,10 +752,8 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
     entry.externalSources = reply.external_sources
     workflowTrace.value = reply.agent_trace ?? []
     workflowRouteExplanation.value = reply.route_explanation ?? null
-    if (reply.model) modelLabel.value = formatModelLabel(reply.model)
     persistChatSession()
     if (!alreadyStreamed) streamReveal(entry)
-    autoSpeakReply(entryIndex, reply.answer)
   }
 
   const chatInput = buildAssistantChatInput({
@@ -1239,8 +854,6 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
     orchestrationPhase.value = null
     sending.value = false
     void loadAgentCatalog()
-    // 自动播报进行中时不开麦回听（开麦会停止朗读）；播完由 onFinished 回听。
-    if (!needMicGesture.value && speakingIndex.value === null) void beginWakeListening()
   }
 }
 
@@ -1253,9 +866,6 @@ onBeforeUnmount(() => {
   cancelActiveSend()
   if (streamTimer) clearInterval(streamTimer)
   if (stopStatusTimer) clearTimeout(stopStatusTimer)
-  document.removeEventListener('visibilitychange', onVisibilityChange)
-  dictation?.dispose()
-  dictation = null
   stopSpeaking()
 })
 </script>
@@ -1317,122 +927,8 @@ onBeforeUnmount(() => {
               </option>
             </select>
           </label>
-          <button
-            type="button"
-            class="assistant-status-chip"
-            :class="{ busy: sending, open: workflowExpanded }"
-            :aria-expanded="workflowExpanded"
-            aria-label="查看本地分析过程"
-            @click="toggleWorkflowPanel"
-          >
-            <AppIcon name="sparkle" :size="13" />
-            {{ workflowChipLabel }}
-          </button>
-          <button
-            v-if="history.length > 0"
-            type="button"
-            class="btn btn-ghost btn-small"
-            :disabled="sending"
-            @click="clearConversation"
-          >
-            清空会话
-          </button>
-          <button
-            type="button"
-            class="icon-button assistant-settings-button"
-            aria-label="助手设置"
-            :aria-expanded="settingsOpen"
-            @click="settingsOpen = !settingsOpen"
-          >
-            <AppIcon name="settings" :size="18" />
-          </button>
         </div>
       </header>
-
-      <section v-if="workflowExpanded" class="agent-workflow-panel assistant-workflow-pop" aria-label="本地分析流程">
-        <div class="agent-workflow-heading">
-          <div>
-            <span class="agent-workflow-kicker"><AppIcon name="sparkle" :size="13" />本地分析流程</span>
-            <small>{{ workflowSummary }}</small>
-          </div>
-          <div class="agent-workflow-actions">
-            <span class="agent-local-badge">
-              <i />数据不离开本机
-            </span>
-            <button
-              type="button"
-              class="btn btn-ghost btn-small"
-              :aria-expanded="workflowExpanded"
-              @click="toggleWorkflowPanel"
-            >
-              收起
-            </button>
-          </div>
-        </div>
-        <div class="agent-workflow-grid">
-          <span class="agent-flow-rail" aria-hidden="true">
-            <span class="agent-flow-fill" :class="{ 'is-indeterminate': sending }" :style="{ width: workflowProgressWidth }">
-              <i v-if="sending" class="agent-flow-runner" />
-            </span>
-          </span>
-          <button
-            v-for="stage in AGENT_STAGES"
-            :key="stage.id"
-            type="button"
-            class="agent-stage"
-            :class="[`is-${agentStatus(stage)}`, { 'is-selected': selectedAgentId === stage.id }]"
-            :aria-expanded="selectedAgentId === stage.id"
-            :aria-label="`${stage.title}，${agentStatusLabel(agentStatus(stage))}，点击查看详情`"
-            @click="toggleAgentDetails(stage.id)"
-          >
-            <div class="agent-stage-topline">
-              <span class="agent-stage-icon"><AppIcon :name="stage.icon" :size="17" /></span>
-              <span class="agent-stage-status">{{ agentStatusLabel(agentStatus(stage)) }}</span>
-            </div>
-            <strong>{{ stage.title }}</strong>
-            <small>{{ agentStatusDetail(stage) }}</small>
-            <span class="agent-stage-kind">{{ stage.network ? '联网参考（可选）' : '本机步骤' }}</span>
-          </button>
-        </div>
-        <section v-if="selectedAgent" class="agent-detail-panel" :aria-label="`${selectedAgent.title}详情`">
-          <div class="agent-detail-heading">
-            <div class="agent-detail-title">
-              <span class="agent-stage-icon"><AppIcon :name="selectedAgent.icon" :size="18" /></span>
-              <div>
-                <strong>{{ selectedAgent.title }}</strong>
-                <small>{{ selectedAgent.network ? '受控联网步骤' : '本机步骤' }} · {{ agentStatusLabel(agentStatus(selectedAgent)) }}</small>
-              </div>
-            </div>
-            <button type="button" class="btn btn-ghost btn-small" @click="selectedAgentId = null">
-              <AppIcon name="close" :size="13" />关闭
-            </button>
-          </div>
-          <div class="agent-detail-grid">
-            <div>
-              <span>职责</span>
-              <p>{{ selectedAgentAction() }}</p>
-            </div>
-            <div>
-              <span>数据边界</span>
-              <p>{{ selectedAgentBoundary() }}</p>
-            </div>
-            <div>
-              <span>本次执行</span>
-              <p v-if="selectedAgentTrace">
-                {{ selectedAgentTrace.summary || '已返回执行结果' }} · {{ selectedAgentTrace.duration_ms ?? 0 }} ms · {{ selectedAgentTrace.source_count ?? 0 }} 条依据
-              </p>
-              <p v-else class="text-faint">尚未执行；发送问题后这里会显示实际的处理结果。</p>
-            </div>
-            <div v-if="selectedAgent.id === 'router' && workflowRouteExplanation">
-              <span>分流说明</span>
-              <p>{{ workflowRouteExplanation }}</p>
-            </div>
-          </div>
-        </section>
-        <p class="agent-workflow-note">
-          <AppIcon name="lock" :size="12" />健康档案不会发送到外部；回答只引用通过服务端校验的本地资料。
-        </p>
-      </section>
 
       <div ref="chatWindow" class="chat-window">
       <div class="chat-thread" :class="{ empty: history.length === 0 }">
@@ -1553,26 +1049,6 @@ onBeforeUnmount(() => {
             </div>
           </details>
           <div
-            v-if="entry.role === 'assistant' && !isStreaming(entry) && index === history.length - 1 && (entry.suggestedQuestions?.length ?? 0) > 0"
-            class="chat-follow-ups"
-            aria-label="相关追问"
-          >
-            <div class="chat-follow-ups-heading">
-              <span class="chat-follow-ups-label"><AppIcon name="sparkle" :size="13" />接下来可以问</span>
-              <small>点击后会放入输入框，可修改后再发送</small>
-            </div>
-            <button
-              v-for="question in entry.suggestedQuestions"
-              :key="question"
-              type="button"
-              class="btn btn-ghost btn-small chat-follow-up"
-              :disabled="sending"
-              @click="useSuggestedQuestion(question)"
-            >
-              {{ question }}
-            </button>
-          </div>
-          <div
             v-if="entry.role === 'assistant' && !isStreaming(entry) && entry.content"
             class="chat-message-actions"
             aria-label="回答操作"
@@ -1598,6 +1074,7 @@ onBeforeUnmount(() => {
               </button>
             </template>
             <button
+              v-if="canRecheckMedicationSafety(entry.queryType)"
               type="button"
               class="btn btn-ghost btn-small"
               :disabled="sending"
@@ -1646,83 +1123,24 @@ onBeforeUnmount(() => {
       <p v-if="stopStatus" class="notice info" role="status" aria-live="polite">
         {{ stopStatus }}
       </p>
-      <p v-if="voiceError" class="notice error" role="alert">
+      <p v-if="speechError" class="notice error" role="alert">
         <AppIcon name="alert" :size="16" />
-        {{ voiceError }}
+        {{ speechError }}
       </p>
-
-      <div
-        v-if="needMicGesture && !listening"
-        class="voice-session-panel wake"
-        role="status"
-        aria-live="polite"
-      >
-        <span class="voice-session-visual" aria-hidden="true">
-          <AppIcon name="microphone" :size="17" />
-        </span>
-        <span class="voice-session-copy">
-          <strong>需要一次点按开启麦克风</strong>
-          <span>浏览器要求用户手势后才能开麦；点按后会自动等待「{{ wakePhrase }}」。</span>
-        </span>
-      </div>
-      <div
-        v-if="listening || voiceMode === 'ready'"
-        class="voice-session-panel"
-        :class="voiceMode"
-        role="status"
-        aria-live="polite"
-      >
-        <span class="voice-session-visual" aria-hidden="true">
-          <span class="voice-session-ring" />
-          <span class="voice-session-ring second" />
-          <AppIcon name="microphone" :size="17" />
-        </span>
-        <span class="voice-session-copy">
-          <strong>
-            {{
-              voiceMode === 'wake'
-                ? '等待唤醒'
-                : voiceMode === 'ready'
-                  ? '已听完'
-                  : voiceMode === 'command'
-                    ? '指令聆听'
-                    : '已唤醒，正在实时输入'
-            }}
-          </strong>
-          <span>{{ voiceStatusText }}</span>
-          <span v-if="voicePreview" class="voice-live-transcript">{{ voicePreview }}</span>
-        </span>
-      </div>
       <form class="chat-compose assistant-composer" @submit.prevent="send()">
         <textarea
           ref="draftInput"
           v-model="draft"
           rows="2"
           placeholder="例如：最近的用药提醒是依据什么？（回答仅供参考，不构成医疗建议）"
-          @focus="onDraftFocus"
           @keydown.enter.exact.prevent="send()"
         />
-        <div v-if="voiceMode === 'ready' || voiceMode === 'command'" class="voice-ready-actions" role="group" aria-label="口述确认">
-          <button ref="sendButton" type="submit" class="btn btn-primary btn-large" :disabled="!canSend">
-            发送
-          </button>
-          <button type="button" class="btn btn-ghost" @click="editDraftLine">
-            改一句
-          </button>
-          <button type="button" class="btn btn-ghost" @click="redoVoiceDraft">
-            重说
-          </button>
-          <button type="button" class="btn btn-ghost btn-small" @click="toggleVoiceInput">
-            {{ voiceButtonLabel }}
-          </button>
-        </div>
-        <p v-if="voiceSendHint" class="text-faint" style="font-size: 13px; margin: 6px 0 0" role="status">{{ voiceSendHint }}</p>
-        <div v-if="voiceMode !== 'ready' && voiceMode !== 'command'" class="chat-compose-actions assistant-composer-actions">
+        <div class="chat-compose-actions assistant-composer-actions">
           <label
             class="assistant-net-toggle"
             :title="webSearchAvailable === false
               ? webSearchDisabledText
-              : '仅发送脱敏后的问题以补充公开参考；详情见右上角设置'"
+              : '仅发送脱敏后的问题以补充公开参考；家庭成员与健康记录始终留在本机'"
           >
             <input v-model="allowNetworkSearch" type="checkbox" :disabled="webSearchAvailable === false" />
             <AppIcon name="cloud" :size="14" />
@@ -1730,19 +1148,6 @@ onBeforeUnmount(() => {
             <span v-if="webSearchBadge" class="pill sage">{{ webSearchBadge }}</span>
           </label>
           <span class="assistant-composer-spacer" aria-hidden="true" />
-          <button
-            type="button"
-            class="btn btn-ghost btn-small voice-input-button"
-            :class="{ listening, active: voiceMode === 'active', ready: voiceMode === 'ready', need: needMicGesture }"
-            :disabled="sending || !speechInputSupported"
-            :aria-label="listening ? '停止语音唤醒' : voiceButtonLabel"
-            :aria-pressed="listening"
-            :title="speechInputSupported ? `进入助手页后会自动尝试聆听；首次需点按允许麦克风，再说「${wakePhrase}」` : '当前浏览器不支持语音输入'"
-            @click="toggleVoiceInput"
-          >
-            <AppIcon name="microphone" :size="15" />
-            {{ voiceButtonLabel }}
-          </button>
           <button
             v-if="sending"
             type="button"
@@ -1753,7 +1158,6 @@ onBeforeUnmount(() => {
             停止
           </button>
           <button
-            ref="sendButton"
             type="submit"
             class="assistant-send"
             :disabled="!canSend"
@@ -1769,201 +1173,11 @@ onBeforeUnmount(() => {
       </p>
     </section>
 
-    <div
-      v-if="settingsOpen"
-      class="assistant-settings-backdrop"
-      aria-hidden="true"
-      @click="settingsOpen = false"
-    />
-    <aside v-if="settingsOpen" class="assistant-settings" role="dialog" aria-modal="false" aria-label="助手设置">
-      <header class="assistant-settings-head">
-        <strong><AppIcon name="settings" :size="16" />助手设置</strong>
-        <button type="button" class="icon-button" aria-label="关闭设置" @click="settingsOpen = false">
-          <AppIcon name="close" :size="15" />
-        </button>
-      </header>
-
-      <section class="assistant-settings-section" aria-label="会话状态">
-        <h4>会话状态</h4>
-        <dl class="assistant-settings-facts">
-          <div><dt>本地模型</dt><dd>{{ modelLabel }}</dd></div>
-          <div><dt>可见范围</dt><dd>{{ selectedMember?.display_name ?? '未选择成员' }}</dd></div>
-          <div><dt>证据模式</dt><dd>先依据后解释</dd></div>
-          <div><dt>处理方式</dt><dd>本地多步核对</dd></div>
-          <div><dt>使用边界</dt><dd>健康参考 · 需人工确认</dd></div>
-        </dl>
-      </section>
-
-      <section class="assistant-settings-section" aria-label="联网搜索">
-        <h4>联网搜索</h4>
-        <label class="agent-network-toggle">
-          <input v-model="allowNetworkSearch" type="checkbox" :disabled="webSearchAvailable === false" />
-          <span>
-            <strong>
-              补充联网参考
-              <span v-if="webSearchBadge" class="pill sage" style="margin-left: 6px">{{ webSearchBadge }}</span>
-            </strong>
-            <small v-if="webSearchAvailable === false">
-              {{ webSearchDisabledText }}
-              <button type="button" class="link-inline" @click="showWebSearchHelp = !showWebSearchHelp">
-                {{ showWebSearchHelp ? '收起启用方法' : '如何启用？' }}
-              </button>
-            </small>
-            <small v-else-if="webSearchFixture">
-              开启后由本机教学夹具提供演示用外部参考样式，不会发起任何网络请求；夹具内容不构成医疗证据。
-              <button type="button" class="link-inline" @click="showWebSearchHelp = !showWebSearchHelp">
-                {{ showWebSearchHelp ? '收起切换方法' : '如何切到真实联网？' }}
-              </button>
-            </small>
-            <small v-else>开启后仅将脱敏后的问题发送到可信搜索服务以补充公开参考；家庭成员、健康记录与图片始终保留在本机。</small>
-          </span>
-        </label>
-        <div v-if="showWebSearchHelp && webSearchAvailable === false" class="notice info web-search-help" role="note">
-          <p style="margin: 0 0 6px">{{ webSearchHint ?? '请部署负责人在 .env 中开启联网搜索后重启 API。' }}</p>
-          <pre class="mono web-search-help-env"><code>AGENT_WEB_SEARCH_ENABLED=true
-# 离线课堂演示（不出网）：
-AGENT_WEB_SEARCH_PROVIDER=fixture
-# 真实联网（白名单出口）：
-# AGENT_WEB_SEARCH_PROVIDER=duckduckgo_html
-# AGENT_WEB_SEARCH_ALLOWED_DOMAINS=html.duckduckgo.com</code></pre>
-          <p style="margin: 6px 0 0">修改 .env 并重启 API 后刷新本页；每次提问仍需勾选本选项，外部结果只作为「非本地审核证据」参考。</p>
-        </div>
-        <div v-if="showWebSearchHelp && webSearchAvailable && webSearchFixture" class="notice info web-search-help" role="note">
-          <p style="margin: 0 0 6px">
-            当前为教学夹具演示（不出网）。若本机允许访问搜索站点，部署负责人可在 .env 切换到真实联网 provider 并重启 API：
-          </p>
-          <pre class="mono web-search-help-env"><code>AGENT_WEB_SEARCH_ENABLED=true
-AGENT_WEB_SEARCH_PROVIDER=duckduckgo_html
-AGENT_WEB_SEARCH_URL=https://html.duckduckgo.com/html/
-AGENT_WEB_SEARCH_ALLOWED_DOMAINS=html.duckduckgo.com
-# 自建 SearXNG：AGENT_WEB_SEARCH_PROVIDER=searxng 并把 URL/白名单换成你的实例</code></pre>
-          <p style="margin: 6px 0 0">切换后本徽标会变为「真实联网 · 白名单出口」；只发送脱敏后的问题，外部结果仍只是「非本地审核证据」参考。</p>
-        </div>
-      </section>
-
-      <section class="assistant-settings-section voice-prefs-panel" aria-label="语音偏好与自检">
-        <h4>语音偏好</h4>
-        <p class="text-faint" style="font-size: 12px; line-height: 1.6; margin: 0 0 10px">
-          点击输入框旁的麦克风按钮开启唤醒，再说「{{ wakePhrase }}」开始实时填入草稿。
-          中途停顿不超过「静音结束」时长（默认约 15 秒）会继续累加，不会打断口述；
-          静音结束后会倒计时自动发送（可在下方改时长或关闭），等待时继续说话会取消倒计时并累加进草稿，
-          也可说「取消」「继续说」，或说「发送吧」立即发送。
-          语音回复由浏览器本地朗读，原始音频不会上传到本地助手 API。
-        </p>
-        <label class="voice-pref-row">
-          <span>唤醒词</span>
-          <input
-            v-model="wakePhraseDraft"
-            type="text"
-            maxlength="8"
-            aria-label="自定义唤醒词"
-            @change="saveWakePhrase"
-          />
-        </label>
-        <div class="row-actions" style="margin: 0 0 8px">
-          <button
-            v-for="preset in WAKE_PHRASE_PRESETS"
-            :key="preset.id"
-            type="button"
-            class="btn btn-ghost btn-small"
-            @click="applyWakePreset(preset.phrase)"
-          >
-            {{ preset.label }}
-          </button>
-        </div>
-        <label class="voice-pref-row">
-          <span>静音结束</span>
-          <select :value="silencePresetId" @change="applySilencePreset(($event.target as HTMLSelectElement).value)">
-            <option v-for="preset in SILENCE_PRESETS" :key="preset.id" :value="preset.id">
-              {{ preset.label }}
-            </option>
-          </select>
-        </label>
-        <label class="voice-pref-row">
-          <span>说完后自动发送</span>
-          <select :value="autoSendPresetId" @change="applyAutoSendPreset(($event.target as HTMLSelectElement).value)">
-            <option v-for="preset in AUTO_SEND_PRESETS" :key="preset.id" :value="preset.id">
-              {{ preset.label }}
-            </option>
-          </select>
-        </label>
-        <label class="voice-pref-row">
-          <input
-            type="checkbox"
-            :checked="voicePrefs.autoSpeakReplies"
-            :disabled="!speechOutputSupported"
-            @change="toggleVoicePref('autoSpeakReplies', ($event.target as HTMLInputElement).checked)"
-          />
-          <span>语音回复：回答完成后自动朗读（可随时停止）</span>
-        </label>
-        <label class="voice-pref-row">
-          <span>播报音色</span>
-          <select
-            :value="voicePrefs.preferredVoiceName"
-            :disabled="!speechOutputSupported"
-            @change="applyPreferredVoice(($event.target as HTMLSelectElement).value)"
-          >
-            <option value="">自动优选（更自然的中文女声）</option>
-            <option v-for="voiceOption in voiceOptions" :key="voiceOption.name" :value="voiceOption.name">
-              {{ voiceOption.name }}（{{ voiceOption.lang }}{{ voiceOption.localService ? ' · 本地' : '' }}）
-            </option>
-          </select>
-        </label>
-        <div class="row-actions" style="margin: 0 0 8px">
-          <button
-            type="button"
-            class="btn btn-ghost btn-small"
-            :disabled="!speechOutputSupported"
-            @click="previewPreferredVoice"
-          >
-            试听当前音色
-          </button>
-        </div>
-        <label class="voice-pref-row">
-          <input
-            type="checkbox"
-            :checked="voicePrefs.confirmSound"
-            @change="toggleVoicePref('confirmSound', ($event.target as HTMLInputElement).checked)"
-          />
-          <span>听写结束后轻量提示音</span>
-        </label>
-        <label class="voice-pref-row">
-          <input
-            type="checkbox"
-            :checked="voicePrefs.doubleWake"
-            @change="toggleVoicePref('doubleWake', ($event.target as HTMLInputElement).checked)"
-          />
-          <span>双次唤醒确认（降低误唤醒）</span>
-        </label>
-        <label class="voice-pref-row">
-          <input
-            type="checkbox"
-            :checked="voicePrefs.voiceCommands"
-            @change="toggleVoicePref('voiceCommands', ($event.target as HTMLInputElement).checked)"
-          />
-          <span>听写后聆听白名单语音指令</span>
-        </label>
-        <div class="row-actions" style="margin-top: 8px">
-          <button type="button" class="btn btn-ghost btn-small" :disabled="voicePackChecking" @click="checkVoicePacks">
-            {{ voicePackChecking ? '检测中…' : '检查中文语音包' }}
-          </button>
-          <button type="button" class="btn btn-ghost btn-small" :disabled="preflightRunning" @click="runPreflight">
-            {{ preflightRunning ? '自检中…' : '运行语音预检' }}
-          </button>
-        </div>
-        <p v-if="voicePackReport" class="text-faint" style="font-size: 12px; margin: 8px 0 0">
-          {{ voicePackReport.guidance }}
-        </p>
-        <ul v-if="preflightReport" class="voice-preflight-list">
-          <li v-for="(line, idx) in preflightReport.guidance" :key="idx">{{ line }}</li>
-        </ul>
-      </section>
-    </aside>
   </div>
 </template>
 
 <style scoped>
-/* ---------- 图五/图六：全幅对话画布 + 会话轨 + 设置抽屉 ---------- */
+/* ---------- 全幅对话画布 + 会话轨 ---------- */
 
 .assistant-shell {
   display: flex;
@@ -2246,9 +1460,8 @@ AGENT_WEB_SEARCH_ALLOWED_DOMAINS=html.duckduckgo.com
   opacity: 0.4;
 }
 
-/* 主区内的提示条与语音状态条与阅读列同宽居中。 */
-.assistant-main > .notice,
-.assistant-main > .voice-session-panel {
+/* 主区内的提示条与阅读列同宽居中。 */
+.assistant-main > .notice {
   margin-inline: auto;
   width: min(100%, 820px);
 }
@@ -2351,71 +1564,7 @@ AGENT_WEB_SEARCH_ALLOWED_DOMAINS=html.duckduckgo.com
   text-align: center;
 }
 
-.assistant-settings-backdrop {
-  background: rgba(63, 58, 49, 0.22);
-  inset: 0;
-  position: absolute;
-  z-index: 30;
-}
-
-.assistant-settings {
-  animation: assistant-drawer-in 0.22s ease both;
-  background: var(--card, #fffcf3);
-  border-left: 1px solid var(--line, rgba(190, 167, 125, 0.4));
-  bottom: 0;
-  box-shadow: -18px 0 40px rgba(94, 71, 42, 0.14);
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  overflow-y: auto;
-  padding: 18px 18px 24px;
-  position: absolute;
-  right: 0;
-  top: 0;
-  width: min(380px, 94vw);
-  z-index: 31;
-}
-
-@keyframes assistant-drawer-in {
-  from { opacity: 0; transform: translateX(24px); }
-  to { opacity: 1; transform: translateX(0); }
-}
-
-.assistant-settings-head {
-  align-items: center;
-  display: flex;
-  justify-content: space-between;
-}
-
-.assistant-settings-head strong {
-  align-items: center;
-  display: inline-flex;
-  font-family: var(--font-display);
-  font-size: 16px;
-  gap: 7px;
-}
-
-.assistant-settings-section {
-  border-top: 1px dashed var(--line, rgba(190, 167, 125, 0.4));
-  padding-top: 12px;
-}
-
-.assistant-settings-section h4 {
-  font-family: var(--font-display);
-  font-size: 14px;
-  margin: 0 0 8px;
-}
-
-.assistant-settings-facts { display: grid; gap: 7px; margin: 0; }
-
-.assistant-settings-facts > div { display: flex; font-size: 13px; gap: 10px; }
-
-.assistant-settings-facts dt { color: var(--ink-soft, #6d6659); flex: 0 0 76px; }
-
-.assistant-settings-facts dd { margin: 0; overflow-wrap: anywhere; }
-
 @media (prefers-reduced-motion: reduce) {
-  .assistant-settings { animation: none; }
   .assistant-status-chip.busy .app-icon { animation: none; }
   .assistant-send,
   .assistant-suggestion { transition: none; }
@@ -2461,17 +1610,6 @@ AGENT_WEB_SEARCH_ALLOWED_DOMAINS=html.duckduckgo.com
   .assistant-main { padding: 12px 14px 10px; }
 }
 
-.voice-ready-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  width: 100%;
-}
-.voice-ready-actions .btn-large {
-  flex: 1 1 140px;
-  min-height: 48px;
-  font-size: 16px;
-}
 .speech-segment-chips {
   display: flex;
   flex-wrap: wrap;
@@ -2480,43 +1618,5 @@ AGENT_WEB_SEARCH_ALLOWED_DOMAINS=html.duckduckgo.com
 }
 .speech-segment-chips .btn.active {
   outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
-}
-.voice-pref-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  margin: 6px 0;
-}
-.voice-preflight-list {
-  margin: 8px 0 0;
-  padding-left: 18px;
-  font-size: 12px;
-  color: var(--ink-soft);
-}
-.link-inline {
-  background: none;
-  border: none;
-  color: var(--pine, #2f6f5e);
-  cursor: pointer;
-  font-size: inherit;
-  padding: 0;
-  text-decoration: underline;
-}
-.web-search-help {
-  font-size: 12.5px;
-  line-height: 1.6;
-  margin-top: 8px;
-}
-.web-search-help-env {
-  background: color-mix(in srgb, var(--ink) 6%, transparent);
-  border-radius: 8px;
-  font-size: 12px;
-  line-height: 1.55;
-  margin: 0;
-  overflow-x: auto;
-  padding: 8px 10px;
-  user-select: all;
-  white-space: pre;
 }
 </style>

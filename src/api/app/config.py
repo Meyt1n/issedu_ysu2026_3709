@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -184,6 +185,16 @@ class Settings(BaseSettings):
         if normalized not in {"allowlist", "open"}:
             raise ValueError("AGENT_WEB_SEARCH_EGRESS_MODE must be 'allowlist' or 'open'")
         return normalized
+
+    @model_validator(mode="after")
+    def resolve_relative_file_root(self) -> "Settings":
+        root = Path(self.file_root)
+        if not root.is_absolute():
+            repo_root = Path(__file__).resolve().parents[3]
+            self.file_root = str((repo_root / root).resolve())
+        else:
+            self.file_root = str(root)
+        return self
 
     @model_validator(mode="after")
     def reject_unsafe_production_configuration(self) -> "Settings":

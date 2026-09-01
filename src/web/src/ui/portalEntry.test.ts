@@ -1,11 +1,15 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, afterEach } from 'vitest'
 
 import {
   crossPortalUrl,
+  overridePortalEntryModeForTest,
   portalEntryBranding,
   portalEntryConflict,
   portalEntryConflictNotice,
+  rememberWelcomeEntry,
+  resetWelcomeEntryHintForTest,
   resolvePortalEntryMode,
+  resolveWelcomeEntryMode,
 } from './portalEntry'
 
 describe('resolvePortalEntryMode (HCT-453)', () => {
@@ -126,13 +130,14 @@ describe('portalEntryBranding (HCT-510)', () => {
     expect(portalEntryBranding('auto')).toBeNull()
   })
 
-  it('brands the member entry as family login with face then password', () => {
+  it('brands the member entry as family login with face then PIN', () => {
     const branding = portalEntryBranding('member')!
     expect(branding.formTitle).toBe('家人登录')
     expect(branding.heroTitle).toContain('我的健康日常')
-    expect(branding.formIdentityHint).toBe('')
-    expect(branding.credentialOrder).toEqual(['face', 'password'])
-    expect(branding.defaultCredential).toBe('password')
+    expect(branding.formIdentityHint).toContain('PIN')
+    expect(branding.heroLede).toContain('后台绑定')
+    expect(branding.credentialOrder).toEqual(['face', 'pin'])
+    expect(branding.defaultCredential).toBe('pin')
     expect(branding.passwordBehindOtherWays).toBe(false)
     expect(branding.ctaLabel).toBe('进入前台')
     expect(branding.crossLinkLabel).toBe('管理员登录')
@@ -143,7 +148,7 @@ describe('portalEntryBranding (HCT-510)', () => {
     const branding = portalEntryBranding('admin')!
     expect(branding.formTitle).toBe('管理员登录')
     expect(branding.heroTitle).toBe('家庭档案与授权')
-    expect(branding.formIdentityHint).toBe('')
+    expect(branding.formIdentityHint).toContain('登录设置')
     expect(branding.credentialOrder).toEqual(['password'])
     expect(branding.defaultCredential).toBe('password')
     expect(branding.ctaLabel).toBe('进入管理后台')
@@ -177,7 +182,7 @@ describe('portalEntryConflictNotice (HCT-510)', () => {
 
   it('explains creating a household on the member entry then switching to admin', () => {
     const notice = portalEntryConflictNotice('need-admin-entry', { afterCreate: true })
-    expect(notice.message).toBe('家庭已创建。请到管理后台继续设置。')
+    expect(notice.message).toBe('家庭已创建。请到管理后台「登录设置」为每位家人设置六位数字密码，然后再回成员前台登录。')
     expect(notice.crossLinkLabel).toBe('去管理后台')
     expect(notice.crossLinkTarget).toBe('admin')
   })
@@ -189,5 +194,31 @@ describe('portalEntryConflictNotice (HCT-510)', () => {
     expect(notice.message).not.toContain('正式账号密码')
     expect(notice.crossLinkLabel).toBe('去成员前台')
     expect(notice.crossLinkTarget).toBe('member')
+  })
+})
+
+describe('resolveWelcomeEntryMode (HCT-516)', () => {
+  afterEach(() => {
+    resetWelcomeEntryHintForTest()
+    overridePortalEntryModeForTest(null)
+  })
+
+  it('uses the member hint on the auto entry after a member logout', () => {
+    overridePortalEntryModeForTest('auto')
+    rememberWelcomeEntry('member')
+    expect(resolveWelcomeEntryMode()).toBe('member')
+  })
+
+  it('does not override an explicit admin or member entry', () => {
+    rememberWelcomeEntry('member')
+    overridePortalEntryModeForTest('admin')
+    expect(resolveWelcomeEntryMode()).toBe('admin')
+    overridePortalEntryModeForTest('member')
+    expect(resolveWelcomeEntryMode()).toBe('member')
+  })
+
+  it('stays auto when the tab has not just left the member portal', () => {
+    overridePortalEntryModeForTest('auto')
+    expect(resolveWelcomeEntryMode()).toBe('auto')
   })
 })

@@ -70,6 +70,7 @@ def test_capabilities_returns_p0_phase(client: TestClient) -> None:
     assert "manual-health-event" in body["available"]
     assert "household-member" in body["available"]
     assert "field-authorization" in body["available"]
+    assert body["instance_id"]
 
 
 # ── 2. 家庭管理接口 ──────────────────────────────────────

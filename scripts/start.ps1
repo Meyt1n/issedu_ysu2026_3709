@@ -95,7 +95,7 @@ switch ($Target) {
     "web-member" {
         # HCT-453 成员前台入口（默认 http://127.0.0.1:5173，可用 HCT_WEB_PORT 覆盖）
         $memberPort = if ($env:HCT_WEB_PORT) { $env:HCT_WEB_PORT } else { "5173" }
-        Write-Host "成员前台入口：启动后打开 http://127.0.0.1:$memberPort ，用家庭成员账号（人脸/PIN）登录；管理员请另开 web-admin。" -ForegroundColor Cyan
+        Write-Host "成员前台入口：启动后打开 http://127.0.0.1:$memberPort ，用家庭管理员账号进入后选择家人并输入 PIN；也可刷脸。管理员请另开 web-admin。" -ForegroundColor Cyan
         Invoke-CheckedCommand { npm run dev:web:member }
     }
     "web-admin" {

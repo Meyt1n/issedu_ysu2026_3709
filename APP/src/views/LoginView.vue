@@ -30,11 +30,13 @@ const reasonNotice = computed(() => REASON_NOTICE[auth.reason] ?? '')
 const serverLabel = computed(() => session.serverBaseUrl || '同源（与页面相同的地址）')
 // HCT-505 尚未完成；保持 fail-closed，不触发摄像头或任何人脸请求。
 const faceLoginReason = faceLoginDisabledReason({ thresholdCalibrated: false })
-/** 与 HCT-107 `AuthCredentials` 的 `password: min_length=8` 对齐，避免把长度问题报成契约不一致。 */
+/** 与 HCT-512 `AuthCredentials` 密码策略对齐：至少 8 位，且含英文和数字。 */
 const PASSWORD_MIN_LENGTH = 8
 const canSubmit = computed(
   () => Boolean(account.value.trim())
     && password.value.length >= PASSWORD_MIN_LENGTH
+    && /[A-Za-z]/.test(password.value)
+    && /\d/.test(password.value)
     && !submitting.value,
 )
 
@@ -107,7 +109,7 @@ function useDemoMode(): void {
           />
         </label>
         <p id="login-help" class="meta-line">
-          密码至少 {{ PASSWORD_MIN_LENGTH }} 位，只用于本次登录请求，不会保存在本机、不会写入日志，也不会出现在地址栏。
+          密码至少 {{ PASSWORD_MIN_LENGTH }} 位，且需同时包含英文字母和数字。只用于本次登录请求，不会保存在本机、不会写入日志，也不会出现在地址栏。
         </p>
         <p v-if="errorMessage" id="login-error" class="notice" data-tone="error" role="alert">
           {{ errorMessage }}

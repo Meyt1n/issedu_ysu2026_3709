@@ -322,7 +322,7 @@ def test_register_rejects_malformed_actor_ids(client: TestClient) -> None:
     for bad_actor in ("actor with spaces", "../../etc/passwd", ".hidden", "名字"):
         response = client.post(
             "/api/v1/auth/register",
-            json={"actor_id": bad_actor, "password": "long-enough-password"},
+            json={"actor_id": bad_actor, "password": "long-enough-pass1"},
         )
         assert response.status_code == 422, (bad_actor, response.text)
 
@@ -339,7 +339,7 @@ def test_dev_actor_header_rejects_malformed_identity(client: TestClient) -> None
 
 
 def test_register_is_rate_limited(client: TestClient) -> None:
-    password = "long-enough-password"
+    password = "long-enough-pass1"
     # Five distinct actor ids from the same client should succeed; the sixth is blocked.
     for index in range(5):
         response = client.post(

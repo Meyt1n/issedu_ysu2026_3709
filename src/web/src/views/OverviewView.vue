@@ -40,6 +40,7 @@ import {
   summarizeEventPayload,
 } from '../ui/labels'
 import { isSameLocalDay, memberEventCount, reviewDrugCandidate } from '../overview/overviewView'
+import { familyRuntimeLines } from '../ui/runtimeStatus'
 
 const timeline = ref<HealthEvent[]>([])
 const memberState = ref<MemberState | null>(null)
@@ -54,6 +55,7 @@ const loadError = ref('')
 let removeHealthRefreshListener: (() => void) | null = null
 
 const greeting = computed(() => greetingByHour())
+const runtimeLines = computed(() => familyRuntimeLines(session.capabilities))
 const recentEvents = computed(() => [...timeline.value].reverse().slice(0, 6))
 const eventsCount = computed(() => {
   const value = memberState.value?.state?.events_count
@@ -514,14 +516,13 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
           网络出口默认拒绝，天气仅发送城市代码。
         </span>
         <div class="capability-chips">
-          <span v-for="cap in session.capabilities?.available ?? []" :key="cap" class="pill sage">{{ cap }}</span>
           <span
-            v-for="cap in session.capabilities?.unavailable ?? []"
-            :key="cap"
-            class="pill plain"
-            :title="'能力未启用：' + cap"
+            v-for="line in runtimeLines"
+            :key="line.label"
+            class="pill"
+            :class="line.on ? 'sage' : 'plain'"
           >
-            {{ cap }} · 未启用
+            {{ line.label }}
           </span>
         </div>
       </div>

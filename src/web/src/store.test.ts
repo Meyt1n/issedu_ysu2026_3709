@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiClientError, apiClient } from './api/client'
 import {
   changeCurrentPassword,
+  completeBoundHouseholdPin,
+  completeMemberPortalPin,
   connectWithFamilyFace,
   connectWithPassword,
   connectWithPin,
@@ -12,6 +14,7 @@ import {
   formatError,
   getBoundFaceHouseholdId,
   getBoundFaceHouseholdName,
+  getBoundPinCandidates,
   portalWelcomeMessage,
   refreshCapabilities,
   recoverPasswordWithPin,
@@ -20,7 +23,7 @@ import {
   setView,
   signOut,
 } from './store'
-import { overridePortalEntryModeForTest } from './ui/portalEntry'
+import { overridePortalEntryModeForTest, readWelcomeEntryHint, resetWelcomeEntryHintForTest } from './ui/portalEntry'
 
 async function loginAs(actorId: string): Promise<void> {
   if (!vi.isMockFunction(apiClient.login)) vi.spyOn(apiClient, 'login')
@@ -337,7 +340,31 @@ describe('cross-portal face household binding (HCT-425)', () => {
     // cross-port cookie fallback used by 5173/5174 and 5183/5184.
     expect(getBoundFaceHouseholdId()).toBe('household-family')
     expect(getBoundFaceHouseholdName()).toBe('爷爷奶奶家')
+    expect(getBoundPinCandidates()).toEqual([])
     expect(cookie).toContain('hct-face-family-household=')
+  })
+
+  it('stores PIN picker members on the same binding without exposing them to a public API', () => {
+    let cookie = ''
+    Object.defineProperty(globalThis, 'document', {
+      configurable: true,
+      value: {
+        get cookie() {
+          return cookie
+        },
+        set cookie(value: string) {
+          cookie = value
+        },
+      },
+    })
+
+    bindFaceHousehold('household-family', '爷爷奶奶家', [
+      { id: 'member-grandma', display_name: '奶奶', actor_id: 'grandma-account' },
+    ])
+
+    expect(getBoundPinCandidates()).toEqual([
+      { id: 'member-grandma', display_name: '奶奶', actor_id: 'grandma-account' },
+    ])
   })
 
   it('automatically migrates an existing port-local binding to the shared cookie', () => {
@@ -470,10 +497,13 @@ describe('portal entry lock (HCT-453)', () => {
   afterEach(() => {
     overridePortalEntryModeForTest(null)
     signOut()
+    clearBoundFaceHousehold()
+    resetWelcomeEntryHintForTest()
     vi.restoreAllMocks()
+    Reflect.deleteProperty(globalThis, 'document')
   })
 
-  it('signs an owner out of the member entry and points to the admin entry', async () => {
+  it('keeps an owner on the member entry in the family-picker staging state', async () => {
     overridePortalEntryModeForTest('member')
     vi.spyOn(apiClient, 'login').mockResolvedValue({
       actor_id: 'parent-admin',
@@ -483,11 +513,57 @@ describe('portal entry lock (HCT-453)', () => {
 
     await connectWithPassword('parent-admin', 'password-123', 'family-care')
 
-    expect(session.status).toBe('signed-out')
-    expect(session.sessionToken).toBe('')
-    expect(session.entryConflict).toBe('need-admin-entry')
-    expect(session.error).toContain('管理后台')
+    expect(session.status).toBe('selecting-member')
+    expect(session.sessionToken).toHaveLength(48)
+    expect(session.entryConflict).toBeNull()
+    expect(session.portal).toBe('admin')
+    expect(apiClient.logout).not.toHaveBeenCalled()
+  })
+
+  it('exchanges the owner staging session for the selected member after PIN', async () => {
+    overridePortalEntryModeForTest('member')
+    vi.spyOn(apiClient, 'login').mockResolvedValue({
+      actor_id: 'parent-admin',
+      session_token: 'o'.repeat(48),
+      expires_at: (Date.now() + 60_000) / 1000,
+    })
+    vi.spyOn(apiClient, 'loginWithPin').mockResolvedValue({
+      actor_id: 'grandma-account',
+      household_id: household.id,
+      session_token: 'm'.repeat(48),
+      expires_at: (Date.now() + 60_000) / 1000,
+    })
+
+    await connectWithPassword('parent-admin', 'password-123', 'family-care')
+    await completeMemberPortalPin(grandma.id, '135790')
+
+    expect(session.status).toBe('ready')
+    expect(session.actorId).toBe('grandma-account')
+    expect(session.portal).toBe('member')
+    expect(session.currentView).toBe('member-home')
+    expect(selectedMember.value?.display_name).toBe('奶奶')
     expect(apiClient.logout).toHaveBeenCalled()
+  })
+
+  it('keeps the family picker when the member PIN is wrong', async () => {
+    overridePortalEntryModeForTest('member')
+    vi.spyOn(apiClient, 'login').mockResolvedValue({
+      actor_id: 'parent-admin',
+      session_token: 'o'.repeat(48),
+      expires_at: (Date.now() + 60_000) / 1000,
+    })
+    vi.spyOn(apiClient, 'loginWithPin').mockRejectedValue(
+      new ApiClientError('AUTH_FAILED', { status: 401, code: 'UNAUTHENTICATED' }),
+    )
+
+    await connectWithPassword('parent-admin', 'password-123', 'family-care')
+    await completeMemberPortalPin(grandma.id, '000000')
+
+    expect(session.status).toBe('selecting-member')
+    expect(session.actorId).toBe('parent-admin')
+    expect(session.sessionToken).toHaveLength(48)
+    expect(session.error).toContain('六位数字密码不正确')
+    expect(apiClient.logout).not.toHaveBeenCalled()
   })
 
   it('signs a plain member out of the admin entry and points to the member entry', async () => {
@@ -569,6 +645,123 @@ describe('portal entry lock (HCT-453)', () => {
     expect(session.entryConflict).toBe('need-admin-entry')
     expect(session.error).toContain('家庭已创建')
     expect(session.error).toContain('管理后台')
+  })
+
+  it('opens login setup after creating a household on the admin entry', async () => {
+    overridePortalEntryModeForTest('admin')
+    vi.spyOn(apiClient, 'listHouseholds')
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([household])
+    vi.spyOn(apiClient, 'createHousehold').mockResolvedValue({
+      ...household,
+      created_by: 'parent-admin',
+    })
+    vi.spyOn(apiClient, 'createMember').mockResolvedValue(grandma)
+
+    await loginAs('parent-admin')
+    expect(session.status).toBe('empty')
+
+    await createHouseholdAndEnter('入口测试家庭', [
+      { displayName: '奶奶', role: 'DEPENDENT', actorId: 'grandma-account' },
+    ])
+
+    expect(session.status).toBe('ready')
+    expect(session.portal).toBe('admin')
+    expect(session.currentView).toBe('face-credentials')
+  })
+
+  it('binds the selected household when an owner signs into the admin entry', async () => {
+    const jar = new Map<string, string>()
+    Object.defineProperty(globalThis, 'document', {
+      configurable: true,
+      value: {
+        get cookie() {
+          return [...jar.entries()].map(([key, value]) => `${key}=${value}`).join('; ')
+        },
+        set cookie(value: string) {
+          const pair = value.split(';')[0] ?? ''
+          const eq = pair.indexOf('=')
+          if (eq < 0) return
+          const key = pair.slice(0, eq).trim()
+          const stored = pair.slice(eq + 1).trim()
+          if (/Max-Age=0/i.test(value)) jar.delete(key)
+          else jar.set(key, stored)
+        },
+      },
+    })
+    overridePortalEntryModeForTest('admin')
+    await loginAs('parent-admin')
+
+    expect(session.status).toBe('ready')
+    expect(getBoundFaceHouseholdId()).toBe(household.id)
+    expect(getBoundFaceHouseholdName()).toBe(household.name)
+    expect(getBoundPinCandidates()).toEqual([
+      { id: grandma.id, display_name: '奶奶', actor_id: 'grandma-account' },
+    ])
+  })
+
+  it('lets a bound device PIN-login a member without an owner password session', async () => {
+    let cookie = ''
+    Object.defineProperty(globalThis, 'document', {
+      configurable: true,
+      value: {
+        get cookie() {
+          return cookie
+        },
+        set cookie(value: string) {
+          cookie = value
+        },
+      },
+    })
+    overridePortalEntryModeForTest('member')
+    bindFaceHousehold(household.id, household.name, [
+      { id: grandma.id, display_name: '奶奶', actor_id: 'grandma-account' },
+    ])
+    vi.spyOn(apiClient, 'loginWithPin').mockResolvedValue({
+      actor_id: 'grandma-account',
+      household_id: household.id,
+      session_token: 'm'.repeat(48),
+      expires_at: (Date.now() + 60_000) / 1000,
+    })
+
+    await completeBoundHouseholdPin(grandma.id, '135790')
+
+    expect(session.status).toBe('ready')
+    expect(session.actorId).toBe('grandma-account')
+    expect(session.portal).toBe('member')
+    expect(session.currentView).toBe('member-home')
+    expect(apiClient.loginWithPin).toHaveBeenCalled()
+  })
+
+  it('member sign-out keeps the next auto welcome page on the member entry', async () => {
+    let cookie = ''
+    Object.defineProperty(globalThis, 'document', {
+      configurable: true,
+      value: {
+        get cookie() {
+          return cookie
+        },
+        set cookie(value: string) {
+          cookie = value
+        },
+      },
+    })
+    overridePortalEntryModeForTest('auto')
+    bindFaceHousehold(household.id, household.name, [
+      { id: grandma.id, display_name: '奶奶', actor_id: 'grandma-account' },
+    ])
+    vi.spyOn(apiClient, 'loginWithPin').mockResolvedValue({
+      actor_id: 'grandma-account',
+      household_id: household.id,
+      session_token: 'm'.repeat(48),
+      expires_at: (Date.now() + 60_000) / 1000,
+    })
+
+    await completeBoundHouseholdPin(grandma.id, '135790')
+    signOut()
+
+    expect(session.status).toBe('signed-out')
+    expect(readWelcomeEntryHint()).toBe('member')
   })
 })
 
@@ -653,6 +846,58 @@ describe('formatError 区分真实失败原因（HCT-401 爬虫面板）', () =>
     expect(message).toContain('正式账号已经存在')
     expect(message).toContain('返回登录')
     expect(message).not.toContain('其它位置被修改')
+  })
+
+  it('401 AUTH_FAILED 在登录卡片内提示账号或密码不正确', () => {
+    const message = formatError(
+      new ApiClientError('AUTH_FAILED', { status: 401, code: 'UNAUTHENTICATED' }),
+    )
+    expect(message).toContain('账号或密码不正确')
+    expect(message).not.toContain('AUTH_FAILED')
+  })
+
+  it('422 PASSWORD_FORMAT_INVALID 要求字母和数字', () => {
+    const message = formatError(
+      new ApiClientError('PASSWORD_FORMAT_INVALID', { status: 422, code: 'VALIDATION_ERROR' }),
+    )
+    expect(message).toContain('英文字母')
+    expect(message).toContain('数字')
+    expect(message).not.toContain('PASSWORD_FORMAT_INVALID')
+  })
+})
+
+describe('connectWithPassword login error wording (HCT-512)', () => {
+  afterEach(() => {
+    signOut()
+    vi.restoreAllMocks()
+  })
+
+  it('maps login PASSWORD_FORMAT_INVALID to 账号或密码不正确', async () => {
+    vi.spyOn(apiClient, 'login').mockRejectedValue(
+      new ApiClientError('PASSWORD_FORMAT_INVALID', { status: 422, code: 'VALIDATION_ERROR' }),
+    )
+    await connectWithPassword('demo-parent', 'onlyletters', 'family-care')
+    expect(session.status).toBe('signed-out')
+    expect(session.error).toContain('账号或密码不正确')
+    expect(session.error).not.toContain('英文字母')
+  })
+
+  it('maps login pydantic 422 to 账号或密码不正确', async () => {
+    vi.spyOn(apiClient, 'login').mockRejectedValue(
+      new ApiClientError('[object Object]', { status: 422, code: 'VALIDATION_ERROR' }),
+    )
+    await connectWithPassword('demo-parent', 'onlyletters', 'family-care')
+    expect(session.error).toContain('账号或密码不正确')
+    expect(session.error).not.toContain('不符合要求')
+  })
+
+  it('keeps policy wording when registration is rejected', async () => {
+    vi.spyOn(apiClient, 'registerAccount').mockRejectedValue(
+      new ApiClientError('PASSWORD_FORMAT_INVALID', { status: 422, code: 'VALIDATION_ERROR' }),
+    )
+    await connectWithPassword('new-owner', 'onlyletters', 'family-care', true)
+    expect(session.status).toBe('signed-out')
+    expect(session.error).toContain('英文字母')
   })
 })
 

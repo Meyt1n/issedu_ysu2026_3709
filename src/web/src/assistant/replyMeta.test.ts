@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { AssistantCitation } from '../api/types'
 import {
+  canRecheckMedicationSafety,
   confidenceLabel,
   extraFactSources,
   questionTypeLabel,
@@ -68,5 +69,14 @@ describe('extraFactSources', () => {
   it('keeps all sources when nothing is cited', () => {
     expect(extraFactSources(['event-9'], [])).toEqual(['event-9'])
     expect(extraFactSources(undefined, undefined)).toEqual([])
+  })
+})
+
+describe('canRecheckMedicationSafety', () => {
+  it('only offers a medication recheck on medication-shaped turns', () => {
+    expect(canRecheckMedicationSafety('MEDICATION_SAFETY')).toBe(true)
+    expect(canRecheckMedicationSafety('SYMPTOM_MEDICATION')).toBe(true)
+    expect(canRecheckMedicationSafety('GENERAL')).toBe(false)
+    expect(canRecheckMedicationSafety(null)).toBe(false)
   })
 })

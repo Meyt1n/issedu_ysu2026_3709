@@ -61,6 +61,34 @@ export async function mockFormalSessionApi(page: Page): Promise<void> {
   })
 }
 
+export async function seedBoundHousehold(
+  page: Page,
+  household: { id: string; name: string },
+  members: Array<{ id: string; display_name: string; actor_id: string }>,
+): Promise<void> {
+  const value = JSON.stringify({
+    id: household.id,
+    name: household.name,
+    members: members.map(member => ({
+      id: member.id,
+      display_name: member.display_name,
+      actor_id: member.actor_id,
+    })),
+  })
+  await page.addInitScript(
+    ([key, stored, ready]) => {
+      window.localStorage.setItem(key!, stored!)
+      document.cookie = `hct-face-family-household=${encodeURIComponent(stored!)}; Path=/; SameSite=Lax`
+      document.cookie = `hct-admin-ready=${encodeURIComponent(ready!)}; Path=/; SameSite=Lax`
+    },
+    [
+      'hct:face-family-household',
+      value,
+      JSON.stringify({ instanceId: 'test-boot', householdId: household.id }),
+    ],
+  )
+}
+
 export async function submitFormalLogin(
   page: Page,
   actorId: string,
@@ -68,11 +96,11 @@ export async function submitFormalLogin(
 ): Promise<void> {
   const passwordTab = page.getByRole('button', { name: '账号密码', exact: true })
   if (await passwordTab.count()) await passwordTab.click()
-  await page.getByLabel('正式账号', { exact: true }).fill(actorId)
+  await page.getByLabel(/^(正式账号|家庭管理员账号)$/).fill(actorId)
   await page.getByLabel('密码', { exact: true }).fill(FORMAL_TEST_PASSWORD)
   const purposeField = page.getByLabel('访问用途代码', { exact: true })
   if (await purposeField.count()) await purposeField.fill(purpose)
   await page.getByRole('button', {
-    name: /^(?:登录(?:成员前台|管理后台|家庭空间)?|进入(?:前台|管理后台))$/,
+    name: /^(?:登录(?:成员前台|管理后台|家庭空间)?|进入(?:前台|管理后台)|选择家人)$/,
   }).click()
 }

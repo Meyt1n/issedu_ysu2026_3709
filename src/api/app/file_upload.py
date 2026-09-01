@@ -135,6 +135,23 @@ def random_storage_key(ext: str) -> str:
     return f"{token}{ext}"
 
 
+def stored_file_path(storage_key: str) -> Path | None:
+    """Resolve a stored object, including the pre-HCT-516 CWD-relative root."""
+    name = Path(storage_key).name
+    if not name or name != storage_key:
+        return None
+    settings = get_settings()
+    roots = [Path(settings.file_root).resolve()]
+    legacy = (Path.cwd() / "data" / "files").resolve()
+    if legacy not in roots:
+        roots.append(legacy)
+    for root in roots:
+        target = (root / name).resolve()
+        if target.is_relative_to(root) and target.is_file():
+            return target
+    return None
+
+
 def store_file(file: BinaryIO, storage_key: str) -> Path:
     """Write *file* to the controlled upload directory. Returns absolute path."""
     settings = get_settings()

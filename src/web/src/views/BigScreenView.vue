@@ -13,6 +13,7 @@ import CountUp from '../components/CountUp.vue'
 import { requestOptions, session } from '../store'
 import { isSameLocalDay, reviewDrugCandidate } from '../overview/overviewView'
 import { formatDateTime, memberRoleLabel } from '../ui/labels'
+import { familyRuntimeLines } from '../ui/runtimeStatus'
 import { presentWeather } from '../weather/weatherView'
 
 interface DayPoint {
@@ -60,6 +61,7 @@ const reviewRows = ref<ReviewRow[]>([])
 const riskRows = ref<RiskRow[]>([])
 const lastUpdated = ref<Date | null>(null)
 const weatherView = computed(() => presentWeather(weather.value))
+const runtimeLines = computed(() => familyRuntimeLines(session.capabilities))
 
 let clockTimer: ReturnType<typeof setInterval> | null = null
 let refreshTimer: ReturnType<typeof setInterval> | null = null
@@ -371,25 +373,13 @@ onBeforeUnmount(() => {
 
       <div class="bs-panel">
         <h3>本地运行状态</h3>
-        <div class="bs-light-row">
-          <span class="bs-light on" />
-          <span>本地 API · 已连接（阶段 {{ session.capabilities?.phase ?? '未知' }}）</span>
-        </div>
         <div
-          v-for="cap in (session.capabilities?.available ?? []).slice(0, 3)"
-          :key="`on-${cap}`"
+          v-for="line in runtimeLines"
+          :key="line.label"
           class="bs-light-row"
         >
-          <span class="bs-light on" />
-          <span>{{ cap }}</span>
-        </div>
-        <div
-          v-for="cap in (session.capabilities?.unavailable ?? []).slice(0, 3)"
-          :key="`off-${cap}`"
-          class="bs-light-row"
-        >
-          <span class="bs-light off" />
-          <span>{{ cap }} · 未启用（不显示虚假状态）</span>
+          <span class="bs-light" :class="line.on ? 'on' : 'off'" />
+          <span>{{ line.label }}</span>
         </div>
         <div class="bs-light-row">
           <span class="bs-light" :class="pendingOutbox === 0 ? 'on' : 'off'" />

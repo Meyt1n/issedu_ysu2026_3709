@@ -203,7 +203,7 @@ uv run python scripts/hct202_quality_demo.py --iterations 50
 ```powershell
 $login = Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/v1/auth/login `
   -ContentType 'application/json' `
-  -Body (@{ actor_id = 'demo-parent'; password = 'DemoOnly-ChangeMe!' } | ConvertTo-Json)
+  -Body (@{ actor_id = 'demo-parent'; password = 'DemoOnly-ChangeMe1!' } | ConvertTo-Json)
 curl.exe -X POST http://localhost:8000/api/v1/vision-quality/check `
   -H "Authorization: Bearer $($login.session_token)" `
   -F "media_type=image" `
@@ -280,7 +280,7 @@ open 模式不再要求域名白名单，改为「公开 HTTPS + SSRF 公网校�
 ```powershell
 $login = Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/v1/auth/login `
   -ContentType 'application/json' `
-  -Body (@{ actor_id = 'demo-parent'; password = 'DemoOnly-ChangeMe!' } | ConvertTo-Json)
+  -Body (@{ actor_id = 'demo-parent'; password = 'DemoOnly-ChangeMe1!' } | ConvertTo-Json)
 Invoke-RestMethod -Uri http://localhost:8000/api/v1/assistant/agents `
   -Headers @{ Authorization = "Bearer $($login.session_token)" }
 # 期望 web_search_ready=true 且 web_search_unavailable_reason=OPT_IN_REQUIRED
@@ -344,24 +344,23 @@ curl http://localhost:8000/api/v1/meta/capabilities
 通过。快照的加载校验（版本白名单、schema、SHA-256、批准/撤销状态）不会因教学范围放宽；识别候选
 仍必须人工确认后才能入档。
 
-### 4.5 演示造数与课堂剧本（一键补种，HCT-499）
+### 4.5 演示造数与课堂剧本（命令行补种，HCT-499 / HCT-513）
 
-「演示造数」页可一键补种正式演示家庭（爷爷奶奶家）的虚构病史、过敏、药品、指标、计划与提醒闭环事件，全部标注「演示」，不含真实健康数据。补种使用固定幂等键，重复点击或超时重试都不会产生重复数据。
+管理后台不再提供「演示造数」页面。用脚本一键补种正式演示家庭（爷爷奶奶家）的虚构病史、过敏、药品、指标、计划与提醒闭环事件，全部标注「演示」，不含真实健康数据。补种使用固定幂等键，重复执行或超时重试都不会产生重复数据。
 
 **前置与步骤：**
 
-1. 先把 API 和 Web 跑起来（§1.1 Compose 或 §1.2 本地进程均可）；本地进程路径要求 API 在 8000 端口、`scripts/start.ps1 web`（或 `.sh`）在 5173。
-2. 运行 `uv run python scripts/seed_formal_demo_health.py`，受控预置/复用 `demo-parent` 正式演示账号并完成虚构健康数据补种；本地默认教学密码为 `DemoOnly-ChangeMe!`，也可用 `--password` 指定。登录页不提供自助注册，也不提供开发身份头入口。非演示账号会被后端 403 `DEMO_SEED_FORBIDDEN` 拒绝——这是守卫生效，不是 API 故障。
-3. 用 `demo-parent` 的正式账号密码登录管理后台，打开「家庭与研发 → 演示造数」，点击「补种 / 重置演示健康数据」。成功后页面展示 `events_touched` 报告并自动切到演示家庭；课堂剧本三条固定路径可直接跳转对应页面。命令行调用同样必须先通过 `/auth/login` 获取短期 Bearer 会话，再请求 `/api/v1/demo/formal-health-seed`。
+1. 先把 API 跑起来（§1.1 Compose 或 §1.2 本地进程均可）；本地进程路径要求 API 在 8000 端口。
+2. 运行 `uv run python scripts/seed_formal_demo_health.py`，受控预置/复用 `demo-parent` 正式演示账号并完成虚构健康数据补种；本地默认教学密码为 `DemoOnly-ChangeMe1!`（至少 8 位且含英文和数字），也可用 `--password` 指定。登录页不提供自助注册，也不提供开发身份头入口。非演示账号会被后端 403 `DEMO_SEED_FORBIDDEN` 拒绝——这是守卫生效，不是 API 故障。
+3. 用 `demo-parent` 的正式账号密码登录管理后台后，可在家庭总览、成员档案、健康计划等页面查看补种结果。命令行以外若要调接口，必须先通过 `/auth/login` 获取短期 Bearer 会话，再请求 `POST /api/v1/demo/formal-health-seed`。
 
-**红条排障对照（错误分层）：**
+**错误分层对照（脚本或接口调用）：**
 
-| 页面提示 | 实际含义 | 处理 |
+| 提示 | 实际含义 | 处理 |
 |---|---|---|
-| 本地 API 服务不可用…请确认 API 已在 8000 端口运行 | 浏览器拿不到任何 API 响应，或代理（Vite dev / Nginx）连不上 API 进程 | 本地进程：确认 `scripts/start api` 终端仍在运行；Compose：`scripts/start.ps1 health` 检查 api 服务 healthy；远程隧道检查隧道连通 |
-| 当前身份无权补种演示数据：请改用 demo-parent… | 后端 `DEMO_SEED_FORBIDDEN` 守卫拒绝非演示身份，API 正常 | 切换为 `demo-parent` 或其它 `demo-` / `test-` 前缀身份 |
-| 课堂剧本加载失败：… | 只读剧本接口失败，与补种无关；红条显示在剧本卡片并带「重新加载剧本」按钮 | 按提示排查 API 连接后点「重新加载剧本」 |
-| 正式登录已失效，请重新登录。 | 请求没有携带有效 Bearer 会话或会话已过期（401） | 回到欢迎页，用正式账号密码重新登录 |
+| 本地 API 服务不可用…请确认 API 已在 8000 端口运行 | 浏览器或脚本拿不到任何 API 响应，或代理连不上 API 进程 | 本地进程：确认 `scripts/start api` 终端仍在运行；Compose：`scripts/start.ps1 health` 检查 api 服务 healthy |
+| 当前身份无权补种演示数据：请改用 demo-parent… | 后端 `DEMO_SEED_FORBIDDEN` 守卫拒绝非演示身份，API 正常 | 改用 `demo-parent` 或其它 `demo-` / `test-` 前缀身份 |
+| 正式登录已失效，请重新登录。 | 请求没有携带有效 Bearer 会话或会话已过期（401） | 重新 `/auth/login` 后再请求补种接口 |
 
 ## 5. 后续必须补齐
 

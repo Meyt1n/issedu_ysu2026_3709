@@ -40,24 +40,19 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { view: 'graph', label: '健康图谱', icon: 'compass', group: '安全与洞察' },
   { view: 'assistant', label: '健康助手', icon: 'assistant', group: '安全与洞察', portals: ['admin'] },
   { view: 'authorizations', label: '授权管理', icon: 'key', group: '权限与凭证' },
-  { view: 'face-credentials', label: '人脸凭证', icon: 'lock', group: '权限与凭证' },
+  { view: 'face-credentials', label: '登录设置', icon: 'lock', group: '权限与凭证' },
   { view: 'bigscreen', label: '家庭大屏', icon: 'sun', group: '家庭与研发' },
-  { view: 'knowledge', label: '知识文档', icon: 'leaf', group: '家庭与研发' },
-  { view: 'modellab', label: '模型实验室', icon: 'sparkle', group: '家庭与研发' },
-  { view: 'demo-lab', label: '演示造数', icon: 'sparkle', group: '家庭与研发' },
 ]
 
 /**
  * 计算某门户可见的导航条目：
  * 1. 先按 portals 显式限定过滤；
  * 2. 再套用成员（MEMBER_VIEWS + SHARED_VIEWS）/ 管理员（非 MEMBER_VIEWS）通用规则；
- * 3. 研发入口按 showAdvancedLab 隐藏（HCT-439 阶段三）；
- * 4. 最后按 view 去重防御，保证 active 高亮唯一，即使未来条目配置出错。
+ * 3. 最后按 view 去重防御，保证 active 高亮唯一，即使未来条目配置出错。
  */
-export function visibleNavItemsFor(portal: PortalName, showAdvancedLab: boolean): NavItem[] {
+export function visibleNavItemsFor(portal: PortalName): NavItem[] {
   const filtered = NAV_ITEMS.filter(item => {
     if (item.portals && !item.portals.includes(portal)) return false
-    if (!showAdvancedLab && item.view === 'modellab') return false
     return portal === 'member'
       ? MEMBER_VIEWS.includes(item.view) || SHARED_VIEWS.includes(item.view)
       : !MEMBER_VIEWS.includes(item.view)

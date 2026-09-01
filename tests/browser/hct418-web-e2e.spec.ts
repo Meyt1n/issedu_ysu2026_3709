@@ -210,7 +210,7 @@ async function installSyntheticApi(page: Page, qualityDecision: 'PASS' | 'RETAKE
 }
 
 async function enterFamilySpace(page: Page): Promise<void> {
-  await page.goto('/')
+  await page.goto('/?portal=admin')
   await submitFormalLogin(page, 'e2e-owner')
   await expect(page.locator('.app-frame')).toBeVisible()
 }
@@ -254,21 +254,9 @@ test('质量门控失败时不给下游上传和任务创建机会', async ({ pa
   expect(requests.some(path => path === 'POST /api/v1/vision-tasks')).toBe(false)
 })
 
-test('助手和知识文档链路显示本地依据，并保留受控检索结果', async ({ page }) => {
+test('助手链路显示本地依据，并保留受控检索结果', async ({ page }) => {
   await installSyntheticApi(page)
   await enterFamilySpace(page)
-
-  await navItem(page, '知识文档').click()
-  await page.locator('label.field').filter({ hasText: '标题' }).locator('input').fill('Synthetic care guide')
-  await page.locator('label.field').filter({ hasText: '来源' }).locator('input').fill('Synthetic source')
-  await page.locator('label.field').filter({ hasText: '正文（自动分块）' }).locator('textarea').fill('Synthetic evidence fragment')
-  await page.getByRole('button', { name: '登记知识文档' }).click()
-  await expect(page.getByText('Synthetic care guide')).toBeVisible()
-  const retrievalCard = page.locator('section.card').filter({ hasText: '试试知识能否被找到' })
-  await retrievalCard.locator('textarea').fill('synthetic')
-  await retrievalCard.getByRole('button', { name: '检索' }).click()
-  await expect(page.getByText('Synthetic evidence fragment')).toBeVisible()
-  await expect(page.getByText('《Synthetic care guide》')).toBeVisible()
 
   await navItem(page, '健康助手').click()
   await expect(page.getByRole('heading', { name: '本地证据助手' })).toBeVisible()
@@ -364,15 +352,12 @@ test('助手和业务页面把纵向滚动收进视口内容区，并随视口�
   expect(overviewMetrics.bodyHeight).toBeLessThanOrEqual(overviewMetrics.viewportHeight + 1)
 })
 
-test('模型实验室展示发布阻断，不把候选版本伪装成已发布', async ({ page }) => {
+test('管理后台不提供模型实验室入口', async ({ page }) => {
   await installSyntheticApi(page)
   await enterFamilySpace(page)
-  await navItem(page, '模型实验室').click()
-  await expect(page.getByText('synthetic-model-v1')).toBeVisible()
-  await expect(page.getByText('缺少对照报告')).toBeVisible()
-  await page.getByRole('button', { name: '发布此版本' }).click()
-  await expect(page.locator('.toast.error')).toContainText('数据已在其它位置被修改，请刷新后再试。')
-  await expect(page.getByText('来自配置回退（无已发布绑定）')).toBeVisible()
+  await expect(navItem(page, '模型实验室')).toHaveCount(0)
+  await expect(navItem(page, '演示造数')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '发布此版本' })).toHaveCount(0)
 })
 
 test('离线时不进入家庭空间，也不渲染旧健康摘要', async ({ page }) => {

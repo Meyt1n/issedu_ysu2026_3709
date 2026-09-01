@@ -6,7 +6,7 @@ describe('sidebar navigation uniqueness (HCT-447)', () => {
   it.each(['admin', 'member'] as const)(
     'renders the assistant entry exactly once in the %s portal',
     portal => {
-      const items = visibleNavItemsFor(portal, true)
+      const items = visibleNavItemsFor(portal)
       const assistantItems = items.filter(item => item.view === 'assistant')
       expect(assistantItems).toHaveLength(1)
       expect(assistantItems[0]!.label).toBe('健康助手')
@@ -14,38 +14,39 @@ describe('sidebar navigation uniqueness (HCT-447)', () => {
   )
 
   it('places the assistant entry in the expected group per portal', () => {
-    const adminAssistant = visibleNavItemsFor('admin', true).find(
+    const adminAssistant = visibleNavItemsFor('admin').find(
       item => item.view === 'assistant',
     )
-    const memberAssistant = visibleNavItemsFor('member', true).find(
+    const memberAssistant = visibleNavItemsFor('member').find(
       item => item.view === 'assistant',
     )
     expect(adminAssistant?.group).toBe('安全与洞察')
     expect(memberAssistant?.group).toBe('我的照护')
   })
 
-  it('gives face credentials a distinct icon from authorization and medication safety', () => {
-    const items = visibleNavItemsFor('admin', false)
+  it.each(['admin', 'member'] as const)('never repeats a sidebar icon in the %s portal', portal => {
+    const icons = visibleNavItemsFor(portal).map(item => item.icon)
+    expect(new Set(icons).size).toBe(icons.length)
+  })
+
+  it('gives login settings a distinct icon from authorization and medication safety', () => {
+    const items = visibleNavItemsFor('admin')
     const authorizations = items.find(item => item.view === 'authorizations')
     const credentials = items.find(item => item.view === 'face-credentials')
     const risks = items.find(item => item.view === 'risks')
+    expect(authorizations?.icon).toBe('key')
     expect(credentials?.icon).toBe('lock')
     expect(credentials?.icon).not.toBe(authorizations?.icon)
     expect(credentials?.icon).not.toBe(risks?.icon)
   })
 
-  it.each([
-    ['admin', true],
-    ['admin', false],
-    ['member', true],
-    ['member', false],
-  ] as const)('never repeats a view in the %s portal (advanced lab: %s)', (portal, lab) => {
-    const views = visibleNavItemsFor(portal, lab).map(item => item.view)
+  it.each(['admin', 'member'] as const)('never repeats a view in the %s portal', portal => {
+    const views = visibleNavItemsFor(portal).map(item => item.view)
     expect(new Set(views).size).toBe(views.length)
   })
 
   it('keeps member portal limited to member and shared views', () => {
-    const views = visibleNavItemsFor('member', true).map(item => item.view)
+    const views = visibleNavItemsFor('member').map(item => item.view)
     expect(views).toEqual([
       'member-home',
       'member-capture',
@@ -56,11 +57,16 @@ describe('sidebar navigation uniqueness (HCT-447)', () => {
     ])
   })
 
-  it('excludes member-only views and the lab flag from the admin portal', () => {
-    const views = visibleNavItemsFor('admin', false).map(item => item.view)
+  it('excludes member-only views and withdrawn lab pages from the admin portal', () => {
+    const views = visibleNavItemsFor('admin').map(item => item.view)
     expect(views).not.toContain('member-home')
-    expect(views).not.toContain('modellab')
     expect(views).toContain('overview')
+    expect(views).toContain('bigscreen')
+    expect(views).not.toContain('knowledge')
+    expect(NAV_ITEMS.map(item => item.view)).not.toContain('modellab')
+    expect(NAV_ITEMS.map(item => item.view)).not.toContain('demo-lab')
+    expect(NAV_ITEMS.some(item => item.label === '模型实验室')).toBe(false)
+    expect(NAV_ITEMS.some(item => item.label === '演示造数')).toBe(false)
   })
 
   it('deduplicates by view even if a future entry forgets portal scoping', () => {
@@ -69,7 +75,7 @@ describe('sidebar navigation uniqueness (HCT-447)', () => {
     const assistantDefinitions = NAV_ITEMS.filter(item => item.view === 'assistant')
     expect(assistantDefinitions.length).toBeGreaterThanOrEqual(2)
     for (const portal of ['admin', 'member'] as const) {
-      const views = visibleNavItemsFor(portal, true).map(item => item.view)
+      const views = visibleNavItemsFor(portal).map(item => item.view)
       expect(views.filter(view => view === 'assistant')).toHaveLength(1)
     }
   })
@@ -78,7 +84,7 @@ describe('sidebar navigation uniqueness (HCT-447)', () => {
 describe('active navigation selection', () => {
   it('marks exactly one entry active when the assistant view is open', () => {
     for (const portal of ['admin', 'member'] as const) {
-      const items = visibleNavItemsFor(portal, true)
+      const items = visibleNavItemsFor(portal)
       const activeItems = items.filter(item => item.view === 'assistant')
       expect(activeItems).toHaveLength(1)
       expect(activeNavItem(items, 'assistant')).toBe(activeItems[0])
@@ -86,7 +92,7 @@ describe('active navigation selection', () => {
   })
 
   it('falls back to the first entry when the current view is not visible', () => {
-    const items = visibleNavItemsFor('member', true)
+    const items = visibleNavItemsFor('member')
     expect(activeNavItem(items, 'overview')).toBe(items[0])
   })
 })

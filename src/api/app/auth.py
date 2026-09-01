@@ -27,6 +27,11 @@ from app.models import (
     AuthSession,
     Base,
 )
+from app.password_policy import (
+    PASSWORD_FORMAT_INVALID,
+    assert_password_policy,
+    teaching_password_hash_if_legacy_upgrade,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -230,7 +235,18 @@ def _enforce_attempt_keys(
     db.flush()
 
 
+def _require_password_policy(password: str) -> None:
+    try:
+        assert_password_policy(password)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=PASSWORD_FORMAT_INVALID,
+        ) from exc
+
+
 def register_account(actor_id: str, password: str, session: Session | None = None) -> None:
+    _require_password_policy(password)
     with _session_scope(session) as db:
         if db.get(AuthAccount, actor_id) is not None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="ACCOUNT_EXISTS")
@@ -288,6 +304,18 @@ def authenticate(actor_id: str, password: str, session: Session | None = None) -
         # Always run a bcrypt verify (dummy hash when missing) so timing does not
         # reveal whether the actor_id is registered.
         hashed = account.password_hash if account is not None else _DUMMY_PASSWORD_HASH
+        if account is not None:
+            upgraded = teaching_password_hash_if_legacy_upgrade(
+                actor_id,
+                password,
+                hashed,
+                verify=verify_password,
+                hash_password=hash_password,
+            )
+            if upgraded is not None:
+                account.password_hash = upgraded
+                account.updated_at = _now()
+                hashed = upgraded
         if account is None or not verify_password(password, hashed):
             _record_failure(db, f"password:{actor_id}")
             db.commit()
@@ -335,6 +363,7 @@ def change_account_password(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="PASSWORD_REUSE",
             )
+        _require_password_policy(new_password)
 
         current_session = _session_record(db, session_token)
         household_id = current_session.household_id
@@ -364,6 +393,7 @@ def recover_account_password_with_pin(
     the same generic 401 path, so the recovery endpoint cannot enumerate them.
     """
     _validate_pin(pin)
+    _require_password_policy(new_password)
     with _session_scope(session) as db:
         rate_keys = [
             f"pin:{household_id}:{actor_id}",

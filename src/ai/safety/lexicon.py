@@ -100,6 +100,45 @@ MEDICATION_SAFETY_ROUTE_TERMS: tuple[str, ...] = (
     "帮我开药",
 )
 
+# Negation immediately before a route term must not fire.  News teaching
+# prompts say「不开处方」; that is not a request to prescribe.
+_NEGATION_PREFIXES = (
+    "并不是",
+    "不要",
+    "不用",
+    "并非",
+    "不是",
+    "未能",
+    "没有",
+    "别",
+    "未",
+    "勿",
+    "非",
+    "没",
+    "不",
+)
+
+
+def contains_lexicon_term(text: str, term: str) -> bool:
+    """True when *term* occurs in *text* without a leading negation."""
+    if not term:
+        return False
+    start = 0
+    haystack = str(text or "")
+    while True:
+        index = haystack.find(term, start)
+        if index < 0:
+            return False
+        prefix = haystack[:index]
+        if any(prefix.endswith(negation) for negation in _NEGATION_PREFIXES):
+            start = index + 1
+            continue
+        return True
+
+
+def contains_any_lexicon_term(text: str, terms: tuple[str, ...]) -> bool:
+    return any(contains_lexicon_term(text, term) for term in terms)
+
 # Decision 1A: explicit individual dose-number requests are the only hard
 # refusal subset.  A question that asks "how many pills / how much" for a
 # person is answered with a deterministic refusal — never with a number —

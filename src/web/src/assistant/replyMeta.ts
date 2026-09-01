@@ -69,3 +69,14 @@ export function extraFactSources(
   const cited = new Set((citations ?? []).map(citation => citation.chunk_id))
   return (sources ?? []).filter(source => source && !cited.has(source))
 }
+
+const MEDICATION_RECHECK_TYPES = new Set([
+  'MEDICATION_SAFETY',
+  'SYMPTOM_MEDICATION',
+  'MEDICATION_RECORD',
+  'DOSE_DECISION',
+])
+
+export function canRecheckMedicationSafety(queryType?: string | null): boolean {
+  return MEDICATION_RECHECK_TYPES.has(queryType ?? '')
+}

@@ -4,13 +4,19 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import welcomeHero from '../assets/welcome-hero.jpg'
 import AppIcon from '../components/AppIcon.vue'
 import FaceVideoCapture from '../components/FaceVideoCapture.vue'
+import PasswordRevealInput from '../components/PasswordRevealInput.vue'
 import {
   connectWithFamilyFace,
   connectWithPassword,
+  completeBoundHouseholdPin,
   createHouseholdAndEnter,
   formatError,
   getBoundFaceHouseholdId,
   getBoundFaceHouseholdName,
+  getBoundPinCandidates,
+  cancelMemberPortalSelection,
+  completeMemberPortalPin,
+  memberPortalPinCandidates,
   portalWelcomeMessage,
   pushToast,
   recoverPasswordWithPin,
@@ -18,14 +24,21 @@ import {
   session,
 } from '../store'
 import {
-  activePortalEntryMode,
   crossPortalPortsHint,
   crossPortalUrl,
   portalEntryBranding,
   portalEntryConflictNotice,
+  resolveWelcomeEntryMode,
 } from '../ui/portalEntry'
 import { THEMES, applyTheme, currentTheme } from '../ui/themes'
-import { faceBindingSummary } from '../ui/welcomeFaceBinding'
+import { FORMAL_PASSWORD_HINT, formalPasswordMeetsPolicy } from '../ui/passwordPolicy'
+import {
+  autoEntryMayUseBoundFace,
+  faceBindingSummary,
+  memberUnboundGate,
+  readAdminReadyCookie,
+  type WelcomeCredentialMode,
+} from '../ui/welcomeFaceBinding'
 
 const artRx = ref('0deg')
 const artRy = ref('0deg')
@@ -49,21 +62,27 @@ const initialBoundFaceHouseholdId = getBoundFaceHouseholdId()
 const householdId = ref(initialBoundFaceHouseholdId)
 const boundFaceHouseholdName = ref(getBoundFaceHouseholdName())
 const faceFrames = ref<File[]>([])
-const entryMode = activePortalEntryMode()
+const entryMode = resolveWelcomeEntryMode()
 const entryBranding = portalEntryBranding(entryMode)
+const initialAdminReady = readAdminReadyCookie()
 
-const credentialMode = ref<'password' | 'face'>(
+const credentialMode = ref<WelcomeCredentialMode>(
   entryBranding
     ? initialBoundFaceHouseholdId && entryBranding.credentialOrder[0] === 'face'
       ? 'face'
       : entryBranding.defaultCredential
     : initialBoundFaceHouseholdId
+      && autoEntryMayUseBoundFace(initialBoundFaceHouseholdId, {
+        readyHouseholdId: initialAdminReady?.householdId ?? '',
+        readyInstanceId: initialAdminReady?.instanceId ?? '',
+      })
       ? 'face'
       : 'password',
 )
 
-const CREDENTIAL_LABELS: Record<'face' | 'password', string> = {
+const CREDENTIAL_LABELS: Record<WelcomeCredentialMode, string> = {
   face: '刷脸进入',
+  pin: 'PIN登录',
   password: '账号密码',
 }
 
@@ -126,6 +145,32 @@ const connecting = ref(false)
 const creating = ref(false)
 const createError = ref('')
 const localError = ref('')
+const selectingMember = computed(() => session.status === 'selecting-member')
+const pinCandidates = computed(() =>
+  selectingMember.value ? memberPortalPinCandidates() : getBoundPinCandidates(),
+)
+const pickedMemberId = ref(pinCandidates.value[0]?.id ?? '')
+const memberPin = ref('')
+const accountFieldLabel = computed(() => (entryMode === 'member' ? '家庭管理员账号' : '正式账号'))
+const boundPinReady = computed(() => getBoundPinCandidates().length > 0)
+const adminReady = ref(readAdminReadyCookie())
+const capabilitiesReady = ref(Boolean(session.capabilities))
+let adminReadyPoll: number | null = null
+watch(
+  () => session.capabilities?.instance_id,
+  () => {
+    adminReady.value = readAdminReadyCookie()
+  },
+)
+const unboundGate = computed(() =>
+  memberUnboundGate(entryMode, getBoundFaceHouseholdId(), {
+    instanceId: session.capabilities?.instance_id ?? '',
+    readyInstanceId: adminReady.value?.instanceId ?? '',
+    readyHouseholdId: adminReady.value?.householdId ?? '',
+    capabilitiesPending: !capabilitiesReady.value,
+  }),
+)
+const adminRegisterUrl = computed(() => crossPortalUrl('admin'))
 
 const householdDraft = reactive({
   name: '',
@@ -160,11 +205,53 @@ const canCreate = computed(
     !creating.value,
 )
 
+watch(
+  () => session.status,
+  status => {
+    if (status === 'selecting-member') {
+      pickedMemberId.value = pinCandidates.value[0]?.id ?? ''
+      memberPin.value = ''
+      localError.value = ''
+    }
+  },
+)
+
+async function submitMemberPin(): Promise<void> {
+  localError.value = ''
+  if (!pickedMemberId.value) {
+    localError.value = '请选择家庭成员。'
+    return
+  }
+  if (!/^\d{6}$/.test(memberPin.value)) {
+    localError.value = '请输入这位家人的六位数字密码。'
+    return
+  }
+  connecting.value = true
+  try {
+    if (selectingMember.value) {
+      await completeMemberPortalPin(pickedMemberId.value, memberPin.value)
+    } else {
+      await completeBoundHouseholdPin(pickedMemberId.value, memberPin.value)
+    }
+    if (session.status === 'ready') {
+      memberPin.value = ''
+      announcePortalEntry()
+    } else if (session.error) {
+      localError.value = session.error
+    }
+  } finally {
+    connecting.value = false
+  }
+}
+
 watch(credentialMode, mode => {
-  householdId.value = mode === 'face' ? getBoundFaceHouseholdId() : ''
-  boundFaceHouseholdName.value = mode === 'face' ? getBoundFaceHouseholdName() : ''
+  householdId.value = mode === 'password' ? '' : getBoundFaceHouseholdId()
+  boundFaceHouseholdName.value = mode === 'password' ? '' : getBoundFaceHouseholdName()
   localError.value = ''
   faceFrames.value = []
+  if (mode === 'pin' && !pickedMemberId.value) {
+    pickedMemberId.value = pinCandidates.value[0]?.id ?? ''
+  }
   if (mode === 'face' && !session.capabilities) void probeFaceCapability()
 })
 
@@ -181,11 +268,24 @@ async function probeFaceCapability(): Promise<void> {
 }
 
 onMounted(() => {
-  if (!session.capabilities) void probeFaceCapability()
+  void refreshCapabilities().finally(() => {
+    capabilitiesReady.value = true
+    adminReady.value = readAdminReadyCookie()
+  })
+  if (!unboundGate.value.blocked && credentialMode.value === 'face' && !session.capabilities) {
+    void probeFaceCapability()
+  }
+  adminReadyPoll = window.setInterval(() => {
+    adminReady.value = readAdminReadyCookie()
+  }, 2000)
 })
 
 onBeforeUnmount(() => {
   faceFrames.value = []
+  if (adminReadyPoll !== null) {
+    window.clearInterval(adminReadyPoll)
+    adminReadyPoll = null
+  }
 })
 
 function announcePortalEntry(): void {
@@ -194,10 +294,11 @@ function announcePortalEntry(): void {
 }
 
 async function submitSession(): Promise<void> {
+  if (connecting.value) return
   localError.value = ''
   if (credentialMode.value === 'face') {
     if (!faceBindingReady.value) {
-      localError.value = '本机还没有绑定人脸登录家庭，请改用账号密码。'
+      localError.value = '本机还没有绑定家庭。请先到管理后台登录一次，或改用 PIN 登录。'
       return
     }
     if (faceFrames.value.length < 2) {
@@ -205,13 +306,23 @@ async function submitSession(): Promise<void> {
       return
     }
   }
+  if (credentialMode.value === 'pin') {
+    await submitMemberPin()
+    return
+  }
+  if (credentialMode.value === 'password') {
+    if (!actorId.value.trim() || !password.value) {
+      localError.value = `请输入${accountFieldLabel.value}和密码。`
+      return
+    }
+    if (registerMode.value && !formalPasswordMeetsPolicy(password.value)) {
+      localError.value = `${FORMAL_PASSWORD_HINT}。`
+      return
+    }
+  }
   connecting.value = true
   try {
     if (credentialMode.value === 'face') {
-      if (!faceBindingReady.value) {
-        localError.value = '本机还没有绑定人脸登录家庭，请改用账号密码。'
-        return
-      }
       await connectWithFamilyFace(householdId.value, faceFrames.value, accessPurpose.value)
     } else {
       await connectWithPassword(
@@ -233,7 +344,7 @@ async function submitSession(): Promise<void> {
 
 async function onFaceCaptured(frames: File[]): Promise<void> {
   if (!faceModelsReady.value) {
-    localError.value = '人脸识别还没准备好，请改用账号密码。'
+    localError.value = '人脸识别还没准备好，请改用 PIN 登录。'
     pushToast('error', localError.value)
     return
   }
@@ -248,7 +359,7 @@ function usePasswordFallback(): void {
   faceFrames.value = []
   localError.value = ''
   registerMode.value = false
-  credentialMode.value = 'password'
+  credentialMode.value = entryMode === 'member' ? 'pin' : 'password'
 }
 
 function openPasswordRecovery(): void {
@@ -277,8 +388,8 @@ async function submitPasswordRecovery(): Promise<void> {
     localError.value = '请输入已设置的六位数字。'
     return
   }
-  if (recoveryNewPassword.value.length < 8) {
-    localError.value = '新密码至少 8 位。'
+  if (recoveryNewPassword.value.length < 8 || !formalPasswordMeetsPolicy(recoveryNewPassword.value)) {
+    localError.value = FORMAL_PASSWORD_HINT + '。'
     return
   }
   if (recoveryNewPassword.value !== recoveryConfirmPassword.value) {
@@ -358,9 +469,6 @@ async function submitCreate(): Promise<void> {
         </p>
         <div class="welcome-art" :style="{ '--par-rx': artRx, '--par-ry': artRy }">
           <img :src="welcomeHero" alt="温馨的家庭照护插画：家人围坐在洒满阳光的窗边" />
-          <span class="art-caption">本地家庭插画</span>
-          <span class="art-float f1"><AppIcon name="lock" :size="13" />数据不出网</span>
-          <span class="art-float f2"><AppIcon name="heart" :size="13" />{{ entryMode === 'member' ? '刷脸就能进' : '记错了也能改' }}</span>
         </div>
         <div class="welcome-chip-row">
           <template v-if="entryBranding">
@@ -379,7 +487,7 @@ async function submitCreate(): Promise<void> {
       <section
         v-if="!showCreateForm"
         class="welcome-form-card"
-        :class="{ 'welcome-form-card--face': credentialMode === 'face' }"
+        :class="{ 'welcome-form-card--face': credentialMode === 'face' && !unboundGate.blocked }"
       >
         <span v-if="entryMode === 'member'" class="portal-mark member">
           <AppIcon name="members" :size="14" />
@@ -389,8 +497,18 @@ async function submitCreate(): Promise<void> {
           <AppIcon name="key" :size="14" />
           管理后台
         </span>
-        <h2>{{ recoveryMode ? '忘记密码' : entryBranding ? entryBranding.formTitle : '登录' }}</h2>
-        <p v-if="entryBranding?.formIdentityHint" class="portal-identity-hint">{{ entryBranding.formIdentityHint }}</p>
+        <h2>{{
+          recoveryMode
+            ? '忘记密码'
+            : selectingMember
+              ? '选择家庭成员'
+              : unboundGate.blocked
+                ? unboundGate.title
+                : entryBranding ? entryBranding.formTitle : '登录'
+        }}</h2>
+        <p v-if="selectingMember" class="form-sub">选择要进入的家人，再输入这位家人的六位数字密码。PIN 由管理员在后台「登录设置」页保存。</p>
+        <p v-else-if="unboundGate.blocked" class="portal-identity-hint">{{ unboundGate.message }}</p>
+        <p v-else-if="entryBranding?.formIdentityHint" class="portal-identity-hint">{{ entryBranding.formIdentityHint }}</p>
         <div v-if="entryConflictNotice" class="notice warn entry-conflict" role="alert">
           <AppIcon name="info" :size="16" />
           <span>{{ entryConflictNotice.message }}</span>
@@ -401,7 +519,49 @@ async function submitCreate(): Promise<void> {
             {{ entryConflictNotice.crossLinkLabel }}（{{ crossPortalPortsHint(entryConflictNotice.crossLinkTarget) }}）
           </span>
         </div>
-        <form v-if="recoveryMode" class="section-stack password-recovery-form" @submit.prevent="submitPasswordRecovery">
+        <form v-if="selectingMember" class="section-stack" @submit.prevent="submitMemberPin">
+          <div class="segmented-control member-picker" role="listbox" aria-label="选择家庭成员">
+            <button
+              v-for="member in pinCandidates"
+              :key="member.id"
+              type="button"
+              role="option"
+              :aria-selected="pickedMemberId === member.id"
+              :class="{ active: pickedMemberId === member.id }"
+              @click="pickedMemberId = member.id"
+            >
+              {{ member.display_name }}
+            </button>
+          </div>
+          <label class="field">
+            六位数字密码
+            <PasswordRevealInput
+              v-model="memberPin"
+              inputmode="numeric"
+              autocomplete="one-time-code"
+              pattern="[0-9]{6}"
+              :maxlength="6"
+              required
+              aria-label="六位数字密码"
+            />
+          </label>
+          <p v-if="localError || session.error" class="notice error" role="alert">
+            <AppIcon name="alert" :size="16" />
+            {{ localError || session.error }}
+          </p>
+          <button
+            type="submit"
+            class="btn btn-primary"
+            :disabled="connecting || !pickedMemberId || !/^\d{6}$/.test(memberPin)"
+          >
+            {{ connecting ? '正在进入…' : '进入前台' }}
+            <AppIcon v-if="!connecting" name="arrow-right" :size="17" />
+          </button>
+          <button type="button" class="btn btn-ghost btn-small" :disabled="connecting" @click="cancelMemberPortalSelection">
+            换管理员账号
+          </button>
+        </form>
+        <form v-else-if="recoveryMode" class="section-stack password-recovery-form" @submit.prevent="submitPasswordRecovery">
           <label class="field">
             正式账号
             <input v-model="actorId" autocomplete="username" required />
@@ -412,35 +572,34 @@ async function submitCreate(): Promise<void> {
           </label>
           <label class="field">
             本人六位数字密码
-            <input
+            <PasswordRevealInput
               v-model="recoveryPin"
-              type="password"
               inputmode="numeric"
               autocomplete="one-time-code"
               pattern="[0-9]{6}"
-              maxlength="6"
+              :maxlength="6"
               required
+              aria-label="本人六位数字密码"
             />
           </label>
           <label class="field">
             新密码
-            <input
+            <PasswordRevealInput
               v-model="recoveryNewPassword"
-              type="password"
               autocomplete="new-password"
               aria-label="新密码"
-              minlength="8"
+              :minlength="8"
               required
             />
+            <small>{{ FORMAL_PASSWORD_HINT }}。</small>
           </label>
           <label class="field">
             再次输入新密码
-            <input
+            <PasswordRevealInput
               v-model="recoveryConfirmPassword"
-              type="password"
               autocomplete="new-password"
               aria-label="再次输入新密码"
-              minlength="8"
+              :minlength="8"
               required
             />
           </label>
@@ -451,7 +610,7 @@ async function submitCreate(): Promise<void> {
           <button
             type="submit"
             class="btn btn-primary"
-            :disabled="recovering || !actorId.trim() || !recoveryHouseholdId.trim() || !/^\d{6}$/.test(recoveryPin) || recoveryNewPassword.length < 8 || recoveryNewPassword !== recoveryConfirmPassword"
+            :disabled="recovering || !actorId.trim() || !recoveryHouseholdId.trim() || !/^\d{6}$/.test(recoveryPin) || !formalPasswordMeetsPolicy(recoveryNewPassword) || recoveryNewPassword !== recoveryConfirmPassword"
           >
             {{ recovering ? '正在重置…' : '重置密码并登录' }}
           </button>
@@ -459,7 +618,25 @@ async function submitCreate(): Promise<void> {
             返回登录
           </button>
         </form>
-        <form v-else class="section-stack" @submit.prevent="submitSession">
+        <div
+          v-else-if="unboundGate.blocked"
+          class="section-stack member-unbound-gate"
+          data-testid="member-unbound-gate"
+        >
+          <a
+            v-if="adminRegisterUrl"
+            class="btn btn-primary"
+            :href="adminRegisterUrl"
+          >
+            {{ unboundGate.ctaLabel }}
+            <AppIcon name="arrow-right" :size="17" />
+          </a>
+          <p v-else class="notice warn" role="status">
+            <AppIcon name="info" :size="16" />
+            请打开管理后台（{{ crossPortalPortsHint('admin') }}）注册或登录家庭管理员账号。
+          </p>
+        </div>
+        <form v-else class="section-stack" novalidate @submit.prevent="submitSession">
           <div v-if="showCredentialTabs" class="segmented-control" role="group" aria-label="选择账号登录凭据">
             <button
               v-for="tab in credentialTabs"
@@ -472,9 +649,44 @@ async function submitCreate(): Promise<void> {
             </button>
           </div>
           <label v-if="credentialMode === 'password'" class="field">
-            正式账号
-            <input v-model="actorId" autocomplete="username" required />
+            {{ accountFieldLabel }}
+            <input
+              v-model="actorId"
+              autocomplete="username"
+              :aria-label="accountFieldLabel"
+              :aria-invalid="Boolean((localError || session.error) && !session.entryConflict)"
+            />
+            <small v-if="entryMode === 'member'">请输入家庭管理员账号，不是家人姓名。每位家人的六位数字密码在管理后台「登录设置」里保存。</small>
           </label>
+          <div v-if="credentialMode === 'pin' && boundPinReady" class="segmented-control member-picker" role="listbox" aria-label="选择家庭成员">
+            <button
+              v-for="member in pinCandidates"
+              :key="member.id"
+              type="button"
+              role="option"
+              :aria-selected="pickedMemberId === member.id"
+              :class="{ active: pickedMemberId === member.id }"
+              @click="pickedMemberId = member.id"
+            >
+              {{ member.display_name }}
+            </button>
+          </div>
+          <label v-if="credentialMode === 'pin' && boundPinReady" class="field">
+            六位数字密码
+            <PasswordRevealInput
+              v-model="memberPin"
+              inputmode="numeric"
+              autocomplete="one-time-code"
+              pattern="[0-9]{6}"
+              :maxlength="6"
+              required
+              aria-label="六位数字密码"
+            />
+          </label>
+          <p v-else-if="credentialMode === 'pin'" class="notice warn" role="status">
+            <AppIcon name="info" :size="16" />
+            请先到管理后台用家庭管理员账号登录一次。登录后这台电脑会自动绑定这个家庭，这里就可以选择家人。
+          </p>
           <div v-if="faceBinding.visible" class="face-family-summary" role="status">
             <AppIcon :name="faceBinding.bound ? 'home' : 'info'" :size="18" />
             <div>
@@ -487,7 +699,13 @@ async function submitCreate(): Promise<void> {
           </div>
           <label v-if="credentialMode === 'password'" class="field">
             密码
-            <input v-model="password" type="password" autocomplete="current-password" minlength="8" required />
+            <PasswordRevealInput
+              v-model="password"
+              autocomplete="current-password"
+              aria-label="密码"
+              :aria-invalid="Boolean((localError || session.error) && !session.entryConflict)"
+            />
+            <small v-if="registerMode">{{ FORMAL_PASSWORD_HINT }}。</small>
           </label>
           <div
             v-if="credentialMode === 'face' && faceBindingReady && (faceCapabilityChecking || (!session.capabilities && !faceCapabilityProbeFailed))"
@@ -505,12 +723,12 @@ async function submitCreate(): Promise<void> {
             <p class="notice warn" role="status">
               <AppIcon name="info" :size="16" />
               {{ faceCapabilityProbeFailed
-                ? '暂时无法确认人脸服务，请改用账号密码。'
-                : '人脸识别尚未就绪，请改用账号密码。' }}
+                ? '暂时无法确认人脸服务，请改用 PIN 登录。'
+                : '人脸识别尚未就绪，请改用 PIN 登录。' }}
             </p>
             <div class="row-actions">
               <button type="button" class="btn btn-primary" @click="probeFaceCapability">重新检查</button>
-              <button type="button" class="btn btn-ghost" @click="usePasswordFallback">用账号密码登录</button>
+              <button type="button" class="btn btn-ghost" @click="usePasswordFallback">改用 PIN 登录</button>
             </div>
           </div>
           <FaceVideoCapture
@@ -519,6 +737,7 @@ async function submitCreate(): Promise<void> {
             mode="login"
             :auto-start="faceBinding.bound"
             :disabled="connecting"
+            :fallback-label="entryMode === 'member' ? '改用 PIN 登录' : '改用账号密码'"
             @captured="onFaceCaptured"
             @fallback="usePasswordFallback"
           />
@@ -530,11 +749,38 @@ async function submitCreate(): Promise<void> {
             <AppIcon name="alert" :size="16" />
             {{ localError || session.error }}
           </p>
-          <button v-if="credentialMode !== 'face'" type="submit" class="btn btn-primary" :disabled="!actorId.trim() || password.length < 8 || connecting">
+          <p
+            v-if="credentialMode === 'password' && registerMode"
+            class="notice"
+            role="status"
+          >
+            <AppIcon name="info" :size="16" />
+            <span v-if="entryMode === 'member'">
+              这里注册的是家庭管理员账号。建家后请到管理后台「登录设置」给每位家人设置六位数字密码，再回成员前台选人登录。
+            </span>
+            <span v-else>
+              注册并创建家庭后，会进入「登录设置」：先给每位家人设 PIN，再按需录入人脸。
+            </span>
+          </p>
+          <button
+            v-if="credentialMode === 'password'"
+            type="submit"
+            class="btn btn-primary"
+            :aria-busy="connecting"
+          >
             {{ submitLabel }}
             <AppIcon v-if="!connecting" name="arrow-right" :size="17" />
           </button>
-          <button v-if="credentialMode === 'password'" type="button" class="btn btn-ghost btn-small" @click="registerMode = !registerMode">
+          <button
+            v-else-if="credentialMode === 'pin' && boundPinReady"
+            type="submit"
+            class="btn btn-primary"
+            :disabled="connecting || !pickedMemberId || !/^\d{6}$/.test(memberPin)"
+          >
+            {{ connecting ? '正在进入…' : '进入前台' }}
+            <AppIcon v-if="!connecting" name="arrow-right" :size="17" />
+          </button>
+          <button v-if="credentialMode === 'password' && entryMode !== 'member'" type="button" class="btn btn-ghost btn-small" @click="registerMode = !registerMode">
             {{ registerMode ? '返回登录' : '注册本地账号' }}
           </button>
           <button
@@ -563,7 +809,7 @@ async function submitCreate(): Promise<void> {
             回到刷脸登录
           </button>
         </form>
-        <p v-if="crossEntryLink" class="welcome-cross-entry">
+        <p v-if="crossEntryLink && !unboundGate.blocked" class="welcome-cross-entry">
           <a v-if="crossEntryLink.url" :href="crossEntryLink.url">{{ crossEntryLink.label }}</a>
           <span v-else>{{ crossEntryLink.label }}（{{ crossPortalPortsHint(crossEntryLink.target) }}）</span>
         </p>
@@ -574,6 +820,7 @@ async function submitCreate(): Promise<void> {
 
       <section v-else class="welcome-form-card">
         <h2>创建你的家庭</h2>
+        <p class="form-sub">这里只登记家庭和 1～2 名成员。创建后会进入「登录设置」：第一步给每位家人（含管理员）设六位数字密码，第二步可录入人脸。刷脸可跳过 PIN。</p>
         <form class="section-stack" @submit.prevent="submitCreate">
           <label class="field">
             家庭名称

@@ -615,6 +615,7 @@ describe('ApiClient authorization contract', () => {
 
     const loggedIn = await client.loginWithPin('household-1', 'owner', '042006')
     await client.setPin('household-1', '042006', { sessionToken: loggedIn.session_token })
+    await client.setPin('household-1', '135790', { sessionToken: loggedIn.session_token }, 'grandma')
 
     expect(JSON.parse(String(requests[0]?.init.body))).toEqual({
       household_id: 'household-1',
@@ -623,6 +624,29 @@ describe('ApiClient authorization contract', () => {
     })
     expect(new Headers(requests[1]?.init.headers).get('Authorization')).toBe(`Bearer ${'s'.repeat(40)}`)
     expect(JSON.parse(String(requests[1]?.init.body))).toEqual({ household_id: 'household-1', pin: '042006' })
+    expect(JSON.parse(String(requests[2]?.init.body))).toEqual({
+      household_id: 'household-1',
+      pin: '135790',
+      actor_id: 'grandma',
+    })
+  })
+
+  it('lists which household logins already have a PIN without sending a PIN', async () => {
+    const client = new ApiClient({
+      baseUrl: 'http://local.test',
+      fetcher: async input => {
+        expect(String(input)).toBe('http://local.test/api/v1/households/home%2F1/pin-status')
+        return new Response(
+          JSON.stringify({ household_id: 'home/1', configured_actor_ids: ['owner', 'grandma'] }),
+          { status: 200 },
+        )
+      },
+    })
+
+    await expect(client.listPinStatus('home/1', { sessionToken: 's'.repeat(40) })).resolves.toEqual({
+      household_id: 'home/1',
+      configured_actor_ids: ['owner', 'grandma'],
+    })
   })
 })
 

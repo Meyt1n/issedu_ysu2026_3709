@@ -40,6 +40,23 @@ describe('buildAssistantChatInput', () => {
     expect(input.max_tokens).toBe(4096)
   })
 
+  it('omits empty assistant placeholders and keeps the latest turns', () => {
+    const input = buildAssistantChatInput({
+      history: [
+        { role: 'assistant', content: '   ' },
+        { role: 'user', content: '上次问过用药提醒' },
+        { role: 'assistant', content: '提醒来自已确认计划。' },
+        { role: 'user', content: '那和今天天气有关吗' },
+      ],
+      allowNetworkSearch: false,
+    })
+    expect(input.messages).toEqual([
+      { role: 'user', content: '上次问过用药提醒' },
+      { role: 'assistant', content: '提醒来自已确认计划。' },
+      { role: 'user', content: '那和今天天气有关吗' },
+    ])
+  })
+
   it('omits an empty assistant session id', () => {
     const input = buildAssistantChatInput({
       history: [{ role: 'user', content: '问题' }],

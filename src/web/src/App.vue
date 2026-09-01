@@ -18,11 +18,10 @@ import {
   type ViewName,
 } from './store'
 import { householdOptionLabel, memberVisibleHouseholds } from './ui/demoData'
-import { SHOW_ADVANCED_LAB } from './ui/featureFlags'
 import { activeNavItem, groupNavItems, NAV_ITEMS, visibleNavItemsFor } from './ui/navigation'
 import { installRipple, vMagnet } from './ui/motion'
 import { THEMES, applyTheme, currentTheme, type ThemeId } from './ui/themes'
-// 欢迎页是首屏必经路径，保持同步加载；十二个业务视图按需拆包，
+// 欢迎页是首屏必经路径，保持同步加载；业务视图按需拆包，
 // 首屏只下载当前视图的代码，切换视图时由 Vite 预构建的 chunk 即时载入。
 import WelcomeView from './views/WelcomeView.vue'
 
@@ -52,9 +51,7 @@ const VIEW_LOADERS = {
   bigscreen: () => import('./views/BigScreenView.vue'),
   authorizations: () => import('./views/AuthView.vue'),
   knowledge: () => import('./views/KnowledgeView.vue'),
-  modellab: () => import('./views/ModelLabView.vue'),
   'face-credentials': () => import('./views/FaceCredentialView.vue'),
-  'demo-lab': () => import('./views/DemoLabView.vue'),
 } satisfies Record<ViewName, () => Promise<{ default: Component }>>
 
 const OverviewView = lazyView(VIEW_LOADERS.overview)
@@ -68,9 +65,7 @@ const AssistantView = lazyView(VIEW_LOADERS.assistant)
 const BigScreenView = lazyView(VIEW_LOADERS.bigscreen)
 const AuthView = lazyView(VIEW_LOADERS.authorizations)
 const KnowledgeView = lazyView(VIEW_LOADERS.knowledge)
-const ModelLabView = lazyView(VIEW_LOADERS.modellab)
 const FaceCredentialView = lazyView(VIEW_LOADERS['face-credentials'])
-const DemoLabView = lazyView(VIEW_LOADERS['demo-lab'])
 const MemberHomeView = lazyView(VIEW_LOADERS['member-home'])
 const MemberCaptureView = lazyView(VIEW_LOADERS['member-capture'])
 const MemberPlansView = lazyView(VIEW_LOADERS['member-plans'])
@@ -94,14 +89,12 @@ const VIEW_COMPONENTS: Record<ViewName, unknown> = {
   authorizations: AuthView,
   bigscreen: BigScreenView,
   knowledge: KnowledgeView,
-  modellab: ModelLabView,
   'face-credentials': FaceCredentialView,
-  'demo-lab': DemoLabView,
 }
 
 // 导航条目、门户过滤与按 view 去重都在 ui/navigation.ts（HCT-447）：
 // 保证同一 view（如共享的 assistant）在任一门户下只渲染一条、只高亮一条。
-const visibleNavItems = computed(() => visibleNavItemsFor(session.portal, SHOW_ADVANCED_LAB))
+const visibleNavItems = computed(() => visibleNavItemsFor(session.portal))
 
 const navGroups = computed(() => groupNavItems(visibleNavItems.value))
 

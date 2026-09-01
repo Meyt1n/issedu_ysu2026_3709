@@ -169,3 +169,14 @@ def test_open_chat_rejects_router_control_label(monkeypatch: pytest.MonkeyPatch)
     assert result["degraded"] is True
     assert result["degrade_reason"] == "SCHEMA_VALIDATION_FAILED"
     assert result["answer"] != "route"
+
+
+def test_open_chat_rejects_orchestration_leak(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.open_chat import coerce_open_model_answer
+
+    leaked = (
+        "问题类型是 MEDICATION_SAFETY。本地知识库 database_agent 报 TOOL_SCOPE_DENIED，"
+        "上一稿没有在 sources 中引用任何 chunk_id。"
+    )
+    assert coerce_open_model_answer(leaked) is None
+    assert coerce_open_model_answer("回答正文") is None

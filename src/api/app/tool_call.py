@@ -102,7 +102,8 @@ ASSISTANT_SYSTEM_PROMPT = (
     "9. 需要更多家庭事实时调用白名单工具。sources 只能填本轮工具结果真实提供的事件 ID、"
     "规则编号或知识片段 ID；联网参考不写入 sources；没有依据就用空数组，禁止伪造引用。\n"
     "10. answer 必须是自然完整的简体中文正文，绝不能只输出 hello、healthy、"
-    "cannot_answer、unknown、DIRECT、REFUSE、route 等标签或内部路由名称。\n"
+    "cannot_answer、unknown、DIRECT、REFUSE、route、「回答正文」等标签，"
+    "也不要复述问题类型、智能体名称、错误码或分析草稿。\n"
     "11. 输出必须是一个 JSON 对象，且只有 JSON，格式："
     '{"answer": "回答正文", "sources": ["引用的依据标识"], '
     '"confidence": "high|medium|low", "escalate": false}。'
@@ -134,7 +135,38 @@ _PLACEHOLDER_ANSWER_LABELS = {
     "database",
     "knowledge",
     "synthesis",
+    "回答正文",
+    "引用的依据标识",
 }
+
+_ORCHESTRATION_LEAK_MARKERS = (
+    "database_agent",
+    "knowledge_agent",
+    "rules_agent",
+    "web_search_agent",
+    "tool_scope_denied",
+    "no_authorised_documents",
+    "上一稿",
+    "只输出最终 json",
+    "只输出符合 json",
+    "【问题类型",
+    "query_type",
+    "chunk_id",
+    "medication_safety",
+    "symptom_medication",
+    "dose_decision",
+    "family_record",
+    "rule_evidence",
+    "medication_record",
+)
+
+
+def answer_leaks_orchestration(text: str) -> bool:
+    """True when a draft is parroting orchestration internals, not answering."""
+    compact = str(text or "").casefold()
+    if not compact:
+        return False
+    return any(marker in compact for marker in _ORCHESTRATION_LEAK_MARKERS)
 
 
 # ── Tool Schema ────────────────────────────────────────────────────────
@@ -243,6 +275,8 @@ class HealthAssistantOutput(BaseModel):
             raise ValueError("ANSWER_EMPTY")
         if cleaned.casefold() in _PLACEHOLDER_ANSWER_LABELS:
             raise ValueError("ANSWER_PLACEHOLDER")
+        if answer_leaks_orchestration(cleaned):
+            raise ValueError("ANSWER_ORCHESTRATION_LEAK")
         return cleaned
 
     @field_validator("sources")
@@ -1822,6 +1856,8 @@ def _parse_assistant_output(raw_content: str) -> HealthAssistantOutput | None:
         return None
     answer = parsed.answer.strip()
     if not answer or answer.casefold() in _PLACEHOLDER_ANSWER_LABELS:
+        return None
+    if answer_leaks_orchestration(answer):
         return None
     return parsed
 
