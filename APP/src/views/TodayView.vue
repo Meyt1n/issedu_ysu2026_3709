@@ -200,7 +200,8 @@ const riskCount = useCountUp(() => snapshot.value?.risks.length ?? 0)
 const recentCount = useCountUp(() => snapshot.value?.recentEvents.length ?? 0)
 
 const listStatusMessage = computed(() => {
-  if (loading.value || error.value) return ''
+  if (loading.value) return '正在加载家庭和成员数据。'
+  if (error.value) return `今日照护数据加载失败：${error.value.message}`
   if (!members.value.length) return '当前没有可用的家庭成员。'
   if (!snapshot.value) return '今日照护数据暂不可用。'
   const pending = pendingTasks.value.length

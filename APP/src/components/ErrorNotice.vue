@@ -24,6 +24,8 @@ const emit = defineEmits<{
     class="error-notice notice"
     :data-tone="props.tone"
     :role="props.tone === 'warn' ? 'status' : 'alert'"
+    :aria-live="props.tone === 'warn' ? 'polite' : 'assertive'"
+    aria-atomic="true"
     :aria-busy="props.busy || undefined"
   >
     <span class="error-icon" aria-hidden="true"><AppIcon name="alert" :size="18" /></span>
