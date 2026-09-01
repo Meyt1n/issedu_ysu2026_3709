@@ -247,8 +247,18 @@ export class ApiClient {
     return this.request(`/api/v1/households/${householdId}/members`, undefined, options)
   }
 
-  listMemberTimeline(householdId: string, memberId: string, options?: RequestOptions): Promise<HealthEvent[]> {
-    return this.request(`/api/v1/households/${householdId}/members/${memberId}/timeline`, undefined, options)
+  listMemberTimeline(
+    householdId: string,
+    memberId: string,
+    options?: RequestOptions,
+    context?: 'today-snapshot' | 'weekly-trend',
+  ): Promise<HealthEvent[]> {
+    const suffix = context ? `?context=${context}` : ''
+    return this.request(
+      `/api/v1/households/${householdId}/members/${memberId}/timeline${suffix}`,
+      undefined,
+      options,
+    )
   }
 
   /** 授权列表（HCT-102，仅 Owner；非 Owner 服务端隐藏式拒绝 403/404）。 */

@@ -69,7 +69,7 @@ watch(() => sessionContextKey(session), load)
       <EmptyState
         v-if="documents.length === 0"
         icon="eye"
-        title="没有可查看的知识条目"
+        title="确实没有可查看的知识条目"
         hint="家庭服务器尚未批准任何条目，或当前身份没有被授权查看。"
       />
       <ul v-else class="divided-list">

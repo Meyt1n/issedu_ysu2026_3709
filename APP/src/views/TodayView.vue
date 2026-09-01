@@ -59,6 +59,9 @@ const confetti = ref<InstanceType<typeof ConfettiBurst> | null>(null)
 const sessionKey = computed(() => sessionContextKey(session))
 let reloadGeneration = 0
 let reloadInFlight = false
+let reloadQueued = false
+type ReloadOptions = { preserveSnapshot?: boolean; preserveErrors?: boolean }
+let queuedReloadOptions: ReloadOptions | null = null
 
 /** MOB-135：任务操作历史。服务端条目按需加载；本地待确认/失败条目只存内存。 */
 const historyOpen = ref(false)
@@ -248,6 +251,7 @@ async function loadSnapshot(expectedKey = sessionKey.value, generation = reloadG
   snapshot.value = snapshotResult.value
   if (trendResult.status === 'fulfilled') {
     trend.value = trendResult.value
+    partialError.value = null
   } else {
     trend.value = []
     partialError.value = presentListApiError(trendResult.reason, { partial: true })
@@ -260,14 +264,22 @@ async function loadSnapshot(expectedKey = sessionKey.value, generation = reloadG
   return true
 }
 
-async function reload(options: { preserveSnapshot?: boolean } = {}): Promise<void> {
-  if (reloadInFlight) return
+async function reload(options: ReloadOptions = {}): Promise<void> {
+  if (reloadInFlight) {
+    // 成员/家庭上下文可能在当前列表请求完成前被自动选定；把这次
+    // 触发排队，避免首轮请求因上下文指纹变化而丢掉后续快照加载。
+    reloadQueued = true
+    queuedReloadOptions = options
+    return
+  }
   reloadInFlight = true
   const generation = ++reloadGeneration
   const expectedKey = sessionKey.value
   loading.value = true
-  error.value = null
-  partialError.value = null
+  if (!options.preserveErrors) {
+    error.value = null
+    partialError.value = null
+  }
   if (!options.preserveSnapshot) {
     members.value = []
     snapshot.value = null
@@ -276,14 +288,28 @@ async function reload(options: { preserveSnapshot?: boolean } = {}): Promise<voi
   try {
     if (!(await loadMembers(expectedKey, generation))) return
     await loadSnapshot(expectedKey, generation)
+    if (generation === reloadGeneration) error.value = null
   } catch (cause) {
     if (expectedKey !== sessionKey.value || generation !== reloadGeneration) return
     error.value = presentListApiError(cause)
+    partialError.value = null
     if (!options.preserveSnapshot) snapshot.value = null
   } finally {
     if (generation === reloadGeneration) loading.value = false
     reloadInFlight = false
+    if (reloadQueued) {
+      const nextOptions = queuedReloadOptions ?? {}
+      reloadQueued = false
+      queuedReloadOptions = null
+      void reload(nextOptions)
+    }
   }
+}
+
+async function retryListReload(): Promise<void> {
+  // 保留当前错误条目直到新请求完成，让按钮在等待期间保持可见、
+  // disabled 且播报“正在重试…”，避免连续点击形成请求风暴。
+  await reload({ preserveErrors: true })
 }
 
 async function onMemberChange(): Promise<void> {
@@ -454,14 +480,14 @@ onMounted(reload)
       </select>
     </label>
 
-    <ErrorNotice v-if="error" :error="error" :busy="loading" @retry="reload" />
+    <ErrorNotice v-if="error" :error="error" :busy="loading" @retry="retryListReload" />
     <ErrorNotice
       v-if="partialError"
       :error="partialError"
       :busy="loading"
       title="部分数据未加载"
       tone="warn"
-      @retry="reload"
+      @retry="retryListReload"
     />
     <ErrorNotice v-if="actionError" :error="actionError" :busy="Boolean(busyTaskId)" @retry="retryTaskAction" />
 
@@ -470,7 +496,7 @@ onMounted(reload)
     <template v-else-if="members.length === 0">
       <EmptyState
         icon="family"
-        title="当前身份没有可用家庭成员"
+        title="确实没有可用的家庭成员"
         hint="请到“我的”检查联机身份、家庭和授权设置；没有成员时不会显示空健康数据。"
       />
     </template>
@@ -585,7 +611,7 @@ onMounted(reload)
           <EmptyState
             v-if="topRisks.length === 0"
             icon="shield"
-            title="暂无待关注的风险提醒"
+            title="确实没有待关注的风险提醒"
             hint="规则重新计算后结果会更新"
           />
           <RouterLink
