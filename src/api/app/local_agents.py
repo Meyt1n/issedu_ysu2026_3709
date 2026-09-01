@@ -1223,10 +1223,10 @@ def _synthesis_agent(
         )
     if query_type == "SYMPTOM_MEDICATION":
         routing_hint += (
-            "这是症状用药资料问题：以已审核知识卡为主，结合过敏史/疾病史说明；"
-            "家庭药箱不是前提。语气亲切有温度；"
-            "若有联网参考，只能把近期季节性呼吸道提醒当补充参考，禁止编造具体病毒名或确诊。"
-            "不下诊断、不开个体处方、不写具体片数。"
+            "这是症状用药问题：先直接回应症状本身，再讲常见原因、如何区分轻重、"
+            "居家照护怎么做、哪些迹象需要就医；常用药可说明各自适合什么情况与注意事项。"
+            "有知识卡就优先引用，没有也可凭常识讲清楚。结合过敏史/疾病史提醒。"
+            "语气亲切有温度；不要编造具体病毒名或病例数；不给个体服用数量。"
         )
         # Seasonal framing is keyed to the symptom, not the calendar: only
         # weather-linked complaints receive the change-of-season template.
@@ -1235,17 +1235,17 @@ def _synthesis_agent(
             routing_hint += f"\n{seasonal_care_context()}"
     elif query_type == "MEDICATION_SAFETY":
         routing_hint += (
-            "这是用药安全问题：优先以本地已审核知识片段为依据；没有命中片段时，"
-            "仍可给出一般性资料说明，但必须明确说明「本机资料未覆盖」并建议咨询医生或药师，"
-            "不得替用户决定是否同服、停换，绝不给出个体剂量数字。"
-            "外部搜索结果只能作补充参考，不是审核证据。家庭药箱不是唯一依据。"
-            "语气关心但内容克制。"
+            "这是用药安全问题：把机制讲清楚——两种药为什么会相互影响、"
+            "漏服或多服后通常怎么处理、要观察哪些反应、什么情况必须联系医生。"
+            "有本地知识片段就优先引用，没有也可凭药理常识作答，不必强调资料是否覆盖。"
+            "外部搜索结果只作补充参考。唯一不给的是个体具体服用数量。"
+            "语气关心，内容具体可操作。"
         )
     if query_type in {"FAMILY_RECORD", "MEDICATION_RECORD", "RULE_EVIDENCE", "MEDICATION_SAFETY"}:
         routing_hint += (
             "若 database_agent 同时提供病史、药品、过敏或规则命中，请按"
             "「病史 → 已确认药品 → 过敏/规则冲突 → 下一步由谁确认」的顺序叙述，"
-            "不得自行补充未返回的事实，不得给出剂量或诊断结论。"
+            "不得自行补充未返回的家庭事实，也不要给出个体服用数量。"
         )
     # 8C: one unified system prompt in every mode; open-chat only relaxes
     # output parsing and the token budget.
@@ -1361,13 +1361,13 @@ def _synthesis_agent(
     unknown_sources = [
         token for token in unmatched if token not in allowed_fact_sources
     ]
-    # Fabricated knowledge citations are still rejected outright.
+    # An unverifiable chunk id is dropped from the citation list instead of
+    # discarding the answer text along with it.
     if any(_looks_like_knowledge_citation(token) for token in unknown_sources):
-        return degraded("CITATION_NOT_FOUND")
+        logger.info("HCT-430 dropped unverifiable citations: %s", unknown_sources)
 
-    # Decision 2B: missing citations no longer wall off the answer.  The
-    # answer is delivered with the unified server-appended risk statement;
-    # unverifiable non-knowledge tokens are dropped quietly.
+    # Missing citations no longer wall off the answer; unverifiable
+    # non-knowledge tokens are dropped quietly.
     fact_sources = [token for token in unmatched if token in allowed_fact_sources]
     escalated = parsed.escalate or query_type == "URGENT"
     final_answer = append_risk_statement(
@@ -1462,8 +1462,8 @@ def run_local_multi_agent(
     member_id: str | None = None,
     access_purpose: str | None = None,
     model: str | None = None,
-    max_tokens: int = 512,
-    temperature: float = 0.3,
+    max_tokens: int = 1536,
+    temperature: float = 0.6,
     allow_network_search: bool = False,
     network_context_level: str = "query_only",
     query_type_override: str | None = None,

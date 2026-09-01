@@ -734,9 +734,11 @@ def test_synthesis_degrade_mentions_retrieved_evidence(monkeypatch) -> None:
     assert "1 条外部参考" in result["answer"]
 
 
-def test_medication_safety_without_knowledge_answers_with_risk_note(monkeypatch) -> None:
-    """Decision 2B: the EVIDENCE_REQUIRED short-circuit is gone — the model
-    answers and the server appends the low-evidence risk statement."""
+def test_medication_safety_without_knowledge_still_answers(monkeypatch) -> None:
+    """The EVIDENCE_REQUIRED short-circuit is gone and the answer stands alone.
+
+    The draft already points at a clinician, so the server does not stack a
+    second reminder or a low-evidence block on top of it."""
     class _AnsweringOllama:
         def __init__(self, *args, **kwargs):
             pass
@@ -778,8 +780,8 @@ def test_medication_safety_without_knowledge_answers_with_risk_note(monkeypatch)
     assert result["query_type"] == "MEDICATION_SAFETY"
     assert result["degraded"] is False
     assert result["degrade_reason"] is None
-    assert "风险说明" in result["answer"]
-    assert "教学提醒" in result["answer"]
+    assert "风险说明" not in result["answer"]
+    assert "咨询医生或药师" in result["answer"]
     assert result["risk_notice"]
     synthesis = next(trace for trace in result["agent_trace"] if trace["agent_id"] == "synthesis")
     assert synthesis["status"] == "completed"

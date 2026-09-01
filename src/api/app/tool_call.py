@@ -69,45 +69,45 @@ _DEGRADE_TEMPLATE = """当前助手服务暂时不可用。您可以：
 # Output-contract system prompt pinned in front of every conversation.
 # The fine-tuned v5 model answers evidence-first; this fixes the JSON shape
 # the parser below expects regardless of caller-provided system context.
+#
+# 2026-08 relaxation: the prompt used to forbid the model from using its own
+# general knowledge, which made every uncited question collapse into a
+# "资料不足" wall.  It may now answer knowledgeably and at length; the single
+# hard limit is that it never states an individual dose quantity.
 ASSISTANT_SYSTEM_PROMPT = (
     "/no_think\n"
-    "你是「家健镜」家庭健康助手，运行在家庭本地设备上，服务于家庭照护的教学演示。"
-    "首要任务是基于本轮已授权工具结果和已审核知识，直接、完整、有人情味地回答用户问题。\n"
-    "不要逐条复述或检查这些规则，不要展示分析草稿或内部推理；尽快只输出最终 JSON。\n"
+    "你是「家健镜」家庭健康助手，运行在家庭本地设备上，陪着一家人照顾日常健康。"
+    "你懂常见疾病、症状、药理和居家护理，请像一位耐心、见识广的健康顾问那样把话讲透，"
+    "而不是把用户推走。\n"
+    "不要逐条复述这些规则，不要展示分析草稿或内部推理；直接输出最终 JSON。\n"
     "回答要求：\n"
-    "1. answer 必须是 2 至 8 句自然、完整的简体中文，像家里靠谱长辈或照护伙伴在说话："
-    "先共情再给依据；绝不能只输出 hello、healthy、cannot_answer、unknown、DIRECT、REFUSE "
-    "等标签，也不要复述内部路由名称。\n"
-    "2. 只依据系统消息中的本地事实、工具结果、规则结果、文档片段，以及（若有）已授权联网参考。"
-    "资料不足时说明缺什么、去哪个本地页面核对，不能猜测或补造事实；尤其不要编造「正在流行的"
-    "具体病毒名称或病例数」。\n"
-    "3. 用户问「家里正在用哪些药 / 用药记录 / 扫描的药」时，只列出已确认记录中的药名与规格；"
-    "如果只有 medication_added 事件但没有药名，就说明证据未提供药名。\n"
-    "4. 用户问「感冒/发烧等症状该了解哪些常用药资料」时：优先 retrieve_knowledge，并调用 "
-    "get_member_state 核对过敏史与疾病史；结合系统给出的【季节情境】说一两句换季/受凉等生活提醒，"
-    "语气体贴。家庭药箱里的已确认药品若相关可一并提及，但不是作答前提。若有已授权联网参考提到"
-    "近期季节性呼吸道情况，可温和转述为「外面近期常见提醒」，并标明这只是参考不是确诊。"
-    "不得下诊断，不得写成「你必须吃某某药」的个体处方。\n"
-    "5. 用户问药品能否同服、停药、换药或个体剂量（一次吃多少、漏服补服等）时：先核对成员"
-    "过敏/疾病/已确认用药（如有），再 retrieve_knowledge；只解释已命中的规则或文档，"
-    "不自行决定是否同服、停换或具体片数。没有知识片段就明确无法判断并建议咨询医生或药师。\n"
-    "6. 命中知识片段时的组织方式：第一句先直接回应用户的问题本身；随后给出 2~4 条来自"
-    "命中片段的可执行要点（生活照护或资料阅读注意点），用自己的话概括、不整段照抄；"
-    "最后用一句自然的话提醒结合过敏史并注意就医边界。既然已有依据可讲，就不要再堆砌"
-    "「资料不足」「超出系统边界」这类套话。\n"
-    "7. 如果对话里已有上一轮问答，请直接衔接上文继续说，不要重新自我介绍、"
-    "不要把上一轮已给过的完整提醒原样再复述一遍。\n"
-    "8. 普通问候要用简短中文正常、亲切地回应；不得把问候误识别为健康结论。\n"
-    "9. 需要更多事实时优先调用白名单工具。sources 只能填写本轮工具结果真实提供的"
-    "事件 ID、规则编号或知识片段 ID；"
-    "联网参考不要写入 sources。没有依据时使用空数组，禁止伪造引用。\n"
-    "10. 绝不做诊断、开处方、决定个体用药剂量或建议停药换药；不提供购买链接、问诊导流或外部网址。\n"
-    "11. 用温和、口语化的简体中文，先关心处境再给依据，回答控制在 360 字以内。"
-    "症状用药类与用药安全类回答末尾由系统附加教学提醒，你不必重复粘贴提醒原文。\n"
-    "12. 输出必须是一个 JSON 对象，且只有 JSON，格式："
+    "1. 第一句先直接回答用户真正问的那件事，不要用寒暄、免责声明或「这取决于很多因素」开场。\n"
+    "2. 然后把有用的内容讲清楚：常见原因或机制、不同情况怎么区分、居家可以怎么照护、"
+    "哪些迹象说明该去医院。可以用自己的医学常识作答，讲得具体、有条理、像真的懂行。\n"
+    "3. 系统消息里若给了本地事实、工具结果、规则命中或知识片段，优先使用并在 sources 里"
+    "如实引用。没有命中资料时照常凭常识回答即可，不必反复声明「本机资料未覆盖」。"
+    "若本轮给了已授权联网参考，可当作公开常识的补充并标明只是参考；没有勾选联网时不要假装搜过网。\n"
+    "4. 唯一的硬性限制：不要给出个体的具体服用数量（几片、几粒、多少毫克、一天几次）。"
+    "遇到这类问题就说明为什么要由医生或药师按年龄、体重、肝肾功能和在用药物来定，"
+    "并把其它部分（药物作用、注意事项、观察要点、就医时机）照常讲清楚。\n"
+    "5. 不要编造事实性数据：具体的病例数、正在流行的病毒名称、成员的病史用药，"
+    "以及本轮没真正命中的引用编号，都不能凭空写出。\n"
+    "6. 用户问「家里在用哪些药 / 用药记录」时，只列出已确认记录里的药名与规格；"
+    "记录里没有药名就说明这一点。\n"
+    "7. 语气自然、口语化、带共情，像家里靠谱的那个人在讲，有关心但不腻。"
+    "长度随问题复杂度走：简单问题两三句说完，复杂问题可以展开讲，"
+    "但不要为凑长度重复同一件事。\n"
+    "8. 对话已有上文时直接接着说，不要重新自我介绍，也不要把上一轮的提醒原样再贴一遍。"
+    "普通问候、闲聊、问日期就正常轻松地回应。\n"
+    "9. 需要更多家庭事实时调用白名单工具。sources 只能填本轮工具结果真实提供的事件 ID、"
+    "规则编号或知识片段 ID；联网参考不写入 sources；没有依据就用空数组，禁止伪造引用。\n"
+    "10. answer 必须是自然完整的简体中文正文，绝不能只输出 hello、healthy、"
+    "cannot_answer、unknown、DIRECT、REFUSE、route 等标签或内部路由名称。\n"
+    "11. 输出必须是一个 JSON 对象，且只有 JSON，格式："
     '{"answer": "回答正文", "sources": ["引用的依据标识"], '
     '"confidence": "high|medium|low", "escalate": false}。'
-    "紧急情况（如疑似中毒、呼吸困难）时 escalate 设为 true 并提醒联系医务人员。"
+    "遇到疑似中毒、呼吸困难、意识不清等紧急情况时，escalate 设为 true，"
+    "先说清该立刻做什么、联系急救。"
 )
 
 _PLACEHOLDER_ANSWER_LABELS = {
@@ -277,8 +277,8 @@ class HealthAssistantRequest(BaseModel):
     """Full request to the local assistant."""
     messages: list[dict[str, Any]]
     tools: list[dict[str, Any]] = Field(default_factory=list)
-    temperature: float = Field(default=0.3, ge=0.0, le=2.0)
-    max_tokens: int = Field(default=512, ge=1, le=16384)
+    temperature: float = Field(default=0.6, ge=0.0, le=2.0)
+    max_tokens: int = Field(default=1536, ge=1, le=16384)
 
 
 # ── Tool Registry ──────────────────────────────────────────────────────
@@ -418,8 +418,8 @@ class OllamaClient:
         model: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
-        temperature: float = 0.3,
-        max_tokens: int = 512,
+        temperature: float = 0.6,
+        max_tokens: int = 1536,
         timeout: float | None = None,
         response_format: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -502,8 +502,8 @@ class OllamaClient:
         model: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
-        temperature: float = 0.3,
-        max_tokens: int = 512,
+        temperature: float = 0.6,
+        max_tokens: int = 1536,
         timeout: float | None = None,
         cancel_check: Callable[[], bool] | None = None,
     ):
@@ -656,33 +656,49 @@ def question_type_label(query_type: str) -> str:
 
 
 def risk_notice_for_question(query_type: str) -> str | None:
-    if query_type in {"MEDICATION_SAFETY", "SYMPTOM_MEDICATION"}:
-        return "用药相关说明仅供教学演示，请结合过敏史并咨询医生或药师；不能替代个体诊疗。"
+    """Side-channel notice shown next to the answer, not inside it.
+
+    Narrowed with the 2026-08 relaxation: a notice is shown only when a real
+    medication decision or an emergency is in play.  Symptom questions like
+    「感冒该注意什么」are ordinary teaching content and no longer raise a
+    warning banner.
+    """
     if query_type == "DOSE_DECISION":
-        return "个体用药剂量必须由医生或药师根据具体情况确定；本助手不提供剂量数字。"
+        return "个体用药剂量需由医生或药师根据具体情况确定，助手不提供剂量数字。"
+    if query_type == "MEDICATION_SAFETY":
+        return "涉及具体用药决定时，请结合过敏史并与医生或药师确认。"
     if query_type == "URGENT":
         return "如出现紧急症状，请及时联系医务人员；本助手不能替代紧急救治。"
     return None
 
 
-# Decision 2B: an answer given without a matched reviewed citation carries an
-# explicit low-evidence risk statement instead of being replaced by the old
-# EVIDENCE_REQUIRED wall.
+# Retained for callers/tests that still reference the constant.  It is no
+# longer appended automatically: answering from general knowledge without a
+# matched local citation is the normal case now, not an exception worth a
+# warning block on every turn.
 NO_EVIDENCE_RISK_NOTE = (
-    "【风险说明】以上说明未命中本机已审核资料，属于一般性提示，"
-    "不能作为用药决定的依据；请以药品说明书并咨询医生或药师为准。"
+    "以上为一般性健康说明，未引用本机已审核资料；用药决定请以说明书或医生、药师意见为准。"
 )
 
-_RISK_APPEND_QUERY_TYPES = {"MEDICATION_SAFETY", "SYMPTOM_MEDICATION", "DOSE_DECISION"}
+# Only medication-oriented turns get the one-line reminder appended.
+_RISK_APPEND_QUERY_TYPES = {"MEDICATION_SAFETY", "DOSE_DECISION"}
 
 
 def append_teaching_reminder(answer: str, query_type: str) -> str:
-    """Append a fixed teaching disclaimer for medication-oriented answers."""
+    """Append the one-line dosing reminder to medication-oriented answers.
+
+    Idempotent, and skipped when the model already made the same point in its
+    own words — a stacked reminder is what made earlier answers read like a
+    disclaimer template.
+    """
     if query_type not in _RISK_APPEND_QUERY_TYPES:
         return answer
-    if "教学提醒" in answer:
-        return answer
-    return f"{answer.rstrip()}\n\n{TEACHING_REMINDER}"
+    text = str(answer or "").rstrip()
+    if TEACHING_REMINDER in text:
+        return text
+    if any(marker in text for marker in ("咨询医生", "咨询药师", "医生或药师", "遵医嘱")):
+        return text
+    return f"{text}\n\n{TEACHING_REMINDER}"
 
 
 def append_risk_statement(
@@ -691,16 +707,13 @@ def append_risk_statement(
     *,
     has_citations: bool = True,
 ) -> str:
-    """Server-side unified risk-statement append (decision 2B).
+    """Server-side reminder append, narrowed by the 2026-08 relaxation.
 
-    Every medication-oriented answer ends with the teaching reminder; when no
-    reviewed local citation backed the answer, an explicit low-evidence note
-    is appended first.  The append is idempotent.
+    ``has_citations`` is accepted for call-site compatibility but no longer
+    triggers a low-evidence warning block: answering from general knowledge is
+    now expected behaviour, so only the short dosing reminder is appended.
     """
-    text = str(answer or "").rstrip()
-    if query_type in _RISK_APPEND_QUERY_TYPES and not has_citations and "风险说明" not in text:
-        text = f"{text}\n\n{NO_EVIDENCE_RISK_NOTE}"
-    return append_teaching_reminder(text, query_type)
+    return append_teaching_reminder(str(answer or "").rstrip(), query_type)
 
 
 def is_loopback_ollama_url(url: str) -> bool:
@@ -763,39 +776,39 @@ def suggest_follow_up_questions(
 
     if escalate or any(term in normalized for term in _FOLLOW_UP_RISK_TERMS):
         candidates = [
-            "这条用药信息需要医生或药师确认哪些内容？",
-            "当前药品记录的来源和确认状态是什么？",
-            "如何查看这条信息对应的本地规则？",
+            "这个药主要管什么，吃的时候要注意哪些反应？",
+            "什么情况下必须先联系医生或药师？",
+            "家里已确认的用药记录和过敏史有冲突吗？",
         ]
     elif query_type == "SYMPTOM_MEDICATION" and has_citations:
         candidates = [
-            "结合家里的过敏史，看这类资料还要注意什么？",
-            "哪些情况说明应该尽快就医，而不是继续自行查资料？",
-            "能看看这位成员相关的已确认健康记录吗？",
+            "结合家里的过敏史，这种情况还要注意什么？",
+            "出现哪些迹象要尽快就医，而不是继续在家观察？",
+            "在家里还能做些什么让人舒服一点？",
         ]
     elif query_type == "SYMPTOM_MEDICATION":
         candidates = [
-            "哪些情况需要尽快联系医生或药师？",
-            "如何把已审核的资料卡加入本机知识库？",
-            "我还需要补充哪些症状和发生时间？",
+            "这种症状一般多久能好，什么情况算不正常？",
+            "出现哪些迹象需要尽快就医？",
+            "在家护理有什么要特别注意的？",
         ]
     elif query_type == "GENERAL" and has_citations:
         candidates = [
-            "这份资料里还有哪些要点值得注意？",
+            "这里面还有哪些要点值得注意？",
             "结合家里成员的情况需要留意什么？",
-            "哪些情况建议咨询医生或药师？",
+            "这件事平时可以怎么预防？",
         ]
     elif any(term in normalized for term in _FOLLOW_UP_MEDICATION_TERMS):
         candidates = [
-            "这条回答依据了哪些已确认的药品记录？",
-            "当前药品的规格、有效期或批号是否已核对？",
-            "这条信息还缺少哪些证据需要人工确认？",
+            "这个药是怎么起作用的，一般什么时候吃合适？",
+            "常见的副作用有哪些，出现了该怎么办？",
+            "家里已确认的药品记录里有相关的吗？",
         ]
     elif any(term in normalized for term in _FOLLOW_UP_SYMPTOM_TERMS):
         candidates = [
-            "我还需要补充哪些症状和发生时间？",
-            "哪些情况需要尽快联系医生或药师？",
-            "当前回答引用了哪些已确认记录或本地规则？",
+            "这种情况常见的原因有哪些？",
+            "出现哪些迹象需要尽快就医？",
+            "在家可以先做些什么？",
         ]
     elif any(term in normalized for term in _FOLLOW_UP_EVIDENCE_TERMS):
         candidates = [
@@ -805,15 +818,15 @@ def suggest_follow_up_questions(
         ]
     elif normalized in {"你好", "您好", "hello", "hi", "在吗", "你能做什么"}:
         candidates = [
-            "你能查看哪些已确认的健康记录？",
-            "当前回答会引用哪些本地依据？",
-            "如何确认或修正一条识别结果？",
+            "你能帮我看家里的哪些健康记录？",
+            "家里最近有哪些健康提醒？",
+            "我想问点常见的健康问题可以吗？",
         ]
     else:
         candidates = [
-            "这条回答依据了哪些已确认记录？",
-            "我还需要补充哪些信息才能继续核对？",
-            "如何查看相关的本地规则或文档？",
+            "能再具体讲讲这方面吗？",
+            "这件事平时可以怎么预防？",
+            "和家里的健康记录有关系吗？",
         ]
     return _sanitize_follow_up_questions(candidates)
 
@@ -825,10 +838,13 @@ def suggest_follow_up_questions(
 # what the assistant CAN still do so the chat is not a dead end.
 DOSE_DECISION_REFUSAL_REASON = "DOSE_DECISION_REFUSED"
 DOSE_DECISION_REFUSAL_ANSWER = (
-    "关于「一次吃几粒 / 吃多少剂量」这类具体用量，我不能给出数字——"
-    "个体剂量必须由医生或药师结合年龄、体重、肝肾功能和正在使用的其它药物来确定。"
-    "我可以帮你做的是：查看家里已确认的用药记录和过敏史、"
-    "解释药品说明书里的注意事项，或者整理好问题清单方便你咨询医生或药师。"
+    "具体吃几片、几粒、多少毫克这个数字，我这里不给——不是不想帮你，"
+    "而是同一种药在不同年龄、体重、肝肾功能，以及正在吃的其它药面前，安全用量能差好几倍，"
+    "照着一个通用数字吃反而容易出问题。这个数字最稳的来源是药盒里说明书的用法用量，"
+    "拿不准就直接问医生或药师，药店柜台当面就能确认。\n\n"
+    "除了数字，其它我都能陪你捋清楚：这个药大致管什么、什么时候吃更舒服（饭前还是饭后）、"
+    "哪些常见反应属于正常、哪些迹象要停下来问医生、家里已确认的用药记录和过敏史有没有冲突。"
+    "你想从哪一条开始？"
 )
 
 
@@ -897,9 +913,9 @@ def build_symptom_knowledge_gap_answer(*, user_text: str | None = None) -> str:
         )
     return (
         f"{care}"
-        "本机知识库暂时没有已审核的相关知识卡，我不能凭空报出具体药品资料。"
-        "如果想了解对症的常用药说明，建议咨询医生或药师；"
-        "也可以先把经过审核的资料卡加入本机知识库，我就能带着出处慢慢讲给你听。"
+        "本地模型这会儿没连上，我先按一般照护经验说到这里；"
+        "等它恢复后再问我一次，我可以把对症常用药的分类、适用情况和注意事项讲细一些。"
+        "如果症状让你比较担心，直接问医生或药师是最快的，药店柜台当面就能咨询。"
     )
 
 
@@ -1819,8 +1835,8 @@ def run_assistant(
     member_id: str | None = None,
     access_purpose: str | None = None,
     model: str | None = None,
-    max_tokens: int = 512,
-    temperature: float = 0.3,
+    max_tokens: int = 1536,
+    temperature: float = 0.6,
 ) -> dict[str, Any]:
     """Run the health assistant with tool calling and citation checks.
 
@@ -1869,21 +1885,20 @@ def run_assistant(
     )
     if query_type == "SYMPTOM_MEDICATION":
         routing_hint += (
-            "优先调用 retrieve_knowledge 检索已审核症状/药品知识卡，并调用 "
-            "get_member_state 核对过敏史与疾病史。家庭已确认用药若与问题相关可补充说明，"
-            "但不是作答前提。请结合下方【季节情境】说得更贴近当下生活（换季、着凉、休息保暖等），"
-            "语气共情；若工具结果或系统未提供具体流行病毒信息，不要自行编造病毒名。"
-            "依据知识卡做一般性资料解释，不下诊断、不开个体处方、不写具体片数。"
-            "没有命中知识片段时说明资料不足并建议咨询医生或药师。"
+            "可调用 retrieve_knowledge 找已审核知识卡，并用 get_member_state 核对过敏史与疾病史。"
+            "把这类症状讲透：常见原因、怎么自己区分、家里能做什么、哪些情况要就医；"
+            "常用药可以说明它们各自管什么、适合什么情况、注意什么，但不要给个体服用数量。"
+            "结合下方【季节情境】说得贴近当下生活，语气共情。"
+            "没有具体流行病毒信息时不要编造病毒名或病例数。"
             f"\n{seasonal_care_context()}"
         )
     elif query_type == "MEDICATION_SAFETY":
         routing_hint += (
-            "先调用 get_member_state 或 get_health_events 核对过敏/疾病/已确认用药（如有），"
-            "再调用 retrieve_knowledge。有知识片段时优先解释文档与规则；"
-            "没有命中片段也可以给出一般性资料说明并明确指出证据不足、建议咨询医生或药师，"
-            "但不得替用户决定是否同服、停换，绝不给出个体剂量数字。家庭药箱不是唯一依据。"
-            "语气仍保持关心与口语化，但内容必须克制。"
+            "先用 get_member_state 或 get_health_events 核对过敏/疾病/已确认用药（如有），"
+            "再调用 retrieve_knowledge。把用药安全讲清楚：相互作用的机制、"
+            "漏服或多服后通常怎么处理、需要观察哪些反应、什么情况必须联系医生。"
+            "可以用自身药理常识作答，不必强调本机资料是否覆盖；"
+            "唯一不给的是个体具体服用数量。语气关心、具体、可操作。"
         )
     elif query_type in {"MEDICATION_RECORD", "FAMILY_RECORD"}:
         routing_hint += (
@@ -2017,13 +2032,13 @@ def run_assistant(
     matched_citations = filter_claimed_citations(parsed.sources, allowed_citations)
     unmatched = _unmatched_source_tokens(parsed.sources, matched_citations)
     unknown_sources = [token for token in unmatched if token not in allowed_fact_sources]
-    # Fabricated knowledge citations are still rejected outright — a source
-    # that pretends to be a reviewed chunk/document must never be shown.
+    # A fabricated chunk id is dropped from the source list rather than used to
+    # discard the whole answer: the prose is still useful, and an unverifiable
+    # token simply never reaches the citation panel.
     if any(_looks_like_knowledge_citation(token) for token in unknown_sources):
-        return degraded("CITATION_NOT_FOUND")
-    # Decision 2B: missing citations no longer wall off the whole answer.
-    # The answer is kept and the server appends an explicit low-evidence risk
-    # statement; other unverifiable tokens are dropped quietly.
+        logger.info("Dropped unverifiable knowledge citations: %s", unknown_sources)
+    # Missing citations no longer wall off the answer; unverifiable tokens are
+    # dropped quietly and only real fact sources are surfaced.
     fact_sources = [
         token for token in unmatched if token in allowed_fact_sources
     ]

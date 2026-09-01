@@ -144,7 +144,9 @@ def test_assistant_returns_structured_degrade_when_local_network_is_down(
 @pytest.mark.parametrize(
     ("unsafe_answer", "expected_reason", "expected_escalate"),
     [
-        ("你必须建议停药并换药。", "MEDICAL_BOUNDARY_VIOLATION", True),
+        # Commerce solicitation is still refused: it would turn the assistant
+        # into an ad channel, which is a different risk from medical content.
+        ("点击购买同款降压药，加我微信。", "MEDICAL_BOUNDARY_VIOLATION", True),
         ("请访问 https://example.com 购买。", "EXTERNAL_LINK_DETECTED", False),
     ],
 )
@@ -187,6 +189,50 @@ def test_assistant_refuses_unsafe_model_output_at_api_boundary(
     assert body["sources"] == []
     assert body["citations"] == []
     assert unsafe_answer not in body["answer"]
+
+
+def test_assistant_delivers_medical_explanation_but_never_a_dose_number(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """2026-08 relaxation, checked at the API boundary.
+
+    Explaining diagnosis, stopping or switching a drug is delivered; only the
+    sentence carrying a concrete per-serving quantity is dropped."""
+    draft = (
+        "血压持续偏高需要医生诊断后再决定治疗方案。"
+        "副作用明显时可以先记录症状，再和开药的医生讨论停药或换药。"
+        "每次吃2片就行。"
+    )
+
+    def scripted(_client: OllamaClient, **_kwargs: object) -> dict:
+        return {
+            "message": {
+                "content": json.dumps(
+                    {
+                        "answer": draft,
+                        "sources": [],
+                        "confidence": "medium",
+                        "escalate": False,
+                    },
+                    ensure_ascii=False,
+                )
+            }
+        }
+
+    monkeypatch.setattr(OllamaClient, "chat", scripted)
+    response = client.post(
+        "/api/v1/assistant/chat",
+        headers=OWNER_HEADERS,
+        json={"messages": [{"role": "user", "content": "降压药副作用大该怎么办？"}]},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["degraded"] is False, body
+    assert "医生诊断后再决定治疗方案" in body["answer"]
+    assert "停药或换药" in body["answer"]
+    assert "每次吃2片" not in body["answer"]
 
 
 def _scripted_knowledge_tool_chat(unsafe_source: str | None = None):
@@ -268,10 +314,14 @@ def test_assistant_live_tool_call_returns_only_retrieved_citations(
     assert "合成照护证据" in body["answer"]
 
 
-def test_assistant_rejects_fabricated_citation_without_tool_evidence(
+def test_assistant_drops_fabricated_citation_without_tool_evidence(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A forged chunk id is dropped from the source list, not shown as evidence.
+
+    The prose is still delivered — losing an entire answer over one bad token
+    was part of what made the assistant feel unhelpful."""
     def fabricated(_client: OllamaClient, **_kwargs: object) -> dict:
         return {
             "message": {
@@ -295,11 +345,13 @@ def test_assistant_rejects_fabricated_citation_without_tool_evidence(
     )
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["degraded"] is True
-    assert body["degrade_reason"] == "CITATION_NOT_FOUND"
+    assert body["degraded"] is False
+    assert body["degrade_reason"] is None
+    # The unverifiable token never reaches the citation panel or source list.
     assert body["citations"] == []
     assert body["sources"] == []
-    assert body["route"] == "EVIDENCE_REQUIRED"
+    assert "forged-chunk" not in body["answer"]
+    assert body["answer"]
 
 
 def test_unauthorized_actor_cannot_cite_private_knowledge_via_tools(
@@ -331,13 +383,13 @@ def test_unauthorized_actor_cannot_cite_private_knowledge_via_tools(
     )
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["degraded"] is True
-    # 2B removed the NO_AUTHORISED_DOCUMENTS blanket wall; the forged source
-    # is now caught by citation verification instead.  Either way the private
-    # knowledge never leaks to the unauthorized actor.
-    assert body["degrade_reason"] in {"NO_AUTHORISED_DOCUMENTS", "CITATION_NOT_FOUND"}
+    # The security property under test is that another household's private
+    # knowledge never reaches this actor.  Whether the turn degrades is an
+    # implementation detail: the forged source is now dropped rather than
+    # walling off the answer, but no citation, source or document text leaks.
     assert body["citations"] == []
     assert body["sources"] == []
+    assert "合成照护证据要求先核对已确认事件，并联系有资质的医务人员" not in body["answer"]
 
 
 def test_low_quality_image_stops_before_downstream_vision_task(

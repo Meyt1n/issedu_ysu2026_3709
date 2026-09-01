@@ -180,46 +180,39 @@ def is_dose_decision_query(text: str) -> bool:
         return True
     return bool(_DOSE_QUANTITY_ASK_RE.search(normalized))
 
-# Follow-up prompts must not invite dosage / stop / switch decisions.
+# Follow-up prompts must not invite a concrete individual dose number.
+# Stop / switch / interaction topics are answerable teaching content now, so
+# they no longer force the generic "let a doctor confirm" follow-up ladder.
 FOLLOW_UP_RISK_TERMS: tuple[str, ...] = (
-    MEDICATION_SAFETY_ROUTE_TERMS
-    + DOSE_DECISION_ROUTE_TERMS
+    DOSE_DECISION_ROUTE_TERMS
     + _DOSE_BARE_QUANTITY_TERMS
     + (
         "几粒",
         "几片",
-        "一起吃",
-        "诊断",
-        "处方",
     )
 )
 
-# Output must never contain diagnosis / prescription / commerce directives.
-# Boundary checks run after structured schema validation as a second line.
-# Prefer directive phrases over bare nouns so safe refusals such as
-# 「停药请咨询医生」are not blocked while 「建议你停药」still is.
+# Narrowed scope (2026-08 relaxation): the assistant may now explain general
+# medical knowledge — mechanisms, what a symptom usually means, when to see a
+# doctor, why two drugs interact — in ordinary language.  Only two things stay
+# out of bounds because they impersonate a clinician or monetise the chat:
+# writing an actual prescription block, and commercial / referral solicitation.
+# Individual dose numbers are handled separately by the dose rules below, which
+# remain the one hard limit.
+#
+# Still enforced by ``sanitize_answer_sentences`` — but note what is no longer
+# here: 诊断 / 确诊 / 给药 / 建议停药 / 建议换药 / 你必须 …  Those made ordinary
+# explanation unpublishable and are gone.
 MEDICAL_BOUNDARY_TERMS: tuple[str, ...] = (
-    "诊断",
-    "确诊",
-    "处方",
-    "给药",
-    "建议停药",
-    "建议换药",
-    "建议你停",
-    "必须停药",
-    "可以停用",
-    "别再吃",
-    "你应当",
-    "你必须",
-    "诊断:",
-    "Diagnosis:",
+    "处方:",
+    "处方：",
     "Prescription:",
-    "buy",
-    "purchase",
-    "order",
     "点击购买",
-    "咨询电话",
+    "立即下单",
+    "购买链接",
+    "加我微信",
     "添加微信",
+    "咨询电话",
 )
 
 DATA_EXFILTRATION_TERMS: tuple[str, ...] = (
@@ -230,9 +223,9 @@ DATA_EXFILTRATION_TERMS: tuple[str, ...] = (
     "银行卡号",
 )
 
-TEACHING_REMINDER = (
-    "【教学提醒】以上内容仅供居家照护教学演示，不能替代医生或药师的诊断与个体用药指导。"
-)
+# Kept short on purpose: a long boilerplate block appended to every answer made
+# the assistant read like a disclaimer generator rather than a helper.
+TEACHING_REMINDER = "（具体用药和剂量请以说明书或医生、药师的意见为准。）"
 
 # A refusal or safety disclaimer is not itself a prohibited medical directive.
 # Check the short phrase immediately before a matched noun so text such as
@@ -272,16 +265,6 @@ def medical_boundary_hits(text: str) -> list[str]:
     lowered = text.casefold()
     hits: list[str] = []
     for term in MEDICAL_BOUNDARY_TERMS:
-        if term == "处方":
-            # Teaching answers often mention OTC「非处方」资料; that must not
-            # trip the prescription boundary.
-            if any(
-                not text[max(0, match.start() - 8):match.start()].endswith("非")
-                and not _is_negated_medical_term(text, match.start())
-                for match in re.finditer("处方", text)
-            ):
-                hits.append(term)
-            continue
         needle = term.casefold()
         if needle not in lowered and term not in text:
             continue
@@ -298,29 +281,47 @@ def medical_boundary_hits(text: str) -> list[str]:
 # ── Output-side sentence sanitisation (decision 1A + blacklist softening) ──
 
 # Concrete per-serving dose numbers in model output（每次2片 / 一天三粒）。
-# Answers may explain reviewed material, but the assistant never states an
-# individual dose quantity — those sentences are removed before delivery.
-_OUTPUT_DOSE_DIRECTIVE_RE = re.compile(
+# This is now the only rule that deletes a sentence, so it must not fire on
+# ordinary lifestyle advice.  Pill-shaped units are unambiguous; volume and
+# package units（毫升 / 袋 / 滴）only count as a dose when the same sentence
+# actually talks about medicine, otherwise「每天喝2袋牛奶」would be censored.
+_DOSE_SERVING_PREFIX = (
     r"(?:每次|一次|每天|一天|每日|每晚|每早|每隔\S{1,4}|一顿|饭前|饭后|睡前)"
     r"[^。！？!?\n]{0,8}?"
     r"(?:\d+(?:\.\d+)?|[一二两三四五六七八九十半])\s*"
-    r"(?:粒|片|颗|丸|毫克|毫升|mg|ml|支|袋|滴)"
+)
+_OUTPUT_DOSE_DIRECTIVE_RE = re.compile(_DOSE_SERVING_PREFIX + r"(?:粒|片|颗|丸|毫克|mg)")
+_OUTPUT_DOSE_AMBIGUOUS_RE = re.compile(_DOSE_SERVING_PREFIX + r"(?:毫升|ml|支|袋|滴)")
+
+# Real medicine mentions only — deliberately excludes measurement units, so
+# that「每天喝500毫升水」is not treated as a drug sentence by its unit alone.
+_MEDICINE_MENTION_RE = re.compile(
+    r"药|胶囊|冲剂|口服液|糖浆|滴剂|栓剂|喷雾|贴剂|注射|输液|"
+    r"布洛芬|阿莫西林|对乙酰氨基酚|扑热息痛|阿司匹林|头孢|青霉素|蒙脱石|奥美拉唑|"
+    r"退烧|退热|止咳|消炎|抗生素|抗菌|降压|降糖|镇痛|服用|口服"
 )
 
 _EXTERNAL_LINK_RE = re.compile(r"https?://[^\s<\"']+", re.IGNORECASE)
 
 _SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[。！？!?；;\n])")
 
-SANITIZED_FOOTNOTE = (
-    "（安全提示：为符合边界，已省略涉及诊断、处方、个体剂量数字或外部链接的个别语句。）"
-)
+SANITIZED_FOOTNOTE = "（涉及具体服用数量的那句已略去，请以说明书或医生、药师的意见为准。）"
+_SANITIZED_FOOTNOTE_OTHER = "（个别涉及外部链接或推广内容的语句已略去。）"
 
 
 def output_dose_directive_hits(text: str) -> list[str]:
-    """Return concrete dose-number directives found in the output text."""
+    """Return concrete individual dose-number directives found in ``text``.
+
+    Pill-shaped units always count.  Volume / package units count only when the
+    surrounding text mentions medicine, so nutrition and hydration advice such
+    as「每天喝2袋牛奶」is left alone.
+    """
     if not text:
         return []
-    return [match.group(0) for match in _OUTPUT_DOSE_DIRECTIVE_RE.finditer(text)]
+    hits = [match.group(0) for match in _OUTPUT_DOSE_DIRECTIVE_RE.finditer(text)]
+    if _MEDICINE_MENTION_RE.search(text):
+        hits += [match.group(0) for match in _OUTPUT_DOSE_AMBIGUOUS_RE.finditer(text)]
+    return hits
 
 
 def split_sentences(text: str) -> list[str]:
@@ -329,19 +330,33 @@ def split_sentences(text: str) -> list[str]:
 
 
 def sanitize_answer_sentences(text: str) -> tuple[str, list[str]]:
-    """Remove only the offending sentences from a model answer.
+    """Remove the few sentence kinds the assistant must never deliver.
 
-    Returns ``(cleaned_text, removal_reasons)``.  Reasons are drawn from
-    {"MEDICAL_BOUNDARY", "EXTERNAL_LINK", "DOSE_NUMBER"}.  A safety
-    disclaimer that merely *mentions* a term in negated form is kept by
-    ``medical_boundary_hits``'s negation handling, so refusal sentences such
-    as「我不能诊断」survive sanitisation.  When everything was removed the
-    caller should fall back to a structured degrade response.
+    Returns ``(cleaned_text, removal_reasons)`` with reasons drawn from
+    {"DOSE_NUMBER", "MEDICAL_BOUNDARY", "EXTERNAL_LINK"}.
+
+    Medical *explanation* is no longer filtered: what a symptom usually means,
+    why two drugs interact, why not to stop an antibiotic early, when to see a
+    doctor — all of that is ordinary teaching content and passes through.  What
+    still goes is narrow and deliberate:
+
+    * ``DOSE_NUMBER`` — a concrete individual dose quantity（每次两片）。This is
+      the one hard medical limit.
+    * ``MEDICAL_BOUNDARY`` — a written-out prescription block, or commercial
+      solicitation（点击购买 / 加我微信）。Not a medical-content rule: it keeps the
+      assistant from becoming an ad or referral channel.
+    * ``EXTERNAL_LINK`` — bare URLs, the usual carrier for the above.
+
+    When nothing survives, the caller falls back to a structured degrade
+    response.
     """
     reasons: list[str] = []
     kept: list[str] = []
     for sentence in split_sentences(text):
         if not sentence.strip():
+            continue
+        if output_dose_directive_hits(sentence):
+            reasons.append("DOSE_NUMBER")
             continue
         if medical_boundary_hits(sentence):
             reasons.append("MEDICAL_BOUNDARY")
@@ -349,11 +364,13 @@ def sanitize_answer_sentences(text: str) -> tuple[str, list[str]]:
         if _EXTERNAL_LINK_RE.search(sentence):
             reasons.append("EXTERNAL_LINK")
             continue
-        if output_dose_directive_hits(sentence):
-            reasons.append("DOSE_NUMBER")
-            continue
         kept.append(sentence)
     cleaned = "".join(kept).strip()
     if reasons and cleaned:
-        cleaned = f"{cleaned}\n\n{SANITIZED_FOOTNOTE}"
+        footnote = (
+            SANITIZED_FOOTNOTE
+            if "DOSE_NUMBER" in reasons
+            else _SANITIZED_FOOTNOTE_OTHER
+        )
+        cleaned = f"{cleaned}\n\n{footnote}"
     return cleaned, reasons

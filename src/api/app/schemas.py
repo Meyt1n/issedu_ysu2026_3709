@@ -1002,8 +1002,10 @@ AssistantNetworkContextLevel = Literal["query_only", "symptom", "member"]
 class AssistantRequest(BaseModel):
     messages: list[dict[str, Any]] = Field(min_length=1)
     model: str | None = Field(default=None, max_length=64)
-    temperature: float = Field(default=0.3, ge=0.0, le=2.0)
-    max_tokens: int = Field(default=512, ge=1, le=16384)
+    # 0.3 / 512 produced clipped, formulaic answers; a slightly warmer
+    # temperature and a larger budget let the assistant explain properly.
+    temperature: float = Field(default=0.6, ge=0.0, le=2.0)
+    max_tokens: int = Field(default=1536, ge=1, le=16384)
     # Keep existing API clients on HCT-403's single-agent contract.  The web
     # demo opts into multi-agent mode explicitly so this additive field cannot
     # change legacy tool-call tests or integrations unexpectedly.

@@ -149,8 +149,9 @@ def test_synthesis_retries_once_when_model_forgets_citation(monkeypatch) -> None
 def test_symptom_answer_keeps_uncited_reply_with_risk_note_after_retry(
     monkeypatch,
 ) -> None:
-    """决策 2B：补正重试仍未引用时，不再整段降级为 EVIDENCE_REQUIRED——
-    回答保留，由服务端附加「未命中已审核资料」的风险说明与教学提醒。"""
+    """补正重试仍未引用时，回答原样保留。
+
+    放宽后（2026-08）未命中已审核资料属于正常情况，不再追加「风险说明」样板。"""
     client_cls = _install_scripted_client(
         monkeypatch, [_uncited_answer(), _uncited_answer()]
     )
@@ -172,8 +173,8 @@ def test_symptom_answer_keeps_uncited_reply_with_risk_note_after_retry(
     assert result["degraded"] is False
     assert result["degrade_reason"] is None
     assert result["citations"] == []
-    assert "风险说明" in result["answer"]
-    assert "教学提醒" in result["answer"]
+    assert "风险说明" not in result["answer"]
+    assert result["answer"].strip()
 
 
 # ── 3. GENERAL 教学问的可选知识使用 ──────────────────────────────────
@@ -262,10 +263,12 @@ def test_follow_ups_differ_by_query_type_and_knowledge_hit() -> None:
     assert with_hit != without_hit
     assert any("过敏史" in item for item in with_hit)
     assert any("就医" in item for item in with_hit)
-    assert any("知识库" in item for item in without_hit)
-    # 不诱导剂量/停换药决定。
+    assert any("就医" in item for item in without_hit)
+    # 追问是真人会问的问题，不再是「引用了哪些记录」式的审计口径。
+    assert not any("依据了哪些" in item for item in [*with_hit, *without_hit])
+    # 仍不诱导个体剂量决定。
     for item in [*with_hit, *without_hit]:
-        assert "剂量" not in item and "停药" not in item
+        assert "剂量" not in item and "几粒" not in item and "几片" not in item
 
     # 未传 query_type 的旧调用方保持原有关键字梯子。
     legacy = suggest_follow_up_questions(messages)
@@ -367,9 +370,9 @@ def test_summer_ac_stuffy_nose_with_cold_card_returns_cited_answer(
     assert result["citations"], "must bind a real retrieved citation"
     assert result["citations"][0]["document_id"] == document.id
     assert "感冒样症状居家照护教学卡" in result["citations"][0]["document_title"]
-    # 非空洞模板：正文回应了处境并给出资料要点，末尾追加教学提醒。
+    # 非空洞模板：正文回应了处境并给出资料要点。症状类不再追加提醒样板。
     assert "鼻塞" in result["answer"]
-    assert "教学提醒" in result["answer"]
+    assert "风险说明" not in result["answer"]
     assert "缺少可核验的本地知识引用" not in result["answer"]
     # 差异化追问：命中知识后引导过敏史/就医边界。
     assert any("过敏史" in item for item in result["suggested_questions"])
