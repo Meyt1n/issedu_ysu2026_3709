@@ -19,22 +19,23 @@
   --ease: cubic-bezier(0.32, 0.72, 0.24, 1);
   --ease-spring: cubic-bezier(0.34, 1.45, 0.5, 1);
 
-  --c-bg: #f6f1e6;
-  --c-bg-deep: #efe7d6;
-  --c-surface: rgba(255, 253, 247, 0.78);
-  --c-surface-solid: #fffdf8;
+  /* 日光浅色基线：提高页面明度，同时保留纸张与松绿的品牌识别。 */
+  --c-bg: #fffaf1;
+  --c-bg-deep: #f4ecdc;
+  --c-surface: rgba(255, 255, 255, 0.9);
+  --c-surface-solid: #ffffff;
 
-  --c-ink: #37332b;
-  --c-ink-soft: #6d6659;
-  --c-ink-faint: #6f6758;
-  --c-line: rgba(229, 219, 198, 0.86);
-  --c-line-strong: #d6cab2;
+  --c-ink: #2f362f;
+  --c-ink-soft: #5a645d;
+  --c-ink-faint: #66736a;
+  --c-line: rgba(210, 224, 214, 0.9);
+  --c-line-strong: #bfd2c3;
 
-  --c-brand: #38665a;
-  --c-brand-strong: #2a5045;
-  --c-brand-deep: #23423a;
-  --c-brand-soft: #e3ece7;
-  --c-brand-softer: rgba(56, 102, 90, 0.08);
+  --c-brand: #3d7a63;
+  --c-brand-strong: #2e644e;
+  --c-brand-deep: #23543f;
+  --c-brand-soft: #e0efe8;
+  --c-brand-softer: rgba(61, 122, 99, 0.1);
 
   --c-accent: #c26744;
   --c-accent-deep: #a95336;
@@ -54,36 +55,36 @@
 
   /* 材质 */
   --glass-blur: blur(16px);
-  --glass-bg: rgba(255, 253, 248, 0.9);
-  --glass-border: rgba(255, 255, 255, 0.62);
-  --glass-chip: rgba(255, 253, 247, 0.72);
-  --sheen: rgba(255, 255, 255, 0.72);
-  --hilite: rgba(255, 255, 255, 0.7);
-  --well-bg: rgba(56, 102, 90, 0.05);
-  --input-bg: rgba(255, 253, 248, 0.82);
-  --divider: #ece4d2;
+  --glass-bg: rgba(255, 255, 255, 0.94);
+  --glass-border: rgba(255, 255, 255, 0.86);
+  --glass-chip: rgba(255, 255, 255, 0.88);
+  --sheen: rgba(255, 255, 255, 0.84);
+  --hilite: rgba(255, 255, 255, 0.82);
+  --well-bg: rgba(61, 122, 99, 0.065);
+  --input-bg: rgba(255, 255, 255, 0.94);
+  --divider: #e7efe8;
 
   /* 与网页端 aurora / fireflies 层共用的氛围色；低透明度避免干扰正文。 */
   --aurora-1: rgba(194, 103, 68, 0.38);
-  --aurora-2: rgba(56, 102, 90, 0.32);
+  --aurora-2: rgba(61, 122, 99, 0.32);
   --aurora-3: rgba(169, 126, 31, 0.22);
   --firefly-color: rgba(194, 103, 68, 0.72);
 
   --grad-brand:
     radial-gradient(120% 140% at 85% -20%, rgba(194, 103, 68, 0.22) 0%, transparent 55%),
-    linear-gradient(135deg, #38665a 0%, #2a5045 70%, #23423a 100%);
-  --grad-btn: linear-gradient(180deg, #447467 0%, #38665a 55%, #2a5045 100%);
+    linear-gradient(135deg, #3d7a63 0%, #2e644e 70%, #23543f 100%);
+  --grad-btn: linear-gradient(180deg, #528f75 0%, #3d7a63 55%, #2e644e 100%);
   --app-bg:
     radial-gradient(900px 520px at 95% -12%, rgba(194, 103, 68, 0.09), transparent 60%),
-    radial-gradient(720px 500px at -12% 34%, rgba(56, 102, 90, 0.1), transparent 56%),
-    radial-gradient(660px 440px at 70% 108%, rgba(169, 126, 31, 0.07), transparent 58%),
+    radial-gradient(720px 500px at -12% 34%, rgba(61, 122, 99, 0.13), transparent 56%),
+    radial-gradient(660px 440px at 70% 108%, rgba(169, 126, 31, 0.09), transparent 58%),
     var(--c-bg);
 
-  --shadow-card: 0 1px 2px rgba(84, 70, 41, 0.05), 0 10px 30px -12px rgba(84, 70, 41, 0.18);
-  --shadow-float: 0 2px 4px rgba(84, 70, 41, 0.07), 0 18px 40px -14px rgba(84, 70, 41, 0.24);
-  --shadow-press: 0 4px 12px -8px rgba(84, 70, 41, 0.28);
-  --shadow-btn: 0 10px 22px -11px rgba(42, 80, 69, 0.56);
-  --focus-ring: #38665a;
+  --shadow-card: 0 1px 2px rgba(84, 70, 41, 0.04), 0 10px 30px -12px rgba(84, 70, 41, 0.14);
+  --shadow-float: 0 2px 4px rgba(84, 70, 41, 0.05), 0 18px 40px -14px rgba(84, 70, 41, 0.2);
+  --shadow-press: 0 4px 12px -8px rgba(84, 70, 41, 0.22);
+  --shadow-btn: 0 10px 22px -11px rgba(46, 100, 78, 0.46);
+  --focus-ring: #3d7a63;
 }
 
 html[data-font-scale='large'] {
@@ -103,22 +104,23 @@ html[data-elder='on'] {
 
 /* ---- 深色模式（森林夜） ---- */
 html[data-theme='dark'] {
-  --c-bg: #0f1714;
-  --c-bg-deep: #18231e;
-  --c-surface: rgba(26, 38, 33, 0.66);
-  --c-surface-solid: #1b2721;
+  /* 深色模式也保持足够的环境亮度，避免 OLED 黑底导致层次丢失。 */
+  --c-bg: #17251f;
+  --c-bg-deep: #21372c;
+  --c-surface: rgba(42, 61, 51, 0.84);
+  --c-surface-solid: #2b4437;
 
   --c-ink: #e9f1eb;
-  --c-ink-soft: #aabbb1;
-  --c-ink-faint: #7d8f85;
-  --c-line: rgba(255, 255, 255, 0.1);
-  --c-line-strong: #47584f;
+  --c-ink-soft: #c7d7cc;
+  --c-ink-faint: #a2b5a8;
+  --c-line: rgba(210, 234, 219, 0.2);
+  --c-line-strong: #587765;
 
-  --c-brand: #4aa17f;
-  --c-brand-strong: #58b28f;
-  --c-brand-deep: #9fe0c4;
-  --c-brand-soft: rgba(74, 161, 127, 0.16);
-  --c-brand-softer: rgba(74, 161, 127, 0.1);
+  --c-brand: #69c59b;
+  --c-brand-strong: #7bd3a9;
+  --c-brand-deep: #bcebd1;
+  --c-brand-soft: rgba(105, 197, 155, 0.2);
+  --c-brand-softer: rgba(105, 197, 155, 0.14);
 
   --c-accent: #f0aa66;
   --c-accent-deep: #ffd9a8;
@@ -136,14 +138,14 @@ html[data-theme='dark'] {
   --c-calm-deep: #b4e6c7;
   --c-calm-soft: rgba(102, 179, 132, 0.16);
 
-  --glass-bg: rgba(24, 36, 30, 0.62);
-  --glass-border: rgba(255, 255, 255, 0.12);
-  --glass-chip: rgba(255, 255, 255, 0.07);
-  --sheen: rgba(255, 255, 255, 0.12);
-  --hilite: rgba(255, 255, 255, 0.09);
-  --well-bg: rgba(255, 255, 255, 0.06);
-  --input-bg: rgba(255, 255, 255, 0.07);
-  --divider: rgba(255, 255, 255, 0.08);
+  --glass-bg: rgba(39, 58, 48, 0.84);
+  --glass-border: rgba(255, 255, 255, 0.18);
+  --glass-chip: rgba(255, 255, 255, 0.12);
+  --sheen: rgba(255, 255, 255, 0.16);
+  --hilite: rgba(255, 255, 255, 0.14);
+  --well-bg: rgba(148, 221, 180, 0.12);
+  --input-bg: rgba(255, 255, 255, 0.12);
+  --divider: rgba(215, 235, 221, 0.16);
 
   --aurora-1: rgba(240, 170, 102, 0.28);
   --aurora-2: rgba(74, 161, 127, 0.3);
@@ -152,18 +154,18 @@ html[data-theme='dark'] {
 
   --grad-brand:
     radial-gradient(130% 130% at 80% -25%, rgba(255, 214, 156, 0.16) 0%, transparent 55%),
-    linear-gradient(135deg, #235244 0%, #1a4034 52%, #102b22 100%);
-  --grad-btn: linear-gradient(180deg, #3f8f71 0%, #2f7a5d 55%, #276750 100%);
+    linear-gradient(135deg, #356a57 0%, #285743 52%, #1e4134 100%);
+  --grad-btn: linear-gradient(180deg, #67bf96 0%, #459f78 55%, #347e5e 100%);
   --app-bg:
     radial-gradient(820px 520px at 96% -12%, rgba(224, 145, 106, 0.12), transparent 60%),
     radial-gradient(720px 520px at -12% 36%, rgba(79, 169, 138, 0.11), transparent 56%),
-    #0f1714;
+    #17251f;
 
   --shadow-card: 0 18px 44px -20px rgba(0, 0, 0, 0.6);
   --shadow-float: 0 24px 56px -20px rgba(0, 0, 0, 0.7);
   --shadow-press: 0 6px 16px -10px rgba(0, 0, 0, 0.6);
   --shadow-btn: 0 10px 24px -10px rgba(0, 0, 0, 0.55);
-  --focus-ring: #7fd7b3;
+  --focus-ring: #9ce4be;
 
   color-scheme: dark;
 }
