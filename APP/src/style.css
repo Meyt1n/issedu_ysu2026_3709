@@ -1,5 +1,5 @@
-/* 家健镜随身版设计系统 v4 —— 玻璃质感 + 氛围背景 + 深色模式 + 立体光影：
-   材质（玻璃/高光/洼地/输入底）全部抽象为变量，浅色/深色/高对比三套联动。
+/* 家健镜随身版设计系统 v5 —— 与网页端共用「暖阳纸笺」设计语言：
+   暖纸背景、松绿主色、陶土强调色和纸感卡片。保留移动端安全区、触控和无障碍令牌。
    无障碍模式由 <html> data-* 驱动：data-theme（light/dark）、data-contrast、
    data-motion、data-font-scale、data-elder。 */
 
@@ -11,76 +11,73 @@
   --hct-safe-area-right: var(--safe-area-inset-right, env(safe-area-inset-right, 0px));
   --hct-safe-area-bottom: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
   --hct-safe-area-left: var(--safe-area-inset-left, env(safe-area-inset-left, 0px));
-  --r-card: 24px;
-  --r-btn: 16px;
+  --r-card: 18px;
+  --r-btn: 13px;
   --r-pill: 999px;
   --hct-bottom-clearance: 116px;
   --speed: 0.24s;
   --ease: cubic-bezier(0.32, 0.72, 0.24, 1);
   --ease-spring: cubic-bezier(0.34, 1.45, 0.5, 1);
 
-  --c-bg: #f5f1e8;
-  --c-bg-deep: #ebe5d7;
-  --c-surface: rgba(255, 255, 255, 0.72);
-  --c-surface-solid: #ffffff;
+  --c-bg: #f6f1e6;
+  --c-bg-deep: #efe7d6;
+  --c-surface: rgba(255, 253, 247, 0.78);
+  --c-surface-solid: #fffdf8;
 
-  --c-ink: #24352e;
-  --c-ink-soft: #53645c;
-  --c-ink-faint: #7f8d85;
-  --c-line: rgba(255, 255, 255, 0.65);
-  --c-line-strong: #c9c2b0;
+  --c-ink: #37332b;
+  --c-ink-soft: #6d6659;
+  --c-ink-faint: #6f6758;
+  --c-line: rgba(229, 219, 198, 0.86);
+  --c-line-strong: #d6cab2;
 
-  --c-brand: #2f6d5a;
-  --c-brand-strong: #275e4d;
-  --c-brand-deep: #1b4437;
-  --c-brand-soft: rgba(47, 109, 90, 0.12);
-  --c-brand-softer: rgba(47, 109, 90, 0.07);
+  --c-brand: #38665a;
+  --c-brand-strong: #2a5045;
+  --c-brand-deep: #23423a;
+  --c-brand-soft: #e3ece7;
+  --c-brand-softer: rgba(56, 102, 90, 0.08);
 
-  --c-accent: #e9a05c;
-  --c-accent-deep: #8a5314;
-  --c-accent-soft: rgba(233, 160, 92, 0.16);
-  --c-danger: #d2604f;
-  --c-danger-deep: #96311f;
-  --c-danger-soft: rgba(210, 96, 79, 0.14);
-  --c-warn: #dd8a3d;
-  --c-warn-deep: #8a4f14;
-  --c-warn-soft: rgba(221, 138, 61, 0.15);
-  --c-info: #4e8d9c;
-  --c-info-deep: #2b5a66;
-  --c-info-soft: rgba(78, 141, 156, 0.14);
-  --c-calm: #57996f;
-  --c-calm-deep: #2f6647;
-  --c-calm-soft: rgba(87, 153, 111, 0.15);
+  --c-accent: #c26744;
+  --c-accent-deep: #a95336;
+  --c-accent-soft: #f6e3d8;
+  --c-danger: #ad4152;
+  --c-danger-deep: #8c3341;
+  --c-danger-soft: #f4dde0;
+  --c-warn: #a97e1f;
+  --c-warn-deep: #7c5c14;
+  --c-warn-soft: #f4e8c8;
+  --c-info: #47708c;
+  --c-info-deep: #38596f;
+  --c-info-soft: #dfe9ef;
+  --c-calm: #6e8a74;
+  --c-calm-deep: #48604d;
+  --c-calm-soft: #e6ede4;
 
   /* 材质 */
-  --glass-blur: blur(20px) saturate(1.5);
-  --glass-bg: rgba(255, 255, 255, 0.68);
-  --glass-border: rgba(255, 255, 255, 0.7);
-  --glass-chip: rgba(255, 255, 255, 0.55);
-  --sheen: rgba(255, 255, 255, 0.7);
-  --hilite: rgba(255, 255, 255, 0.6);
-  --well-bg: rgba(37, 55, 48, 0.05);
-  --input-bg: rgba(255, 255, 255, 0.82);
-  --divider: rgba(37, 55, 48, 0.08);
+  --glass-blur: blur(16px);
+  --glass-bg: rgba(255, 253, 248, 0.9);
+  --glass-border: rgba(255, 255, 255, 0.62);
+  --glass-chip: rgba(255, 253, 247, 0.72);
+  --sheen: rgba(255, 255, 255, 0.72);
+  --hilite: rgba(255, 255, 255, 0.7);
+  --well-bg: rgba(56, 102, 90, 0.05);
+  --input-bg: rgba(255, 253, 248, 0.82);
+  --divider: #ece4d2;
 
   --grad-brand:
-    radial-gradient(120% 140% at 85% -20%, rgba(255, 236, 200, 0.35) 0%, transparent 55%),
-    linear-gradient(135deg, #418569 0%, #2f6d5a 52%, #1f5240 100%);
-  --grad-btn: linear-gradient(180deg, #3b7f67 0%, #2f6d5a 55%, #295f4e 100%);
+    radial-gradient(120% 140% at 85% -20%, rgba(194, 103, 68, 0.22) 0%, transparent 55%),
+    linear-gradient(135deg, #38665a 0%, #2a5045 70%, #23423a 100%);
+  --grad-btn: linear-gradient(180deg, #447467 0%, #38665a 55%, #2a5045 100%);
+  --app-bg:
+    radial-gradient(900px 520px at 95% -12%, rgba(194, 103, 68, 0.09), transparent 60%),
+    radial-gradient(720px 500px at -12% 34%, rgba(56, 102, 90, 0.1), transparent 56%),
+    radial-gradient(660px 440px at 70% 108%, rgba(169, 126, 31, 0.07), transparent 58%),
+    var(--c-bg);
 
-  --shadow-card: 0 16px 40px -20px rgba(37, 55, 48, 0.28);
-  --shadow-float: 0 22px 52px -20px rgba(37, 55, 48, 0.4);
-  --shadow-press: 0 6px 16px -10px rgba(37, 55, 48, 0.35);
-  --shadow-btn: 0 10px 22px -10px rgba(47, 109, 90, 0.6);
-  --focus-ring: #2f6d5a;
-
-  /* 氛围色斑 */
-  --blob-a: rgba(65, 133, 105, 0.34);
-  --blob-b: rgba(238, 173, 108, 0.3);
-  --blob-c: rgba(78, 141, 156, 0.24);
-  --deco-ring: rgba(47, 109, 90, 0.14);
-  --deco-ring-2: rgba(233, 160, 92, 0.22);
-  --deco-leaf: rgba(47, 109, 90, 0.16);
+  --shadow-card: 0 1px 2px rgba(84, 70, 41, 0.05), 0 10px 30px -12px rgba(84, 70, 41, 0.18);
+  --shadow-float: 0 2px 4px rgba(84, 70, 41, 0.07), 0 18px 40px -14px rgba(84, 70, 41, 0.24);
+  --shadow-press: 0 4px 12px -8px rgba(84, 70, 41, 0.28);
+  --shadow-btn: 0 10px 22px -11px rgba(42, 80, 69, 0.56);
+  --focus-ring: #38665a;
 }
 
 html[data-font-scale='large'] {
@@ -146,19 +143,16 @@ html[data-theme='dark'] {
     radial-gradient(130% 130% at 80% -25%, rgba(255, 214, 156, 0.16) 0%, transparent 55%),
     linear-gradient(135deg, #235244 0%, #1a4034 52%, #102b22 100%);
   --grad-btn: linear-gradient(180deg, #3f8f71 0%, #2f7a5d 55%, #276750 100%);
+  --app-bg:
+    radial-gradient(820px 520px at 96% -12%, rgba(224, 145, 106, 0.12), transparent 60%),
+    radial-gradient(720px 520px at -12% 36%, rgba(79, 169, 138, 0.11), transparent 56%),
+    #0f1714;
 
   --shadow-card: 0 18px 44px -20px rgba(0, 0, 0, 0.6);
   --shadow-float: 0 24px 56px -20px rgba(0, 0, 0, 0.7);
   --shadow-press: 0 6px 16px -10px rgba(0, 0, 0, 0.6);
   --shadow-btn: 0 10px 24px -10px rgba(0, 0, 0, 0.55);
   --focus-ring: #7fd7b3;
-
-  --blob-a: rgba(74, 161, 127, 0.17);
-  --blob-b: rgba(240, 170, 102, 0.11);
-  --blob-c: rgba(99, 169, 184, 0.12);
-  --deco-ring: rgba(255, 255, 255, 0.08);
-  --deco-ring-2: rgba(240, 170, 102, 0.16);
-  --deco-leaf: rgba(255, 255, 255, 0.09);
 
   color-scheme: dark;
 }
@@ -200,6 +194,7 @@ html[data-contrast='high'] {
   --divider: #3a453f;
   --grad-brand: linear-gradient(0deg, #123f32, #123f32);
   --grad-btn: linear-gradient(0deg, #123f32, #123f32);
+  --app-bg: #ffffff;
   --shadow-card: none;
   --shadow-float: 0 0 0 2px #000000;
   --shadow-press: none;
@@ -222,10 +217,9 @@ html { font-size: calc(16px * var(--scale)); }
 
 body {
   margin: 0;
-  background: var(--c-bg);
+  background: var(--app-bg);
   color: var(--c-ink);
-  font-family: 'PingFang SC', 'HarmonyOS Sans SC', 'MiSans', 'Microsoft YaHei',
-    ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-family: 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', 'Segoe UI', system-ui, sans-serif;
   line-height: 1.55;
   text-rendering: optimizeLegibility;
   -webkit-tap-highlight-color: transparent;
@@ -234,6 +228,18 @@ body {
   min-height: 100vh;
   min-height: 100dvh;
   transition: background 0.4s ease, color 0.4s ease;
+}
+
+/* 与网页端一致的轻纸纹；纯 CSS 生成，不请求外部资源。 */
+body::after {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  content: '';
+  opacity: 0.045;
+  mix-blend-mode: soft-light;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
 html[data-motion='reduced'] *,
@@ -256,123 +262,11 @@ html[data-motion='reduced'] *::after {
   }
 }
 
-/* ---- 氛围背景场景 ---- */
-
-.bg-scene {
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  overflow: hidden;
-  pointer-events: none;
-}
-
-/* AI 生成的水彩氛围底图：随主题切换，缓慢 Ken Burns 呼吸 */
-.bg-art {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  opacity: 0;
-  transition: opacity 0.6s ease;
-  animation: kenburns 70s ease-in-out infinite alternate;
-  will-change: transform;
-}
-html[data-theme='light'] .bg-art--light { opacity: 0.62; }
-html[data-theme='dark'] .bg-art--dark { opacity: 0.85; }
-
-@keyframes kenburns {
-  from { transform: scale(1) translateY(0); }
-  to { transform: scale(1.08) translateY(-1.5%); }
-}
-
-.blob {
-  position: absolute;
-  border-radius: 50%;
-  will-change: transform;
-}
-.blob-a {
-  width: 62vmax;
-  height: 62vmax;
-  left: -22vmax;
-  top: -18vmax;
-  background: radial-gradient(circle, var(--blob-a) 0%, transparent 68%);
-  animation: drift-a 34s ease-in-out infinite alternate;
-}
-.blob-b {
-  width: 48vmax;
-  height: 48vmax;
-  right: -18vmax;
-  top: 8vh;
-  background: radial-gradient(circle, var(--blob-b) 0%, transparent 66%);
-  animation: drift-b 42s ease-in-out infinite alternate;
-}
-.blob-c {
-  width: 56vmax;
-  height: 56vmax;
-  left: 8vw;
-  bottom: -30vmax;
-  background: radial-gradient(circle, var(--blob-c) 0%, transparent 66%);
-  animation: drift-c 48s ease-in-out infinite alternate;
-}
-
-@keyframes drift-a {
-  from { transform: translate3d(0, 0, 0) scale(1); }
-  to { transform: translate3d(9vw, 7vh, 0) scale(1.14); }
-}
-@keyframes drift-b {
-  from { transform: translate3d(0, 0, 0) scale(1.08); }
-  to { transform: translate3d(-8vw, 12vh, 0) scale(0.94); }
-}
-@keyframes drift-c {
-  from { transform: translate3d(0, 0, 0) scale(1); }
-  to { transform: translate3d(6vw, -9vh, 0) scale(1.1); }
-}
-
-.ring-deco {
-  position: absolute;
-  border-radius: 50%;
-  border: 1.5px solid var(--deco-ring);
-}
-.ring-deco--a {
-  width: 260px;
-  height: 260px;
-  right: -70px;
-  top: 16vh;
-  animation: bob 12s ease-in-out infinite alternate;
-}
-.ring-deco--b {
-  width: 150px;
-  height: 150px;
-  left: -40px;
-  top: 58vh;
-  border-style: dashed;
-  border-color: var(--deco-ring-2);
-  animation: spin-slow 60s linear infinite;
-}
-
-.leaf-deco {
-  position: absolute;
-  color: var(--deco-leaf);
-  animation: bob 14s ease-in-out infinite alternate;
-}
-.leaf-deco--a { right: 12vw; top: 66vh; transform: rotate(-18deg); }
-.leaf-deco--b { left: 9vw; top: 30vh; transform: rotate(24deg) scale(0.72); animation-delay: -6s; }
-
-@keyframes bob {
-  from { translate: 0 0; }
-  to { translate: 0 -22px; }
-}
-@keyframes spin-slow {
-  to { transform: rotate(360deg); }
-}
-
-html[data-contrast='high'] .bg-scene { display: none; }
-
 h1, h2, h3, p { margin: 0; overflow-wrap: anywhere; }
-h1 { font-size: 1.5rem; line-height: 1.25; font-weight: 800; letter-spacing: 0.01em; }
-h2 { font-size: 1.08rem; line-height: 1.35; font-weight: 800; }
-h3 { font-size: 1rem; font-weight: 700; }
+h1, h2, h3 { font-family: 'Noto Serif SC', 'Source Han Serif SC', 'STZhongsong', 'SimSun', Georgia, serif; }
+h1 { font-size: 1.5rem; line-height: 1.25; font-weight: 650; letter-spacing: 0.015em; }
+h2 { font-size: 1.08rem; line-height: 1.35; font-weight: 650; }
+h3 { font-size: 1rem; font-weight: 650; }
 ul, ol { margin: 0; padding: 0; list-style: none; }
 a { color: var(--c-brand); }
 

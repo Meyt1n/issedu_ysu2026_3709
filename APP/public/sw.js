@@ -5,7 +5,7 @@
    - MOB-151：新版本默认等待（不静默切换），仅当页面在用户确认后
      发送 SKIP_WAITING 消息才接管，避免写操作中途换版本。 */
 
-const CACHE_NAME = 'hct-mobile-shell-v3'
+const CACHE_NAME = 'hct-mobile-shell-v4'
 const SHELL = [
   '/',
   '/manifest.webmanifest',
@@ -14,8 +14,6 @@ const SHELL = [
   '/icons/icon-512.png',
   '/icons/icon-maskable-192.png',
   '/icons/icon-maskable-512.png',
-  '/bg/ambient-light.jpg',
-  '/bg/ambient-dark.jpg',
 ]
 
 self.addEventListener('install', event => {
