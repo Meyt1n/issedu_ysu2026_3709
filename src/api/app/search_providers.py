@@ -13,7 +13,7 @@ import threading
 import time
 from html.parser import HTMLParser
 from typing import Any, Protocol
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 import httpx
 
@@ -500,51 +500,105 @@ def extract_page_text(body: str) -> str:
 
 
 _PAGE_EXCERPT_MAX_CHARS = 600
+_CITED_PAGE_EXCERPT_MAX_CHARS = 4000
 _FETCHABLE_CONTENT_TYPES = ("text/html", "text/plain", "application/xhtml")
+_HTTPS_URL_RE = re.compile(r"https://[^\s<>\"'`]+", re.I)
 
 
-def fetch_result_page_excerpt(url: str, *, settings: Settings) -> str | None:
+def extract_explicit_https_urls(text: str, *, limit: int = 3) -> list[str]:
+    """Pull user- or news-cited HTTPS URLs out of a chat message."""
+    found: list[str] = []
+    seen: set[str] = set()
+    for match in _HTTPS_URL_RE.finditer(str(text or "")):
+        raw = re.sub(r"[^A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$", "", match.group(0))
+        key = raw.casefold()
+        if not raw.lower().startswith("https://") or key in seen:
+            continue
+        seen.add(key)
+        found.append(raw)
+        if len(found) >= max(1, int(limit)):
+            break
+    return found
+
+
+def fetch_result_page_excerpt(
+    url: str,
+    *,
+    settings: Settings,
+    max_chars: int | None = None,
+    max_redirects: int = 0,
+) -> str | None:
     """Fetch one public HTTPS result page under strict limits.
 
     Returns a referral-free text excerpt, or ``None`` when the page is not a
-    public HTTPS host, is not HTML/plain text, redirects, or fails to load.
+    public HTTPS host, is not HTML/plain text, redirects beyond the cap,
+    or fails to load.
     """
     from app.egress_guard import is_public_https_url
 
-    if not is_public_https_url(url):
-        logger.warning("HCT-430 open-mode page fetch blocked (not a public HTTPS host)")
-        return None
+    current = str(url or "").strip()
     max_bytes = int(getattr(settings, "agent_web_search_fetch_page_max_bytes", 262_144))
     timeout = float(getattr(settings, "agent_web_search_fetch_page_timeout_seconds", 6.0))
-    try:
-        with httpx.Client(
-            timeout=timeout,
-            follow_redirects=False,
-            trust_env=False,
-            headers={"User-Agent": "HomeCareTwin-local-agent/1.0"},
-        ) as client:
-            with client.stream("GET", url) as response:
-                if response.status_code != 200:
-                    return None
-                content_type = (response.headers.get("content-type") or "").casefold()
-                if content_type and not any(
-                    accepted in content_type for accepted in _FETCHABLE_CONTENT_TYPES
-                ):
-                    return None
-                collected = bytearray()
-                for chunk in response.iter_bytes():
-                    collected.extend(chunk)
-                    if len(collected) >= max_bytes:
-                        break
-    except Exception as exc:  # noqa: BLE001 — page fetch is best-effort
-        logger.warning("HCT-430 result page fetch failed: %s", str(exc)[:120])
+    hops = max(0, int(max_redirects))
+    excerpt_limit = int(max_chars) if max_chars is not None else _PAGE_EXCERPT_MAX_CHARS
+    collected = bytearray()
+    for _ in range(hops + 1):
+        if not is_public_https_url(current):
+            logger.warning("HCT-430 open-mode page fetch blocked (not a public HTTPS host)")
+            return None
+        try:
+            with httpx.Client(
+                timeout=timeout,
+                follow_redirects=False,
+                trust_env=False,
+                headers={"User-Agent": "HomeCareTwin-local-agent/1.0"},
+            ) as client:
+                with client.stream("GET", current) as response:
+                    if response.status_code in {301, 302, 303, 307, 308}:
+                        location = (response.headers.get("location") or "").strip()
+                        if not location:
+                            return None
+                        current = urljoin(current, location)
+                        continue
+                    if response.status_code != 200:
+                        return None
+                    content_type = (response.headers.get("content-type") or "").casefold()
+                    if content_type and not any(
+                        accepted in content_type for accepted in _FETCHABLE_CONTENT_TYPES
+                    ):
+                        return None
+                    collected = bytearray()
+                    for chunk in response.iter_bytes():
+                        collected.extend(chunk)
+                        if len(collected) >= max_bytes:
+                            break
+                    break
+        except Exception as exc:  # noqa: BLE001 — page fetch is best-effort
+            logger.warning("HCT-430 result page fetch failed: %s", str(exc)[:120])
+            return None
+    else:
         return None
     body = bytes(collected[:max_bytes]).decode("utf-8", errors="ignore")
     text = strip_referral_sentences(extract_page_text(body))
     text = re.sub(r"\n{2,}", "\n", text).strip()
     if not text:
         return None
-    return text[:_PAGE_EXCERPT_MAX_CHARS]
+    return text[:excerpt_limit]
+
+
+def fetch_cited_page_excerpt(url: str, *, settings: Settings) -> str | None:
+    """Fetch a user- or news-cited public HTTPS page.
+
+    Explicit URLs are not limited to the search-engine allowlist; they still
+    must be public HTTPS (SSRF). Bounded redirects are followed because news
+    and WHO pages commonly 301.
+    """
+    return fetch_result_page_excerpt(
+        url,
+        settings=settings,
+        max_chars=_CITED_PAGE_EXCERPT_MAX_CHARS,
+        max_redirects=3,
+    )
 
 
 def enrich_results_with_pages(

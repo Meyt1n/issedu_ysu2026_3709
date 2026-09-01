@@ -20,7 +20,10 @@ const member = {
   created_at: '2026-08-12T00:00:00Z',
 }
 
-const sourceBytes = Buffer.from('synthetic-image')
+const sourceBytes = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhAGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64',
+)
 const sourceHash = createHash('sha256').update(sourceBytes).digest('hex')
 
 const visionResult = {
@@ -171,8 +174,8 @@ async function installSyntheticApi(page: Page, terminal: 'failed' | 'succeeded')
 }
 
 async function enterFamilySpace(page: Page): Promise<void> {
-  await page.goto('/')
-  await expect(page.getByRole('button', { name: '登录家庭空间' })).toBeVisible({ timeout: 20_000 })
+  await page.goto('/?portal=admin')
+  await expect(page.getByRole('button', { name: /进入管理后台|登录家庭空间/ })).toBeVisible({ timeout: 20_000 })
   await submitFormalLogin(page, 'owner-1')
   await expect(page.locator('.app-frame')).toBeVisible({ timeout: 20_000 })
 }

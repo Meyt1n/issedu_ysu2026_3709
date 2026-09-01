@@ -116,6 +116,7 @@ from app.file_upload import (
     compute_hash,
     delete_file_tree,
     file_owner,
+    stored_file_path,
     validate_and_store,
     validate_extension,
     validate_filename,
@@ -130,6 +131,7 @@ from app.knowledge_audit_pagination import (
 from app.local_agents import OrchestrationCancelled, get_agent_catalog, run_local_multi_agent
 from app.models import (
     AccessAudit,
+    AuthPin,
     CareAuthorization,
     FaceCredential,
     HealthEvent,
@@ -231,6 +233,7 @@ from app.schemas import (
     PasswordRecoveryRequest,
     PinLoginCredentials,
     PinSetRequest,
+    PinStatusRead,
     PlanAutomationRead,
     PlanWorkbenchRead,
     ProjectionCheckpointRead,
@@ -502,6 +505,9 @@ def _add_household_setting_audit(
     )
 
 
+RUNTIME_INSTANCE_ID = secrets.token_hex(8)
+
+
 @router.get("/health/db", response_model=HealthResponse)
 def database_health(session: Session = Depends(get_session)) -> HealthResponse:
     session.execute(text("SELECT 1"))
@@ -571,6 +577,7 @@ def capabilities() -> CapabilityResponse:
         phase="P0-foundation",
         available=available,
         unavailable=unavailable,
+        instance_id=RUNTIME_INSTANCE_ID,
         knowledge_admin_configured=bool(cfg.knowledge_admin_actor_set),
         model_release_admin_configured=bool(cfg.model_release_admin_actor_set),
         model_release_dual_control=cfg.model_release_dual_control,
@@ -1853,11 +1860,8 @@ def download_file(
     Legacy objects without ownership metadata are fail-closed: they are readable
     only through the same vision-task authorization path (never by key alone).
     """
-    settings = get_settings()
-    root = Path(settings.file_root).resolve()
-    target = (root / storage_key).resolve()
-
-    if not target.is_relative_to(root) or not target.is_file():
+    target = stored_file_path(storage_key)
+    if target is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="FILE_NOT_FOUND")
 
     owner = file_owner(storage_key)
@@ -2521,9 +2525,18 @@ def auth_set_pin(
     actor_id: str = Depends(get_actor_id),
     session: Session = Depends(get_session),
 ) -> dict:
-    if not _actor_belongs_to_household(session, payload.household_id, actor_id):
+    household = session.get(Household, payload.household_id)
+    if household is None or _is_erased(household):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RESOURCE_NOT_FOUND")
-    set_account_pin(actor_id, payload.household_id, payload.pin, session)
+    target_actor_id = payload.actor_id or actor_id
+    if target_actor_id != actor_id:
+        if household.created_by != actor_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="FORBIDDEN")
+        if not _actor_belongs_to_household(session, payload.household_id, target_actor_id):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RESOURCE_NOT_FOUND")
+    elif not _actor_belongs_to_household(session, payload.household_id, actor_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RESOURCE_NOT_FOUND")
+    set_account_pin(target_actor_id, payload.household_id, payload.pin, session)
     session.add(
         AccessAudit(
             household_id=payload.household_id,
@@ -2539,6 +2552,24 @@ def auth_set_pin(
     )
     session.commit()
     return {"status": "pin_configured", "household_id": payload.household_id}
+
+
+@router.get("/households/{household_id}/pin-status", response_model=PinStatusRead)
+def list_pin_status(
+    household_id: str,
+    actor_id: str = Depends(get_actor_id),
+    session: Session = Depends(get_session),
+) -> dict:
+    """Owner can see which family logins already have a PIN. Hashes are never returned."""
+    household = session.get(Household, household_id)
+    if household is None or _is_erased(household):
+        _raise_resource_not_found()
+    if household.created_by != actor_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="FORBIDDEN")
+    configured_actor_ids = list(
+        session.scalars(select(AuthPin.actor_id).where(AuthPin.household_id == household_id)).all()
+    )
+    return {"household_id": household_id, "configured_actor_ids": configured_actor_ids}
 
 
 @router.post("/auth/logout")
@@ -4191,7 +4222,13 @@ def _prepare_assistant_messages(
     household_id: str | None,
     member_id: str | None,
 ) -> tuple[list[dict[str, Any]], str | None]:
-    messages = list(payload.messages)
+    messages = [
+        message
+        for message in payload.messages
+        if isinstance(message, dict)
+        and message.get("role") in {"user", "assistant"}
+        and str(message.get("content") or "").strip()
+    ][-12:]
     context = _build_assistant_context(session, actor_id, household_id, member_id)
     if context:
         messages = [{"role": "system", "content": context}, *messages]
@@ -4619,11 +4656,8 @@ def create_vision_task_endpoint(
             _raise_resource_not_found()
         household_id = household.id
 
-    file_root = Path(settings.file_root).resolve()
-    target = (file_root / payload.file_id).resolve()
-
-    # Security: only allow files inside the upload root
-    if not target.is_relative_to(file_root) or not target.is_file():
+    target = stored_file_path(payload.file_id)
+    if target is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="FILE_NOT_FOUND",

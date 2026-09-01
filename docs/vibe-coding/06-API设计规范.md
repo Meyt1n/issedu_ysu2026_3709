@@ -51,6 +51,7 @@
 | POST | `/api/v1/households` | 创建家庭 | ✅ |
 | PATCH | `/api/v1/households/{id}` | Owner 修改家庭业务时区 | ✅ |
 | GET | `/api/v1/households/{id}/members` | 列出家庭成员 | ✅ |
+| GET | `/api/v1/households/{id}/pin-status` | Owner 查询哪些登录名已设置 PIN（只返回 actor_id，不含哈希或明文） | ✅ |
 | POST | `/api/v1/households/{id}/members` | 添加成员 | ✅ |
 | GET | `/api/v1/households/{id}/authorizations` | Owner 查询本家庭授权 | ✅ |
 | POST | `/api/v1/households/{id}/authorizations` | 创建字段级授权 | ✅ |
@@ -73,7 +74,7 @@ P0 错误格式：当前使用 FastAPI 默认 `{"detail":"..."}`，P1 统一为 
 
 家庭接口的 `HouseholdRead.time_zone` 是服务端业务日的 IANA 时区名称。创建家庭可传入时区，省略时使用部署配置 `DEFAULT_HOUSEHOLD_TIME_ZONE`；只有家庭 Owner 可通过 `PATCH /api/v1/households/{id}` 修改该字段，非法时区返回校验错误。该字段只影响业务日展示，不参与身份或授权判断。
 
-HCT-417 Web 会话边界：注册、登录和登出只接受 JSON 请求体，密码不得出现在 URL、日志或前端持久化存储中。登录返回 `actor_id`、短期 `session_token` 和 `expires_at`；除登录/注册外，正式网页请求使用 `Authorization: Bearer <session_token>`，Bearer 身份优先于 `X-Actor-Id`。令牌当前只保存在页面内存，浏览器收到 `401` 时必须清理家庭、成员、健康数据和会话状态并回到登录页。`X-Actor-Id` 仅保留给明确的非生产本地演示；正式部署还必须补齐持久化会话存储、密钥轮换、CSRF/同源策略和会话撤销审计，不能把本地内存实现直接宣称为生产鉴权。
+HCT-417 Web 会话边界：注册、登录和登出只接受 JSON 请求体，密码不得出现在 URL、日志或前端持久化存储中。正式账号密码须至少 8 位且同时包含英文字母和数字（HCT-512）；六位 PIN 规则不变。登录返回 `actor_id`、短期 `session_token` 和 `expires_at`；除登录/注册外，正式网页请求使用 `Authorization: Bearer <session_token>`，Bearer 身份优先于 `X-Actor-Id`。令牌当前只保存在页面内存，浏览器收到 `401` 时必须清理家庭、成员、健康数据和会话状态并回到登录页。`X-Actor-Id` 仅保留给明确的非生产本地演示；正式部署还必须补齐持久化会话存储、密钥轮换、CSRF/同源策略和会话撤销审计，不能把本地内存实现直接宣称为生产鉴权。
 
 P0 权限边界的事实源是：owner 可访问本家庭成员目录和健康事件/状态；非 owner 只能看到授权成员和字段。若未来改为 owner 也必须逐项授权，必须先更新 Story、ADR、OpenAPI 和契约测试，不能由单个 PR 默默改变。
 

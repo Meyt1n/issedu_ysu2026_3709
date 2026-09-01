@@ -19,6 +19,7 @@ from ai.safety.lexicon import (
     SYMPTOM_CONTEXT_TERMS,
     SYMPTOM_MEDICATION_INTENT_TERMS,
     URGENT_ROUTE_TERMS,
+    contains_any_lexicon_term,
     is_dose_decision_query,
 )
 
@@ -74,7 +75,7 @@ def classify_question_lexicon(query: str) -> str:
         term in normalized for term in ("药", "阿莫西林", "布洛芬", "处方")
     ):
         return "MEDICATION_SAFETY"
-    if any(term in normalized for term in MEDICATION_SAFETY_ROUTE_TERMS):
+    if contains_any_lexicon_term(normalized, MEDICATION_SAFETY_ROUTE_TERMS):
         return "MEDICATION_SAFETY"
     medicine_intent = any(term in normalized for term in SYMPTOM_MEDICATION_INTENT_TERMS)
     symptom_context = any(term in normalized for term in SYMPTOM_CONTEXT_TERMS)

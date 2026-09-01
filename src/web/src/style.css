@@ -123,6 +123,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 /* ---------- 表单基础 ---------- */
 
 input[type="text"],
+input[type="password"],
 input[type="number"],
 input[type="date"],
 input[type="datetime-local"],
@@ -164,6 +165,39 @@ label.field small {
   color: var(--ink-faint);
   font-weight: 400;
   line-height: 1.5;
+}
+
+.password-reveal {
+  position: relative;
+}
+
+.password-reveal input {
+  width: 100%;
+  padding-right: 42px;
+}
+
+.password-reveal-toggle {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-soft);
+  transform: translateY(-50%);
+  cursor: pointer;
+}
+
+.password-reveal-toggle:hover,
+.password-reveal-toggle:focus-visible {
+  color: var(--ink);
+  background: rgba(56, 102, 90, 0.08);
 }
 
 fieldset {
@@ -638,7 +672,6 @@ button:focus-visible, a:focus-visible {
 
 .view-assistant .chat-compose,
 .view-assistant .agent-network-toggle,
-.view-assistant .voice-session-panel,
 .view-assistant .notice {
   flex: 0 0 auto;
 }
@@ -1507,6 +1540,10 @@ button:focus-visible, a:focus-visible {
   margin: -8px 0 0;
 }
 
+.member-unbound-gate .btn {
+  justify-content: center;
+}
+
 /* 成员前台：账号密码收进「其他方式」的次级入口。 */
 .portal-other-ways {
   background: none;
@@ -2065,22 +2102,9 @@ button:focus-visible, a:focus-visible {
   color: var(--pine-deep);
 }
 
-.chat-message-actions .app-icon,
-.voice-input-button .app-icon {
+.chat-message-actions .app-icon {
   margin-right: 5px;
   vertical-align: -2px;
-}
-
-.voice-input-button.listening {
-  background: var(--rose-tint);
-  border-color: var(--rose);
-  color: var(--rose-ink);
-}
-
-.voice-input-button.active {
-  background: var(--pine-tint);
-  border-color: var(--pine);
-  color: var(--pine-deep);
 }
 
 .stream-caret {
@@ -2405,72 +2429,6 @@ button:focus-visible, a:focus-visible {
   white-space: nowrap;
 }
 
-.voice-session-panel {
-  align-items: center;
-  background: color-mix(in srgb, var(--pine-tint) 72%, transparent);
-  border: 1px solid color-mix(in srgb, var(--pine) 34%, var(--glass-border));
-  border-radius: 16px;
-  display: flex;
-  gap: 12px;
-  margin-top: 12px;
-  min-height: 66px;
-  padding: 10px 14px;
-}
-
-.voice-session-panel.active {
-  background: color-mix(in srgb, var(--rose-tint) 62%, transparent);
-  border-color: color-mix(in srgb, var(--rose) 40%, var(--glass-border));
-}
-
-.voice-session-visual {
-  align-items: center;
-  background: var(--glass-card-strong);
-  border: 1px solid var(--glass-border);
-  border-radius: 50%;
-  color: var(--pine-deep);
-  display: inline-flex;
-  flex: 0 0 auto;
-  height: 42px;
-  justify-content: center;
-  position: relative;
-  width: 42px;
-}
-
-.voice-session-panel.active .voice-session-visual { color: var(--rose-ink); }
-
-.voice-session-ring {
-  border: 1px solid currentColor;
-  border-radius: 50%;
-  inset: 3px;
-  opacity: 0.48;
-  position: absolute;
-  animation: voice-ring-pulse 1.6s ease-out infinite;
-}
-
-.voice-session-ring.second {
-  animation-delay: 0.8s;
-}
-
-@keyframes voice-ring-pulse {
-  0% { opacity: 0.5; transform: scale(0.76); }
-  100% { opacity: 0; transform: scale(1.7); }
-}
-
-.voice-session-copy {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.voice-session-copy strong { color: var(--ink); font-size: 13px; }
-.voice-session-copy > span { color: var(--ink-soft); font-size: 12px; }
-.voice-live-transcript {
-  color: var(--pine-deep) !important;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 @media (max-width: 640px) {
   .chat-compose { flex-wrap: wrap; }
   .chat-compose textarea { flex-basis: 100%; }
@@ -2480,10 +2438,6 @@ button:focus-visible, a:focus-visible {
 
 @media (max-height: 700px) and (min-width: 641px) {
   .chat-window { height: auto; min-height: 120px; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .voice-session-ring { animation: none; }
 }
 
 /* ---------- 杂项 ---------- */
@@ -3042,25 +2996,11 @@ button:focus-visible, a:focus-visible {
   }
 }
 
-/* ---------- 模型实验室 / 知识文档 ---------- */
+/* ---------- 知识文档 ---------- */
 
 .mono {
   font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
   font-size: 12px;
-}
-
-.release-band {
-  align-items: center;
-  backdrop-filter: blur(12px) saturate(1.15);
-  background: linear-gradient(120deg, var(--pine-tint), var(--gold-tint));
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-soft), inset 0 1px 0 var(--glass-highlight);
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  justify-content: space-between;
-  padding: 15px 19px;
 }
 
 .chunk-hit {
@@ -4177,45 +4117,6 @@ button:focus-visible, a:focus-visible {
 
 :root[data-theme="dusk"] .welcome-art img { filter: brightness(0.82) saturate(0.92); }
 
-.welcome-art .art-caption {
-  backdrop-filter: blur(6px);
-  background: rgba(28, 24, 18, 0.4);
-  border-radius: 999px;
-  bottom: 12px;
-  color: #f6efdf;
-  font-size: 11.5px;
-  left: 12px;
-  letter-spacing: 1px;
-  padding: 5px 12px;
-  position: absolute;
-}
-
-.art-float {
-  align-items: center;
-  backdrop-filter: blur(10px);
-  background: rgba(255, 253, 247, 0.72);
-  border: 1px solid rgba(255, 255, 255, 0.7);
-  border-radius: 999px;
-  box-shadow: 0 8px 24px -10px rgba(84, 70, 41, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.8);
-  color: var(--pine-deep);
-  display: inline-flex;
-  font-size: 12px;
-  font-weight: 750;
-  gap: 6px;
-  padding: 7px 13px;
-  position: absolute;
-}
-
-.art-float .app-icon { color: var(--clay); }
-
-.art-float.f1 { animation: chip-float 5.4s ease-in-out infinite; right: 14px; top: 14px; }
-.art-float.f2 { animation: chip-float 6.6s ease-in-out -2.2s infinite; bottom: 44px; right: -12px; }
-
-@keyframes chip-float {
-  0%, 100% { transform: translateY(0) rotate(0.4deg); }
-  50% { transform: translateY(-7px) rotate(-0.6deg); }
-}
-
 /* ---------- 图谱能量粒子 ---------- */
 
 .graph-particle { opacity: 0.85; }
@@ -4865,7 +4766,6 @@ button:focus-visible, a:focus-visible {
 
 .seal { font-family: var(--font-hand); font-size: 17px; }
 .welcome-title .accent { font-family: var(--font-hand); font-size: 1.1em; }
-.art-caption { font-family: var(--font-hand); letter-spacing: 2.5px; }
 .sec-no { font-family: var(--font-numeric); font-style: italic; }
 .empty-state strong { font-family: var(--font-display); font-size: 16px; letter-spacing: 0.5px; }
 .brand-sub { font-family: var(--font-numeric); font-style: italic; letter-spacing: 1.6px; text-transform: none; }
@@ -5625,6 +5525,14 @@ button:focus-visible, a:focus-visible {
   background: var(--pine);
   color: white;
   font-weight: 700;
+}
+
+.member-picker {
+  flex-wrap: wrap;
+}
+
+.member-picker button {
+  flex: 1 1 120px;
 }
 
 /* 家庭成员前台：大按钮、少选项，避免把管理后台术语带给老人。 */

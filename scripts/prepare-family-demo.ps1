@@ -2,7 +2,7 @@
 param(
     [string]$ApiBaseUrl = "http://127.0.0.1:8000",
     [string]$AdminActorId = "demo-parent",
-    [string]$AdminPassword = "DemoOnly-ChangeMe!",
+    [string]$AdminPassword = "DemoOnly-ChangeMe1!",
     [string]$HouseholdName = "爷爷奶奶家（本地演示）",
     [string]$GrandpaActorId = "grandpa-demo",
     [string]$GrandmaActorId = "grandma-demo"

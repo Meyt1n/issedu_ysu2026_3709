@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 
-import { submitFormalLogin } from './support/formalLogin'
+import { seedBoundHousehold, submitFormalLogin } from './support/formalLogin'
 
 /**
  * HCT-453 前后台分端口登录入口。
@@ -8,7 +8,7 @@ import { submitFormalLogin } from './support/formalLogin'
  * 生产形态是两个端口（成员前台 5173/8080、管理后台 5174/8081）；
  * 本套用例通过 `?portal=member|admin` 查询覆盖在同一 dev server 上
  * 复现两种入口模式（portalEntry.ts 的解析优先级保证两者等价），
- * 断言：入口品牌、成员刷脸/账号密码、管理员账号密码、入口/门户不匹配拦截与跨端指引。
+ * 断言：入口品牌、成员刷脸/PIN、管理员账号密码、入口/门户不匹配拦截与跨端指引。
  */
 
 const household = {
@@ -71,9 +71,10 @@ async function installEntryApi(page: Page): Promise<void> {
       })
     }
     if (request.method() === 'POST' && path === '/api/v1/auth/pin-login') {
+      const submitted = request.postDataJSON() as { actor_id?: string; household_id?: string } | null
       return respond({
-        actor_id: grandmaMember.actor_id,
-        household_id: household.id,
+        actor_id: submitted?.actor_id ?? grandmaMember.actor_id,
+        household_id: submitted?.household_id ?? household.id,
         session_token: 'p'.repeat(48),
         expires_at: (Date.now() + 1_800_000) / 1000,
       })
@@ -116,7 +117,7 @@ async function installEntryApi(page: Page): Promise<void> {
   })
 }
 
-test('成员前台入口展示个人前台品牌，并保留刷脸与账号密码', async ({ page }) => {
+test('成员前台入口未绑定家庭时展示个人前台品牌，并引导去管理后台注册', async ({ page }) => {
   await installEntryApi(page)
   await page.goto('/?portal=member')
 
@@ -125,20 +126,21 @@ test('成员前台入口展示个人前台品牌，并保留刷脸与账号密�
   await expect(page.getByText('成员前台 · 个人身份')).toHaveCount(0)
   await expect(page.getByTestId('formal-login-method')).toHaveCount(0)
   await expect(page.getByLabel('访问用途代码', { exact: true })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: '进入前台', exact: true })).toBeVisible()
-  await expect(page.getByRole('group', { name: '选择账号登录凭据' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '刷脸进入', exact: true })).toBeVisible()
+  await expect(page.getByTestId('member-unbound-gate')).toBeVisible()
+  await expect(page.getByRole('heading', { name: '请先到管理后台' })).toBeVisible()
+  await expect(page.getByRole('link', { name: '去管理后台登录' })).toHaveAttribute(
+    'href',
+    'http://127.0.0.1:5174/?portal=admin',
+  )
+  await expect(page.getByRole('link', { name: '管理员登录' })).toHaveCount(0)
+  await expect(page.getByRole('group', { name: '选择账号登录凭据' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '刷脸进入', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'PIN登录', exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '数字密码' })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: '账号密码', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: '账号密码', exact: true }).click()
-  await expect(page.getByLabel('正式账号', { exact: true })).toBeVisible()
-  await expect(page.getByLabel('密码', { exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: /注册本地账号/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: '账号密码', exact: true })).toHaveCount(0)
+  await expect(page.getByLabel('家庭管理员账号', { exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /注册本地账号/ })).toHaveCount(0)
   await expect(page.getByTestId('member-portal-entry-guide')).toHaveCount(0)
-
-  const crossLink = page.getByRole('link', { name: '管理员登录' })
-  await expect(crossLink).toBeVisible()
-  await expect(crossLink).toHaveAttribute('href', 'http://127.0.0.1:5174/?portal=admin')
 })
 
 test('管理后台入口展示全家管理品牌，并只提供账号密码', async ({ page }) => {
@@ -161,6 +163,37 @@ test('管理后台入口展示全家管理品牌，并只提供账号密码', as
   const crossLink = page.getByRole('link', { name: '家人登录' })
   await expect(crossLink).toBeVisible()
   await expect(crossLink).toHaveAttribute('href', 'http://127.0.0.1:5173/?portal=member')
+})
+
+test('管理后台主按钮始终可点，密码错误在卡片内提示', async ({ page }) => {
+  await installEntryApi(page)
+  await page.route('**/api/v1/auth/login', async route => {
+    await route.fulfill({
+      status: 401,
+      contentType: 'application/json',
+      body: JSON.stringify({ detail: 'AUTH_FAILED' }),
+    })
+  })
+  await page.goto('/?portal=admin')
+
+  const submit = page.getByRole('button', { name: '进入管理后台', exact: true })
+  await expect(submit).toBeEnabled()
+  await submit.click()
+  await expect(page.locator('.welcome-form-card').getByRole('alert')).toContainText('请输入')
+
+  await expect(page.getByText(/至少 8 位，需同时包含英文字母和数字/)).toHaveCount(0)
+
+  await page.getByLabel('正式账号', { exact: true }).fill('demo-parent')
+  await page.getByLabel('密码', { exact: true }).fill('onlyletters')
+  await expect(submit).toBeEnabled()
+  await submit.click()
+  await expect(page.locator('.welcome-form-card').getByRole('alert')).toContainText('账号或密码不正确')
+  await expect(page.locator('.welcome-form-card').getByRole('alert')).not.toContainText('英文字母')
+
+  await page.getByLabel('密码', { exact: true }).fill('WrongPass1')
+  await expect(submit).toBeEnabled()
+  await submit.click()
+  await expect(page.locator('.welcome-form-card').getByRole('alert')).toContainText('账号或密码不正确')
 })
 
 test('管理后台可用本人六位数字密码重置忘记的正式密码', async ({ page }) => {
@@ -235,22 +268,22 @@ test('成员前台与管理后台的欢迎页明显不同（标语、徽标、�
   await expect(page.getByRole('button', { name: '进入前台', exact: true })).toHaveCount(0)
 })
 
-test('成员前台入口拦截管理员账号：登出并指向管理后台，不渲染后台界面', async ({ page }) => {
+test('成员前台入口用 PIN 选人进入成员首页且不渲染后台', async ({ page }) => {
+  await seedBoundHousehold(page, household, [grandmaMember])
   await installEntryApi(page)
   await page.goto('/?portal=member')
 
-  await submitFormalLogin(page, 'parent-admin')
-
-  // 不落在管理后台：无应用框架、无后台导航。
-  await expect(page.getByRole('alert')).toContainText('这是成员前台')
-  await expect(page.getByRole('alert')).toContainText('管理后台')
+  await page.getByRole('button', { name: 'PIN登录', exact: true }).click()
   await expect(page.locator('.app-frame')).toHaveCount(0)
   await expect(page.getByRole('button', { name: '人工复核' })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: '家庭总览' })).toHaveCount(0)
+  await expect(page.getByRole('option', { name: '奶奶' })).toBeVisible()
+  await page.getByRole('option', { name: '奶奶' }).click()
+  await page.getByLabel('六位数字密码', { exact: true }).fill('135790')
+  await page.getByRole('button', { name: '进入前台', exact: true }).click()
 
-  const crossLink = page.getByRole('link', { name: '去管理后台' })
-  await expect(crossLink).toBeVisible()
-  await expect(crossLink).toHaveAttribute('href', 'http://127.0.0.1:5174/?portal=admin')
+  await expect(page.locator('.app-frame')).toBeVisible()
+  await expect(page.getByRole('heading', { name: '你好，奶奶' })).toBeVisible()
+  await expect(page.locator('aside.sidebar').getByRole('button', { name: '人工复核' })).toHaveCount(0)
 })
 
 test('管理后台入口拦截成员账号：登出并指向成员前台，不渲染前台界面', async ({ page }) => {
@@ -269,11 +302,15 @@ test('管理后台入口拦截成员账号：登出并指向成员前台，不�
   await expect(crossLink).toHaveAttribute('href', 'http://127.0.0.1:5173/?portal=member')
 })
 
-test('成员前台入口放行成员账号并落在成员首页，只见成员导航', async ({ page }) => {
+test('成员前台入口放行已绑定家人的 PIN 并落在成员首页，只见成员导航', async ({ page }) => {
+  await seedBoundHousehold(page, household, [grandmaMember])
   await installEntryApi(page)
   await page.goto('/?portal=member')
 
-  await submitFormalLogin(page, grandmaMember.actor_id)
+  await page.getByRole('button', { name: 'PIN登录', exact: true }).click()
+  await page.getByRole('option', { name: '奶奶' }).click()
+  await page.getByLabel('六位数字密码', { exact: true }).fill('135790')
+  await page.getByRole('button', { name: '进入前台', exact: true }).click()
 
   await expect(page.locator('.app-frame')).toBeVisible()
   await expect(page.getByRole('heading', { name: '你好，奶奶' })).toBeVisible()

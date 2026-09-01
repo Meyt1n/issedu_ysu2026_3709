@@ -33,23 +33,26 @@ const expandedTaskId = ref<string | null>(null)
 const imageUrls = ref<Record<string, string>>({})
 const imageLoadingId = ref<string | null>(null)
 
+async function loadTaskImage(task: VisionTask): Promise<void> {
+  if (imageUrls.value[task.id] || imageLoadingId.value === task.id) return
+  imageLoadingId.value = task.id
+  try {
+    const blob = await apiClient.fetchFileBlob(task.file_id, requestOptions.value)
+    imageUrls.value = { ...imageUrls.value, [task.id]: URL.createObjectURL(blob) }
+  } catch {
+    // Keep the card usable; the viewer shows 「原图不可用」 when the blob is missing.
+  } finally {
+    if (imageLoadingId.value === task.id) imageLoadingId.value = null
+  }
+}
+
 async function toggleViewer(task: VisionTask): Promise<void> {
   if (expandedTaskId.value === task.id) {
     expandedTaskId.value = null
     return
   }
   expandedTaskId.value = task.id
-  if (imageUrls.value[task.id]) return
-
-  imageLoadingId.value = task.id
-  try {
-    const blob = await apiClient.fetchFileBlob(task.file_id, requestOptions.value)
-    imageUrls.value = { ...imageUrls.value, [task.id]: URL.createObjectURL(blob) }
-  } catch {
-    // 原图不可用时查看器显示占位提示，不阻塞证据列表。
-  } finally {
-    imageLoadingId.value = null
-  }
+  await loadTaskImage(task)
 }
 
 const TASK_PREVIEW = 5
@@ -101,6 +104,7 @@ async function refreshTasks(showSpinner = false): Promise<void> {
       previousStatuses.set(task.id, task.status)
     }
     tasks.value = nextTasks
+    await Promise.allSettled(nextTasks.map(task => loadTaskImage(task)))
   } finally {
     loadingTasks.value = false
   }
@@ -291,7 +295,6 @@ onBeforeUnmount(() => {
         </template>
 
         <VisionResultViewer
-          v-if="expandedTaskId === task.id"
           :task="task"
           :image-url="imageUrls[task.id] ?? null"
           :image-loading="imageLoadingId === task.id"

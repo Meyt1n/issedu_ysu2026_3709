@@ -27,7 +27,11 @@ async function loadNews(): Promise<void> {
 }
 
 function openItem(item: HealthNewsItem): void {
-  openAssistantWithPrompt(item.chat_prompt)
+  const url = item.source_url?.trim() ?? ''
+  const prompt = url
+    ? `请阅读这篇公开网页后再回答：${url}\n${item.chat_prompt}`
+    : item.chat_prompt
+  openAssistantWithPrompt(prompt, { allowNetworkSearch: true, newThread: true })
 }
 
 onMounted(() => {

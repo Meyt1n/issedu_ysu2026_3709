@@ -85,10 +85,54 @@ function readEnvironmentSignals(): PortalEntrySignals {
 
 let activeEntryMode: PortalEntryMode | null = null
 
+const WELCOME_ENTRY_HINT_KEY = 'hct-welcome-entry-hint'
+let memoryWelcomeHint: 'member' | 'admin' | null = null
+
+/** 成员前台退出后，同一标签页的单入口欢迎页仍按成员前台渲染。 */
+export function rememberWelcomeEntry(portal: 'member' | 'admin'): void {
+  memoryWelcomeHint = portal
+  try {
+    globalThis.sessionStorage?.setItem(WELCOME_ENTRY_HINT_KEY, portal)
+  } catch {
+    // Private browsing may disable sessionStorage; in-memory hint still covers this tab.
+  }
+}
+
+export function readWelcomeEntryHint(): 'member' | 'admin' | null {
+  try {
+    const value = globalThis.sessionStorage?.getItem(WELCOME_ENTRY_HINT_KEY)
+    if (value === 'member' || value === 'admin') return value
+  } catch {
+    // Fall through to the in-memory hint.
+  }
+  return memoryWelcomeHint
+}
+
+/** 仅供单元测试清理。 */
+export function resetWelcomeEntryHintForTest(): void {
+  memoryWelcomeHint = null
+  try {
+    globalThis.sessionStorage?.removeItem(WELCOME_ENTRY_HINT_KEY)
+  } catch {
+    // Ignore missing Storage in node test environments.
+  }
+}
+
 /** 当前页面的入口模式；首次调用时从环境解析并缓存。 */
 export function activePortalEntryMode(): PortalEntryMode {
   if (activeEntryMode === null) activeEntryMode = resolvePortalEntryMode(readEnvironmentSignals())
   return activeEntryMode
+}
+
+/**
+ * 欢迎页实际使用的入口。显式 `?portal=` / 端口 / 构建模式优先；
+ * 单入口（auto）在本标签刚从成员前台退出时，仍走成员前台品牌和门禁，
+ * 避免落回带残留家庭名的刷脸调试页。
+ */
+export function resolveWelcomeEntryMode(): PortalEntryMode {
+  const resolved = activePortalEntryMode()
+  if (resolved !== 'auto') return resolved
+  return readWelcomeEntryHint() ?? 'auto'
 }
 
 /** 仅供单元测试注入入口模式；传 null 恢复按环境解析。 */
@@ -182,9 +226,9 @@ export interface PortalEntryBranding {
   /** 左侧信息栏的三枚承诺胶囊（两端文案不同，避免两个入口长得一样）。 */
   chips: ReadonlyArray<{ icon: string; text: string }>
   /** 凭据 tab 顺序（首个为人脸时，本机已绑定家庭则默认刷脸）。 */
-  credentialOrder: ReadonlyArray<'face' | 'password'>
+  credentialOrder: ReadonlyArray<'face' | 'password' | 'pin'>
   /** 未绑定人脸时的默认凭据 tab。 */
-  defaultCredential: 'face' | 'password'
+  defaultCredential: 'face' | 'password' | 'pin'
   /** 是否把账号密码收进“其他方式”。 */
   passwordBehindOtherWays: boolean
   /** 主按钮文案。 */
@@ -196,17 +240,17 @@ export interface PortalEntryBranding {
 
 const MEMBER_BRANDING: PortalEntryBranding = {
   formTitle: '家人登录',
-  formIdentityHint: '',
+  formIdentityHint: '刷脸进入，或用 PIN 选择家人。',
   badge: '成员前台',
   heroTitle: '我的健康日常',
-  heroLede: '刷脸进入，查看今天的提醒和记录。',
+  heroLede: '刷脸进入，或用 PIN 选择家人。这台电脑需要先由管理员在后台绑定。',
   chips: [
     { icon: 'sun', text: '今天的提醒' },
     { icon: 'scan', text: '拍药盒核对' },
     { icon: 'heart', text: '刷脸就能进' },
   ],
-  credentialOrder: ['face', 'password'],
-  defaultCredential: 'password',
+  credentialOrder: ['face', 'pin'],
+  defaultCredential: 'pin',
   passwordBehindOtherWays: false,
   ctaLabel: '进入前台',
   crossLinkLabel: '管理员登录',
@@ -215,7 +259,7 @@ const MEMBER_BRANDING: PortalEntryBranding = {
 
 const ADMIN_BRANDING: PortalEntryBranding = {
   formTitle: '管理员登录',
-  formIdentityHint: '',
+  formIdentityHint: '新家庭注册后会进入「登录设置」：先给每位家人设 PIN，再按需录入人脸。登录后这台电脑会自动绑定当前家庭。',
   badge: '管理后台',
   heroTitle: '家庭档案与授权',
   heroLede: '使用管理员账号进入。',
@@ -251,7 +295,7 @@ export function portalEntryConflictNotice(
   if (conflict === 'need-admin-entry') {
     if (context.afterCreate) {
       return {
-        message: '家庭已创建。请到管理后台继续设置。',
+        message: '家庭已创建。请到管理后台「登录设置」为每位家人设置六位数字密码，然后再回成员前台登录。',
         crossLinkLabel: '去管理后台',
         crossLinkTarget: 'admin',
       }

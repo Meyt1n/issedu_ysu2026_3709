@@ -242,11 +242,14 @@ test.describe('keyboard path and focus visibility', () => {
 })
 
 test.describe('form errors', () => {
-  test('an incomplete formal login cannot be submitted', async ({ page }) => {
+  test('an incomplete formal login shows an in-card error after submit', async ({ page }) => {
     await installSyntheticApi(page)
     await page.goto('/')
 
-    await expect(page.getByRole('button', { name: '登录家庭空间' })).toBeDisabled()
+    const submit = page.getByRole('button', { name: '登录家庭空间' })
+    await expect(submit).toBeEnabled()
+    await submit.click()
+    await expect(page.getByRole('alert')).toContainText('请输入')
   })
 })
 

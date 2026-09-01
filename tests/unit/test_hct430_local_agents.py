@@ -242,7 +242,7 @@ def test_agent_catalog_declares_all_workers_local() -> None:
 
 
 def test_agent_catalog_reports_web_search_readiness() -> None:
-    disabled = get_agent_catalog(Settings())
+    disabled = get_agent_catalog(Settings(agent_web_search_enabled=False))
     assert disabled["web_search_enabled"] is False
     assert disabled["web_search_ready"] is False
 
@@ -263,7 +263,7 @@ def test_agent_catalog_reports_web_search_readiness() -> None:
 
 def test_agent_catalog_explains_unavailable_reason_and_enable_hint() -> None:
     """The catalog must say why search is off and how to turn it on."""
-    disabled = get_agent_catalog(Settings())
+    disabled = get_agent_catalog(Settings(agent_web_search_enabled=False))
     assert disabled["web_search_unavailable_reason"] == "DEPLOYMENT_DISABLED"
     assert "AGENT_WEB_SEARCH_ENABLED" in disabled["web_search_enable_hint"]
     assert disabled["web_search_offline_fixture"] is False
@@ -521,6 +521,33 @@ def test_web_search_no_results_keeps_trace_clear(monkeypatch, body: str) -> None
     assert safe_query is not None
 
 
+def test_cited_url_fetch_skips_search_allowlist(monkeypatch) -> None:
+    def fail_search(*args, **kwargs):
+        raise AssertionError("search engine must not run when a cited page is fetched")
+
+    monkeypatch.setattr("app.local_agents.execute_web_search", fail_search)
+    monkeypatch.setattr(
+        "app.local_agents.fetch_cited_page_excerpt",
+        lambda url, settings: "页面正文：居家隔离与洗手提醒。",
+    )
+    results, trace, outbound = _web_search_agent(
+        "请阅读这篇公开网页后再回答：https://www.who.int/zh/news/item/1\n首页看到公开资讯",
+        sensitive_values=[],
+        allow_network_search=True,
+        settings=Settings(
+            agent_web_search_enabled=True,
+            agent_web_search_egress_mode="allowlist",
+            agent_web_search_allowed_domains="html.duckduckgo.com",
+            agent_web_search_url="https://html.duckduckgo.com/html/",
+        ),
+    )
+    assert results[0]["source"] == "cited_page"
+    assert "洗手" in results[0]["page_excerpt"]
+    assert trace["status"] == "completed"
+    assert "指定网页" in trace["summary"]
+    assert "who.int" in (outbound or "")
+
+
 def test_general_plan_runs_knowledge_and_honours_search_opt_in() -> None:
     """HCT-430/HCT-450: GENERAL teaching questions retrieve the reviewed local
     library; external search stays off until the user opts in (double gate
@@ -732,6 +759,7 @@ def test_synthesis_degrade_mentions_retrieved_evidence(monkeypatch) -> None:
     assert result["degraded"] is True
     assert result["degrade_reason"] == "SCHEMA_VALIDATION_FAILED"
     assert "1 条外部参考" in result["answer"]
+    assert "系统暂时无法处理" not in result["answer"]
 
 
 def test_medication_safety_without_knowledge_still_answers(monkeypatch) -> None:
@@ -955,6 +983,8 @@ def test_compact_local_evidence_keeps_query_relevant_fields() -> None:
     assert "布洛芬" in med
     assert "notes" not in med
     assert "get_applied_rules" not in med
+    assert "database_agent" not in med
+    assert "knowledge_agent" not in med
 
     rules = _compact_local_evidence(
         database,
@@ -964,6 +994,15 @@ def test_compact_local_evidence_keeps_query_relevant_fields() -> None:
     )
     assert "RULE-1" in rules
     assert "get_member_state" in rules
+
+    denied = _compact_local_evidence(
+        {},
+        {"error": "TOOL_SCOPE_DENIED", "results": []},
+        query_type="GENERAL",
+    )
+    assert "TOOL_SCOPE_DENIED" not in denied
+    assert "NO_AUTHORISED_DOCUMENTS" not in denied
+    assert "database_agent" not in denied
 
 
 def test_synthesis_streams_only_validated_answer(monkeypatch) -> None:
@@ -1032,3 +1071,123 @@ def test_synthesis_emits_validating_status(monkeypatch) -> None:
         on_status=phases.append,
     )
     assert phases == ["generating", "validating"]
+
+
+def test_news_prompt_forces_general_query_type(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_knowledge(session, **kwargs):
+        return {"results": []}, _completed_trace("knowledge", "本地资料检索")
+
+    def fake_synthesis(**kwargs):
+        captured["query_type"] = kwargs.get("query_type")
+        return {
+            "answer": "ok", "sources": [], "citations": [],
+            "suggested_questions": [], "confidence": "high", "escalate": False,
+            "degraded": False, "degrade_reason": None, "route": None,
+            "model": kwargs.get("model"), "query_type": kwargs.get("query_type"),
+            "risk_notice": None,
+            "_trace": _completed_trace("synthesis", "回答生成"),
+        }
+
+    monkeypatch.setattr("app.local_agents.get_settings", lambda: Settings(
+        agent_web_search_enabled=False,
+        agent_retrieval_cache_ttl_seconds=0,
+    ))
+    monkeypatch.setattr("app.local_agents._knowledge_agent", fake_knowledge)
+    monkeypatch.setattr("app.local_agents._synthesis_agent", fake_synthesis)
+
+    result = run_local_multi_agent(
+        None,
+        messages=[{
+            "role": "user",
+            "content": (
+                "请阅读这篇公开网页后再回答：https://www.who.int/zh/news-room\n"
+                "结合本地知识库，用教学语气说明一般性居家照护注意点；"
+                "不要诊断、不开处方、不编造病例数。"
+            ),
+        }],
+        actor_id="actor",
+        allow_network_search=True,
+    )
+
+    assert captured["query_type"] == "GENERAL"
+    assert result["query_type"] == "GENERAL"
+
+
+def test_general_skips_citation_retry(monkeypatch) -> None:
+    from app.local_agents import _synthesis_agent
+
+    calls: list[int] = []
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def chat_stream(self, **kwargs):
+            calls.append(len(kwargs["messages"]))
+            yield (
+                '{"answer":"居家注意洗手和分开放置个人用品。",'
+                '"sources":[],"confidence":"medium","escalate":false}'
+            )
+
+    monkeypatch.setattr("app.local_agents.OllamaClient", FakeClient)
+    monkeypatch.setattr("app.local_agents.is_loopback_ollama_url", lambda url: True)
+
+    result = _synthesis_agent(
+        messages=[{"role": "user", "content": "最近有什么新闻吗"}],
+        query_type="GENERAL",
+        database={},
+        knowledge={"results": [{
+            "document_id": "d1",
+            "version": "1",
+            "chunk_id": "c1",
+            "title": "说明书",
+            "text": "洗手",
+            "locator": "",
+        }]},
+        external_sources=[],
+        model="local-model",
+        max_tokens=64,
+        temperature=0.1,
+        settings=Settings(agent_open_chat=False),
+    )
+
+    assert len(calls) == 1
+    assert result["degraded"] is False
+    assert result["answer"].startswith("居家注意洗手")
+
+
+def test_news_schema_failure_uses_teaching_fallback(monkeypatch) -> None:
+    from app.local_agents import _synthesis_agent
+
+    class BrokenModel:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def chat_stream(self, **kwargs):
+            yield (
+                "问题类型是 MEDICATION_SAFETY。"
+                "database_agent 报 TOOL_SCOPE_DENIED。上一稿没有在 sources 中引用。"
+            )
+
+    monkeypatch.setattr("app.local_agents.OllamaClient", BrokenModel)
+    monkeypatch.setattr("app.local_agents.is_loopback_ollama_url", lambda url: True)
+
+    result = _synthesis_agent(
+        messages=[{"role": "user", "content": "最近有什么新闻吗"}],
+        query_type="GENERAL",
+        database={},
+        knowledge={"results": []},
+        external_sources=[],
+        model="local-model",
+        max_tokens=64,
+        temperature=0.1,
+        settings=Settings(agent_open_chat=True),
+    )
+
+    assert result["degraded"] is True
+    assert "联网搜索" in result["answer"]
+    assert "TOOL_SCOPE_DENIED" not in result["answer"]
+    assert "database_agent" not in result["answer"]
+    assert "上一稿" not in result["answer"]

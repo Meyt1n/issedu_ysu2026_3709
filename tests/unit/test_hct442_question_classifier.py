@@ -106,3 +106,14 @@ def test_classify_question_default_is_lexicon_only(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr("app.config.get_settings", lambda: _Settings())
     assert classify_question("好像吃错药了怎么办？") == "MEDICATION_SAFETY"
     assert classify_question("你好") == "GENERAL"
+
+
+def test_lexicon_ignores_negated_prescription_in_news_prompt() -> None:
+    news_prompt = (
+        "请阅读这篇公开网页后再回答：https://www.who.int/zh/news-room "
+        "结合本地知识库，用教学语气说明一般性居家照护注意点；"
+        "不要诊断、不开处方、不编造病例数或未证实的疫情结论。"
+    )
+    assert classify_question_lexicon(news_prompt) == "GENERAL"
+    assert classify_question_lexicon("最近有什么新闻吗") == "GENERAL"
+    assert classify_question_lexicon("请帮我开处方") == "MEDICATION_SAFETY"

@@ -1,5 +1,7 @@
 """The API must fail closed for production until remaining demo gaps are closed."""
 
+from pathlib import Path
+
 import pytest
 
 from app.config import Settings
@@ -33,3 +35,11 @@ def test_development_configuration_defaults_to_formal_authentication() -> None:
 
     assert settings.allow_dev_actor_header is False
     assert settings.egress_default_deny is True
+
+
+def test_relative_file_root_resolves_against_the_repository() -> None:
+    settings = Settings(file_root="./data/files", _env_file=None)
+    root = Path(settings.file_root)
+    assert root.is_absolute()
+    assert root.name == "files"
+    assert root.parent.name == "data"

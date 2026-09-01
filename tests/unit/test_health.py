@@ -12,6 +12,8 @@ def test_health_and_capability_contract(client: TestClient) -> None:
     assert "manual-health-event" in body["available"]
     assert "local-assistant" in body["available"]
     assert "llm-cloud" in body["unavailable"]
+    assert body["instance_id"]
+    assert isinstance(body["instance_id"], str)
 
 
 def test_actor_is_required_for_mutating_routes(client: TestClient) -> None:

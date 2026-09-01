@@ -379,3 +379,70 @@ def test_enrich_results_with_pages_only_in_open_mode(monkeypatch) -> None:
     )
     enriched = enrich_results_with_pages([dict(results[0])], settings=open_settings)
     assert enriched[0]["page_excerpt"] == "页面正文摘录"
+
+
+def test_extract_explicit_https_urls_strips_trailing_punctuation() -> None:
+    from app.search_providers import extract_explicit_https_urls
+
+    text = (
+        "请阅读这篇公开网页后再回答：https://www.who.int/zh/news/item/1。"
+        "另外 https://www.cdc.gov/flu/ 也可以。"
+    )
+    urls = extract_explicit_https_urls(text)
+    assert urls[0] == "https://www.who.int/zh/news/item/1"
+    assert urls[1] == "https://www.cdc.gov/flu/"
+
+
+def test_cited_page_fetch_follows_public_https_redirect(monkeypatch) -> None:
+    from app.search_providers import fetch_cited_page_excerpt
+
+    monkeypatch.setattr("app.egress_guard.is_public_https_url", lambda url: url.startswith("https://"))
+
+    class RedirectResponse:
+        status_code = 301
+        headers = {"location": "https://www.who.int/zh/final", "content-type": "text/html"}
+
+        def iter_bytes(self):
+            yield b""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class FinalResponse:
+        status_code = 200
+        headers = {"content-type": "text/html"}
+
+        def iter_bytes(self):
+            yield (
+                "<html><body><p>本迪布焦病毒病疫情一般性公共卫生提醒。</p></body></html>"
+            ).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def stream(self, method, url):
+            assert method == "GET"
+            if url.endswith("/final"):
+                return FinalResponse()
+            return RedirectResponse()
+
+    monkeypatch.setattr("app.search_providers.httpx.Client", FakeClient)
+    excerpt = fetch_cited_page_excerpt("https://www.who.int/zh/news/item/1", settings=Settings())
+    assert excerpt is not None
+    assert "本迪布焦" in excerpt

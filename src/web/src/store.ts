@@ -2,11 +2,12 @@ import { computed, reactive, readonly } from 'vue'
 
 import { ApiClientError, apiClient } from './api/client'
 import { clearChatSessionsForActor } from './assistant/chatSession'
-import { SHOW_ADVANCED_LAB } from './ui/featureFlags'
+import { clearAdminReadyCookie, writeAdminReadyCookie } from './ui/welcomeFaceBinding'
 import {
   activePortalEntryMode,
   portalEntryConflict,
   portalEntryConflictNotice,
+  rememberWelcomeEntry,
   type PortalEntryConflict,
 } from './ui/portalEntry'
 import type {
@@ -34,9 +35,7 @@ export type ViewName =
   | 'authorizations'
   | 'bigscreen'
   | 'knowledge'
-  | 'modellab'
   | 'face-credentials'
-  | 'demo-lab'
 
 export type PortalName = 'member' | 'admin'
 
@@ -51,7 +50,7 @@ export const MEMBER_VIEWS: readonly ViewName[] = [
 /** Views reachable from both member and admin portals. */
 export const SHARED_VIEWS: readonly ViewName[] = ['assistant']
 
-export type SessionStatus = 'signed-out' | 'loading' | 'ready' | 'empty' | 'error'
+export type SessionStatus = 'signed-out' | 'loading' | 'ready' | 'empty' | 'error' | 'selecting-member'
 
 export const HEALTH_DATA_REFRESH_EVENT = 'hct:health-data-refresh'
 export const FACE_FAMILY_STORAGE_KEY = 'hct:face-family-household'
@@ -71,9 +70,16 @@ interface PersistedSession {
   accessPurpose: string
 }
 
+export interface BoundPinCandidate {
+  id: string
+  display_name: string
+  actor_id: string
+}
+
 interface BoundFaceHousehold {
   id: string
   name: string
+  members: BoundPinCandidate[]
 }
 
 export interface Toast {
@@ -102,6 +108,8 @@ interface SessionState {
   pendingReviewCount: number
   toasts: Toast[]
   assistantSeedPrompt: string
+  assistantSeedNetworkSearch: boolean
+  assistantSeedNewThread: boolean
   /**
    * HCT-453：登录账号的真实门户与当前入口（成员前台 / 管理后台端口）不匹配。
    * 命中时会话已被登出，欢迎页据此渲染跨端指引按钮。
@@ -129,6 +137,8 @@ const state = reactive<SessionState>({
   pendingReviewCount: 0,
   toasts: [],
   assistantSeedPrompt: '',
+  assistantSeedNetworkSearch: false,
+  assistantSeedNewThread: false,
   entryConflict: null,
 })
 
@@ -221,6 +231,9 @@ export function formatError(cause: unknown): string {
       if (cause.message === 'FACE_AUTH_FAILED' || cause.message === 'FACE_MATCH_FAILED') {
         return '这次没有认出来。请重拍，或改用账号密码。'
       }
+      if (cause.message === 'AUTH_FAILED') {
+        return '账号或密码不正确，请再试一次。'
+      }
       return '账号、密码或会话无效，请重新登录。'
     }
     if (cause.status === 403) {
@@ -248,6 +261,12 @@ export function formatError(cause: unknown): string {
     }
     if (cause.status === 422) {
       if (cause.message === 'PASSWORD_REUSE') return '新密码不能与当前密码相同，请换一个新密码。'
+      if (
+        cause.message === 'PASSWORD_FORMAT_INVALID'
+        || (typeof cause.message === 'string' && cause.message.includes('PASSWORD_FORMAT_INVALID'))
+      ) {
+        return '密码至少 8 位，且必须同时包含英文字母和数字。'
+      }
       if (cause.message === 'FACE_FRAME_LOW_QUALITY') {
         return '摄像头画面太小或过暗过亮，请改善光线后重拍，或改用账号密码。'
       }
@@ -317,23 +336,41 @@ export function setView(view: ViewName): void {
     state.currentView = 'overview'
     return
   }
-  // 研发入口在生产构建默认隐藏（HCT-439 阶段三），直接访问回落到总览。
-  if (view === 'modellab' && !SHOW_ADVANCED_LAB) {
-    state.currentView = 'overview'
-    return
-  }
   state.currentView = view
 }
 
-export function openAssistantWithPrompt(prompt: string): void {
+function openAdminLoginSetup(): void {
+  if (state.status === 'ready' && state.portal === 'admin') {
+    state.currentView = 'face-credentials'
+  }
+}
+
+export function openAssistantWithPrompt(
+  prompt: string,
+  options: { allowNetworkSearch?: boolean; newThread?: boolean } = {},
+): void {
   state.assistantSeedPrompt = prompt.trim()
+  state.assistantSeedNetworkSearch = Boolean(options.allowNetworkSearch)
+  state.assistantSeedNewThread = options.newThread !== false
   setView('assistant')
 }
 
-export function consumeAssistantSeedPrompt(): string {
+export function consumeAssistantSeed(): {
+  prompt: string
+  allowNetworkSearch: boolean
+  newThread: boolean
+} {
   const prompt = state.assistantSeedPrompt
+  const allowNetworkSearch = state.assistantSeedNetworkSearch
+  const newThread = state.assistantSeedNewThread
   state.assistantSeedPrompt = ''
-  return prompt
+  state.assistantSeedNetworkSearch = false
+  state.assistantSeedNewThread = false
+  return { prompt, allowNetworkSearch, newThread }
+}
+
+export function consumeAssistantSeedPrompt(): string {
+  return consumeAssistantSeed().prompt
 }
 
 function sessionIsSignedOut(): boolean {
@@ -356,6 +393,12 @@ export function setIdentityDraft(actorId: string, accessPurpose: string): void {
 }
 
 export function signOut(): void {
+  if (
+    (state.status === 'ready' || state.status === 'empty' || state.status === 'selecting-member')
+    && state.portal === 'member'
+  ) {
+    rememberWelcomeEntry('member')
+  }
   const token = state.sessionToken
   if (token) void apiClient.logout(token).catch(() => undefined)
   clearSessionContext()
@@ -446,6 +489,7 @@ function clearSessionContext(): void {
     clearTimeout(sessionExpiryTimer)
     sessionExpiryTimer = null
   }
+  if (state.portal === 'admin') clearAdminReadyCookie()
   clearPersistedSession()
   clearChatSessionsForActor(state.actorId)
   state.actorId = ''
@@ -492,6 +536,40 @@ function rejectPortalEntry(conflict: PortalEntryConflict): void {
   state.error = notice.message
 }
 
+function parseBoundPinCandidates(value: unknown): BoundPinCandidate[] {
+  if (!Array.isArray(value)) return []
+  const result: BoundPinCandidate[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
+    const row = item as Partial<BoundPinCandidate>
+    if (
+      typeof row.id === 'string'
+      && row.id.trim()
+      && typeof row.display_name === 'string'
+      && row.display_name.trim()
+      && typeof row.actor_id === 'string'
+      && row.actor_id.trim()
+    ) {
+      result.push({
+        id: row.id.trim(),
+        display_name: row.display_name.trim(),
+        actor_id: row.actor_id.trim(),
+      })
+    }
+  }
+  return result
+}
+
+function pinCandidatesFromMembers(members: Member[], ownerId: string): BoundPinCandidate[] {
+  return members
+    .filter(member => Boolean(member.actor_id) && member.actor_id !== ownerId)
+    .map(member => ({
+      id: member.id,
+      display_name: member.display_name,
+      actor_id: member.actor_id as string,
+    }))
+}
+
 function parseBoundFaceHousehold(raw: string): BoundFaceHousehold | null {
   const value = raw.trim()
   if (!value) return null
@@ -499,11 +577,15 @@ function parseBoundFaceHousehold(raw: string): BoundFaceHousehold | null {
     if (value.startsWith('{')) {
       const parsed = JSON.parse(value) as Partial<BoundFaceHousehold>
       if (typeof parsed.id === 'string' && parsed.id.trim()) {
-        return { id: parsed.id.trim(), name: typeof parsed.name === 'string' ? parsed.name.trim() : '' }
+        return {
+          id: parsed.id.trim(),
+          name: typeof parsed.name === 'string' ? parsed.name.trim() : '',
+          members: parseBoundPinCandidates(parsed.members),
+        }
       }
     }
     // Keep old plain household ids readable after upgrading the web client.
-    return { id: value, name: '' }
+    return { id: value, name: '', members: [] }
   } catch {
     return null
   }
@@ -559,13 +641,26 @@ export function getBoundFaceHouseholdName(): string {
   return readBoundFaceHousehold()?.name ?? ''
 }
 
-export function bindFaceHousehold(householdId: string, householdName = ''): void {
+export function getBoundPinCandidates(): BoundPinCandidate[] {
+  return readBoundFaceHousehold()?.members ?? []
+}
+
+export function bindFaceHousehold(
+  householdId: string,
+  householdName = '',
+  members?: readonly BoundPinCandidate[],
+): void {
   const id = householdId.trim()
   if (!id) return
   const previous = readBoundFaceHousehold()
   const value = JSON.stringify({
     id,
     name: householdName.trim() || (previous?.id === id ? previous.name : ''),
+    members: members
+      ? [...members]
+      : previous?.id === id
+        ? previous.members
+        : [],
   })
   try {
     globalThis.localStorage?.setItem(FACE_FAMILY_STORAGE_KEY, value)
@@ -573,6 +668,22 @@ export function bindFaceHousehold(householdId: string, householdName = ''): void
     // Private browsing may disable storage; the same-host cookie remains available.
   }
   writeFaceBindingCookie(value)
+}
+
+function syncDeviceHouseholdBinding(): void {
+  if (state.portal !== 'admin' || !state.isOwnerView || !state.selectedHouseholdId) return
+  const household = state.households.find(item => item.id === state.selectedHouseholdId)
+  if (!household) return
+  bindFaceHousehold(
+    household.id,
+    household.name,
+    pinCandidatesFromMembers(state.members, household.created_by),
+  )
+  const instanceId = state.capabilities?.instance_id?.trim() || 'local'
+  const remaining = state.sessionExpiresAt
+    ? Math.max(60, Math.floor(state.sessionExpiresAt - Date.now() / 1000))
+    : 86_400
+  writeAdminReadyCookie(instanceId, household.id, remaining)
 }
 
 export function clearBoundFaceHousehold(): void {
@@ -633,6 +744,8 @@ async function enterAuthenticatedSession(
       : state.households[0]?.id ?? ''
   await loadHouseholdScope()
   if (sessionIsSignedOut()) return
+  // 管理员账号在成员前台只作为选人前门禁；PIN 换成成员会话后 portal 已是 member。
+  if (state.status === 'selecting-member' && state.portal === 'admin') return
   state.status = 'ready'
   if (state.authMode === 'session' && state.sessionToken && state.sessionExpiresAt) {
     writePersistedSession({
@@ -644,10 +757,17 @@ async function enterAuthenticatedSession(
   }
 }
 
+function clearAdminReadyIfAdminEntry(): void {
+  if (activePortalEntryMode() === 'admin') clearAdminReadyCookie()
+}
+
 /** 刷新页面后从本机持久化的 Bearer 会话恢复登录态（HCT-428）。 */
 export async function restoreSessionFromCookie(): Promise<boolean> {
   const persisted = readPersistedSession()
-  if (!persisted) return false
+  if (!persisted) {
+    clearAdminReadyIfAdminEntry()
+    return false
+  }
 
   state.status = 'loading'
   state.authMode = 'session'
@@ -667,6 +787,7 @@ export async function restoreSessionFromCookie(): Promise<boolean> {
     return (state.status as SessionStatus) === 'ready' || (state.status as SessionStatus) === 'empty'
   } catch {
     clearSessionContext()
+    clearAdminReadyIfAdminEntry()
     return false
   }
 }
@@ -692,12 +813,22 @@ export async function connectWithPassword(
   try {
     if (register) await apiClient.registerAccount(state.actorId, password)
     await enterAuthenticatedSession(await apiClient.login(state.actorId, password))
+    if (register) openAdminLoginSetup()
   } catch (cause) {
     const sessionExpired = sessionIsSignedOut() && state.error.includes('会话已过期')
     if (!sessionExpired) clearSessionContext()
     state.authMode = 'session'
     state.status = 'signed-out'
     if (sessionExpired) return
+    // Login must not leak password-policy or pydantic validation wording.
+    if (
+      !register
+      && cause instanceof ApiClientError
+      && (cause.status === 401 || cause.status === 422)
+    ) {
+      state.error = '账号或密码不正确，请再试一次。'
+      return
+    }
     state.error = formatError(cause)
   }
 }
@@ -883,6 +1014,12 @@ export async function createHouseholdAndEnter(
   state.households = await apiClient.listHouseholds(requestOptions.value)
   state.selectedHouseholdId = created.id
   await loadHouseholdScope()
+  if (state.status === 'selecting-member') {
+    rejectPortalEntry('need-admin-entry')
+    const notice = portalEntryConflictNotice('need-admin-entry', { afterCreate: true })
+    state.error = notice.message
+    return
+  }
   if (sessionIsSignedOut()) {
     // 成员前台建家后创建者即 owner，入口锁会登出——改写提示，避免误以为「建家失败」。
     if (state.entryConflict === 'need-admin-entry') {
@@ -892,6 +1029,7 @@ export async function createHouseholdAndEnter(
     return
   }
   state.status = 'ready'
+  openAdminLoginSetup()
 }
 
 export async function selectHousehold(householdId: string): Promise<void> {
@@ -902,6 +1040,84 @@ export async function selectHousehold(householdId: string): Promise<void> {
 
 export function selectMember(memberId: string): void {
   state.selectedMemberId = memberId
+}
+
+/** 成员前台 PIN 选人：排除家庭管理员，只列出已绑定登录名的家人。 */
+export function memberPortalPinCandidates(): Member[] {
+  const ownerId = state.households.find(item => item.id === state.selectedHouseholdId)?.created_by ?? ''
+  return state.members.filter(member => Boolean(member.actor_id) && member.actor_id !== ownerId)
+}
+
+export function cancelMemberPortalSelection(): void {
+  signOut()
+}
+
+export async function completeBoundHouseholdPin(memberId: string, pin: string): Promise<void> {
+  const householdId = getBoundFaceHouseholdId()
+  const member = getBoundPinCandidates().find(item => item.id === memberId)
+  if (!householdId || !member) {
+    state.error = '请先到管理后台登录一次，再选择家人。'
+    state.status = 'signed-out'
+    return
+  }
+  if (!/^\d{6}$/.test(pin)) {
+    state.error = '请输入这位家人的六位数字密码。'
+    state.status = 'signed-out'
+    return
+  }
+
+  clearSessionContext()
+  state.authMode = 'session'
+  state.accessPurpose = 'family-care'
+  state.status = 'loading'
+  state.error = ''
+  try {
+    const memberSession = await apiClient.loginWithPin(householdId, member.actor_id, pin, {
+      suppressUnauthorizedHandler: true,
+    })
+    await enterAuthenticatedSession(memberSession, householdId)
+  } catch (cause) {
+    state.status = 'signed-out'
+    state.error =
+      cause instanceof ApiClientError && cause.message === 'AUTH_FAILED'
+        ? '六位数字密码不正确。请再试一次，或请管理员在后台重新设置。'
+        : formatError(cause)
+  }
+}
+
+export async function completeMemberPortalPin(memberId: string, pin: string): Promise<void> {
+  const member = state.members.find(item => item.id === memberId)
+  const householdId = state.selectedHouseholdId
+  const purpose = state.accessPurpose
+  if (!member?.actor_id || !householdId) {
+    state.error = '请选择家庭成员。'
+    return
+  }
+  if (!/^\d{6}$/.test(pin)) {
+    state.error = '请输入这位家人的六位数字密码。'
+    return
+  }
+
+  const ownerToken = state.sessionToken
+  try {
+    // PIN 错误返回 401，不能走全局未授权处理，否则会把管理员门禁会话清掉。
+    const memberSession = await apiClient.loginWithPin(
+      householdId,
+      member.actor_id,
+      pin,
+      { suppressUnauthorizedHandler: true },
+    )
+    if (ownerToken) void apiClient.logout(ownerToken).catch(() => undefined)
+    state.authMode = 'session'
+    state.accessPurpose = purpose.trim() || 'family-care'
+    await enterAuthenticatedSession(memberSession, householdId)
+  } catch (cause) {
+    state.status = 'selecting-member'
+    state.error =
+      cause instanceof ApiClientError && cause.message === 'AUTH_FAILED'
+        ? '六位数字密码不正确。请再试一次，或请管理员在后台重新设置。'
+        : formatError(cause)
+  }
 }
 
 export function portalWelcomeMessage(): string {
@@ -943,6 +1159,18 @@ export async function loadHouseholdScope(): Promise<void> {
     // 成员前台；不匹配时登出并让欢迎页给出「去另一入口」指引。
     const conflict = portalEntryConflict(activePortalEntryMode(), state.portal)
     if (conflict) {
+      const ownerId = state.households.find(item => item.id === householdId)?.created_by ?? ''
+      const pinCandidates = state.members.filter(
+        member => Boolean(member.actor_id) && member.actor_id !== ownerId,
+      )
+      // HCT-511：管理员账号在成员前台作为选人前门禁，不渲染后台。
+      if (conflict === 'need-admin-entry' && pinCandidates.length > 0) {
+        state.status = 'selecting-member'
+        state.entryConflict = null
+        state.error = ''
+        state.pendingReviewCount = 0
+        return
+      }
       rejectPortalEntry(conflict)
       return
     }
@@ -961,6 +1189,7 @@ export async function loadHouseholdScope(): Promise<void> {
     }
 
     if (state.portal === 'admin') {
+      syncDeviceHouseholdBinding()
       await refreshPendingReviewCount()
     } else {
       state.pendingReviewCount = 0
@@ -980,7 +1209,10 @@ export async function refreshMembers(): Promise<void> {
   if (!state.members.some(member => member.id === state.selectedMemberId)) {
     state.selectedMemberId = state.members[0]?.id ?? ''
   }
-  if (state.portal === 'admin') await refreshPendingReviewCount()
+  if (state.portal === 'admin') {
+    syncDeviceHouseholdBinding()
+    await refreshPendingReviewCount()
+  }
 }
 
 export async function refreshPendingReviewCount(): Promise<void> {

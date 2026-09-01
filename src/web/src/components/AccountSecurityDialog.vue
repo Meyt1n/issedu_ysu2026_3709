@@ -3,6 +3,8 @@ import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import { changeCurrentPassword, formatError, pushToast } from '../store'
 import AppIcon from './AppIcon.vue'
+import PasswordRevealInput from './PasswordRevealInput.vue'
+import { FORMAL_PASSWORD_HINT, formalPasswordMeetsPolicy } from '../ui/passwordPolicy'
 
 const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{ close: [] }>()
@@ -28,8 +30,8 @@ function close(): void {
 
 async function submit(): Promise<void> {
   error.value = ''
-  if (newPassword.value.length < 8) {
-    error.value = '新密码至少需要 8 个字符。'
+  if (!formalPasswordMeetsPolicy(newPassword.value)) {
+    error.value = FORMAL_PASSWORD_HINT + '。'
     return
   }
   if (newPassword.value !== confirmPassword.value) {
@@ -80,36 +82,32 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
           <form class="section-stack account-security-form" @submit.prevent="submit">
             <label class="field">
               当前密码
-              <input
+              <PasswordRevealInput
                 v-model="currentPassword"
-                type="password"
                 autocomplete="current-password"
                 aria-label="当前密码"
-                minlength="8"
+                :minlength="8"
                 required
-                autofocus
               />
             </label>
             <label class="field">
               新密码
-              <input
+              <PasswordRevealInput
                 v-model="newPassword"
-                type="password"
                 autocomplete="new-password"
                 aria-label="新密码"
-                minlength="8"
+                :minlength="8"
                 required
               />
-              <small>至少 8 个字符；不能与当前密码相同。</small>
+              <small>{{ FORMAL_PASSWORD_HINT }}；不能与当前密码相同。</small>
             </label>
             <label class="field">
               再次输入新密码
-              <input
+              <PasswordRevealInput
                 v-model="confirmPassword"
-                type="password"
                 autocomplete="new-password"
                 aria-label="再次输入新密码"
-                minlength="8"
+                :minlength="8"
                 required
               />
             </label>
@@ -121,7 +119,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
               <button type="button" class="btn btn-ghost" :disabled="submitting" @click="close">
                 取消
               </button>
-              <button type="submit" class="btn btn-primary" :disabled="submitting">
+              <button type="submit" class="btn btn-primary" :disabled="submitting || !formalPasswordMeetsPolicy(newPassword) || newPassword !== confirmPassword">
                 {{ submitting ? '正在修改…' : '确认修改' }}
               </button>
             </div>

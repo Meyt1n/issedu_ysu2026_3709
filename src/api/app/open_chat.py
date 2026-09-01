@@ -78,6 +78,10 @@ def coerce_open_model_answer(raw_content: str) -> dict[str, object] | None:
             key in parsed for key in ("answer", "response", "content", "route")
         ):
             return None
+    from app.tool_call import _PLACEHOLDER_ANSWER_LABELS, answer_leaks_orchestration
+
+    if text.casefold() in _PLACEHOLDER_ANSWER_LABELS or answer_leaks_orchestration(text):
+        return None
     return {
         "answer": text[:8000],
         "sources": [],

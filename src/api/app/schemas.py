@@ -11,6 +11,7 @@ from pydantic import (
     model_validator,
 )
 
+from app.password_policy import assert_password_policy
 from app.time_zone import validate_iana_time_zone
 
 
@@ -50,12 +51,22 @@ class AuthCredentials(BaseModel):
     actor_id: str = Field(min_length=1, max_length=120, pattern=ACTOR_ID_PATTERN)
     password: str = Field(min_length=8, max_length=256)
 
+    @field_validator("password")
+    @classmethod
+    def password_must_mix_letters_and_digits(cls, value: str) -> str:
+        return assert_password_policy(value)
+
 
 class PasswordChangeRequest(BaseModel):
     """Current-session password rotation; plaintext is request-only."""
 
     current_password: str = Field(min_length=8, max_length=256)
     new_password: str = Field(min_length=8, max_length=256)
+
+    @field_validator("new_password")
+    @classmethod
+    def new_password_must_mix_letters_and_digits(cls, value: str) -> str:
+        return assert_password_policy(value)
 
 
 class PasswordRecoveryRequest(BaseModel):
@@ -65,6 +76,11 @@ class PasswordRecoveryRequest(BaseModel):
     household_id: str = Field(min_length=1, max_length=120)
     pin: str = Field(pattern=r"^[0-9]{6}$")
     new_password: str = Field(min_length=8, max_length=256)
+
+    @field_validator("new_password")
+    @classmethod
+    def recovered_password_must_mix_letters_and_digits(cls, value: str) -> str:
+        return assert_password_policy(value)
 
 
 class PinLoginCredentials(BaseModel):
@@ -90,6 +106,14 @@ class FaceChallengeRead(BaseModel):
 class PinSetRequest(BaseModel):
     household_id: str = Field(min_length=1, max_length=120)
     pin: str = Field(pattern=r"^[0-9]{6}$")
+    actor_id: str | None = Field(default=None, min_length=1, max_length=120)
+
+
+class PinStatusRead(BaseModel):
+    """Owner-only: which actors already have a household PIN. Never includes hashes."""
+
+    household_id: str
+    configured_actor_ids: list[str]
 
 
 class AuthSessionRequest(BaseModel):
@@ -181,6 +205,7 @@ class CapabilityResponse(BaseModel):
     phase: str
     available: list[str]
     unavailable: list[str]
+    instance_id: str = ""
     knowledge_admin_configured: bool = False
     model_release_admin_configured: bool = False
     model_release_dual_control: bool = True

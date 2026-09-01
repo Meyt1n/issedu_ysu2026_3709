@@ -25,6 +25,7 @@ export interface CapabilityResponse {
   phase: string
   available: string[]
   unavailable: string[]
+  instance_id?: string
 }
 
 export interface Household {

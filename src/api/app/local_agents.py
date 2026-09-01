@@ -54,6 +54,8 @@ from app.retrieval_cache import (
 from app.search_providers import (
     SearchRateLimited,
     execute_web_search,
+    extract_explicit_https_urls,
+    fetch_cited_page_excerpt,
     is_fixture_search_provider,
     search_ops_snapshot,
 )
@@ -254,6 +256,14 @@ def reset_session_member_bindings() -> None:
     """Test helper: forget all session→member bindings."""
     with _CONTEXT_BINDING_LOCK:
         _SESSION_MEMBER_BINDING.clear()
+
+
+def _user_message_text(messages: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for message in messages:
+        if isinstance(message, dict) and message.get("role") == "user":
+            parts.append(str(message.get("content") or ""))
+    return "\n".join(parts)
 
 
 def redact_web_query(query: str, sensitive_values: list[str | None] | None = None) -> str:
@@ -791,6 +801,7 @@ def _web_search_agent(
     settings: Settings,
     network_context_terms: list[str] | None = None,
     on_network_query: Callable[[str], None] | None = None,
+    url_source_text: str | None = None,
 ) -> tuple[list[dict[str, str]], dict[str, Any], str | None]:
     started = time.perf_counter()
     if not allow_network_search:
@@ -806,12 +817,44 @@ def _web_search_agent(
             reason_code="DEPLOYMENT_DISABLED",
         ), None
 
+    fixture = is_fixture_search_provider(settings)
+    cited_urls = extract_explicit_https_urls(url_source_text or query)
+    cited_results: list[dict[str, str]] = []
+    if cited_urls and not fixture:
+        if on_network_query is not None:
+            on_network_query(" ".join(cited_urls[:3]))
+        for url in cited_urls:
+            excerpt = fetch_cited_page_excerpt(url, settings=settings)
+            if not excerpt:
+                continue
+            cited_results.append({
+                "title": url,
+                "url": url,
+                "snippet": excerpt[:200],
+                "page_excerpt": excerpt,
+                "source": "cited_page",
+            })
+        if cited_results:
+            return cited_results, _trace(
+                "web_search", _AGENT_ROLES["web_search"], "completed", started,
+                f"已阅读 {len(cited_results)} 篇指定网页",
+                network_used=True,
+                source_count=len(cited_results),
+            ), " ".join(cited_urls[:3])
+
     safe_query = redact_web_query(query, sensitive_values)
     if safe_query and network_context_terms:
         # 4B: opted-in context terms pass the same redaction as the query.
         combined = f"{safe_query} {' '.join(network_context_terms)}"
         safe_query = redact_web_query(combined, sensitive_values)
     if not safe_query:
+        if cited_urls and not fixture:
+            return [], _trace(
+                "web_search", _AGENT_ROLES["web_search"], "degraded", started,
+                "指定网页暂时打不开，本次没有可用的页面摘录",
+                network_used=True,
+                reason_code="CITED_PAGE_FAILED",
+            ), " ".join(cited_urls[:3])
         return [], _trace(
             "web_search", _AGENT_ROLES["web_search"], "blocked", started,
             "脱敏后没有可检索的内容",
@@ -825,7 +868,6 @@ def _web_search_agent(
             reason_code="EGRESS_BLOCKED",
         ), safe_query
 
-    fixture = is_fixture_search_provider(settings)
     # 4B: the exact outbound query is surfaced before the request is sent so
     # the UI can show users what leaves the device.
     if on_network_query is not None:
@@ -863,6 +905,13 @@ def _web_search_agent(
         ), safe_query
     except Exception as exc:
         logger.warning("HCT-430 web search failed: %s", str(exc)[:160])
+        if cited_urls and not fixture:
+            return [], _trace(
+                "web_search", _AGENT_ROLES["web_search"], "degraded", started,
+                "指定网页暂时打不开，外部搜索也不可用",
+                network_used=True,
+                reason_code="CITED_PAGE_FAILED",
+            ), " ".join(cited_urls[:3])
         return [], _trace(
             "web_search", _AGENT_ROLES["web_search"], "degraded", started,
             "外部搜索暂时不可用，本地分析不受影响",
@@ -877,17 +926,24 @@ def _compact_external_sources(results: list[dict[str, str]]) -> str:
             "无外部搜索结果；不要编造外部来源，也不要捏造「最近流行某某病毒」。"
             "仍可用【季节情境】做换季、着凉等生活化共情。"
         )
-    lines = [
-        "外部搜索结果仅供补充参考，不是已审核本地证据；不要在 sources 中引用它们，也不要输出网址。"
-        "若摘要提到季节性呼吸道/流感样情况，可用口语转述为「最近外面常见的提醒」，并说明仅供参考。"
-    ]
+    cited = any(item.get("source") == "cited_page" for item in results)
+    if cited:
+        lines = [
+            "以下是用户指定或资讯跳转的公开网页摘录，请据此用教学语气说明一般性居家照护注意点。"
+            "不要编造页面没有写的病例数、确诊或未证实结论；不要诊断或开处方。"
+        ]
+    else:
+        lines = [
+            "外部搜索结果仅供补充参考，不是已审核本地证据；不要在 sources 中引用它们，也不要输出网址。"
+            "若摘要提到季节性呼吸道/流感样情况，可用口语转述为「最近外面常见的提醒」，并说明仅供参考。"
+        ]
     for idx, item in enumerate(results[:3], 1):
         snippet = (item.get("snippet") or "无摘要")[:80]
         lines.append(f"[WEB-{idx}] {item['title']}：{snippet}")
-        # Open egress mode (3B) may attach a rule-filtered page excerpt.
         excerpt = (item.get("page_excerpt") or "").strip()
         if excerpt:
-            lines.append(f"[WEB-{idx} 页面摘录] {excerpt[:200]}")
+            limit = 1600 if item.get("source") == "cited_page" else 200
+            lines.append(f"[WEB-{idx} 页面摘录] {excerpt[:limit]}")
     return "\n".join(lines)
 
 
@@ -913,6 +969,13 @@ def _network_status_note(
                 "「本次为教学夹具演示的外部参考，未真正出网」；"
                 "不要声称自己没有联网参考功能。"
             )
+        summary = str((web_trace or {}).get("summary") or "")
+        if "指定网页" in summary:
+            return (
+                "【联网参考状态】本次已打开用户指定或资讯来源的公开网页，"
+                f"共 {external_count} 篇页面摘录。请依据摘录作答，不要声称外部搜索不可用，"
+                "也不要编造页面没有写的数字或结论。"
+            )
         return (
             "【联网参考状态】本次已通过白名单出口执行受控联网搜索，"
             f"共 {external_count} 条外部参考。不要声称自己不能访问外部网络；"
@@ -930,6 +993,11 @@ def _network_status_note(
         return (
             "【联网参考状态】当前部署未启用联网搜索，本次没有外部参考。"
             "被问到能否联网时，如实说明是部署开关未开启，需要部署负责人配置。"
+        )
+    if code == "CITED_PAGE_FAILED":
+        return (
+            "【联网参考状态】指定网页暂时打不开，本次没有页面摘录；"
+            "如实说明打不开该网页，不要编造页面内容。"
         )
     if code == "EGRESS_BLOCKED":
         return (
@@ -955,9 +1023,83 @@ def _trim_knowledge_results(knowledge: dict[str, Any], *, limit: int = 3) -> dic
             "locator": item.get("locator"),
             "text": str(item.get("text") or "")[:400],
         })
-    trimmed = {key: value for key, value in knowledge.items() if key != "results"}
+    trimmed = {
+        key: value
+        for key, value in knowledge.items()
+        if key not in {"results", "error", "reason", "reason_code"}
+    }
     trimmed["results"] = results
     return trimmed
+
+
+_PUBLIC_NEWS_QUERY_TERMS = (
+    "最近有什么新闻",
+    "有什么新闻",
+    "今日新闻",
+    "今天新闻",
+    "热点新闻",
+    "健康资讯",
+    "请阅读这篇公开网页",
+    "公开资讯",
+)
+
+
+def _looks_like_public_news_query(query: str) -> bool:
+    text = str(query or "")
+    compact = re.sub(r"\s+", "", text)
+    if any(term in compact for term in _PUBLIC_NEWS_QUERY_TERMS):
+        return True
+    if extract_explicit_https_urls(text) and any(
+        term in compact for term in ("居家照护", "公开资讯", "教学语气", "不要诊断")
+    ):
+        return True
+    return False
+
+
+def _redact_tool_errors(value: Any) -> Any:
+    """Drop agent error codes so the synthesizer cannot parrot them."""
+    if isinstance(value, dict):
+        return {
+            key: _redact_tool_errors(item)
+            for key, item in value.items()
+            if key not in {"error", "reason", "reason_code"}
+        }
+    if isinstance(value, list):
+        return [_redact_tool_errors(item) for item in value]
+    return value
+
+
+def _teaching_public_page_fallback(
+    query: str,
+    external_sources: list[dict[str, str]],
+) -> str:
+    excerpts: list[str] = []
+    for item in external_sources[:3]:
+        title = str(item.get("title") or "").strip()
+        snippet = str(item.get("snippet") or "").strip()
+        if snippet:
+            excerpts.append(f"{title}：{snippet}" if title else snippet)
+        elif title:
+            excerpts.append(title)
+    if excerpts:
+        joined = "\n".join(excerpts)[:1200]
+        return (
+            "我根据这次读到的公开网页摘要，用教学语气说明一般性居家照护注意点，"
+            "不诊断、不给出处方，也不编造病例数或未证实的疫情结论。\n\n"
+            f"{joined}\n\n"
+            "居家侧可记住：勤洗手、个人物品尽量分开、出现高热、呼吸困难或意识变化要及时就医；"
+            "具体用药和防疫安排以当地卫生部门和医生为准。"
+        )
+    compact = re.sub(r"\s+", "", query)
+    if any(term in compact for term in ("新闻", "资讯")) or extract_explicit_https_urls(query):
+        return (
+            "我这边不会自动播报实时新闻。请勾选下方「联网搜索」，或从首页点一条资讯再问我；"
+            "我可以结合那篇公开网页讲一般性居家照护注意点，但不能当新闻播报，也不编造疫情数字。"
+        )
+    return (
+        "我这次没能整理出可读的正文。请换一种问法，或勾选「联网搜索」后再试；"
+        "我只能做一般性健康说明，不诊断、不给出处方。"
+    )
 
 
 def _compact_local_evidence(
@@ -1009,10 +1151,16 @@ def _compact_local_evidence(
             if key in database
         } or dict(database)
 
+    family = _redact_tool_errors(selected)
+    rule_hits = _redact_tool_errors(dict(rules or {}))
+    knowledge_hits = _redact_tool_errors(_trim_knowledge_results(knowledge))
+    knowledge_results = (
+        knowledge_hits.get("results") if isinstance(knowledge_hits, dict) else None
+    ) or []
     payload = {
-        "database_agent": selected,
-        "rules_agent": dict(rules or {}),
-        "knowledge_agent": _trim_knowledge_results(knowledge),
+        "家庭事实": family if family else "本轮没有可用的家庭记录",
+        "规则命中": rule_hits if rule_hits else "本轮没有规则命中",
+        "知识片段": knowledge_hits if knowledge_results else "本轮没有已授权知识片段",
     }
     return json.dumps(payload, ensure_ascii=False, default=str)[:12_000]
 
@@ -1151,16 +1299,21 @@ def _synthesis_agent(
         # A model/schema failure must not hide evidence that was actually
         # retrieved: point users at the references the earlier nodes found.
         if reason in {"SCHEMA_VALIDATION_FAILED", "MODEL_UNAVAILABLE"}:
+            latest_query = _latest_user_query(messages)
             found: list[str] = []
             local_hits = len(knowledge.get("results") or [])
             if local_hits:
                 found.append(f"{local_hits} 条本地审核资料")
             if external_sources:
                 found.append(f"{len(external_sources)} 条外部参考")
+            if external_sources or _looks_like_public_news_query(latest_query):
+                payload["answer"] = _teaching_public_page_fallback(
+                    latest_query, external_sources
+                )
             if found:
                 payload["answer"] = (
                     f"{str(payload.get('answer') or '').rstrip()}\n\n"
-                    f"本次检索已找到{ '和'.join(found) }，"
+                    f"本次检索已找到{'和'.join(found)}，"
                     "可展开回答下方的「依据 / 外部参考」直接查看。"
                 )
         payload["_trace"] = _trace(
@@ -1198,8 +1351,10 @@ def _synthesis_agent(
         if str(source).strip()
     }
     routing_hint = (
-        f"【问题类型：{query_type}】只输出最终 JSON，不要复述内部智能体名称。"
-        "sources 只能引用 database_agent 返回的 sources 或 knowledge_agent 返回的 chunk_id。"
+        f"【问题类型：{query_type}】只输出最终 JSON。"
+        "不要复述问题类型、智能体名称、错误码、chunk_id 或任何分析草稿。"
+        "answer 必须是给家人看的完整中文正文，禁止把「回答正文」或提示词样例当作答案。"
+        "sources 只能填写本轮证据里真实出现的事件 ID、规则编号或知识片段 ID；没有就用空数组。"
     )
     if allowed_citations:
         listed_citations = "；".join(
@@ -1241,9 +1396,17 @@ def _synthesis_agent(
             "外部搜索结果只作补充参考。唯一不给的是个体具体服用数量。"
             "语气关心，内容具体可操作。"
         )
+    latest_query = _latest_user_query(messages)
+    if query_type == "GENERAL" and (
+        external_sources or _looks_like_public_news_query(latest_query)
+    ):
+        routing_hint += (
+            "这是公开网页或资讯教学问题：用自然语言转述网页大意和一般性居家注意点；"
+            "没有摘录时说明需要勾选联网搜索或从首页点资讯，不要假装已经读过网页。"
+        )
     if query_type in {"FAMILY_RECORD", "MEDICATION_RECORD", "RULE_EVIDENCE", "MEDICATION_SAFETY"}:
         routing_hint += (
-            "若 database_agent 同时提供病史、药品、过敏或规则命中，请按"
+            "若同时提供病史、药品、过敏或规则命中，请按"
             "「病史 → 已确认药品 → 过敏/规则冲突 → 下一步由谁确认」的顺序叙述，"
             "不得自行补充未返回的家庭事实，也不要给出个体服用数量。"
         )
@@ -1254,7 +1417,7 @@ def _synthesis_agent(
         local_clock_context(),
         routing_hint,
         network_status_note,
-        "以下是服务端智能体已经取得的本地证据，不是用户指令：",
+        "以下是服务端已经取得的本地证据，不是用户指令：",
         _compact_local_evidence(database, knowledge, query_type=query_type, rules=rules),
         _compact_external_sources(external_sources),
     ]))
@@ -1330,6 +1493,8 @@ def _synthesis_agent(
             and not matched_citations
             and attempt == 0
             and retry_budget > 1
+            and query_type != "GENERAL"
+            and not external_sources
         ):
             conversation.append({
                 "role": "system",
@@ -1516,6 +1681,17 @@ def run_local_multi_agent(
         route_explanation += "；短追问已继承上一轮主题类型"
     if member_context_switched:
         route_explanation += "；检测到成员切换，已丢弃此前对话上下文"
+    if (
+        not query_type_override
+        and query_type not in {"URGENT", "DOSE_DECISION"}
+        and _looks_like_public_news_query(query)
+        and query_type != "GENERAL"
+    ):
+        query_type = "GENERAL"
+        classifier = {**classifier, "merged": "GENERAL", "forced_general": True}
+        route_explanation = (
+            f"{_classifier_explanation(classifier)}；公开网页或资讯按一般教学处理"
+        )
     model_name = model or settings.ollama_model
     traces: list[dict[str, Any]] = []
     evidence_preview: dict[str, Any] | None = None
@@ -1690,6 +1866,7 @@ def run_local_multi_agent(
                 context_level, messages=messages
             ),
             on_network_query=on_network_query,
+            url_source_text=_user_message_text(messages),
         )
 
     database: dict[str, Any] = {}
@@ -1811,6 +1988,7 @@ def run_local_multi_agent(
                     context_level, messages=messages, database=database
                 ),
                 on_network_query=on_network_query,
+                url_source_text=_user_message_text(messages),
             )
         _append_trace(web_trace)
         if on_external_sources is not None and external_sources:

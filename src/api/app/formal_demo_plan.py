@@ -8,14 +8,16 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.password_policy import TEACHING_PASSWORD_DEFAULT
+
 # Shared labels used by prepare-family-demo.ps1 / continuous demo runbook.
 FORMAL_HOUSEHOLD_NAME = "爷爷奶奶家（本地演示）"
 FORMAL_OWNER_ACTOR_ID = "demo-parent"
 FORMAL_GRANDPA_ACTOR_ID = "grandpa-demo"
 FORMAL_GRANDMA_ACTOR_ID = "grandma-demo"
-FORMAL_OWNER_PASSWORD_DEFAULT = "DemoOnly-ChangeMe!"
+FORMAL_OWNER_PASSWORD_DEFAULT = TEACHING_PASSWORD_DEFAULT
 FORMAL_CHILD_ACTOR_ID = "demo-child"
-FORMAL_CHILD_PASSWORD_DEFAULT = "DemoOnly-ChangeMe!"
+FORMAL_CHILD_PASSWORD_DEFAULT = TEACHING_PASSWORD_DEFAULT
 
 # Idempotent keys — re-running the seeder skips duplicates via API.
 SEED_PREFIX = "formal-demo-health"

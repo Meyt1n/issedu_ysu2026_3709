@@ -173,7 +173,9 @@ test('图四：管理后台侧栏在 1280×800 下五组导航收进一屏，无
 
   const sidebar = page.locator('aside.sidebar')
   await expect(sidebar.getByRole('button', { name: '家庭总览' })).toBeVisible()
-  await expect(sidebar.getByRole('button', { name: '演示造数' })).toBeVisible()
+  await expect(sidebar.getByRole('button', { name: '知识文档' })).toHaveCount(0)
+  await expect(sidebar.getByRole('button', { name: '演示造数' })).toHaveCount(0)
+  await expect(sidebar.getByRole('button', { name: '模型实验室' })).toHaveCount(0)
   await expect(sidebar.getByText('健康数据默认只保存在本地。')).toBeVisible()
   await expect(sidebar.getByRole('button', { name: '收起导航' })).toBeVisible()
 

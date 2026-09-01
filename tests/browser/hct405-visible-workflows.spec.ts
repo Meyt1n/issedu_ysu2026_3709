@@ -216,14 +216,14 @@ function viewHeading(page: Page) {
 }
 
 async function enterFamilySpace(page: Page): Promise<void> {
-  await page.goto('/')
-  await expect(page.getByRole('button', { name: '登录家庭空间' })).toBeVisible({ timeout: 20_000 })
+  await page.goto('/?portal=admin')
+  await expect(page.getByRole('button', { name: '进入管理后台' })).toBeVisible({ timeout: 20_000 })
   await submitFormalLogin(page, 'owner-1')
   await expect(page.locator('.app-frame')).toBeVisible({ timeout: 20_000 })
   await expect(navItem(page, '授权管理')).toBeVisible()
 }
 
-test('管理员后台保持五组导航，研发入口在开发构建可见', async ({ page }) => {
+test('管理员后台保持五组导航，不展示模型实验室与演示造数', async ({ page }) => {
   await installSyntheticApi(page)
   await enterFamilySpace(page)
 
@@ -235,10 +235,11 @@ test('管理员后台保持五组导航，研发入口在开发构建可见', as
     '权限与凭证',
     '家庭与研发',
   ])
-  // 开发构建（vite dev）下模型实验室可见；生产构建默认隐藏由
-  // VITE_SHOW_ADVANCED_LAB 控制，见 src/web/src/ui/featureFlags.ts。
-  await expect(navItem(page, '模型实验室')).toBeVisible()
-  await expect(navItem(page, '人脸凭证')).toBeVisible()
+  await expect(navItem(page, '家庭大屏')).toBeVisible()
+  await expect(navItem(page, '知识文档')).toHaveCount(0)
+  await expect(navItem(page, '模型实验室')).toHaveCount(0)
+  await expect(navItem(page, '演示造数')).toHaveCount(0)
+  await expect(navItem(page, '登录设置')).toBeVisible()
 })
 
 test('家庭总览显著展示简洁的环境行动卡', async ({ page }) => {

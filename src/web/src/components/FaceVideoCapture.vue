@@ -15,6 +15,7 @@ const props = withDefaults(defineProps<{
   disabled?: boolean
   mode?: FaceCaptureMode
   showFallback?: boolean
+  fallbackLabel?: string
   /** Shorter layout for welcome/login card — hide long bullet lists. */
   compact?: boolean
   /** Default on for elder-friendly coaching; user can mute. */
@@ -24,6 +25,7 @@ const props = withDefaults(defineProps<{
 }>(), {
   mode: 'login',
   showFallback: true,
+  fallbackLabel: '改用账号密码',
   compact: false,
   voiceEnabled: true,
   autoStart: false,
@@ -368,7 +370,7 @@ onBeforeUnmount(() => {
         :disabled="capturing"
         @click="useFallback"
       >
-        改用账号密码
+        {{ fallbackLabel }}
       </button>
     </div>
     <p class="face-capture-footnote">

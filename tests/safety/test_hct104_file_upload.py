@@ -14,6 +14,7 @@ from app.file_upload import (
     delete_file_tree,
     random_storage_key,
     store_file,
+    stored_file_path,
     validate_and_store,
     validate_extension,
     validate_filename,
@@ -141,3 +142,16 @@ class TestValidateAndStore:
         stored = tmp_path / result["storage_key"]
         assert stored.exists()
         assert stored.read_bytes() == content
+
+
+class TestStoredFilePath:
+    def test_canonical_root_and_rejects_traversal(self, monkeypatch, tmp_path):
+        settings = get_settings()
+        monkeypatch.setattr(settings, "file_root", str(tmp_path))
+        key = "abc.jpg"
+        (tmp_path / key).write_bytes(b"jpeg")
+        found = stored_file_path(key)
+        assert found is not None
+        assert found.read_bytes() == b"jpeg"
+        assert stored_file_path("../secret.jpg") is None
+        assert stored_file_path("missing.jpg") is None

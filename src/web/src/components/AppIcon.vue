@@ -36,6 +36,7 @@ const ICONS: Record<string, string> = {
   cloud: '<path d="M7 18.5A4 4 0 0 1 7.5 10.6 5.5 5.5 0 0 1 18 12a3.5 3.5 0 0 1-.5 6.5H7Z"/>',
   pill: '<rect x="3.5" y="9" width="17" height="6.5" rx="3.25" transform="rotate(-30 12 12.25)"/><path d="m9 8.7 5.5 3.2"/>',
   eye: '<path d="M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6Z"/><circle cx="12" cy="12" r="2.5"/>',
+  'eye-off': '<path d="M3 12s3.5-6 9-6c2 0 3.8.7 5.3 1.7M21 12s-3.5 6-9 6c-2 0-3.8-.7-5.3-1.7"/><path d="M9.5 9.6a2.5 2.5 0 0 0 3.9 3.9M4 4l16 16"/>',
   timeline: '<path d="M6 4.5v15"/><circle cx="6" cy="7" r="1.6"/><circle cx="6" cy="13" r="1.6"/><path d="M9.5 7H19M9.5 13h6"/>',
   signout: '<path d="M14 4.5H6.5A1.5 1.5 0 0 0 5 6v12a1.5 1.5 0 0 0 1.5 1.5H14"/><path d="M10.5 12H20M16.5 8.5 20 12l-3.5 3.5"/>',
   compass: '<circle cx="12" cy="12" r="8.5"/><path d="m15 9-1.8 4.2L9 15l1.8-4.2L15 9Z"/>',
