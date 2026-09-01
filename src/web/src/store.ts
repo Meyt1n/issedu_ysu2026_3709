@@ -1175,10 +1175,14 @@ export async function loadHouseholdScope(): Promise<void> {
       return
     }
 
-    const allowedViews = state.portal === 'admin' ? undefined : MEMBER_VIEWS
-    if (allowedViews && !allowedViews.includes(state.currentView)) {
-      state.currentView = 'member-home'
-    } else if (!allowedViews && MEMBER_VIEWS.includes(state.currentView)) {
+    // 与 setView 使用同一套门户可见性规则。此前这里只认 MEMBER_VIEWS，
+    // 会把停留在共享视图（「健康助手」）的成员踢回首页——例如多家庭成员
+    // 在助手页切换家庭时。两处判定必须一致，否则侧栏给了入口却待不住。
+    if (state.portal === 'member') {
+      const memberCanView =
+        MEMBER_VIEWS.includes(state.currentView) || SHARED_VIEWS.includes(state.currentView)
+      if (!memberCanView) state.currentView = 'member-home'
+    } else if (MEMBER_VIEWS.includes(state.currentView)) {
       state.currentView = 'overview'
     }
 

@@ -18,15 +18,13 @@ from app.health_news import build_health_news
 from app.health_news_adapter import (
     HealthNewsSourceProfile,
     RemoteNewsDraft,
+    _localize_english_draft,
+    _round_robin_merge,
     draft_to_item,
     health_news_ops_snapshot,
     parse_html_list_payload,
     parse_rss_payload,
     reset_health_news_state,
-)
-from app.health_news_adapter import (
-    _localize_english_draft,
-    _round_robin_merge,
 )
 from app.main import app
 from app.security import get_actor_id

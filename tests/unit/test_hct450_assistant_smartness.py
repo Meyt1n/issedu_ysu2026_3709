@@ -64,8 +64,10 @@ def _install_scripted_client(monkeypatch, script: list[dict]) -> type:
     client_cls = type(
         "_Client", (_ScriptedStreamClient,), {"script": list(script), "instances": []}
     )
-    monkeypatch.setattr("app.local_agents.OllamaClient", client_cls)
-    monkeypatch.setattr("app.local_agents.is_loopback_ollama_url", lambda _url: True)
+    monkeypatch.setattr(
+        "app.local_agents.build_chat_client", lambda *_a, **_k: client_cls()
+    )
+    monkeypatch.setattr("app.local_agents.model_endpoint_allowed", lambda _url: True)
     return client_cls
 
 
@@ -352,8 +354,10 @@ def test_summer_ac_stuffy_nose_with_cold_card_returns_cited_answer(
     )
     db_session.commit()
 
-    monkeypatch.setattr("app.local_agents.OllamaClient", _CooperativeClient)
-    monkeypatch.setattr("app.local_agents.is_loopback_ollama_url", lambda _url: True)
+    monkeypatch.setattr(
+        "app.local_agents.build_chat_client", lambda *_a, **_k: _CooperativeClient()
+    )
+    monkeypatch.setattr("app.local_agents.model_endpoint_allowed", lambda _url: True)
 
     result = run_local_multi_agent(
         db_session,
@@ -388,7 +392,9 @@ def test_greeting_fast_path_untouched(monkeypatch) -> None:
     def _forbidden(*_args, **_kwargs):
         raise AssertionError("greeting must not call model or tools")
 
-    monkeypatch.setattr("app.local_agents.OllamaClient", _forbidden)
+    monkeypatch.setattr(
+        "app.local_agents.build_chat_client", lambda *_a, **_k: _forbidden()
+    )
     monkeypatch.setattr("app.local_agents.execute_whitelisted_tool", _forbidden)
 
     result = run_local_multi_agent(

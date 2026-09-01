@@ -916,7 +916,6 @@ onBeforeUnmount(() => {
       <header class="assistant-topbar">
         <div class="assistant-topbar-title">
           <h2 class="hero-greeting">本地证据助手</h2>
-          <p>基于本地事实与规则回答并给出引用；资料不足会明说，不替医生做决定。</p>
         </div>
         <div class="assistant-topbar-actions">
           <label class="context-select">
@@ -937,7 +936,6 @@ onBeforeUnmount(() => {
           <AppIcon name="assistant" :size="30" />
         </span>
         <strong class="assistant-empty-title">向家庭助手提问</strong>
-        <p class="assistant-empty-sub">回答只依据这个家庭的本地事实与已审核资料；证据不足会明说。</p>
         <div class="assistant-empty-suggestions">
           <button
             v-for="suggestion in SUGGESTIONS"

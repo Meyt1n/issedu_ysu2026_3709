@@ -173,9 +173,6 @@ onBeforeUnmount(() => {
     <div class="card-heading" style="margin-bottom: 0">
       <div>
         <h2 class="hero-greeting">视觉扫描中心</h2>
-        <p class="hero-sub">
-          拍摄药盒或报告，经本地质量门控后进入识别队列；冲突结果进入人工复核。
-        </p>
       </div>
       <label class="context-select">
         归属成员
@@ -276,9 +273,6 @@ onBeforeUnmount(() => {
             {{ retryingId === task.id ? '正在重新处理' : '重新处理' }}
           </button>
         </div>
-        <p v-else-if="task.status === 'failed' || task.status === 'timeout'" class="notice error" style="margin: 0">
-          识别没有完成，健康记录没有被修改。请保持药盒正面、完整入框并重新拍摄；如仍失败，请让家人检查本地服务（任务 {{ task.id.slice(0, 8) }}…）。
-        </p>
         <template v-if="task.status === 'succeeded' && task.result">
           <div class="capability-chips">
             <span class="pill sky">证据 {{ task.result.evidence?.length ?? 0 }} 条</span>

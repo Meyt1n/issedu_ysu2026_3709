@@ -5,13 +5,24 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect, text
 
 from app.config import get_settings
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PREVIOUS_REVISION = "0010_hct405_review_wiring"
-CURRENT_REVISION = "0024_hct462_risk_disposition"
+
+
+def _current_head() -> str:
+    """The single migration head, read from the graph instead of pinned by name.
+
+    A pinned revision name made every new migration fail this suite even when
+    the migration itself was correct.
+    """
+    heads = ScriptDirectory.from_config(Config(str(REPO_ROOT / "alembic.ini"))).get_heads()
+    assert len(heads) == 1, f"expected a single migration head, found {heads}"
+    return heads[0]
 
 
 def _config(database_url: str) -> Config:
@@ -62,7 +73,7 @@ def test_erasure_upgrade_adds_tombstones_and_task_table(
             revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-        assert revision == CURRENT_REVISION
+        assert revision == _current_head()
     finally:
         engine.dispose()
         get_settings.cache_clear()

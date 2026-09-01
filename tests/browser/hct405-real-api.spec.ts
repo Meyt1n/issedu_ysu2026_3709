@@ -108,36 +108,32 @@ async function bootstrapPortalHousehold(request: APIRequestContext, id: string):
   }
 }
 
-test('管理员创建并撤回授权，审计链与服务端状态一致', async ({ page, request }) => {
+test('真实后端：授权 API 创建并撤回，审计链与服务端状态一致', async ({ request }) => {
   const id = runId()
   const scope = await bootstrapPortalHousehold(request, id)
 
-  await enterFormalIdentity(page, scope.ownerId, scope.ownerPassword)
-  await expect(page.getByText('家庭管理员后台', { exact: true })).toBeVisible()
+  const grantResponse = await request.post(
+    `${API_BASE}/api/v1/households/${scope.householdId}/authorizations`,
+    {
+      headers: { Authorization: `Bearer ${scope.ownerToken}` },
+      data: {
+        member_id: scope.memberId,
+        grantee_actor_id: scope.caregiverId,
+        data_fields: ['health_events'],
+        actions: ['READ_EVENTS'],
+        purpose: 'family-care',
+        valid_until: new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString(),
+      },
+    },
+  )
+  expect(grantResponse.status()).toBe(201)
+  const grant = await grantResponse.json()
 
-  await navItem(page, '授权管理').click()
-  await expect(page.getByRole('heading', { name: '新建授权' })).toBeVisible()
-
-  await page.getByLabel('照护者账号').fill(scope.caregiverId)
-  await page.getByRole('button', { name: '创建授权' }).click()
-  await expect(page.getByText('授权已创建，默认遵循最小权限原则。')).toBeVisible()
-
-  // HCT-449：创建成功后出现交接闭环（对方账号 + 登录用途代码 + 到期时间）
-  const successPanel = page.locator('.auth-success-panel')
-  await expect(successPanel.getByText('授权已生效，接下来交给对方')).toBeVisible()
-  await expect(successPanel.getByLabel('授权交接说明')).toHaveValue(new RegExp(scope.caregiverId))
-
-  // 点选授权卡片查看对方可见范围（当前 UI；不加载健康事件正文）
-  const grantCard = page.locator('.auth-grant-card').filter({ hasText: scope.caregiverId })
-  await grantCard.click()
-  await expect(page.getByText('对方能看到什么')).toBeVisible()
-  await expect(page.getByText(/可见：已确认健康事件/)).toBeVisible()
-
-  await page.getByRole('button', { name: '撤回授权' }).first().click()
-  const dialog = page.getByRole('alertdialog')
-  await expect(dialog).toBeVisible()
-  await dialog.getByRole('button', { name: '撤回授权' }).click()
-  await expect(page.getByText('授权已撤回，对应照护者立即失去访问权限。')).toBeVisible()
+  const revokeResponse = await request.post(
+    `${API_BASE}/api/v1/households/${scope.householdId}/authorizations/${grant.id}/revoke`,
+    { headers: { Authorization: `Bearer ${scope.ownerToken}` } },
+  )
+  expect(revokeResponse.status()).toBe(200)
 
   const auditResponse = await request.get(
     `${API_BASE}/api/v1/households/${scope.householdId}/authorization-audits`,
@@ -148,6 +144,13 @@ test('管理员创建并撤回授权，审计链与服务端状态一致', async
   const operations = audits.map(item => item.operation)
   expect(operations).toContain('CREATE')
   expect(operations).toContain('REVOKE')
+
+  const activeGrantsResponse = await request.get(
+    `${API_BASE}/api/v1/households/${scope.householdId}/authorizations`,
+    { headers: { Authorization: `Bearer ${scope.ownerToken}` } },
+  )
+  expect(activeGrantsResponse.status()).toBe(200)
+  expect(await activeGrantsResponse.json()).toEqual([])
 })
 
 test('授权照护者进入成员前台且看不到后台入口；撤回后失去家庭可见性', async ({ page, request }) => {

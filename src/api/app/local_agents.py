@@ -62,19 +62,19 @@ from app.search_providers import (
 from app.tool_call import (
     ASSISTANT_SYSTEM_PROMPT,
     HealthAssistantOutput,
-    OllamaClient,
     _latest_user_query,
     _looks_like_knowledge_citation,
     _parse_assistant_output,
     _unmatched_source_tokens,
     append_risk_statement,
+    build_chat_client,
     build_degrade_response,
     classify_question_detail,
     degrade_result,
     dose_decision_result,
     execute_whitelisted_tool,
     filter_claimed_citations,
-    is_loopback_ollama_url,
+    model_endpoint_allowed,
     question_type_label,
     risk_notice_for_question,
     suggest_follow_up_questions,
@@ -934,7 +934,8 @@ def _compact_external_sources(results: list[dict[str, str]]) -> str:
         ]
     else:
         lines = [
-            "外部搜索结果仅供补充参考，不是已审核本地证据；不要在 sources 中引用它们，也不要输出网址。"
+            "外部搜索结果仅供补充参考，不是已审核本地证据；"
+            "不要在 sources 中引用它们，也不要输出网址。"
             "若摘要提到季节性呼吸道/流感样情况，可用口语转述为「最近外面常见的提醒」，并说明仅供参考。"
         ]
     for idx, item in enumerate(results[:3], 1):
@@ -1326,7 +1327,7 @@ def _synthesis_agent(
     if cancelled():
         raise OrchestrationCancelled("cancelled before synthesis")
 
-    if not is_loopback_ollama_url(settings.ollama_base_url):
+    if not model_endpoint_allowed(settings.ollama_base_url):
         logger.warning("HCT-430 blocked non-loopback Ollama endpoint")
         return degraded("LOCAL_MODEL_ENDPOINT_REQUIRED")
 
@@ -1428,7 +1429,7 @@ def _synthesis_agent(
             if message.get("role") in {"user", "assistant"}
         ][-12:],
     ]
-    client = OllamaClient(settings.ollama_base_url)
+    client = build_chat_client(settings.ollama_base_url)
     parsed = None
     matched_citations: list[dict[str, str]] = []
     # HCT-450: one quality retry — either the draft was not a displayable

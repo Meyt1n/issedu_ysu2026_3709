@@ -271,13 +271,6 @@ onMounted(() => void loadTasks())
     <div class="card-heading" style="margin-bottom: 0">
       <div>
         <h2 class="hero-greeting">人工复核中心</h2>
-        <p class="hero-sub">
-          成员提交的药盒照片在此排队，确认后才写入家庭记录。
-        </p>
-        <p class="hero-sub review-session-meta">
-          登录 <strong>{{ session.actorId }}</strong>
-          · 用途 <strong>{{ session.accessPurpose || '未填' }}</strong>
-        </p>
       </div>
       <div class="review-hero-actions">
         <label class="context-select">

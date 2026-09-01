@@ -220,7 +220,7 @@ async function enterFamilySpace(page: Page): Promise<void> {
   await expect(page.getByRole('button', { name: '进入管理后台' })).toBeVisible({ timeout: 20_000 })
   await submitFormalLogin(page, 'owner-1')
   await expect(page.locator('.app-frame')).toBeVisible({ timeout: 20_000 })
-  await expect(navItem(page, '授权管理')).toBeVisible()
+  await expect(navItem(page, '授权管理')).toHaveCount(0)
 }
 
 test('管理员后台保持五组导航，不展示模型实验室与演示造数', async ({ page }) => {
@@ -263,78 +263,15 @@ test('家庭总览显著展示简洁的环境行动卡', async ({ page }) => {
   await expect(panel.getByText(/更新于/)).toBeVisible()
 })
 
-test('管理员用模板创建授权，看到交接闭环后撤回', async ({ page }) => {
+test('管理员前端隐藏授权管理入口，但保留安全登录设置', async ({ page }) => {
   await installSyntheticApi(page)
   await enterFamilySpace(page)
 
-  // 进入家庭空间后，侧栏必须保持本地数据承诺
-  await expect(page.getByText('健康数据默认只保存在本地。')).toBeVisible()
-
-  await navItem(page, '授权管理').click()
-  await expect(viewHeading(page)).toHaveText('授权管理')
-  await expect(page.getByRole('heading', { name: '新建授权' })).toBeVisible()
-
-  // 空状态提供模板直达入口（HCT-449）
-  const emptyState = page.locator('.auth-empty-state')
-  await expect(emptyState.getByText('还没有为照护者创建授权')).toBeVisible()
-  await emptyState.getByRole('button', { name: '子女日常照护' }).click()
-
-  // 模板填入最小权限组合：只读 + 确认风险，不含追加事件写权限
-  await expect(page.getByLabel('已确认健康事件')).toBeChecked()
-  await expect(page.getByLabel('风险确认回执')).toBeChecked()
-  await expect(page.getByLabel('查看已确认事件')).toBeChecked()
-  await expect(page.getByLabel('确认风险已知晓')).toBeChecked()
-  await expect(page.getByLabel('追加已确认事件')).not.toBeChecked()
-  await expect(page.getByLabel('授权用途')).toHaveValue('family-care')
-
-  await page.getByLabel('照护者账号').fill('caregiver-1')
-  await page.getByRole('button', { name: '创建授权' }).click()
-  await expect(page.getByText('授权已创建，默认遵循最小权限原则。')).toBeVisible()
-
-  // 创建成功后出现交接闭环：对方账号、登录时的用途代码、到期与撤回提示
-  const successPanel = page.locator('.auth-success-panel')
-  await expect(successPanel.getByText('授权已生效，接下来交给对方')).toBeVisible()
-  await expect(successPanel.getByText('family-care')).toBeVisible()
-  await expect(successPanel.getByLabel('授权交接说明')).toHaveValue(/caregiver-1/)
-  await expect(successPanel.getByLabel('授权交接说明')).toHaveValue(/家庭日常照护/)
-
-  // 点选授权后，右侧展示对方可见范围（不加载健康事件内容）
-  const grantCard = page.locator('.auth-grant-card').filter({ hasText: 'caregiver-1' })
-  await grantCard.click()
-  await expect(page.getByText('对方能看到什么')).toBeVisible()
-  await expect(page.getByText(/可见：已确认健康事件/)).toBeVisible()
-
-  // 撤回需要经过确认弹窗，防止误触
-  await grantCard.getByRole('button', { name: '撤回授权' }).click()
-  const dialog = page.getByRole('alertdialog')
-  await expect(dialog).toBeVisible()
-  await dialog.getByRole('button', { name: '撤回授权' }).click()
-
-  await expect(page.getByText('授权已撤回，对应照护者立即失去访问权限。')).toBeVisible()
-  await expect(page.getByText('已撤回', { exact: true })).toBeVisible()
+  await expect(navItem(page, '登录设置')).toBeVisible()
+  await expect(page.getByText('授权管理', { exact: true })).toHaveCount(0)
 })
 
-test('管理员可以给生效中的授权续期 30 天', async ({ page }) => {
-  await installSyntheticApi(page)
-  await enterFamilySpace(page)
-
-  await navItem(page, '授权管理').click()
-  await page.getByLabel('照护者账号').fill('caregiver-1')
-  await page.getByRole('button', { name: '创建授权' }).click()
-  await expect(page.getByText('授权已创建，默认遵循最小权限原则。')).toBeVisible()
-
-  // 续期是既有 PATCH 的快捷方式：先二次确认，权限范围不变
-  const grantCard = page.locator('.auth-grant-card').filter({ hasText: 'caregiver-1' })
-  await grantCard.getByRole('button', { name: '续期 30 天' }).click()
-  const dialog = page.getByRole('alertdialog')
-  await expect(dialog).toBeVisible()
-  await expect(dialog.getByText(/权限范围不变/)).toBeVisible()
-  await dialog.getByRole('button', { name: '确认续期' }).click()
-
-  await expect(page.getByText(/授权已续期到/)).toBeVisible()
-})
-
-test('命令面板 Ctrl+K 可以在十二个视图之间快速跳转', async ({ page }) => {
+test('命令面板不暴露已隐藏的授权管理入口', async ({ page }) => {
   await installSyntheticApi(page)
   await enterFamilySpace(page)
 
@@ -343,9 +280,9 @@ test('命令面板 Ctrl+K 可以在十二个视图之间快速跳转', async ({ 
   await expect(palette).toBeVisible()
 
   await palette.getByLabel('搜索命令').fill('授权')
-  await page.keyboard.press('Enter')
+  await expect(palette.getByText(/没有匹配「授权」的命令/)).toBeVisible()
+  await page.keyboard.press('Escape')
   await expect(palette).toHaveCount(0)
-  await expect(viewHeading(page)).toHaveText('授权管理')
 
   // 顶栏「工具与主题」菜单里同样可以打开；无匹配时给出无导流的空态提示
   await page.getByRole('button', { name: '工具与主题' }).click()
@@ -411,10 +348,12 @@ test('本地 API 不可用时不进入家庭空间，也不渲染任何健康摘
 })
 
 test('可见界面始终保持本地优先与无导流安全边界', async ({ page }) => {
-  await page.goto('/')
+  await page.goto('/?portal=admin')
 
-  await expect(page.getByText('健康信息默认只保存在家里')).toBeVisible()
-  await expect(page.getByText('家庭健康记录仅供日常参考，不提供诊断、处方或用药决策；紧急情况请联系医生或当地急救服务。')).toBeVisible()
+  await expect(page.getByRole('button', { name: '进入管理后台' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '注册本地账号' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '忘记密码' })).toBeVisible()
+  await expect(page.getByText('家庭健康记录仅供日常参考，不提供诊断或用药决策。')).toBeVisible()
   await expect(page.locator('body')).not.toContainText(
     /购药入口|立即购买|去问诊|在线咨询|广告推荐|buy medicine|purchase|online consultation|advertisement|commission/i,
   )

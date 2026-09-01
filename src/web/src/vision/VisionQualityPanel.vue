@@ -307,12 +307,6 @@ watch(() => [props.actorId, props.memberId, props.accessPurpose], () => {
       </span>
     </div>
 
-    <p class="card-note" style="margin: 0 0 12px">
-      {{ isMemberView
-        ? '照片只留在家里，家人确认后才会记入本子。'
-        : '图片只发送到本机 API。质量通过不代表识别成功；识别结果仅为候选，人工确认后才进入健康记录。' }}
-    </p>
-
     <div class="grid-two capture-layout">
       <label class="capture-zone" :class="{ checking: state === 'checking', 'has-preview': Boolean(previewUrl) }" :aria-disabled="isBusy">
         <img v-if="previewUrl" :src="previewUrl" alt="当前待检查药盒图片的本地预览" />
