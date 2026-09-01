@@ -51,6 +51,12 @@ watch(
 </script>
 
 <template>
+  <!-- 与网页端一致的轻量极光/萤火氛围层：纯 CSS、无网络资源，且不参与交互。 -->
+  <div class="ambient-aurora" aria-hidden="true"><span /><span /><span /></div>
+  <div class="ambient-fireflies" aria-hidden="true">
+    <i /><i /><i /><i /><i /><i /><i /><i />
+  </div>
+
   <a class="skip-link" href="#main">跳到主要内容</a>
 
   <RouterView v-slot="{ Component }">
