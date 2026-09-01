@@ -1,4 +1,5 @@
 import { reactive, readonly } from 'vue'
+import { SystemBars, SystemBarsStyle } from '@capacitor/core'
 
 /** 字号档位：标准 / 大 / 特大 */
 export type FontScale = 'standard' | 'large' | 'xlarge'
@@ -96,10 +97,18 @@ export function applySettingsToDocument(
   root.dataset.elder = settings.elderMode ? 'on' : 'off'
   root.dataset.theme = theme
 
+  // Capacitor 的系统栏插件在启动时只读取一次系统主题；主题在应用内切换时
+  // 需要同步更新图标明暗，否则浅色页面可能出现白色状态栏图标低对比度。
+  void SystemBars.setStyle({
+    style: theme === 'dark' ? SystemBarsStyle.Dark : SystemBarsStyle.Light,
+  }).catch(() => {
+    // PWA/桌面浏览器没有原生 SystemBars 时静默降级。
+  })
+
   // 状态栏/浏览器工具条颜色跟随主题（高对比走浅色方案）。
   const meta = doc.querySelector<HTMLMetaElement>('meta[name="theme-color"]')
   if (meta) {
-    meta.content = settings.highContrast ? '#ffffff' : theme === 'dark' ? '#10201a' : '#2f6d5a'
+    meta.content = settings.highContrast ? '#ffffff' : theme === 'dark' ? '#17251f' : '#3d7a63'
   }
 }
 
