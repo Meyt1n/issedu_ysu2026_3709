@@ -68,6 +68,19 @@ npm run test       # vitest 单元测试
 npm run build      # 产物输出到 dist/
 ```
 
+### MOB-171 受控弱网复核
+
+弱网列表的局部复核可使用仅内存、仅合成数据的夹具；它不是生产后端，也不能替代维护者的 Android/TalkBack 发布签收：
+
+```powershell
+npm run serve:mob171-fixture -- --host 0.0.0.0 --port 8000
+# 场景：ok | loading | timeout | slow | empty | partial
+# 通过 POST http://<局域网地址>:8000/__control 发送 {"mode":"slow"} 切换场景
+# 通过 GET  /__stats 查看脱敏请求计数与上下文；夹具不会写磁盘
+```
+
+`partial` 只让周趋势请求返回 504，用于确认今日任务/风险保留与“重试补齐”文案；`loading`/`timeout` 用于确认骨架屏和连接等待超时。验收记录见 [MOB-171 Android/PWA 受控局部验收记录](../docs/testing/MOB-171-Android-PWA受控局部验收记录-20260901.md)。
+
 ## 近 7 天趋势统计口径
 
 联机趋势只使用服务端事件时间戳和家庭接口返回的 IANA 时区 `time_zone` 分日，不使用浏览器本地时区。同一计划的更新按稳定计划标识折叠，计划总数保留原始创建日期；完成数只计服务端最终动作为 `plan_confirmed` 的那一天。时区、稳定关联或事件时间不完整时趋势显示为不可用，不使用零值代替未知结果。演示模式的趋势为虚构教学数据，标签固定按 `Asia/Shanghai` 生成。

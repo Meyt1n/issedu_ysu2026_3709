@@ -850,7 +850,7 @@ export class HttpDataProvider implements DataProvider {
     const householdId = await this.resolveHouseholdId()
     const memberName = await this.memberName(memberId)
     const [events, risks] = await Promise.all([
-      this.client.listMemberTimeline(householdId, memberId, this.options()),
+      this.client.listMemberTimeline(householdId, memberId, this.options(), 'today-snapshot'),
       this.listRisks(memberId),
     ])
 
@@ -967,7 +967,7 @@ export class HttpDataProvider implements DataProvider {
 
   async getWeeklyTrend(memberId: string): Promise<TrendPoint[]> {
     const householdId = await this.resolveHouseholdId()
-    const events = await this.client.listMemberTimeline(householdId, memberId, this.options())
+    const events = await this.client.listMemberTimeline(householdId, memberId, this.options(), 'weekly-trend')
     return deriveWeeklyTrendFromEvents(events, new Date(), this.householdTimeZone ?? undefined)
   }
 

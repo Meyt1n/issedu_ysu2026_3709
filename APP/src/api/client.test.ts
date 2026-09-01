@@ -17,6 +17,26 @@ describe('ApiClient 鉴权传输适配', () => {
     expect(() => new ApiClient({ baseUrl: 'http://example.com:8000' })).toThrow('明文 HTTP')
   })
 
+  it('为时间线请求保留可审计的页面上下文', async () => {
+    let url = ''
+    const client = new ApiClient({
+      baseUrl: 'http://127.0.0.1:8000',
+      fetcher: async input => {
+        url = String(input)
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          text: async () => '[]',
+        } as Response
+      },
+    })
+
+    await client.listMemberTimeline('household-1', 'member-1', undefined, 'weekly-trend')
+
+    expect(url).toBe('http://127.0.0.1:8000/api/v1/households/household-1/members/member-1/timeline?context=weekly-trend')
+  })
+
   it('正式 bearer 会话发送 Authorization，并停止发送开发期身份头', async () => {
     let request: RequestInit | undefined
     const session: AuthSession = {
