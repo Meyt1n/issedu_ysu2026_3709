@@ -171,6 +171,25 @@ def test_knowledge_crawl_config_missing_is_structured_503(
     assert denied.json()["detail"] == "KNOWLEDGE_STEWARD_REQUIRED"
 
 
+def test_knowledge_crawl_invalid_config_is_structured_503(
+    client: TestClient, tmp_path: Path, monkeypatch
+) -> None:
+    from app import knowledge_crawl as crawl
+
+    invalid = tmp_path / "allowlist.json"
+    invalid.write_text('{"sources": "not-a-list"}', encoding="utf-8")
+    monkeypatch.setattr(crawl, "ALLOWLIST_PATH", invalid)
+    headers = {"X-Actor-Id": "demo-parent", "X-Access-Purpose": "family-care"}
+
+    status = client.get("/api/v1/knowledge/crawl/status", headers=headers)
+    run = client.post("/api/v1/knowledge/crawl/run", headers=headers)
+
+    assert status.status_code == 503, status.text
+    assert status.json()["detail"] == "KNOWLEDGE_CRAWL_CONFIG_INVALID"
+    assert run.status_code == 503, run.text
+    assert run.json()["detail"] == "KNOWLEDGE_CRAWL_CONFIG_INVALID"
+
+
 def test_staging_detail_returns_markdown_and_change_flags(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -314,6 +333,84 @@ def test_authoritative_health_sources_are_allowlisted_but_default_off() -> None:
     }
     assert expected <= set(sources)
     assert all(sources[source_id]["enabled"] is False for source_id in expected)
+
+
+def test_crawl_failures_have_stable_human_safe_error_shape() -> None:
+    from urllib.error import HTTPError, URLError
+
+    from app.knowledge_crawl import friendly_crawl_error
+
+    forbidden = friendly_crawl_error(
+        "official-demo",
+        HTTPError("https://private.example/secret", 403, "private details", {}, None),
+    )
+    assert forbidden["error"] == "UPSTREAM_FORBIDDEN"
+    assert forbidden["code"] == "UPSTREAM_FORBIDDEN"
+    assert forbidden["retryable"] is False
+    assert "403" in forbidden["message"]
+    assert "private.example" not in str(forbidden)
+
+    timeout = friendly_crawl_error(
+        "official-demo", URLError(TimeoutError("socket internals"))
+    )
+    assert timeout["error"] == "UPSTREAM_TIMEOUT"
+    assert timeout["retryable"] is True
+    assert "socket internals" not in str(timeout)
+
+    unavailable = friendly_crawl_error(
+        "official-demo",
+        HTTPError("https://private.example/secret", 503, "gateway internals", {}, None),
+    )
+    assert unavailable["error"] == "UPSTREAM_UNAVAILABLE"
+    assert unavailable["retryable"] is True
+    assert "gateway internals" not in str(unavailable)
+
+    blocked = friendly_crawl_error("fixture-demo", ValueError("HOST_NOT_ALLOWLISTED"))
+    assert blocked["error"] == "HOST_NOT_ALLOWLISTED"
+    assert blocked["retryable"] is False
+    assert blocked["action"]
+
+
+def test_run_crawl_report_contains_structured_fixture_failure(tmp_path: Path, monkeypatch) -> None:
+    import json
+
+    from app import knowledge_crawl as crawl
+
+    staging = tmp_path / "staging"
+    monkeypatch.setattr(crawl, "STAGING_ROOT", staging)
+    monkeypatch.setattr(crawl, "RUNS_PATH", staging / "crawl_runs.jsonl")
+    allowlist = tmp_path / "allowlist.json"
+    allowlist.write_text(
+        json.dumps(
+            {
+                "policy": {"auto_ingest": False},
+                "sources": [
+                    {
+                        "id": "missing-fixture",
+                        "title": "演示来源",
+                        "url": "fixture://knowledge/not-present.html",
+                        "enabled": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = crawl.run_crawl(live=False, allowlist_path=allowlist)
+
+    assert report["ok"] is False
+    assert report["fetched"] == 0
+    assert report["errors"] == [
+        {
+            "source_id": "missing-fixture",
+            "error": "FIXTURE_NOT_FOUND",
+            "code": "FIXTURE_NOT_FOUND",
+            "message": "本地演示夹具缺失，请重新构建 API 镜像或补齐夹具文件。",
+            "retryable": False,
+            "action": "检查 docs/knowledge/crawl/fixtures",
+        }
+    ]
 
 
 def test_staging_detail_and_simulate_update_api_contracts(
