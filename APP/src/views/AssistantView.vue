@@ -771,9 +771,13 @@ function applyNetworkSearchFailure(reply: AssistantResponse, question: string, o
 }
 
 /** 取消/结束回复的收尾：保留已显示内容并明确标记为不完整。 */
-function settleCancelledReply(entryIndex: number, streamingEntry: ChatEntry): void {
+function settleCancelledReply(entryIndex: number): void {
   const entry = history.value[entryIndex]
-  if (entry === streamingEntry && entry.content.trim()) {
+  // `history` is a ref, so Vue exposes pushed entries as reactive proxies.
+  // Comparing that proxy with the pre-push object (`streamingEntry`) is not
+  // identity-safe and used to leave a cancelled bubble stuck at "generating".
+  const isCurrentStreamingEntry = entry?.role === 'assistant' && entry.replyStatus === 'streaming'
+  if (isCurrentStreamingEntry && entry.content.trim()) {
     entry.replyStatus = keepPartialReply ? 'ended' : 'stopped'
     entry.degraded = true
     entry.degradeReason = keepPartialReply ? 'reply_ended' : 'user_stopped'
@@ -787,8 +791,8 @@ function settleCancelledReply(entryIndex: number, streamingEntry: ChatEntry): vo
       ? '已结束回复，保留已生成的内容'
       : '已停止，已保留未完整内容；可点击“重新提问”'
   } else {
-    if (entry === streamingEntry) history.value.splice(entryIndex, 1)
-    cancelStatus.value = '已停止'
+    if (isCurrentStreamingEntry) history.value.splice(entryIndex, 1)
+    cancelStatus.value = keepPartialReply ? '已结束回复，尚未生成可保留内容' : '已停止'
   }
   keepPartialReply = false
   persistChatSession()
@@ -919,9 +923,11 @@ async function send(
   const requestOpts = { ...requestOptions(), signal: controller.signal }
 
   // 流式展示：token 直接写入这条气泡；结束回复/停止时按需保留或移除。
-  const streamingEntry: ChatEntry = { role: 'assistant', content: '', createdAt: Date.now(), replyStatus: 'streaming' }
-  history.value.push(streamingEntry)
+  history.value.push({ role: 'assistant', content: '', createdAt: Date.now(), replyStatus: 'streaming' })
   const entryIndex = history.value.length - 1
+  // Read the entry back from the ref so token mutations go through Vue's
+  // reactive proxy and render incrementally on Android WebView as well.
+  const streamingEntry = history.value[entryIndex]!
 
   let streamStarted = false
   let streamCancelled = false
@@ -963,7 +969,7 @@ async function send(
       applyNetworkSearchFailure(reply, content, networkSearchForThisTurn)
     } catch (streamError) {
       if (controller.signal.aborted || streamCancelled || isAssistantCancellation(streamError)) {
-        settleCancelledReply(entryIndex, streamingEntry)
+        settleCancelledReply(entryIndex)
         return
       }
       if (streamStarted && streamingEntry.content.trim()) {
@@ -982,7 +988,7 @@ async function send(
     }
   } catch (cause) {
     if (controller.signal.aborted || isAssistantCancellation(cause)) {
-      settleCancelledReply(entryIndex, streamingEntry)
+      settleCancelledReply(entryIndex)
     } else {
       const message =
         cause instanceof ApiClientError
@@ -994,7 +1000,7 @@ async function send(
       const fallbackContent =
         '本地模型或其依赖当前不可用，无法生成回答。家庭事实、任务与提醒不受影响，可直接在对应页面查看。'
       const entry = history.value[entryIndex]
-      if (entry === streamingEntry) {
+      if (entry?.role === 'assistant' && entry.replyStatus === 'streaming') {
         entry.content = fallbackContent
         entry.replyStatus = 'incomplete'
         entry.degraded = true
@@ -1279,7 +1285,10 @@ onBeforeUnmount(() => {
           :degraded="entry.degraded"
           :degrade-reason="entry.degradeReason"
         />
-        <div v-if="entry.role === 'assistant' && entry.content" class="bubble-actions">
+        <div
+          v-if="entry.role === 'assistant' && (entry.content || (sending && index === history.length - 1))"
+          class="bubble-actions"
+        >
           <button
             v-if="sending && index === history.length - 1"
             type="button"
@@ -1298,6 +1307,7 @@ onBeforeUnmount(() => {
             重新提问
           </button>
           <button
+            v-if="entry.content"
             type="button"
             class="btn btn-secondary"
             :aria-pressed="speakingIndex === index"
@@ -1306,6 +1316,7 @@ onBeforeUnmount(() => {
             {{ speakingIndex === index ? '停止朗读' : '朗读回答' }}
           </button>
           <button
+            v-if="entry.content"
             type="button"
             class="btn btn-secondary"
             :disabled="sending"
