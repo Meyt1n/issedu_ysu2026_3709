@@ -348,7 +348,7 @@ function mapAuthError(operation: AuthOperation, status: number, body: unknown): 
  * - 凭据只走 POST JSON body，绝不进 query string，避免落进访问日志与浏览器历史；
  * - `POST {prefix}/login` → `{ actor_id, session_token, expires_at }`（HCT-423 起已是 JSON body）；
  * - `POST {prefix}/logout` → body `{ session_token }`，服务端销毁会话；移动端无论成败都清空本地会话；
- * - `POST {prefix}/session` → 会话续验，401 表示已过期或已撤销（**服务端尚未提供**）；
+ * - `POST {prefix}/session` → 会话续验，401 表示已过期或已撤销；
  * - `POST {prefix}/pin-challenge` → `{ challenge_id, action, expires_at }`，**不得回显 PIN**；
  * - `POST {prefix}/pin-verify` → `{ status: "confirmed" }`。
  *

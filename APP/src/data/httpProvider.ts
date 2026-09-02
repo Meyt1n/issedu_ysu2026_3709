@@ -1,6 +1,6 @@
 import { ApiClient, ApiClientError } from '@/api/client'
 import { CAPABILITY_IDS, hasCapability } from '@/stores/capabilities'
-import type { AuthorizationRead, HealthEvent, HealthNewsResponse, Member, RequestOptions, RiskAlert, RiskListResponse, UploadedFile, VisionTask } from '@/api/types'
+import type { AuthorizationRead, HealthEvent, HealthNewsResponse, Member, RequestOptions, RiskAcknowledgement, RiskAlert, RiskListResponse, UploadedFile, VisionTask } from '@/api/types'
 import type {
   CareTask,
   CaregiverEscalation,
@@ -499,6 +499,20 @@ function riskAcknowledgement(alert: RiskAlert): RiskAcknowledgementView | null {
   }
 }
 
+function validRiskAcknowledgement(value: RiskAcknowledgement | null | undefined): value is RiskAcknowledgement {
+  return Boolean(
+    value
+      && optionalText(value.receipt_id)
+      && optionalText(value.household_id)
+      && optionalText(value.member_id)
+      && optionalText(value.rule_id)
+      && optionalText(value.rule_version)
+      && optionalText(value.risk_fingerprint)
+      && optionalText(value.actor_id)
+      && optionalText(value.acknowledged_at),
+  )
+}
+
 function toRiskCard(
   alert: RiskAlert,
   memberId: string,
@@ -929,9 +943,40 @@ export class HttpDataProvider implements DataProvider {
       })), '由家庭服务器确定性规则计算得出；以下为服务端返回的脱敏证据事件摘要。')
   }
 
-  async acknowledgeRisk(memberId: string, ruleId: string): Promise<RiskCard> {
-    // 主仓库暂未提供风险“已知晓”写接口；联机模式如实拒绝，不伪装成功。
-    throw new Error(`联机模式暂不支持在手机上记录“已知晓”（${memberId}/${ruleId}），请在网页端处理`)
+  async acknowledgeRisk(memberId: string, ruleId: string, idempotencyKey?: string): Promise<RiskCard> {
+    if (!hasCapability(CAPABILITY_IDS.riskAcknowledgement)) {
+      throw new Error('家庭服务器未声明风险知晓回写能力；本页不会伪装写入成功。请先到“我的”重新测试连接。')
+    }
+    const householdId = await this.resolveHouseholdId()
+    const memberName = await this.memberName(memberId)
+    const detail = await this.client.getRiskDetail(householdId, memberId, ruleId, this.options())
+    const ruleVersion = optionalText(detail.alert.rule_version)
+    const riskFingerprint = optionalText(detail.alert.risk_fingerprint)
+    if (!ruleVersion || !riskFingerprint) {
+      throw new Error('家庭服务器未返回完整风险版本信息，无法安全回写“已知晓”状态。')
+    }
+    const acknowledgement = await this.client.acknowledgeRisk(
+      householdId,
+      memberId,
+      ruleId,
+      { rule_version: ruleVersion, risk_fingerprint: riskFingerprint },
+      this.options({ idempotencyKey: idempotencyKey?.trim() || `risk-ack:${createIdempotencyKey()}` }),
+    )
+    if (!validRiskAcknowledgement(acknowledgement)) {
+      throw new Error('家庭服务器回执不完整，未记录成功；请稍后重试。')
+    }
+    return toRiskCard(
+      { ...detail.alert, acknowledgement },
+      memberId,
+      memberName,
+      detail.source_events.map(event => ({
+        id: event.id,
+        eventType: event.event_type,
+        confirmationStatus: event.confirmation_status,
+        createdAt: event.created_at,
+      })),
+      '由家庭服务器确定性规则计算得出；移动端只展示服务端返回的脱敏证据事件摘要。',
+    )
   }
 
   async submitTaskAction(

@@ -711,6 +711,146 @@ describe('服务端风险审计元数据（MOB-156）', () => {
   })
 })
 
+describe('联机风险知晓回写（MOB-156）', () => {
+  it('能力未声明时不调用风险回写接口', async () => {
+    const getRiskDetail = vi.fn()
+    const acknowledgeRisk = vi.fn()
+    const client = { getRiskDetail, acknowledgeRisk } as unknown as ApiClient
+    const provider = new HttpDataProvider(client, () => ({ actorId: 'actor-1', accessPurpose: 'family-care', householdId: 'hh-1' }))
+
+    clearCapabilities()
+    await expect(provider.acknowledgeRisk('m-1', 'risk-1', 'risk-ack-fixed')).rejects.toThrow('未声明风险知晓回写能力')
+    expect(getRiskDetail).not.toHaveBeenCalled()
+    expect(acknowledgeRisk).not.toHaveBeenCalled()
+  })
+
+  it('能力可用时携带服务端版本/指纹并映射回已知晓卡片', async () => {
+    const getRiskDetail = vi.fn().mockResolvedValue({
+      alert: {
+        rule_id: 'risk-1',
+        level: 'SEVERE',
+        message: '合成严重风险',
+        source_event_ids: ['event-1'],
+        created_at: '2026-08-20T02:00:00Z',
+        rule_version: 'rules-v7',
+        risk_fingerprint: 'f'.repeat(64),
+        acknowledgement: null,
+        deduplication_key: 'dedup-1',
+        merged_count: 1,
+        budget_status: 'VISIBLE',
+        budget_reason: '严重信号不受普通预算压制',
+        next_visible_at: null,
+        valid_until: '2026-08-21T02:00:00Z',
+        evidence_summary: '1 条脱敏来源事件',
+      },
+      source_events: [{
+        id: 'event-1',
+        event_type: 'medication_added',
+        confirmation_status: 'CONFIRMED',
+        created_at: '2026-08-20T01:00:00Z',
+      }],
+    })
+    const acknowledgeRisk = vi.fn().mockResolvedValue({
+      receipt_id: 'receipt-1',
+      household_id: 'hh-1',
+      member_id: 'm-1',
+      rule_id: 'risk-1',
+      rule_version: 'rules-v7',
+      risk_fingerprint: 'f'.repeat(64),
+      actor_id: 'actor-1',
+      acknowledged_at: '2026-08-20T02:01:00Z',
+      replayed: false,
+    })
+    const client = {
+      listHouseholds: vi.fn().mockResolvedValue([{ id: 'hh-1', name: '合成家庭' }]),
+      listMembers: vi.fn().mockResolvedValue([{ id: 'm-1', display_name: '合成成员' }]),
+      getRiskDetail,
+      acknowledgeRisk,
+    } as unknown as ApiClient
+    const provider = new HttpDataProvider(client, () => ({
+      actorId: 'actor-1',
+      accessPurpose: 'family-care',
+      householdId: 'hh-1',
+    }))
+
+    setCapabilities({ phase: 'ready', available: ['risk-acknowledgement'], unavailable: [] })
+    try {
+      const card = await provider.acknowledgeRisk('m-1', 'risk-1', 'risk-ack-fixed')
+
+      expect(getRiskDetail).toHaveBeenCalledWith('hh-1', 'm-1', 'risk-1', expect.objectContaining({ actorId: 'actor-1' }))
+      expect(acknowledgeRisk).toHaveBeenCalledWith(
+        'hh-1',
+        'm-1',
+        'risk-1',
+        { rule_version: 'rules-v7', risk_fingerprint: 'f'.repeat(64) },
+        expect.objectContaining({ idempotencyKey: 'risk-ack-fixed' }),
+      )
+      expect(card).toMatchObject({
+        ruleId: 'risk-1',
+        acknowledged: true,
+        acknowledgement: { actorId: 'actor-1', replayed: false },
+        sourceEvents: [{ id: 'event-1', eventType: 'medication_added' }],
+      })
+
+      await provider.acknowledgeRisk('m-1', 'risk-1', 'risk-ack-fixed')
+      expect(acknowledgeRisk).toHaveBeenCalledTimes(2)
+      expect(acknowledgeRisk.mock.calls[1]?.[4]).toMatchObject({ idempotencyKey: 'risk-ack-fixed' })
+    } finally {
+      clearCapabilities()
+    }
+  })
+
+  it('服务端缺少版本或指纹时拒绝写回', async () => {
+    const getRiskDetail = vi.fn().mockResolvedValue({
+      alert: {
+        rule_id: 'risk-1', level: 'WARNING', message: '不完整风险', source_event_ids: [], created_at: null,
+        rule_version: null, risk_fingerprint: null,
+      },
+      source_events: [],
+    })
+    const acknowledgeRisk = vi.fn()
+    const client = {
+      listHouseholds: vi.fn().mockResolvedValue([{ id: 'hh-1', name: '合成家庭' }]),
+      listMembers: vi.fn().mockResolvedValue([{ id: 'm-1', display_name: '合成成员' }]),
+      getRiskDetail,
+      acknowledgeRisk,
+    } as unknown as ApiClient
+    const provider = new HttpDataProvider(client, () => ({ actorId: 'actor-1', accessPurpose: 'family-care', householdId: 'hh-1' }))
+
+    setCapabilities({ phase: 'ready', available: ['risk-acknowledgement'], unavailable: [] })
+    try {
+      await expect(provider.acknowledgeRisk('m-1', 'risk-1')).rejects.toThrow('未返回完整风险版本信息')
+      expect(acknowledgeRisk).not.toHaveBeenCalled()
+    } finally {
+      clearCapabilities()
+    }
+  })
+
+  it('服务端回执字段不完整时不返回已知晓卡片', async () => {
+    const getRiskDetail = vi.fn().mockResolvedValue({
+      alert: {
+        rule_id: 'risk-1', level: 'WARNING', message: '风险', source_event_ids: [], created_at: null,
+        rule_version: 'rules-v7', risk_fingerprint: 'f'.repeat(64), acknowledgement: null,
+      },
+      source_events: [],
+    })
+    const client = {
+      listHouseholds: vi.fn().mockResolvedValue([{ id: 'hh-1', name: '合成家庭' }]),
+      listMembers: vi.fn().mockResolvedValue([{ id: 'm-1', display_name: '合成成员' }]),
+      getRiskDetail,
+      acknowledgeRisk: vi.fn().mockResolvedValue({ receipt_id: '' }),
+    } as unknown as ApiClient
+    const provider = new HttpDataProvider(client, () => ({ actorId: 'actor-1', accessPurpose: 'family-care', householdId: 'hh-1' }))
+
+    setCapabilities({ phase: 'ready', available: ['risk-acknowledgement'], unavailable: [] })
+    try {
+      await expect(provider.acknowledgeRisk('m-1', 'risk-1', 'risk-ack-fixed')).rejects.toThrow('回执不完整')
+    } finally {
+      clearCapabilities()
+    }
+  })
+})
+
 describe('环境行动卡的受控降级（MOB-157）', () => {
   it('服务端未声明能力时不把旧环境数据或本地推断显示为行动卡', () => {
     clearCapabilities()
