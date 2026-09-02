@@ -87,6 +87,8 @@ interface ChatEntry {
   sources?: string[]
   /** 只保留本次回答返回的引用；会话恢复不持久化，避免与服务端索引版本产生二义。 */
   citations?: AssistantCitation[]
+  /** 本次回答的服务端证据预览；只在当前内存会话保留，用于无证据状态提示。 */
+  evidencePreview?: EvidencePreview | null
   suggestedQuestions?: string[]
   queryType?: string | null
   networkUsed?: boolean
@@ -329,6 +331,7 @@ function restoreChatSession(entries: StoredChatEntry[]): void {
     degradeReason: entry.degradeReason,
     sources: entry.sources,
     suggestedQuestions: entry.suggestedQuestions,
+    evidencePreview: undefined,
   }))
   scrollToEnd()
 }
@@ -737,6 +740,9 @@ function applyAssistantReply(entryIndex: number, reply: AssistantResponse): void
   entry.degradeReason = reply.degrade_reason
   entry.sources = reply.sources
   entry.citations = reply.citations
+  // 某些旧服务端只在 SSE evidence_preview 事件中发送预览，完成事件没有
+  // 重复携带；同一轮请求内可安全沿用该事件，避免无证据回答丢失明确提示。
+  entry.evidencePreview = reply.evidence_preview ?? liveEvidencePreview.value ?? null
   entry.suggestedQuestions = (reply.suggested_questions ?? []).filter(
     (item) => typeof item === 'string' && item.trim(),
   )
@@ -779,6 +785,7 @@ function settleCancelledReply(entryIndex: number, streamingEntry: ChatEntry): vo
     entry.degradeReason = keepPartialReply ? 'reply_ended' : 'user_stopped'
     entry.sources = undefined
     entry.citations = undefined
+    entry.evidencePreview = undefined
     entry.suggestedQuestions = undefined
     entry.networkUsed = false
     entry.externalDomains = []
@@ -1276,6 +1283,7 @@ onBeforeUnmount(() => {
           v-if="entry.role === 'assistant' && entry.content"
           :citations="entry.citations"
           :sources="entry.sources"
+          :evidence-preview="entry.evidencePreview"
           :degraded="entry.degraded"
           :degrade-reason="entry.degradeReason"
         />

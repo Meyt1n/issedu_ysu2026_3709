@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import type { AssistantCitation } from '@/api/types'
+import type { AssistantCitation, EvidencePreview } from '@/api/types'
 import {
   assistantCitationTitle,
   extraAssistantSources,
   MAX_ASSISTANT_CITATIONS,
   MAX_CITATION_TEXT_LENGTH,
+  shouldShowAssistantNoEvidence,
   uniqueAssistantCitations,
 } from './assistantEvidence'
 
@@ -17,6 +18,18 @@ function citation(overrides: Partial<AssistantCitation> = {}): AssistantCitation
     document_title: '用药说明书',
     text: '每日一次，随餐服用。',
     locator: '第 2 页',
+    ...overrides,
+  }
+}
+
+function preview(overrides: Partial<EvidencePreview> = {}): EvidencePreview {
+  return {
+    query_type: 'GENERAL',
+    database_tools: [],
+    knowledge_titles: [],
+    knowledge_count: 0,
+    external_count: 0,
+    rule_tools: [],
     ...overrides,
   }
 }
@@ -87,5 +100,24 @@ describe('assistant evidence extra sources', () => {
   it('falls back to the document id when no title was returned', () => {
     expect(assistantCitationTitle(citation({ document_title: null }))).toBe('doc-1')
     expect(assistantCitationTitle(citation())).toBe('用药说明书')
+  })
+})
+
+describe('assistant evidence empty-state', () => {
+  it('shows an explicit empty state when the server preview has no knowledge or external evidence', () => {
+    expect(shouldShowAssistantNoEvidence([], [], preview())).toBe(true)
+  })
+
+  it('keeps the empty state for a degraded answer even without a preview event', () => {
+    expect(shouldShowAssistantNoEvidence([], [], null, true)).toBe(true)
+  })
+
+  it('does not call a fact source or a retrieved citation empty evidence', () => {
+    expect(shouldShowAssistantNoEvidence([], ['event-1'], preview())).toBe(false)
+    expect(shouldShowAssistantNoEvidence([citation()], [], preview())).toBe(false)
+  })
+
+  it('does not infer empty evidence when an older response has no preview metadata', () => {
+    expect(shouldShowAssistantNoEvidence([], [])).toBe(false)
   })
 })
