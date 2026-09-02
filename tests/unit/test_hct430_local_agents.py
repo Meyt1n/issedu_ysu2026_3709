@@ -388,7 +388,9 @@ def test_greeting_fast_path_never_touches_model_or_tools(monkeypatch) -> None:
     def _forbidden(*args, **kwargs):
         raise AssertionError("greeting must not call the model or database tools")
 
-    monkeypatch.setattr("app.local_agents.OllamaClient", _forbidden)
+    monkeypatch.setattr(
+        "app.local_agents.build_chat_client", lambda *_a, **_k: _forbidden()
+    )
     monkeypatch.setattr("app.local_agents.execute_whitelisted_tool", _forbidden)
     monkeypatch.setattr("app.local_agents.execute_web_search", _forbidden)
 
@@ -735,8 +737,10 @@ def test_synthesis_degrade_mentions_retrieved_evidence(monkeypatch) -> None:
             # Placeholder-label drafts fail _parse_assistant_output validation.
             yield '{"answer":"hello","sources":[],"confidence":"high","escalate":false}'
 
-    monkeypatch.setattr("app.local_agents.OllamaClient", BrokenModel)
-    monkeypatch.setattr("app.local_agents.is_loopback_ollama_url", lambda url: True)
+    monkeypatch.setattr(
+        "app.local_agents.build_chat_client", lambda *_a, **_k: BrokenModel()
+    )
+    monkeypatch.setattr("app.local_agents.model_endpoint_allowed", lambda url: True)
 
     result = _synthesis_agent(
         messages=[{"role": "user", "content": "最近有什么流行性感冒吗"}],
@@ -777,8 +781,10 @@ def test_medication_safety_without_knowledge_still_answers(monkeypatch) -> None:
                 '建议咨询医生或药师。","sources":[],"confidence":"low","escalate":false}'
             )
 
-    monkeypatch.setattr("app.local_agents.OllamaClient", _AnsweringOllama)
-    monkeypatch.setattr("app.local_agents.is_loopback_ollama_url", lambda url: True)
+    monkeypatch.setattr(
+        "app.local_agents.build_chat_client", lambda *_a, **_k: _AnsweringOllama()
+    )
+    monkeypatch.setattr("app.local_agents.model_endpoint_allowed", lambda url: True)
 
     def fake_database(session, **kwargs):
         return {"get_member_state": {"sources": []}}, {
@@ -827,8 +833,10 @@ def test_symptom_medication_model_down_keeps_friendly_fallback(monkeypatch) -> N
             raise RuntimeError("OLLAMA_UNAVAILABLE: connection refused")
             yield  # pragma: no cover
 
-    monkeypatch.setattr("app.local_agents.OllamaClient", _DownOllama)
-    monkeypatch.setattr("app.local_agents.is_loopback_ollama_url", lambda url: True)
+    monkeypatch.setattr(
+        "app.local_agents.build_chat_client", lambda *_a, **_k: _DownOllama()
+    )
+    monkeypatch.setattr("app.local_agents.model_endpoint_allowed", lambda url: True)
 
     def fake_database(session, **kwargs):
         return {"get_member_state": {"sources": []}}, {
@@ -879,7 +887,9 @@ def test_dose_decision_fast_path_refuses_without_model(monkeypatch) -> None:
         def __init__(self, *args, **kwargs):
             raise AssertionError("no model may be called for DOSE_DECISION")
 
-    monkeypatch.setattr("app.local_agents.OllamaClient", _ForbiddenOllama)
+    monkeypatch.setattr(
+        "app.local_agents.build_chat_client", lambda *_a, **_k: _ForbiddenOllama()
+    )
 
     result = run_local_multi_agent(
         None,
@@ -1018,8 +1028,10 @@ def test_synthesis_streams_only_validated_answer(monkeypatch) -> None:
             yield draft[:20]
             yield draft[20:]
 
-    monkeypatch.setattr("app.local_agents.OllamaClient", FakeClient)
-    monkeypatch.setattr("app.local_agents.is_loopback_ollama_url", lambda url: True)
+    monkeypatch.setattr(
+        "app.local_agents.build_chat_client", lambda *_a, **_k: FakeClient()
+    )
+    monkeypatch.setattr("app.local_agents.model_endpoint_allowed", lambda url: True)
 
     tokens: list[str] = []
     statuses: list[str] = []
@@ -1054,8 +1066,10 @@ def test_synthesis_emits_validating_status(monkeypatch) -> None:
         def chat_stream(self, **kwargs):
             yield '{"answer":"ok","sources":[],"confidence":"high","escalate":false}'
 
-    monkeypatch.setattr("app.local_agents.OllamaClient", FakeClient)
-    monkeypatch.setattr("app.local_agents.is_loopback_ollama_url", lambda url: True)
+    monkeypatch.setattr(
+        "app.local_agents.build_chat_client", lambda *_a, **_k: FakeClient()
+    )
+    monkeypatch.setattr("app.local_agents.model_endpoint_allowed", lambda url: True)
 
     phases: list[str] = []
     _synthesis_agent(
@@ -1131,8 +1145,10 @@ def test_general_skips_citation_retry(monkeypatch) -> None:
                 '"sources":[],"confidence":"medium","escalate":false}'
             )
 
-    monkeypatch.setattr("app.local_agents.OllamaClient", FakeClient)
-    monkeypatch.setattr("app.local_agents.is_loopback_ollama_url", lambda url: True)
+    monkeypatch.setattr(
+        "app.local_agents.build_chat_client", lambda *_a, **_k: FakeClient()
+    )
+    monkeypatch.setattr("app.local_agents.model_endpoint_allowed", lambda url: True)
 
     result = _synthesis_agent(
         messages=[{"role": "user", "content": "最近有什么新闻吗"}],
@@ -1171,8 +1187,10 @@ def test_news_schema_failure_uses_teaching_fallback(monkeypatch) -> None:
                 "database_agent 报 TOOL_SCOPE_DENIED。上一稿没有在 sources 中引用。"
             )
 
-    monkeypatch.setattr("app.local_agents.OllamaClient", BrokenModel)
-    monkeypatch.setattr("app.local_agents.is_loopback_ollama_url", lambda url: True)
+    monkeypatch.setattr(
+        "app.local_agents.build_chat_client", lambda *_a, **_k: BrokenModel()
+    )
+    monkeypatch.setattr("app.local_agents.model_endpoint_allowed", lambda url: True)
 
     result = _synthesis_agent(
         messages=[{"role": "user", "content": "最近有什么新闻吗"}],

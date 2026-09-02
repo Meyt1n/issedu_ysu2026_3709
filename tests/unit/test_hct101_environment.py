@@ -1,5 +1,6 @@
 import io
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -145,13 +146,37 @@ def test_env_example_uses_non_secret_placeholders() -> None:
     assert "REVIEW_API_KEY=" not in env_example
 
 
+def test_env_example_documents_every_setting() -> None:
+    """``.env.example`` is the deployment contract: it must list every setting.
+
+    A field that exists only in ``config.py`` is invisible to whoever provisions
+    a new machine, so that machine silently runs on a different default than the
+    one it was tested with.  Six settings (video intake, vision-worker leasing,
+    face-login liveness) had drifted out of this file.
+    """
+    env_example = read_repo_file(".env.example")
+    documented = set(re.findall(r"^([A-Z][A-Z0-9_]*)=", env_example, re.MULTILINE))
+    configured = {
+        name.upper()
+        for name in re.findall(
+            r"^\s{4}([a-z][a-z0-9_]*)\s*:", read_repo_file("src/api/app/config.py"), re.MULTILINE
+        )
+    }
+
+    missing = sorted(configured - documented)
+    assert not missing, f".env.example is missing documented settings: {missing}"
+
+
 def test_alembic_has_a_single_head() -> None:
     config = Config(str(REPO_ROOT / "alembic.ini"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert len(scripts.get_heads()) == 1
+    # A single head is the real invariant: unmerged branches would let two
+    # deployments end up on different schemas.  The head's *name* is not pinned
+    # here — doing so made every legitimate new migration fail this test.
+    assert len(scripts.get_heads()) == 1, scripts.get_heads()
     head = scripts.get_heads()[0]
-    assert head == "0024_hct462_risk_disposition"
+    # MySQL's alembic_version.version_num column is VARCHAR(64).
     assert len(head) <= 64
 
 

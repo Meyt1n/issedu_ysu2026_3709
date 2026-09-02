@@ -668,11 +668,11 @@ def classify_question_detail(query: str, override: str | None = None) -> dict[st
         return classify_question_dual_detail(
             query,
             model_enabled=bool(settings.agent_classifier_enabled),
-            is_loopback_url=is_loopback_ollama_url,
+            is_loopback_url=model_endpoint_allowed,
             ollama_base_url=settings.ollama_base_url,
             ollama_model=settings.ollama_model,
             ollama_timeout=float(settings.agent_classifier_timeout_seconds),
-            chat_factory=lambda base_url: OllamaClient(base_url=base_url),
+            chat_factory=build_chat_client,
             override=override,
         )
     except Exception:  # noqa: BLE001 — routing must never fail open to crash
@@ -756,6 +756,34 @@ def is_loopback_ollama_url(url: str) -> bool:
     return parsed.scheme in {"http", "https"} and parsed.hostname in {
         "localhost", "127.0.0.1", "::1",
     }
+
+
+def model_endpoint_allowed(url: str) -> bool:
+    """Whether the configured model endpoint may be used.
+
+    Local mode keeps the original rule: loopback only, so a stray public URL in
+    ``OLLAMA_BASE_URL`` can never silently ship conversations off the machine.
+    Cloud mode (``LLM_PROVIDER=cloud``) is an operator's explicit decision to
+    use a remote endpoint, so the loopback rule does not apply to it — the
+    endpoint is instead validated as HTTPS when the backend is built.
+    """
+    from app.cloud_llm import cloud_backend_enabled
+
+    if cloud_backend_enabled():
+        return True
+    return is_loopback_ollama_url(url)
+
+
+def build_chat_client(base_url: str | None = None):
+    """Return the active chat backend: local Ollama or the cloud drop-in.
+
+    Both satisfy the same interface, so callers never branch on the backend.
+    """
+    from app.cloud_llm import build_cloud_client, cloud_backend_enabled
+
+    if cloud_backend_enabled():
+        return build_cloud_client()
+    return OllamaClient(base_url or OLLAMA_DEFAULT_URL)
 
 
 def _sanitize_follow_up_questions(candidates: list[str]) -> list[str]:
@@ -1483,7 +1511,9 @@ def _execute_get_applied_rules(
             "rule_id": alert.rule_id,
             "level": alert.level,
             "source_event_ids": list(dict.fromkeys(alert.source_event_ids)),
-            "deduplication_key": getattr(alert, "deduplication_key", None) or deduplication_key(alert),
+            "deduplication_key": (
+                getattr(alert, "deduplication_key", None) or deduplication_key(alert)
+            ),
             "merged_count": max(int(alert.merged_count or 1), 1),
         }
         for alert in alerts
@@ -1891,7 +1921,7 @@ def run_assistant(
     settings = get_settings()
     model = model or settings.ollama_model
     timeout = settings.ollama_timeout_seconds
-    client = OllamaClient(settings.ollama_base_url)
+    client = build_chat_client(settings.ollama_base_url)
     query_type = classify_question(_latest_user_query(messages))
     open_chat = is_open_chat(settings)
     max_tokens = effective_max_tokens(max_tokens, settings)
@@ -1908,7 +1938,7 @@ def run_assistant(
     if query_type == "DOSE_DECISION":
         return dose_decision_result(messages, model=model)
 
-    if not is_loopback_ollama_url(settings.ollama_base_url):
+    if not model_endpoint_allowed(settings.ollama_base_url):
         logger.warning("Blocked non-loopback Ollama endpoint for local assistant")
         return degraded("LOCAL_MODEL_ENDPOINT_REQUIRED")
 

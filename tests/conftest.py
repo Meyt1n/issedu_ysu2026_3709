@@ -1,6 +1,7 @@
 import sys
 from collections.abc import Generator
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -17,10 +18,51 @@ for source_path in (REPO_ROOT / "src/api", REPO_ROOT / "src", REPO_ROOT / "scrip
     if source not in sys.path:
         sys.path.insert(0, source)
 
+from app import config as app_config  # noqa: E402
+
+# Ignore the developer's local ``.env`` for the whole suite.
+#
+# ``Settings`` loads ``.env`` by default, so tests asserting *default deployment*
+# behaviour silently took on whatever the current machine had configured: with
+# ``MASTER_DATA_APPROVED_VERSIONS=demo-cn-en-v1`` set locally, the capabilities
+# contract test failed on that machine and passed in CI (which has no ``.env``).
+# Same commit, different verdict per machine — so the suite pins the documented
+# defaults instead.  This must happen before ``app.db``/``app.main`` are imported,
+# because those bind ``settings = get_settings()`` at import time.  Individual
+# tests still opt into non-default values with ``monkeypatch``.
+app_config.Settings.model_config["env_file"] = None
+
 from app.config import get_settings  # noqa: E402
 from app.db import get_session  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import Base  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _restore_settings_singleton() -> Generator[None, None, None]:
+    """Keep ``get_settings()`` returning the same object for every test.
+
+    ``app.routes``/``app.db``/``app.main`` and ``migrations/env.py`` bind a
+    module-level ``settings = get_settings()`` snapshot at import time.  A test
+    that calls ``get_settings.cache_clear()`` (migration tests legitimately do,
+    to pick up a new ``DATABASE_URL``) leaves the cache empty, so the next
+    ``get_settings()`` builds a *different* instance while those snapshots keep
+    the old one.  Configuration patched on one object is then invisible to the
+    other — that split previously made ~20 contract tests fail or pass purely
+    on execution order (``FILE_NOT_FOUND``: written under one ``file_root``,
+    looked up under another).
+
+    Re-priming the cache with the original instance makes the suite order
+    independent without forcing every migration test to manage it by hand.
+    """
+    original = get_settings()
+    try:
+        yield
+    finally:
+        if get_settings() is not original:
+            get_settings.cache_clear()
+            with patch.object(app_config, "Settings", lambda: original):
+                get_settings()
 
 
 @pytest.fixture(autouse=True)

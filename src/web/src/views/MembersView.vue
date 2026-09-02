@@ -21,7 +21,6 @@ import {
   eventTone,
   eventTypeLabel,
   formatDateTime,
-  memberRoleLabel,
   summarizeEventPayload,
 } from '../ui/labels'
 import { buildFactsFromTimeline } from '../ui/projection'
@@ -292,10 +291,6 @@ onMounted(() => void loadProfile())
     <div class="card-heading" style="margin-bottom: 0">
       <div>
         <h2 class="hero-greeting">{{ selectedMember?.display_name ?? '成员' }}的健康档案</h2>
-        <p class="hero-sub">
-          {{ selectedMember ? memberRoleLabel(selectedMember.role) : '' }} ·
-          每一条记录都来自已确认的健康事件，字段未授权时不会显示。
-        </p>
       </div>
       <label class="context-select">
         成员
