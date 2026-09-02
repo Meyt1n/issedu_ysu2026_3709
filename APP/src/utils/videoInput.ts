@@ -68,7 +68,10 @@ export function validateMedicineVideo(file: File, probe: VideoProbe): VideoValid
       summary: '',
     }
   }
-  if (!(VIDEO_ALLOWED_MIME_TYPES as readonly string[]).includes(file.type)) {
+  const declaredMime = file.type.trim().toLowerCase()
+  // 部分 Android/WebView 文件选择器对合法媒体返回空 MIME。扩展名已命中
+  // 白名单时按扩展名继续校验；显式提供的 MIME 仍必须严格命中白名单。
+  if (declaredMime && !(VIDEO_ALLOWED_MIME_TYPES as readonly string[]).includes(declaredMime)) {
     return {
       ok: false,
       message: `视频类型“${file.type || '未知'}”不受支持；请使用手机默认相机录制的 MP4 / MOV 视频。`,
