@@ -26,6 +26,7 @@
     "serve:mob171-fixture": "node scripts/mob171-weak-network-fixture.mjs",
     "seed:live": "node scripts/seed-live-demo.mjs",
     "demo:ready": "node scripts/mobile-demo-ready.mjs",
+    "mobile:ready": "node scripts/mobile-release-check.mjs",
     "verify:linkage": "node scripts/verify-web-linkage.mjs",
     "audit:pwa": "npm run build && node scripts/audit-pwa.mjs",
     "verify:controlled-release": "node scripts/verify-controlled-release.mjs",
