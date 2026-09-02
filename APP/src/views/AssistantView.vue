@@ -923,9 +923,11 @@ async function send(
   const requestOpts = { ...requestOptions(), signal: controller.signal }
 
   // 流式展示：token 直接写入这条气泡；结束回复/停止时按需保留或移除。
-  const streamingEntry: ChatEntry = { role: 'assistant', content: '', createdAt: Date.now(), replyStatus: 'streaming' }
-  history.value.push(streamingEntry)
+  history.value.push({ role: 'assistant', content: '', createdAt: Date.now(), replyStatus: 'streaming' })
   const entryIndex = history.value.length - 1
+  // Read the entry back from the ref so token mutations go through Vue's
+  // reactive proxy and render incrementally on Android WebView as well.
+  const streamingEntry = history.value[entryIndex]!
 
   let streamStarted = false
   let streamCancelled = false
