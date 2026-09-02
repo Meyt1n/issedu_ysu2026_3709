@@ -46,6 +46,21 @@ describe('MOB-149 validateMedicineVideo', () => {
     expect(result.message).toContain('video/webm')
   })
 
+  it('允许 Android 文件选择器未提供 MIME 的 MP4', () => {
+    const result = validateMedicineVideo(makeVideoFile({ name: 'clip.mp4', type: '' }), GOOD_PROBE)
+    expect(result.ok).toBe(true)
+    expect(result.summary).toContain('MP4')
+  })
+
+  it('允许未提供 MIME 的 MOV，并接受大小写不同的标准 MIME', () => {
+    const result = validateMedicineVideo(makeVideoFile({ name: 'clip.mov', type: '' }), GOOD_PROBE)
+    expect(result.ok).toBe(true)
+    expect(result.summary).toContain('MOV')
+
+    const normalized = validateMedicineVideo(makeVideoFile({ name: 'clip.mov', type: 'Video/QuickTime' }), GOOD_PROBE)
+    expect(normalized.ok).toBe(true)
+  })
+
   it('拒绝超过大小上限的视频', () => {
     const result = validateMedicineVideo(makeVideoFile({ size: VIDEO_MAX_BYTES + 1 }), GOOD_PROBE)
     expect(result.ok).toBe(false)
