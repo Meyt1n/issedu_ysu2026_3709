@@ -452,7 +452,7 @@ html[data-contrast='high'] :focus-visible { outline-width: 4px; }
   .screen {
     max-width: 960px;
     padding-top: max(14px, var(--hct-safe-area-top));
-    padding-inline: max(24px, var(--hct-safe-area-right)) max(24px, var(--hct-safe-area-left));
+    padding-inline: max(24px, var(--hct-safe-area-left)) max(24px, var(--hct-safe-area-right));
     gap: 14px;
   }
 
@@ -478,7 +478,7 @@ html[data-contrast='high'] :focus-visible { outline-width: 4px; }
 @media (orientation: landscape) and (max-height: 560px) {
   :root { --hct-bottom-clearance: 82px; }
 
-  .screen { padding-inline: max(16px, var(--hct-safe-area-right)) max(16px, var(--hct-safe-area-left)); gap: 12px; }
+  .screen { padding-inline: max(16px, var(--hct-safe-area-left)) max(16px, var(--hct-safe-area-right)); gap: 12px; }
   .card { padding: 14px; }
   .hero { padding: 14px 16px; gap: 9px; }
   .tabbar-wrap { bottom: calc(8px + var(--hct-safe-area-bottom)); padding-inline: 12px; }
@@ -490,10 +490,10 @@ html[data-contrast='high'] :focus-visible { outline-width: 4px; }
 @media (horizontal-viewport-segments: 2) {
   .screen {
     max-width: 100%;
-    padding-inline: max(28px, var(--hct-safe-area-right)) max(28px, var(--hct-safe-area-left));
+    padding-inline: max(28px, var(--hct-safe-area-left)) max(28px, var(--hct-safe-area-right));
   }
 
-  .tabbar-wrap { padding-inline: max(20px, var(--hct-safe-area-right)) max(20px, var(--hct-safe-area-left)); }
+  .tabbar-wrap { padding-inline: max(20px, var(--hct-safe-area-left)) max(20px, var(--hct-safe-area-right)); }
 }
 
 .page-enter-active {
