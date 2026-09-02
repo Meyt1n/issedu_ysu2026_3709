@@ -39,7 +39,6 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { view: 'risks', label: '用药安全', icon: 'shield', group: '安全与洞察' },
   { view: 'graph', label: '健康图谱', icon: 'compass', group: '安全与洞察' },
   { view: 'assistant', label: '健康助手', icon: 'assistant', group: '安全与洞察', portals: ['admin'] },
-  { view: 'authorizations', label: '授权管理', icon: 'key', group: '权限与凭证' },
   { view: 'face-credentials', label: '登录设置', icon: 'lock', group: '权限与凭证' },
   { view: 'bigscreen', label: '家庭大屏', icon: 'sun', group: '家庭与研发' },
 ]

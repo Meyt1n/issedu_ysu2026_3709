@@ -356,9 +356,10 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
       />
     </div>
 
-    <section class="home-dashboard-card" aria-labelledby="pending-overview-title">
+    <section class="home-dashboard-card overview-section overview-section--pending" aria-labelledby="pending-overview-title">
       <div class="sec-head">
         <span class="sec-no">01</span>
+        <span class="overview-sec-icon" aria-hidden="true"><AppIcon name="review" :size="15" /></span>
         <h3 id="pending-overview-title">待确认事项</h3>
         <span class="sec-line" />
         <button type="button" class="btn btn-ghost btn-small" @click="setView('review')">
@@ -384,9 +385,10 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
   </section>
 
   <section class="home-dashboard-grid home-dashboard-secondary" aria-label="家庭健康动态">
-    <section class="home-dashboard-card" aria-labelledby="medication-overview-title">
+    <section class="home-dashboard-card overview-section overview-section--medication" aria-labelledby="medication-overview-title">
       <div class="sec-head">
         <span class="sec-no">02</span>
+        <span class="overview-sec-icon" aria-hidden="true"><AppIcon name="plan" :size="15" /></span>
         <h3 id="medication-overview-title">今日用药</h3>
         <span class="sec-line" />
         <button type="button" class="btn btn-ghost btn-small" @click="setView('plans')">
@@ -413,9 +415,10 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
       </ul>
     </section>
 
-    <section class="home-dashboard-card" aria-labelledby="recent-scan-overview-title">
+    <section class="home-dashboard-card overview-section overview-section--scan" aria-labelledby="recent-scan-overview-title">
       <div class="sec-head">
         <span class="sec-no">03</span>
+        <span class="overview-sec-icon" aria-hidden="true"><AppIcon name="scan" :size="15" /></span>
         <h3 id="recent-scan-overview-title">最近识别的药品</h3>
         <span class="sec-line" />
         <button type="button" class="btn btn-ghost btn-small" @click="setView('review')">
@@ -439,9 +442,10 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
     </section>
   </section>
 
-  <section class="home-dashboard-card home-dashboard-members" aria-labelledby="member-overview-title">
+  <section class="home-dashboard-card home-dashboard-members overview-section overview-section--members" aria-labelledby="member-overview-title">
     <div class="sec-head">
       <span class="sec-no">04</span>
+      <span class="overview-sec-icon" aria-hidden="true"><AppIcon name="members" :size="15" /></span>
       <h3 id="member-overview-title">家庭成员状态</h3>
       <span class="sec-line" />
       <button type="button" class="btn btn-ghost btn-small" @click="setView('members')">
@@ -472,10 +476,11 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
   </section>
 
   <div class="grid-main-side" style="gap: 34px">
-    <section aria-label="近期变化">
+    <section class="home-dashboard-card overview-section overview-section--changes" aria-label="近期变化">
       <div class="sec-head">
         <!-- 编号沿视觉阅读顺序递增：01 待确认 → 02 用药 → 03 识别 → 04 成员 → 05 近期变化。 -->
         <span class="sec-no">05</span>
+        <span class="overview-sec-icon" aria-hidden="true"><AppIcon name="timeline" :size="15" /></span>
         <h3>近期变化</h3>
         <span class="sec-line" />
         <button type="button" class="btn btn-ghost btn-small" @click="setView('members')">
@@ -534,16 +539,6 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
             ? '你是家庭管理员，可以为子女或照护者配置字段级授权，并随时撤回。'
             : '你是授权照护者，仅能看到授权范围内的成员与字段，范围与到期时间以授权记录为准。' }}
         </span>
-        <button
-          v-if="session.isOwnerView"
-          type="button"
-          class="btn btn-ghost btn-small"
-          style="justify-self: start"
-          @click="setView('authorizations')"
-        >
-          管理授权
-          <AppIcon name="arrow-right" :size="14" />
-        </button>
       </div>
     </aside>
   </div>
@@ -579,6 +574,50 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
   border-radius: 22px;
   background: rgba(255, 252, 243, 0.76);
   box-shadow: 0 14px 34px rgba(94, 71, 42, 0.06);
+}
+
+.overview-section {
+  isolation: isolate;
+  overflow: hidden;
+  position: relative;
+}
+
+.overview-section::after {
+  border: 1px solid var(--overview-accent);
+  border-radius: 50%;
+  content: "";
+  height: 82px;
+  opacity: 0.1;
+  pointer-events: none;
+  position: absolute;
+  right: -32px;
+  top: -34px;
+  width: 82px;
+}
+
+.overview-section--pending { --overview-accent: var(--clay-deep); }
+.overview-section--medication { --overview-accent: var(--pine-deep); }
+.overview-section--scan { --overview-accent: var(--sky); }
+.overview-section--members { --overview-accent: var(--gold); }
+.overview-section--changes { --overview-accent: var(--rose); }
+
+.overview-section > * { position: relative; z-index: 1; }
+
+.overview-section .sec-head { color: var(--ink); }
+
+.overview-sec-icon {
+  align-items: center;
+  background: color-mix(in srgb, var(--overview-accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--overview-accent) 24%, transparent);
+  border-radius: 9px;
+  color: var(--overview-accent);
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 27px;
+  justify-content: center;
+  margin-left: -5px;
+  transform: translateY(-1px);
+  width: 27px;
 }
 
 .home-dashboard-card .sec-head {

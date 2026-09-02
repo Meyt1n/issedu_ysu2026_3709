@@ -83,6 +83,34 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "unavailable"
     ollama_timeout_seconds: float = 30.0
+    # ── Model backend switch (ops-only, no UI) ────────────────────────────
+    # ``local`` (default) keeps every model call on this machine, which is the
+    # project's default-deny posture.  ``cloud`` routes the *same* calls to an
+    # OpenAI-compatible chat-completions endpoint instead: identical prompts,
+    # identical tool contract, identical response shape, so no caller — and no
+    # frontend — changes.  This is a deliberate egress decision: turning it on
+    # sends conversation content (which can include member health facts) to a
+    # third party, so it is off unless an operator sets it explicitly.
+    llm_provider: str = "local"
+    llm_api_base_url: str = ""
+    llm_api_key: str = ""
+    llm_api_model: str = ""
+    llm_api_timeout_seconds: float = Field(default=60.0, gt=0, le=300)
+    # Sent as OpenAI's ``max_tokens``/``max_completion_tokens`` ceiling guard.
+    llm_api_max_tokens: int = Field(default=2048, ge=256, le=32768)
+    # Some gateways reject ``tools``; this degrades that feature instead of
+    # losing the whole backend.
+    llm_api_supports_tools: bool = True
+    # How the provider accepts a JSON output contract:
+    #   json_schema  — OpenAI-style strict schema (default for OpenAI itself)
+    #   json_object  — valid-JSON-only; what DeepSeek's chat/completions accepts
+    #   none         — omit the field and rely on prompt + app-layer validation
+    # Sending a json_schema to a provider that only knows json_object is a hard
+    # 400 on every synthesis call, so this is a per-provider setting, not a flag.
+    llm_api_response_format_mode: str = "json_schema"
+    # Extra hosts the cloud backend may reach.  The endpoint host is allowed
+    # automatically; this exists for gateways that redirect to a sibling host.
+    llm_api_extra_allowed_hosts: str = ""
     # HCT-430: the orchestrator and every model call stay local.  Public web
     # search is an explicitly opt-in, redacted tool and remains disabled by
     # default so HCT-004's default-deny posture is preserved.
@@ -184,6 +212,16 @@ class Settings(BaseSettings):
         normalized = (value or "").strip().casefold()
         if normalized not in {"allowlist", "open"}:
             raise ValueError("AGENT_WEB_SEARCH_EGRESS_MODE must be 'allowlist' or 'open'")
+        return normalized
+
+    @field_validator("llm_api_response_format_mode")
+    @classmethod
+    def validate_llm_api_response_format_mode(cls, value: str) -> str:
+        normalized = (value or "").strip().casefold()
+        if normalized not in {"json_schema", "json_object", "none"}:
+            raise ValueError(
+                "LLM_API_RESPONSE_FORMAT_MODE must be 'json_schema', 'json_object' or 'none'"
+            )
         return normalized
 
     @model_validator(mode="after")

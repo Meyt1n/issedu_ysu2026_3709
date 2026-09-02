@@ -53,7 +53,7 @@ test('真实后端：创建家庭并记录一条健康事实的完整闭环', as
   await page.getByRole('button', { name: '创建家庭并进入' }).click()
 
   // 客户端有 15s 超时兜底：偶发代理抖动会显示可恢复的错误，重试一次（写请求带幂等键，安全）
-  const enteredMarker = page.locator('aside.sidebar button.nav-item', { hasText: '授权管理' })
+  const enteredMarker = page.locator('.app-frame')
   const createError = page.locator('.welcome-form-card .notice.error')
   await expect(enteredMarker.or(createError)).toBeVisible({ timeout: 25_000 })
   if (!(await enteredMarker.isVisible())) {

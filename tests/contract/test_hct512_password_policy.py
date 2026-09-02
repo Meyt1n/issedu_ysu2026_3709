@@ -1,9 +1,9 @@
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
 from app.auth import hash_password
 from app.models import AuthAccount
 from app.password_policy import TEACHING_PASSWORD_DEFAULT, TEACHING_PASSWORD_LEGACY
-from sqlalchemy.orm import Session
 
 
 def test_register_rejects_passwords_without_letter_and_digit(client: TestClient) -> None:

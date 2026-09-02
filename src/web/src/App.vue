@@ -275,10 +275,6 @@ onBeforeUnmount(() => {
       </template>
 
       <div class="sidebar-foot">
-        <p class="privacy-note">
-          <AppIcon name="lock" :size="16" />
-          <span>{{ session.portal === 'admin' ? '健康数据默认只保存在本地。' : '健康信息只保存在家里 · 详见使用帮助' }}</span>
-        </p>
         <button type="button" class="sidebar-collapse" :title="sidebarMini ? '展开导航' : '收起导航'" @click="toggleSidebar">
           <AppIcon name="arrow-right" :size="15" style="transform: rotate(180deg)" />
           <span v-if="!sidebarMini">收起导航</span>

@@ -71,8 +71,10 @@ def test_open_chat_skips_symptom_short_circuit(monkeypatch: pytest.MonkeyPatch) 
                 '"sources":[],"confidence":"medium","escalate":false}'
             )
 
-    monkeypatch.setattr(local_agents, "OllamaClient", FakeClient)
-    monkeypatch.setattr(local_agents, "is_loopback_ollama_url", lambda _url: True)
+    monkeypatch.setattr(
+        local_agents, "build_chat_client", lambda *_a, **_k: FakeClient()
+    )
+    monkeypatch.setattr(local_agents, "model_endpoint_allowed", lambda _url: True)
 
     result = local_agents._synthesis_agent(
         messages=[{"role": "user", "content": "我有点腹泻，吃什么药"}],
@@ -113,8 +115,10 @@ def test_open_chat_no_longer_bypasses_safety_sanitisation(
                 '有疑问请咨询医生或药师。","sources":[],"confidence":"low","escalate":false}'
             )
 
-    monkeypatch.setattr(local_agents, "OllamaClient", FakeClient)
-    monkeypatch.setattr(local_agents, "is_loopback_ollama_url", lambda _url: True)
+    monkeypatch.setattr(
+        local_agents, "build_chat_client", lambda *_a, **_k: FakeClient()
+    )
+    monkeypatch.setattr(local_agents, "model_endpoint_allowed", lambda _url: True)
 
     result = local_agents._synthesis_agent(
         messages=[{"role": "user", "content": "布洛芬吃着不舒服怎么办"}],
@@ -151,8 +155,10 @@ def test_open_chat_rejects_router_control_label(monkeypatch: pytest.MonkeyPatch)
         def chat_stream(self, **_kwargs):
             yield '{"answer":"route","sources":[],"confidence":"low","escalate":false}'
 
-    monkeypatch.setattr(local_agents, "OllamaClient", FakeClient)
-    monkeypatch.setattr(local_agents, "is_loopback_ollama_url", lambda _url: True)
+    monkeypatch.setattr(
+        local_agents, "build_chat_client", lambda *_a, **_k: FakeClient()
+    )
+    monkeypatch.setattr(local_agents, "model_endpoint_allowed", lambda _url: True)
 
     result = local_agents._synthesis_agent(
         messages=[{"role": "user", "content": "普通问题"}],

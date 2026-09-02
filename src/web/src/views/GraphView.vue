@@ -135,9 +135,6 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
     <div class="card-heading" style="margin-bottom: 0">
       <div>
         <h2 class="hero-greeting gradient-text">家庭健康图谱</h2>
-        <p class="hero-sub">
-          图谱只由已确认健康事件生成；被补偿更正的事实不会出现。点击节点可查看来源事件与确认状态。
-        </p>
       </div>
       <label class="context-select">
         成员
@@ -302,9 +299,6 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
     </div>
   </div>
 
-  <p class="text-faint" style="font-size: 12.5px; margin: 0; text-align: center">
-    P0 图谱为成员级投影，不引入医学本体或自动医学推理；识别候选、冲突与未知状态不会生成节点。
-  </p>
 </template>
 
 <style scoped>

@@ -53,7 +53,17 @@ _WINDOWS_STYLE_CV2_ERROR = (
 
 
 def _clear_model_caches() -> None:
-    get_settings.cache_clear()
+    """Drop only the model caches.
+
+    ``get_settings.cache_clear()`` must not be used here: ``app.routes`` (and
+    ``app.db``/``app.main``) bind a module-level ``settings = get_settings()``
+    snapshot at import time.  Replacing the cached instance mid-session makes
+    those snapshots and later ``get_settings()`` callers read *different*
+    objects, so anything patched on one is invisible to the other.  That is
+    what previously made ~20 contract tests fail depending on execution order
+    (``FILE_NOT_FOUND``: the file was written under one ``file_root`` and
+    looked up under another).
+    """
     _sface_recognizer.cache_clear()
     _yunet_model_buffer.cache_clear()
 
@@ -63,8 +73,11 @@ def unicode_model_dir(tmp_path, monkeypatch) -> Path:
     """A FACE_MODEL_DIR whose path contains Chinese characters."""
     model_dir = tmp_path / _UNICODE_DIR_NAME
     model_dir.mkdir()
-    monkeypatch.setenv("FACE_MODEL_DIR", str(model_dir))
-    monkeypatch.setenv("FACE_MODEL_AUTO_DOWNLOAD", "false")
+    # ``face_credentials`` reads ``get_settings()`` on every call, so patching
+    # the live singleton is enough and keeps its identity stable for everyone.
+    settings = get_settings()
+    monkeypatch.setattr(settings, "face_model_dir", str(model_dir))
+    monkeypatch.setattr(settings, "face_model_auto_download", False)
     _clear_model_caches()
     yield model_dir
     _clear_model_caches()

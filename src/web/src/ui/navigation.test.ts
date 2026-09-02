@@ -29,14 +29,13 @@ describe('sidebar navigation uniqueness (HCT-447)', () => {
     expect(new Set(icons).size).toBe(icons.length)
   })
 
-  it('gives login settings a distinct icon from authorization and medication safety', () => {
+  it('keeps login settings available while authorization management stays hidden', () => {
     const items = visibleNavItemsFor('admin')
     const authorizations = items.find(item => item.view === 'authorizations')
     const credentials = items.find(item => item.view === 'face-credentials')
     const risks = items.find(item => item.view === 'risks')
-    expect(authorizations?.icon).toBe('key')
+    expect(authorizations).toBeUndefined()
     expect(credentials?.icon).toBe('lock')
-    expect(credentials?.icon).not.toBe(authorizations?.icon)
     expect(credentials?.icon).not.toBe(risks?.icon)
   })
 

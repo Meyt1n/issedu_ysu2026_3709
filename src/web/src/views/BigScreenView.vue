@@ -285,7 +285,6 @@ onBeforeUnmount(() => {
       <div>
         <p class="bs-kicker">家庭值守大屏</p>
         <h2 class="bigscreen-title">{{ householdName }} · 健康值守</h2>
-        <span class="bs-hint">非敏感聚合视图 · 病史、报告与对话正文不会投放到公共大屏</span>
       </div>
       <div class="clock-ring">
         <div class="bigscreen-clock">
