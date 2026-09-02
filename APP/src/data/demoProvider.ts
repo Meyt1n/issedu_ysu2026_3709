@@ -586,7 +586,7 @@ export const demoProvider: DataProvider = {
     return clone(risk)
   },
 
-  async acknowledgeRisk(memberId: string, ruleId: string): Promise<RiskCard> {
+  async acknowledgeRisk(memberId: string, ruleId: string, _idempotencyKey?: string): Promise<RiskCard> {
     await delay(140)
     const risk = state.risks.find(r => r.memberId === memberId && r.ruleId === ruleId)
     if (!risk) throw new Error('该风险提示不存在或未获授权')

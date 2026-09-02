@@ -379,7 +379,8 @@ export interface DataProvider {
   listRisks(memberId?: string): Promise<RiskCard[]>
   getRiskSummary(): Promise<RiskSummary>
   getRiskDetail(memberId: string, ruleId: string): Promise<RiskCard>
-  acknowledgeRisk(memberId: string, ruleId: string): Promise<RiskCard>
+  /** 风险知晓回写；可传入同一次用户动作的幂等键用于失败重试。 */
+  acknowledgeRisk(memberId: string, ruleId: string, idempotencyKey?: string): Promise<RiskCard>
   submitTaskAction(taskId: string, action: TaskAction, payload?: TaskActionPayload): Promise<CareTask>
   checkImageQuality(file: File): Promise<QualityCheckResult>
   /** MOB-149：短视频质量门（帧级摘要）；仅在服务端声明 vision-task-video 时可用。 */

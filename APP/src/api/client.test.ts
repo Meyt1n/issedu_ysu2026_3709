@@ -188,6 +188,54 @@ describe('首页健康资讯（MOB-159）', () => {
   })
 })
 
+describe('风险知晓回写（MOB-156）', () => {
+  it('POST 风险版本与指纹，并透传幂等键', async () => {
+    let url = ''
+    let request: RequestInit | undefined
+    const client = new ApiClient({
+      baseUrl: 'http://192.168.1.8:8000',
+      fetcher: async (input, init) => {
+        url = String(input)
+        request = init
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'x-request-id': 'risk-ack-request-1' }),
+          text: async () => JSON.stringify({
+            receipt_id: 'receipt-1',
+            household_id: 'household-1',
+            member_id: 'member-1',
+            rule_id: 'expiry/check',
+            rule_version: 'rules-v7',
+            risk_fingerprint: 'f'.repeat(64),
+            actor_id: 'owner',
+            acknowledged_at: '2026-08-20T02:00:00Z',
+            replayed: false,
+          }),
+        } as Response
+      },
+    })
+
+    await client.acknowledgeRisk(
+      'household-1',
+      'member-1',
+      'expiry/check',
+      { rule_version: 'rules-v7', risk_fingerprint: 'f'.repeat(64) },
+      { actorId: 'owner', idempotencyKey: 'risk-ack-1' },
+    )
+
+    expect(url).toBe(
+      'http://192.168.1.8:8000/api/v1/households/household-1/members/member-1/risks/expiry%2Fcheck/acknowledge',
+    )
+    expect(request?.method).toBe('POST')
+    expect(new Headers(request?.headers).get('Idempotency-Key')).toBe('risk-ack-1')
+    expect(JSON.parse(String(request?.body))).toEqual({
+      rule_version: 'rules-v7',
+      risk_fingerprint: 'f'.repeat(64),
+    })
+  })
+})
+
 describe('视觉任务状态回查（MOB-132）', () => {
   it('getVisionTask 走 GET 且任务 ID 编码进路径，凭据由会话承载', async () => {
     let url = ''
