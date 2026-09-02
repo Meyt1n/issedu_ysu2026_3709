@@ -2,29 +2,38 @@
 import { computed } from 'vue'
 import { RouterLink, type RouteLocationRaw } from 'vue-router'
 
-import type { AssistantCitation } from '@/api/types'
+import type { AssistantCitation, EvidencePreview } from '@/api/types'
 import {
   assistantCitationTitle,
   extraAssistantSources,
+  shouldShowAssistantNoEvidence,
   uniqueAssistantCitations,
 } from '@/utils/assistantEvidence'
 
 const props = withDefaults(defineProps<{
   citations?: AssistantCitation[] | null
   sources?: string[] | null
+  evidencePreview?: EvidencePreview | null
   degraded?: boolean
   degradeReason?: string | null
 }>(), {
   citations: null,
   sources: null,
+  evidencePreview: null,
   degraded: false,
   degradeReason: null,
 })
 
 const normalizedCitations = computed(() => uniqueAssistantCitations(props.citations))
 const extraSources = computed(() => extraAssistantSources(props.sources, normalizedCitations.value))
+const noEvidence = computed(() => shouldShowAssistantNoEvidence(
+  normalizedCitations.value,
+  props.sources,
+  props.evidencePreview,
+  props.degraded,
+))
 const hasEvidenceDetails = computed(() =>
-  props.degraded || normalizedCitations.value.length > 0 || extraSources.value.length > 0,
+  noEvidence.value || normalizedCitations.value.length > 0 || extraSources.value.length > 0,
 )
 const disclosureSummary = computed(() => {
   const parts: string[] = []
@@ -91,7 +100,7 @@ function citationRoute(citation: AssistantCitation): RouteLocationRaw {
       <p v-if="extraSources.length" class="meta-line assistant-extra-sources">
         其他依据标识：{{ extraSources.join('、') }}
       </p>
-      <p v-if="!normalizedCitations.length" class="assistant-no-evidence" role="status">
+      <p v-if="noEvidence" class="assistant-no-evidence" role="status">
         本次回答没有可引用的知识文档；{{ props.degradeReason ? `当前为受控降级（${props.degradeReason}），` : '' }}请勿把回答当作已核验的医疗建议。
       </p>
     </div>

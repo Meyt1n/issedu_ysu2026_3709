@@ -1,4 +1,4 @@
-import type { AssistantCitation } from '@/api/types'
+import type { AssistantCitation, EvidencePreview } from '@/api/types'
 
 /**
  * 引用展示的上限只用于保护移动端渲染和会话存储，不会改变服务端的引用校验。
@@ -73,4 +73,25 @@ export function extraAssistantSources(
 
 export function assistantCitationTitle(citation: AssistantCitation): string {
   return citation.document_title?.trim() || citation.document_id
+}
+
+/**
+ * 判断回答是否需要明确显示“没有可引用依据”。
+ *
+ * 仅凭空的 citations/sources 无法区分旧版响应和服务端明确返回的“没有命中
+ * 知识文档”预览，因此只有在降级，或服务端预览明确表示本轮没有本地/外部
+ * 资料且没有其他来源标识时才展示该提示。这样既不伪造依据，也不会把家庭
+ * 事实来源误报成无证据。
+ */
+export function shouldShowAssistantNoEvidence(
+  citations?: AssistantCitation[] | null,
+  sources?: string[] | null,
+  evidencePreview?: EvidencePreview | null,
+  degraded = false,
+): boolean {
+  if (uniqueAssistantCitations(citations).length > 0) return false
+  if (extraAssistantSources(sources, citations).length > 0) return false
+  if (degraded) return true
+  if (!evidencePreview) return false
+  return evidencePreview.knowledge_count <= 0 && evidencePreview.external_count <= 0
 }
