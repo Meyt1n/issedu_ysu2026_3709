@@ -6,7 +6,7 @@
  * 通过 POST /__control 切换场景，GET /__stats 查看请求计数；夹具不写磁盘。
  *
  * 用法：node scripts/mob171-weak-network-fixture.mjs --host 0.0.0.0 --port 8000
- * 场景：ok | loading | timeout | slow | empty | partial
+ * 场景：ok | loading | timeout | slow | empty | partial | news-stale | news-error
  */
 
 import http from 'node:http'
@@ -19,7 +19,7 @@ function arg(flag, fallback) {
 
 const host = arg('--host', '127.0.0.1')
 const port = Number(arg('--port', '8000'))
-const allowedModes = new Set(['ok', 'loading', 'timeout', 'slow', 'empty', 'partial'])
+const allowedModes = new Set(['ok', 'loading', 'timeout', 'slow', 'empty', 'partial', 'news-stale', 'news-error'])
 let mode = allowedModes.has(arg('--mode', 'ok')) ? arg('--mode', 'ok') : 'ok'
 const requestCounts = new Map()
 const requestIds = new Map()
@@ -140,7 +140,7 @@ const server = http.createServer(async (request, response) => {
   if (request.method === 'POST' && path === '/__control') {
     const input = await body(request)
     if (typeof input.mode !== 'string' || !allowedModes.has(input.mode)) {
-      writeJson(response, 400, { detail: 'mode must be one of ok/loading/timeout/slow/empty/partial' }, 'mob171-control-error')
+      writeJson(response, 400, { detail: 'mode must be one of ok/loading/timeout/slow/empty/partial/news-stale/news-error' }, 'mob171-control-error')
       return
     }
     mode = input.mode
@@ -218,6 +218,41 @@ function respond(path, response, requestId, context = null) {
     return
   }
   if (path === '/api/v1/health-news') {
+    if (mode === 'news-error') {
+      writeJson(response, 503, {
+        error: {
+          code: 'HEALTH_NEWS_UNAVAILABLE',
+          message: 'MOB-520 synthetic health news failure',
+          request_id: requestId,
+        },
+      }, requestId)
+      return
+    }
+    if (mode === 'news-stale') {
+      writeJson(response, 200, {
+        status: 'stale',
+        cache_status: 'stale',
+        season: 'synthetic',
+        generated_at: now,
+        fetched_at: '2026-08-01T02:00:00.000Z',
+        disclaimer: 'MOB-520 synthetic stale-cache fixture（仅用于移动端验收）',
+        degraded_reason: '资讯源暂不可用，当前展示家庭服务器保留的过期缓存。',
+        items: [{
+          id: 'mob520-news-stale',
+          kind: 'remote',
+          title: 'MOB-520 合成过期缓存资讯',
+          summary: '该条目专用于验证过期标识、缓存时间和刷新入口。',
+          tag: '缓存验收',
+          chat_prompt: '请解释 MOB-520 合成过期缓存资讯。',
+          source: 'remote_whitelist',
+          source_name: 'MOB-520 synthetic allowlist',
+          source_url: null,
+          published_at: '2026-08-01T01:00:00.000Z',
+          fetched_at: '2026-08-01T02:00:00.000Z',
+        }],
+      }, requestId)
+      return
+    }
     writeJson(response, 200, { status: 'local_only', cache_status: 'fresh', season: 'synthetic', generated_at: now, fetched_at: now, disclaimer: 'MOB-171 synthetic fixture', items: [] }, requestId)
     return
   }

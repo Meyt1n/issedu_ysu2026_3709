@@ -85,6 +85,18 @@
   --shadow-press: 0 4px 12px -8px rgba(84, 70, 41, 0.22);
   --shadow-btn: 0 10px 22px -11px rgba(46, 100, 78, 0.46);
   --focus-ring: #3d7a63;
+
+  /* 兼容旧版 scoped 视图：统一映射到当前暖阳纸笺令牌，避免主题切换后
+     知识库引用高亮、焦点环、错误提示等样式因变量缺失而静默失效。 */
+  --accent: var(--c-accent);
+  --surface: var(--c-surface);
+  --text: var(--c-ink);
+  --muted: var(--c-ink-soft);
+  --danger: var(--c-danger);
+  --line: var(--c-line);
+  --c-border: var(--c-line);
+  --c-surface-soft: var(--well-bg);
+  --c-ink-muted: var(--c-ink-faint);
 }
 
 html[data-font-scale='large'] {
@@ -213,6 +225,16 @@ html[data-contrast='high'] {
   --shadow-press: none;
   --shadow-btn: none;
   --focus-ring: #000000;
+  /* 高对比模式显式收紧兼容别名，保证旧视图也满足黑白强对比门槛。 */
+  --accent: #000000;
+  --surface: #ffffff;
+  --text: #000000;
+  --muted: #1c2621;
+  --danger: #8f1f0e;
+  --line: #3a453f;
+  --c-border: #000000;
+  --c-surface-soft: #ffffff;
+  --c-ink-muted: #313d37;
   color-scheme: light;
 }
 
