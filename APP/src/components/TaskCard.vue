@@ -63,6 +63,14 @@ async function togglePanel(nextPanel: 'defer' | 'skip' | 'miss'): Promise<void> 
   await nextTick()
   const targetId = nextPanel === 'defer' ? deferPanelId : nextPanel === 'skip' ? skipInputId : missInputId
   document.getElementById(targetId)?.focus()
+  // 展开后把整个面板滚进视口：面板比按钮行高，加上软键盘顶起页面后，
+  // 提交按钮可能落到固定底部导航下面（真机实测点到的是导航而不是按钮）。
+  const panelId = nextPanel === 'defer' ? deferPanelId : nextPanel === 'skip' ? skipPanelId : missPanelId
+  const reduceMotion = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
+  document.getElementById(panelId)?.scrollIntoView({
+    block: 'center',
+    behavior: reduceMotion ? 'auto' : 'smooth',
+  })
 }
 
 function submitSkip(): void {
@@ -168,19 +176,22 @@ function submitMiss(): void {
         >
           跳过
         </button>
-        <button
-          :id="missButtonId"
-          type="button"
-          class="btn btn-quiet"
-          :disabled="props.busy || !allowsAction('miss')"
-          :aria-expanded="panel === 'miss'"
-          :aria-controls="missPanelId"
-          @click="togglePanel('miss')"
-        >
-          <AppIcon name="alert" :size="18" />
-          记漏服
-        </button>
       </div>
+
+      <!-- 记漏服单独占一行：四个按钮挤在同一行时，窄屏 + 大字号下中文会被逐字断行
+           （荣耀 AAP-AN00 真机实测「完成」被折成两行、「记漏服」被折成三行）。 -->
+      <button
+        :id="missButtonId"
+        type="button"
+        class="btn btn-quiet btn-block"
+        :disabled="props.busy || !allowsAction('miss')"
+        :aria-expanded="panel === 'miss'"
+        :aria-controls="missPanelId"
+        @click="togglePanel('miss')"
+      >
+        <AppIcon name="alert" :size="18" />
+        记漏服
+      </button>
 
       <div
         v-if="panel === 'defer'"
