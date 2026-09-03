@@ -10,7 +10,7 @@ import { submitFormalLogin } from './support/formalLogin'
  * - 图二：天气「生活安排」建议横排渲染，不被压成一字一行的窄列；
  * - 图三：「家庭成员状态」成员格子完整渲染（姓名/角色/状态签/事件数），
  *   分区编号沿阅读顺序严格递增（01→05，不再出现 04 下面还有 01）；
- * - 图四：管理后台侧栏五组导航收进一屏，不出现内容溢出（无滚动条）。
+ * - 图四：管理后台侧栏分组收进一屏，不出现内容溢出（无滚动条）。
  */
 
 const household = {
@@ -156,6 +156,7 @@ test('图三：家庭成员状态完整渲染，分区编号沿阅读顺序递�
   expect(cardBox.height).toBeGreaterThan(150)
 
   // 分区编号在 DOM（即阅读）顺序中严格递增，且纵向位置同样递增。
+  // 健康日历已迁入家庭大屏，首页只保留 01→05 五个摘要分区。
   const seen = await page.locator('.sec-no').evaluateAll(nodes =>
     nodes.map(node => ({
       no: node.textContent?.trim() ?? '',
@@ -176,8 +177,10 @@ test('图四：管理后台侧栏在 1280×800 下五组导航收进一屏，无
   await expect(sidebar.getByRole('button', { name: '知识文档' })).toHaveCount(0)
   await expect(sidebar.getByRole('button', { name: '演示造数' })).toHaveCount(0)
   await expect(sidebar.getByRole('button', { name: '模型实验室' })).toHaveCount(0)
-  await expect(sidebar.getByText('健康数据默认只保存在本地。')).toHaveCount(0)
-  await expect(page.getByText('本地运行状态', { exact: true })).toBeVisible()
+  await expect(sidebar.getByRole('button', { name: '授权管理' })).toHaveCount(0)
+  await expect(sidebar.getByText('账户安全')).toBeVisible()
+  await expect(sidebar.getByText('家庭洞察')).toBeVisible()
+  await expect(sidebar.getByText('健康数据默认只保存在本地。')).toBeVisible()
   await expect(sidebar.getByRole('button', { name: '收起导航' })).toBeVisible()
 
   const metrics = await sidebar.evaluate(el => ({

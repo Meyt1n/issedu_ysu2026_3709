@@ -588,7 +588,7 @@ describe('多家庭选择与隔离（MOB-158）', () => {
     })
   })
 
-  it('listHouseholds 只暴露 ID 与名称', async () => {
+  it('listHouseholds 暴露展示所需的家庭主人标识', async () => {
     const listHouseholds = vi.fn().mockResolvedValue([
       { id: 'hh-1', name: '王家', created_by: 'actor-1', created_at: '2026-08-01T00:00:00Z' },
     ])
@@ -599,7 +599,7 @@ describe('多家庭选择与隔离（MOB-158）', () => {
       householdId: '',
     }))
 
-    await expect(provider.listHouseholds()).resolves.toEqual([{ id: 'hh-1', name: '王家' }])
+    await expect(provider.listHouseholds()).resolves.toEqual([{ id: 'hh-1', name: '王家', createdBy: 'actor-1' }])
   })
 })
 

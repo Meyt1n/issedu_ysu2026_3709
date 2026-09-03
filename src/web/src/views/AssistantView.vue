@@ -39,18 +39,39 @@ import {
   webSearchSkipDetail,
 } from '../assistant/webSearchAvailability'
 import {
+  AUTO_SEND_PRESETS,
+  createAutoSendScheduler,
+  createDictationController,
   getSpeakingIndex,
   getSpeakingSegments,
+  inspectChineseVoicePacks,
+  isSpeechInputSupported,
   isSpeechOutputSupported,
   jumpSpeakingSegment,
+  listChineseVoices,
+  loadVoicePreferences,
+  memberNameHotwordPairs,
+  runVoicePreflight,
+  saveVoicePreferences,
+  SILENCE_PRESETS,
   skipSpeakingSegment,
   speakText,
   stopSpeaking,
+  validateWakePhrase,
+  WAKE_PHRASE_PRESETS,
+  type DictationController,
+  type DictationMode,
+  type SpeechVoiceLike,
+  type VoiceCommandId,
+  type VoicePackReport,
+  type VoicePreflightReport,
+  type VoicePreferences,
 } from '../assistant/voice'
 import AppIcon from '../components/AppIcon.vue'
 import {
   consumeAssistantSeed,
   formatError,
+  pushToast,
   requestOptions,
   selectMember,
   session,
@@ -104,13 +125,14 @@ const history = ref<ChatEntry[]>([])
 const draft = ref('')
 const sending = ref(false)
 const sendError = ref('')
-const speechError = ref('')
+const voiceError = ref('')
 const allowNetworkSearch = ref(false)
 const webSearchAvailable = ref<boolean | null>(null)
 const webSearchReason = ref<string | null>(null)
 const webSearchHint = ref<string | null>(null)
 const webSearchFixture = ref(false)
 const webSearchProvider = ref<string | null>(null)
+const settingsOpen = ref(false)
 const workflowTrace = ref<AssistantAgentTrace[]>([])
 const selectedAgentId = ref<string | null>(null)
 const workflowExpanded = ref(false)
@@ -120,15 +142,181 @@ const stopStatus = ref('')
 const assistantSessionId = ref('')
 const threads = ref<ChatThreadMeta[]>([])
 const activeThreadId = ref('')
+type VoiceMode = DictationMode
+
+const voiceMode = ref<VoiceMode>('off')
+const listening = computed(() => ['wake', 'active', 'command'].includes(voiceMode.value))
+const voicePreview = ref('')
+const needMicGesture = ref(false)
 const speakingIndex = ref<number | null>(null)
 const speakingProgress = ref('')
 const chatWindow = ref<HTMLElement | null>(null)
 const draftInput = ref<HTMLTextAreaElement | null>(null)
+const sendButton = ref<HTMLButtonElement | null>(null)
+const voicePrefs = ref<VoicePreferences>(loadVoicePreferences())
+const wakePhraseDraft = ref(voicePrefs.value.wakePhrase)
+const voiceSendHint = ref('')
+const voicePackReport = ref<VoicePackReport | null>(null)
+const voicePackChecking = ref(false)
+const voiceOptions = ref<SpeechVoiceLike[]>([])
+const preflightReport = ref<VoicePreflightReport | null>(null)
+const preflightRunning = ref(false)
 const speakingSegmentIndex = ref(0)
+const modelLabel = ref('本地模型')
+
+const wakePhrase = computed(() => voicePrefs.value.wakePhrase)
+const memberHotwordExtras = computed(() =>
+  memberNameHotwordPairs(session.members.map(member => member.display_name)),
+)
 
 const activeSpeakingSegments = computed(() =>
   speakingIndex.value !== null ? [...getSpeakingSegments()] : [],
 )
+
+function applySilencePreset(presetId: string): void {
+  const preset = SILENCE_PRESETS.find(item => item.id === presetId)
+  if (!preset) return
+  voicePrefs.value = saveVoicePreferences({
+    silenceMs: preset.silenceMs,
+    continuationSilenceMs: preset.continuationSilenceMs,
+  })
+}
+
+function applyAutoSendPreset(presetId: string): void {
+  const preset = AUTO_SEND_PRESETS.find(item => item.id === presetId)
+  if (!preset) return
+  voicePrefs.value = saveVoicePreferences({ autoSendDelayMs: preset.delayMs })
+  sendConfirmGate.reset()
+  voiceSendHint.value = ''
+}
+
+function toggleVoicePref<K extends keyof VoicePreferences>(key: K, value: VoicePreferences[K]): void {
+  voicePrefs.value = saveVoicePreferences({ [key]: value })
+}
+
+function applyWakePreset(phrase: string): void {
+  wakePhraseDraft.value = phrase
+  saveWakePhrase()
+}
+
+function saveWakePhrase(): void {
+  const checked = validateWakePhrase(wakePhraseDraft.value)
+  if (!checked.ok) {
+    voiceError.value = checked.message
+    wakePhraseDraft.value = voicePrefs.value.wakePhrase
+    return
+  }
+  voiceError.value = ''
+  voicePrefs.value = saveVoicePreferences({ wakePhrase: checked.phrase })
+  wakePhraseDraft.value = checked.phrase
+  if (listening.value || voiceMode.value === 'ready') void beginWakeListening()
+}
+
+function repeatLastAnswer(): void {
+  const last = [...history.value].reverse().find(entry => entry.role === 'assistant' && entry.content.trim())
+  if (!last) {
+    voiceError.value = '还没有可朗读的回答。'
+    return
+  }
+  toggleSpeech(history.value.lastIndexOf(last), last.content)
+}
+
+function armAutoSend(draftText?: string): void {
+  const delay = loadVoicePreferences().autoSendDelayMs
+  if (!delay || delay <= 0) {
+    voiceSendHint.value = '已听完，请确认后点发送；也可说「发送吧」立即发送'
+    return
+  }
+  sendConfirmGate.start(draftText ?? draft.value, delay)
+}
+
+function handleVoiceCommand(command: VoiceCommandId): void {
+  if (command === 'confirm_send') {
+    if (!draft.value.trim() || sending.value) {
+      voiceError.value = '没有可发送的草稿。'
+      return
+    }
+    sendConfirmGate.reset()
+    voiceSendHint.value = ''
+    void send()
+    return
+  }
+  if (command === 'cancel_send') {
+    sendConfirmGate.cancel()
+    return
+  }
+  if (command === 'repeat_answer') {
+    sendConfirmGate.cancel()
+    repeatLastAnswer()
+    return
+  }
+  if (command === 'stop_speaking') {
+    stopSpeaking()
+    speakingIndex.value = null
+    speakingProgress.value = ''
+    return
+  }
+  if (command === 'redo_dictation') {
+    sendConfirmGate.reset()
+    ensureDictation().redoDictation()
+    return
+  }
+  if (command === 'resume_dictation') {
+    sendConfirmGate.cancel()
+    ensureDictation().resumeDictation()
+  }
+}
+
+async function refreshVoiceOptions(): Promise<void> {
+  if (!speechOutputSupported) return
+  voiceOptions.value = await listChineseVoices()
+}
+
+function applyPreferredVoice(name: string): void {
+  voicePrefs.value = saveVoicePreferences({ preferredVoiceName: name })
+}
+
+function previewPreferredVoice(): void {
+  if (!speechOutputSupported) return
+  stopSpeaking()
+  speakingIndex.value = null
+  speakingProgress.value = ''
+  speakText('您好，我会用这个声音朗读回答。')
+}
+
+async function checkVoicePacks(): Promise<void> {
+  voicePackChecking.value = true
+  try {
+    voicePackReport.value = await inspectChineseVoicePacks()
+  } finally {
+    voicePackChecking.value = false
+  }
+}
+
+async function runPreflight(): Promise<void> {
+  preflightRunning.value = true
+  try {
+    preflightReport.value = await runVoicePreflight()
+  } finally {
+    preflightRunning.value = false
+  }
+}
+
+function onDraftFocus(): void {
+  if (voiceMode.value === 'active' || voiceMode.value === 'wake') ensureDictation().pause()
+  sendConfirmGate.cancel()
+}
+
+function editDraftLine(): void {
+  sendConfirmGate.cancel()
+  ensureDictation().pause()
+  void nextTick(() => draftInput.value?.focus())
+}
+
+function redoVoiceDraft(): void {
+  sendConfirmGate.reset()
+  ensureDictation().redoDictation()
+}
 
 function jumpSpeechSegment(index: number): void {
   if (jumpSpeakingSegment(index)) {
@@ -139,10 +327,40 @@ function jumpSpeechSegment(index: number): void {
 let streamTimer: ReturnType<typeof setInterval> | null = null
 let stopStatusTimer: ReturnType<typeof setTimeout> | null = null
 
+const speechInputSupported = isSpeechInputSupported()
 const speechOutputSupported = isSpeechOutputSupported()
 let activeSendController: AbortController | null = null
 let userRequestedStop = false
 let keepPartialReply = false
+let dictation: DictationController | null = null
+
+const silencePresetId = computed(() => {
+  const match = SILENCE_PRESETS.find(
+    preset => preset.silenceMs === voicePrefs.value.silenceMs
+      && preset.continuationSilenceMs === voicePrefs.value.continuationSilenceMs,
+  )
+  return match?.id ?? 'custom'
+})
+
+const sendConfirmGate = createAutoSendScheduler({
+  onArmed: (delayMs) => {
+    const sec = Math.round(delayMs / 1000)
+    voiceSendHint.value = `无新输入，约 ${sec} 秒后自动发送；可说「取消」或「继续说」`
+    if (loadVoicePreferences().confirmSound) speakText(`${sec} 秒后发送，可说取消`)
+  },
+  onTick: (remainMs) => {
+    if (remainMs <= 0) return
+    const sec = Math.max(1, Math.ceil(remainMs / 1000))
+    voiceSendHint.value = `无新输入，${sec} 秒后自动发送；可说「取消」「继续说」，或说「发送吧」立即发送`
+  },
+  onAutoSend: (content) => {
+    voiceSendHint.value = ''
+    if (content.trim() && !sending.value) void send(content)
+  },
+  onCancelled: () => {
+    voiceSendHint.value = '已取消自动发送'
+  },
+})
 
 function cancelActiveSend(showStatus = false): void {
   if (activeSendController) {
@@ -171,6 +389,109 @@ function showStoppedStatus(text = '已停止'): void {
     stopStatusTimer = null
     stopStatus.value = ''
   }, 2400)
+}
+
+function ensureDictation(): DictationController {
+  if (dictation) return dictation
+  dictation = createDictationController({
+    onModeChange: (mode) => {
+      voiceMode.value = mode
+      if (mode === 'active') {
+        sendConfirmGate.reset()
+        voiceSendHint.value = ''
+      }
+    },
+    onPreview: (text) => {
+      voicePreview.value = text
+    },
+    onDraft: (text) => {
+      draft.value = text
+    },
+    onError: (message) => {
+      voiceError.value = message
+    },
+    onNeedGesture: () => {
+      needMicGesture.value = true
+    },
+    onUtteranceComplete: (utteranceDraft) => {
+      needMicGesture.value = false
+      void nextTick(() => sendButton.value?.focus())
+      armAutoSend(utteranceDraft || draft.value)
+    },
+    onCommand: (command) => {
+      handleVoiceCommand(command)
+    },
+  }, {
+    getHotwordExtras: () => memberHotwordExtras.value,
+    getPreferences: () => loadVoicePreferences(),
+  })
+  return dictation
+}
+
+function stopVoiceInput(): void {
+  dictation?.stop()
+  voicePreview.value = ''
+  needMicGesture.value = false
+  sendConfirmGate.reset()
+  voiceSendHint.value = ''
+}
+
+async function beginWakeListening(): Promise<void> {
+  if (!speechInputSupported) {
+    voiceError.value = '当前浏览器不支持语音输入，请改用文字输入。'
+    return
+  }
+  if (speakingIndex.value !== null) {
+    stopSpeaking()
+    speakingIndex.value = null
+    speakingProgress.value = ''
+  }
+  needMicGesture.value = false
+  voiceError.value = ''
+  ensureDictation().startWake(draft.value)
+}
+
+async function bootstrapVoice(): Promise<void> {
+  if (!speechInputSupported) return
+  await ensureDictation().tryAutoStart()
+}
+
+const voiceStatusText = computed(() => {
+  if (voiceMode.value === 'wake') return `正在聆听唤醒词：“${wakePhrase.value}”`
+  if (voiceMode.value === 'active') return '已唤醒，识别中的文字会实时填入草稿'
+  if (voiceMode.value === 'ready' || voiceMode.value === 'command') {
+    return voiceSendHint.value || '说完后会倒计时自动发送；可说取消、继续说，或发送吧立即发送'
+  }
+  return needMicGesture.value ? '点按下方按钮一次以开启麦克风聆听' : ''
+})
+
+const autoSendPresetId = computed(() => {
+  const match = AUTO_SEND_PRESETS.find(preset => preset.delayMs === voicePrefs.value.autoSendDelayMs)
+  return match?.id ?? 'custom'
+})
+
+const voiceButtonLabel = computed(() => {
+  if (voiceMode.value === 'wake') return '等待唤醒'
+  if (voiceMode.value === 'active') return '停止语音'
+  if (voiceMode.value === 'ready' || voiceMode.value === 'command') return '重新聆听'
+  return needMicGesture.value ? '允许麦克风并聆听' : '开启唤醒'
+})
+
+function toggleVoiceInput(): void {
+  if (listening.value || voiceMode.value === 'ready') {
+    stopVoiceInput()
+    return
+  }
+  void beginWakeListening()
+}
+
+function onVisibilityChange(): void {
+  if (document.visibilityState === 'hidden') stopVoiceInput()
+}
+
+function formatModelLabel(model?: string | null): string {
+  if (!model || model === 'unavailable') return '本地模型未配置'
+  return model
 }
 
 const canSend = computed(() => draft.value.trim().length > 0 && !sending.value)
@@ -339,7 +660,18 @@ function selectedAgentAction(): string {
 const reduceMotion = () =>
   globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
 
-function scrollToEnd(): void {
+/* 滚动智能跟随：仅当用户本来就在底部附近时才自动下滚，
+   回看历史时不再被流式输出强行拽到底部（HCT-535）。 */
+const stickToBottom = ref(true)
+
+function onChatScroll(): void {
+  const el = chatWindow.value
+  if (!el) return
+  stickToBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < 96
+}
+
+function scrollToEnd(force = false): void {
+  if (!force && !stickToBottom.value) return
   void nextTick(() => {
     const el = chatWindow.value
     if (el) el.scrollTop = el.scrollHeight
@@ -385,6 +717,7 @@ function refreshThreads(): void {
 /** 切换/新建线索前的公共收尾：停掉请求、朗读与打字机。 */
 function suspendActiveConversation(): void {
   cancelActiveSend()
+  stopVoiceInput()
   if (speakingIndex.value !== null) {
     stopSpeaking()
     speakingIndex.value = null
@@ -615,6 +948,14 @@ const webSearchBadge = computed(() => webSearchModeBadge(webSearchState.value))
 
 onMounted(() => {
   void loadAgentCatalog()
+  autoResizeDraft()
+  void bootstrapVoice()
+  void refreshVoiceOptions()
+  document.addEventListener('visibilitychange', onVisibilityChange)
+})
+
+watch(settingsOpen, open => {
+  if (open) void refreshVoiceOptions()
 })
 
 watch(
@@ -637,7 +978,7 @@ async function applyAssistantSeed(): Promise<void> {
   await send(seeded.prompt)
 }
 
-function startReplySpeech(index: number, content: string): boolean {
+function startReplySpeech(index: number, content: string, resumeListeningAfter = false): boolean {
   speakingProgress.value = ''
   speakingSegmentIndex.value = 0
   const started = speakText(content, {
@@ -646,6 +987,7 @@ function startReplySpeech(index: number, content: string): boolean {
         speakingIndex.value = null
         speakingProgress.value = ''
         speakingSegmentIndex.value = 0
+        if (resumeListeningAfter && !needMicGesture.value) void beginWakeListening()
       }
     },
     onProgress: (progress) => {
@@ -664,9 +1006,10 @@ function toggleSpeech(index: number, content: string): void {
     speakingProgress.value = ''
     return
   }
-  speechError.value = ''
+  voiceError.value = ''
+  if (listening.value) stopVoiceInput()
   if (!startReplySpeech(index, content)) {
-    speechError.value = '当前浏览器不支持语音回复，请阅读文字回答。'
+    voiceError.value = '当前浏览器不支持语音回复，请阅读文字回答。'
   }
 }
 
@@ -692,11 +1035,37 @@ function streamReveal(entry: ChatEntry): void {
   }, 26)
 }
 
+async function copyReply(content: string): Promise<void> {
+  try {
+    await globalThis.navigator?.clipboard?.writeText(content)
+    pushToast('success', '回答已复制到剪贴板。')
+  } catch {
+    pushToast('error', '复制失败，请手动选择文本复制。')
+  }
+}
+
+function autoSpeakReply(index: number, content: string): void {
+  if (!voicePrefs.value.autoSpeakReplies || !speechOutputSupported || !content.trim()) return
+  if (listening.value) stopVoiceInput()
+  startReplySpeech(index, content, true)
+}
+
+/* 输入框随内容自动增高，上限约 7 行，避免长问题被压在小框里。 */
+function autoResizeDraft(): void {
+  const el = draftInput.value
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = `${Math.min(el.scrollHeight, 168)}px`
+}
+
+watch(draft, () => autoResizeDraft())
+
 async function send(text?: string, queryTypeOverride?: string): Promise<void> {
   const content = (text ?? draft.value).trim()
   if (!content || sending.value) return
 
   cancelActiveSend()
+  stopVoiceInput()
   if (speakingIndex.value !== null) {
     stopSpeaking()
     speakingIndex.value = null
@@ -715,7 +1084,8 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
   workflowTrace.value = []
   orchestrationPhase.value = 'routing'
   workflowRouteExplanation.value = null
-  scrollToEnd()
+  stickToBottom.value = true
+  scrollToEnd(true)
 
   const streamingEntry: ChatEntry = {
     role: 'assistant',
@@ -750,9 +1120,11 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
     entry.networkQuery = reply.network_query
     entry.agentTrace = reply.agent_trace
     entry.externalSources = reply.external_sources
+    modelLabel.value = formatModelLabel(reply.model)
     workflowTrace.value = reply.agent_trace ?? []
     workflowRouteExplanation.value = reply.route_explanation ?? null
     persistChatSession()
+    autoSpeakReply(entryIndex, reply.answer)
     if (!alreadyStreamed) streamReveal(entry)
   }
 
@@ -854,6 +1226,7 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
     orchestrationPhase.value = null
     sending.value = false
     void loadAgentCatalog()
+    if (!needMicGesture.value && speakingIndex.value === null) void beginWakeListening()
   }
 }
 
@@ -864,8 +1237,12 @@ function onMemberChange(event: Event): void {
 
 onBeforeUnmount(() => {
   cancelActiveSend()
+  stopVoiceInput()
+  dictation?.dispose()
+  dictation = null
   if (streamTimer) clearInterval(streamTimer)
   if (stopStatusTimer) clearTimeout(stopStatusTimer)
+  document.removeEventListener('visibilitychange', onVisibilityChange)
   stopSpeaking()
 })
 </script>
@@ -926,14 +1303,33 @@ onBeforeUnmount(() => {
               </option>
             </select>
           </label>
+          <button
+            type="button"
+            class="assistant-settings-trigger"
+            aria-label="打开语音设置"
+            title="语音设置"
+            :aria-expanded="settingsOpen"
+            @click="settingsOpen = true"
+          >
+            <AppIcon name="settings" :size="16" />
+          </button>
         </div>
       </header>
 
-      <div ref="chatWindow" class="chat-window">
+      <div ref="chatWindow" class="chat-window" @scroll.passive="onChatScroll">
       <div class="chat-thread" :class="{ empty: history.length === 0 }">
       <div v-if="history.length === 0" class="assistant-empty">
         <span class="assistant-empty-art" aria-hidden="true">
-          <AppIcon name="assistant" :size="30" />
+          <svg class="assistant-empty-orb" viewBox="0 0 96 96" fill="none">
+            <circle cx="48" cy="48" r="34" fill="var(--pine, #38665a)" opacity="0.92" />
+            <circle cx="48" cy="48" r="34" stroke="var(--pine-deep, #2a4d42)" stroke-width="1.6" />
+            <path
+              d="M48 60c-6.4-4.2-10.4-8.4-10.4-13 0-3.3 2.5-5.8 5.5-5.8 1.9 0 3.6 1 4.9 2.8 1.3-1.8 3-2.8 4.9-2.8 3 0 5.5 2.5 5.5 5.8 0 4.6-4 8.8-10.4 13z"
+              fill="#fff"
+              opacity="0.94"
+            />
+            <circle cx="37" cy="34" r="7" fill="#fff" opacity="0.28" />
+          </svg>
         </span>
         <strong class="assistant-empty-title">向家庭助手提问</strong>
         <div class="assistant-empty-suggestions">
@@ -961,7 +1357,7 @@ onBeforeUnmount(() => {
           <AppIcon name="assistant" :size="16" />
         </span>
         <div class="chat-bubble">
-          <div class="chat-message-text"><span class="chat-message-content">{{ entry.role === 'assistant' ? entry.content.slice(0, entry.revealed) : entry.content }}</span><span v-if="isStreaming(entry)" class="stream-caret" aria-hidden="true" /></div>
+          <div class="chat-message-text" :aria-live="isStreaming(entry) ? 'polite' : undefined"><span class="chat-message-content">{{ entry.role === 'assistant' ? entry.content.slice(0, entry.revealed) : entry.content }}</span><span v-if="isStreaming(entry)" class="stream-caret" aria-hidden="true" /></div>
           <details
             v-if="entry.role === 'assistant' && !isStreaming(entry) && hasEvidenceDetails(entry)"
             class="chat-evidence"
@@ -1046,11 +1442,43 @@ onBeforeUnmount(() => {
               </details>
             </div>
           </details>
+          <!-- 相关追问：服务端 suggested_questions 已在 entry 上归一化，
+               但 HCT-516 精简时把渲染块一并删掉，导致这批建议永远不显示。
+               只挂在最后一条已完成的助手回复下，点击放入输入框由用户确认后再发。 -->
+          <div
+            v-if="entry.role === 'assistant' && !isStreaming(entry) && index === history.length - 1 && (entry.suggestedQuestions?.length ?? 0) > 0"
+            class="chat-follow-ups"
+            aria-label="相关追问"
+          >
+            <div class="chat-follow-ups-heading">
+              <span class="chat-follow-ups-label"><AppIcon name="sparkle" :size="13" />接下来可以问</span>
+              <small>点击后会放入输入框，可修改后再发送</small>
+            </div>
+            <button
+              v-for="question in entry.suggestedQuestions"
+              :key="question"
+              type="button"
+              class="btn btn-ghost btn-small chat-follow-up"
+              :disabled="sending"
+              @click="useSuggestedQuestion(question)"
+            >
+              {{ question }}
+            </button>
+          </div>
           <div
             v-if="entry.role === 'assistant' && !isStreaming(entry) && entry.content"
             class="chat-message-actions"
             aria-label="回答操作"
           >
+            <button
+              type="button"
+              class="btn btn-ghost btn-small"
+              aria-label="复制回答全文"
+              @click="copyReply(entry.content)"
+            >
+              <AppIcon name="check" :size="14" />
+              复制
+            </button>
             <template v-if="speechOutputSupported">
               <button
                 type="button"
@@ -1121,19 +1549,51 @@ onBeforeUnmount(() => {
       <p v-if="stopStatus" class="notice info" role="status" aria-live="polite">
         {{ stopStatus }}
       </p>
-      <p v-if="speechError" class="notice error" role="alert">
+      <p v-if="voiceError" class="notice error" role="alert">
         <AppIcon name="alert" :size="16" />
-        {{ speechError }}
+        {{ voiceError }}
       </p>
+      <div v-if="needMicGesture && !listening" class="voice-session-panel wake" role="status">
+        <span class="voice-session-visual" aria-hidden="true"><AppIcon name="microphone" :size="24" /></span>
+        <span class="voice-session-copy">
+          <strong>语音唤醒已准备好</strong>
+          <span>浏览器需要一次点按来允许麦克风，之后会持续等待唤醒词。</span>
+        </span>
+        <button type="button" class="btn btn-primary btn-small" @click="toggleVoiceInput">允许并开启</button>
+      </div>
+      <div v-if="listening || voiceMode === 'ready'" class="voice-session-panel" :class="voiceMode" role="status" aria-live="polite">
+        <span class="voice-session-visual" aria-hidden="true">
+          <span class="voice-session-ring" />
+          <span class="voice-session-ring second" />
+          <AppIcon name="microphone" :size="22" />
+        </span>
+        <span class="voice-session-copy">
+          <strong>{{ voiceMode === 'wake' ? '常开唤醒' : voiceMode === 'ready' ? '口述已完成' : voiceMode === 'command' ? '等待语音指令' : '正在听写' }}</strong>
+          <span>{{ voiceStatusText }}</span>
+          <span v-if="voicePreview" class="voice-live-transcript">{{ voicePreview }}</span>
+        </span>
+      </div>
       <form class="chat-compose assistant-composer" @submit.prevent="send()">
         <textarea
           ref="draftInput"
           v-model="draft"
           rows="2"
           placeholder="例如：最近的用药提醒是依据什么？（回答仅供参考，不构成医疗建议）"
+          title="Enter 发送 · Shift + Enter 换行"
+          @focus="onDraftFocus"
           @keydown.enter.exact.prevent="send()"
         />
-        <div class="chat-compose-actions assistant-composer-actions">
+        <div v-if="voiceMode === 'ready' || voiceMode === 'command'" class="voice-ready-actions" role="group" aria-label="口述确认">
+          <button type="button" class="btn btn-primary btn-large" :disabled="!canSend" @click="send()">
+            <AppIcon name="arrow-up" :size="16" />发送这段话
+          </button>
+          <button type="button" class="btn btn-ghost" @click="editDraftLine">改一句</button>
+          <button type="button" class="btn btn-ghost btn-small" @click="redoVoiceDraft">重说</button>
+          <button type="button" class="btn btn-ghost btn-small" @click="toggleVoiceInput">{{ voiceButtonLabel }}</button>
+        </div>
+        <p v-if="voiceSendHint" class="assistant-voice-send-hint" role="status">{{ voiceSendHint }}</p>
+        <div v-if="voiceMode !== 'ready' && voiceMode !== 'command'" class="chat-compose-actions assistant-composer-actions">
+          <small class="assistant-compose-hint">Enter 发送 · Shift + Enter 换行</small>
           <label
             class="assistant-net-toggle"
             :title="webSearchAvailable === false
@@ -1147,6 +1607,19 @@ onBeforeUnmount(() => {
           </label>
           <span class="assistant-composer-spacer" aria-hidden="true" />
           <button
+            v-if="speechInputSupported"
+            type="button"
+            class="btn btn-ghost btn-small voice-input-button"
+            :class="{ listening, active: voiceMode === 'active', need: needMicGesture }"
+            :aria-pressed="listening"
+            :aria-label="listening ? '停止语音唤醒' : voiceButtonLabel"
+            :title="`进入助手页后会自动尝试聆听；首次需点按允许麦克风，再说「${wakePhrase}」`"
+            @click="toggleVoiceInput"
+          >
+            <AppIcon :name="listening ? 'close' : 'microphone'" :size="14" />
+            {{ voiceButtonLabel }}
+          </button>
+          <button
             v-if="sending"
             type="button"
             class="btn btn-ghost btn-small"
@@ -1157,6 +1630,7 @@ onBeforeUnmount(() => {
           </button>
           <button
             type="submit"
+            ref="sendButton"
             class="assistant-send"
             :disabled="!canSend"
             :aria-label="sending ? '发送中' : '发送'"
@@ -1170,6 +1644,74 @@ onBeforeUnmount(() => {
         回答基于本地证据，仅供参考，不构成医疗建议；紧急情况请直接联系医生或药师。
       </p>
     </section>
+
+    <div v-if="settingsOpen" class="assistant-settings-backdrop" @click.self="settingsOpen = false">
+      <aside class="assistant-settings-drawer" role="dialog" aria-modal="true" aria-labelledby="assistant-settings-title">
+        <header class="assistant-settings-header">
+          <div>
+            <p class="eyebrow">助手偏好</p>
+            <h3 id="assistant-settings-title">语音唤醒与播报</h3>
+          </div>
+          <button type="button" class="assistant-settings-close" aria-label="关闭语音设置" @click="settingsOpen = false">
+            <AppIcon name="close" :size="16" />
+          </button>
+        </header>
+        <p class="assistant-settings-note">进入助手后会自动尝试保持唤醒聆听；你可以随时在输入区关闭。语音识别和播报均由浏览器本地完成。</p>
+        <section class="assistant-settings-section voice-prefs-panel" aria-label="语音偏好与自检">
+          <h4>语音偏好</h4>
+          <label class="voice-pref-row">
+            <span>唤醒词</span>
+            <div class="voice-pref-control voice-wake-control">
+              <input v-model="wakePhraseDraft" maxlength="8" aria-label="唤醒词" @keydown.enter.prevent="saveWakePhrase" />
+              <button type="button" class="btn btn-ghost btn-small" @click="saveWakePhrase">保存</button>
+            </div>
+          </label>
+          <div class="voice-preset-row" aria-label="唤醒词预设">
+            <button
+              v-for="preset in WAKE_PHRASE_PRESETS"
+              :key="preset.id"
+              type="button"
+              class="btn btn-ghost btn-small"
+              :class="{ active: wakePhrase === preset.phrase }"
+              @click="applyWakePreset(preset.phrase)"
+            >{{ preset.phrase }}</button>
+          </div>
+          <label class="voice-pref-row">
+            <span>句末判定</span>
+            <select :value="silencePresetId" aria-label="句末判定" @change="applySilencePreset(($event.target as HTMLSelectElement).value)">
+              <option v-for="preset in SILENCE_PRESETS" :key="preset.id" :value="preset.id">{{ preset.label }}</option>
+            </select>
+          </label>
+          <label class="voice-pref-row">
+            <span>自动发送</span>
+            <select :value="autoSendPresetId" aria-label="自动发送" @change="applyAutoSendPreset(($event.target as HTMLSelectElement).value)">
+              <option v-for="preset in AUTO_SEND_PRESETS" :key="preset.id" :value="preset.id">{{ preset.label }}</option>
+            </select>
+          </label>
+          <label class="voice-pref-row voice-check-row"><input type="checkbox" :checked="voicePrefs.autoSpeakReplies" @change="toggleVoicePref('autoSpeakReplies', ($event.target as HTMLInputElement).checked)" /><span>回答完成后自动朗读</span></label>
+          <label class="voice-pref-row voice-check-row"><input type="checkbox" :checked="voicePrefs.confirmSound" @change="toggleVoicePref('confirmSound', ($event.target as HTMLInputElement).checked)" /><span>自动发送倒计时播放确认音</span></label>
+          <label class="voice-pref-row voice-check-row"><input type="checkbox" :checked="voicePrefs.doubleWake" @change="toggleVoicePref('doubleWake', ($event.target as HTMLInputElement).checked)" /><span>需要连续两次唤醒词，减少误触</span></label>
+          <label class="voice-pref-row voice-check-row"><input type="checkbox" :checked="voicePrefs.voiceCommands" @change="toggleVoicePref('voiceCommands', ($event.target as HTMLInputElement).checked)" /><span>听写后接收白名单语音指令</span></label>
+          <label v-if="speechOutputSupported" class="voice-pref-row">
+            <span>播报音色</span>
+            <select :value="voicePrefs.preferredVoiceName" aria-label="播报音色" @change="applyPreferredVoice(($event.target as HTMLSelectElement).value)">
+              <option value="">自动选择中文音色</option>
+              <option v-for="voiceOption in voiceOptions" :key="voiceOption.name" :value="voiceOption.name">{{ voiceOption.name }}（{{ voiceOption.lang }}{{ voiceOption.localService ? ' · 本地' : '' }}）</option>
+            </select>
+            <button type="button" class="btn btn-ghost btn-small" @click="previewPreferredVoice">试听</button>
+          </label>
+          <div class="voice-check-actions">
+            <button type="button" class="btn btn-ghost btn-small" :disabled="voicePackChecking" @click="checkVoicePacks">{{ voicePackChecking ? '检测中…' : '检查中文语音包' }}</button>
+            <button type="button" class="btn btn-ghost btn-small" :disabled="preflightRunning" @click="runPreflight">{{ preflightRunning ? '自检中…' : '运行语音预检' }}</button>
+          </div>
+          <p v-if="voicePackReport" class="text-faint voice-check-result">{{ voicePackReport.guidance }}</p>
+          <ul v-if="preflightReport" class="voice-preflight-list">
+            <li v-for="(line, index) in preflightReport.guidance" :key="index">{{ line }}</li>
+          </ul>
+        </section>
+        <p class="assistant-settings-model">当前回答模型：{{ modelLabel }} · SSE 流式输出已开启</p>
+      </aside>
+    </div>
 
   </div>
 </template>
@@ -1341,6 +1883,32 @@ onBeforeUnmount(() => {
   gap: 8px;
 }
 
+.assistant-settings-trigger,
+.assistant-settings-close {
+  align-items: center;
+  background: color-mix(in srgb, var(--card, #fffcf3) 84%, transparent);
+  border: 1px solid var(--line, rgba(190, 167, 125, 0.4));
+  border-radius: 50%;
+  color: var(--pine-deep, #2a5045);
+  cursor: pointer;
+  display: inline-flex;
+  height: 34px;
+  justify-content: center;
+  padding: 0;
+  transition: background 0.16s ease, border-color 0.16s ease, transform 0.16s ease;
+  width: 34px;
+}
+
+.assistant-settings-trigger:hover,
+.assistant-settings-trigger:focus-visible,
+.assistant-settings-close:hover,
+.assistant-settings-close:focus-visible {
+  background: var(--pine-tint, #e3ece7);
+  border-color: color-mix(in srgb, var(--pine, #38665a) 42%, var(--line));
+  outline: none;
+  transform: translateY(-1px);
+}
+
 .assistant-status-chip {
   align-items: center;
   background: color-mix(in srgb, var(--pine, #38665a) 9%, transparent);
@@ -1458,11 +2026,204 @@ onBeforeUnmount(() => {
   opacity: 0.4;
 }
 
-/* 主区内的提示条与阅读列同宽居中。 */
-.assistant-main > .notice {
+/* 主区内的提示条与语音状态条同宽居中。 */
+.assistant-main > .notice,
+.assistant-main > .voice-session-panel {
   margin-inline: auto;
   width: min(100%, 820px);
 }
+
+.voice-session-panel {
+  align-items: center;
+  background: color-mix(in srgb, var(--pine-tint, #e3ece7) 70%, var(--card, #fffcf3));
+  border: 1px solid color-mix(in srgb, var(--pine, #38665a) 28%, var(--line));
+  border-radius: 16px;
+  box-shadow: 0 8px 20px rgba(56, 102, 90, 0.08);
+  display: flex;
+  gap: 12px;
+  min-height: 62px;
+  padding: 10px 13px;
+}
+
+.voice-session-panel.wake {
+  background: color-mix(in srgb, var(--gold-tint, #f4ead0) 68%, var(--card, #fffcf3));
+  border-color: color-mix(in srgb, var(--gold, #a97e1f) 28%, var(--line));
+}
+
+.voice-session-visual {
+  align-items: center;
+  background: color-mix(in srgb, var(--pine, #38665a) 13%, var(--card, #fffcf3));
+  border: 1px solid color-mix(in srgb, var(--pine, #38665a) 26%, transparent);
+  border-radius: 50%;
+  color: var(--pine-deep, #2a5045);
+  display: inline-flex;
+  flex: 0 0 42px;
+  height: 42px;
+  justify-content: center;
+  position: relative;
+  width: 42px;
+}
+
+.voice-session-panel.wake .voice-session-visual {
+  background: color-mix(in srgb, var(--gold, #a97e1f) 16%, var(--card, #fffcf3));
+  border-color: color-mix(in srgb, var(--gold, #a97e1f) 34%, transparent);
+  color: var(--gold-deep, #8f6b1f);
+}
+
+.voice-session-ring {
+  border: 1px solid color-mix(in srgb, var(--pine, #38665a) 36%, transparent);
+  border-radius: 50%;
+  inset: -5px;
+  position: absolute;
+}
+
+.voice-session-ring.second {
+  animation: assistant-voice-ring 1.8s ease-out infinite;
+  inset: -10px;
+  opacity: 0.45;
+}
+
+@keyframes assistant-voice-ring {
+  0%, 100% { opacity: 0.15; transform: scale(0.86); }
+  55% { opacity: 0.72; transform: scale(1.08); }
+}
+
+.voice-session-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.voice-session-copy strong { color: var(--pine-deep, #2a5045); font-size: 13.5px; }
+.voice-session-copy > span { color: var(--ink-soft, #6d6659); font-size: 12px; line-height: 1.45; }
+.voice-live-transcript { color: var(--ink, #3f3a31) !important; font-weight: 600; overflow-wrap: anywhere; }
+
+.voice-ready-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 auto;
+  width: min(100%, 820px);
+}
+
+.voice-ready-actions .btn-large {
+  flex: 1 1 150px;
+  min-height: 44px;
+}
+
+.assistant-voice-send-hint {
+  color: var(--pine-deep, #2a5045);
+  font-size: 12px;
+  margin: -2px auto 0;
+  width: min(100%, 820px);
+}
+
+.voice-input-button {
+  min-width: 76px;
+}
+
+.voice-input-button.listening,
+.voice-input-button.active {
+  background: color-mix(in srgb, var(--pine, #38665a) 15%, transparent);
+  border-color: color-mix(in srgb, var(--pine, #38665a) 38%, var(--line));
+  color: var(--pine-deep, #2a5045);
+}
+
+.voice-input-button.need {
+  border-color: color-mix(in srgb, var(--gold, #a97e1f) 48%, var(--line));
+  color: var(--gold-deep, #8f6b1f);
+}
+
+.assistant-settings-backdrop {
+  background: rgba(63, 58, 49, 0.22);
+  inset: 0;
+  position: absolute;
+  z-index: 30;
+}
+
+.assistant-settings-drawer {
+  animation: assistant-drawer-in 0.22s ease both;
+  background: var(--card, #fffcf3);
+  border-left: 1px solid var(--line, rgba(190, 167, 125, 0.4));
+  bottom: 0;
+  box-shadow: -18px 0 40px rgba(94, 71, 42, 0.14);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 100%;
+  overflow-y: auto;
+  padding: 18px 18px 24px;
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: min(420px, 94vw);
+  z-index: 31;
+}
+
+@keyframes assistant-drawer-in {
+  from { opacity: 0; transform: translateX(24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.assistant-settings-header {
+  align-items: flex-start;
+  display: flex;
+  justify-content: space-between;
+}
+
+.assistant-settings-header h3 {
+  font-family: var(--font-display);
+  font-size: 18px;
+  margin: 2px 0 0;
+}
+
+.assistant-settings-note {
+  color: var(--ink-soft, #6d6659);
+  font-size: 12.5px;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.assistant-settings-section {
+  border-top: 1px dashed var(--line, rgba(190, 167, 125, 0.4));
+  padding-top: 12px;
+}
+
+.assistant-settings-section h4 {
+  font-family: var(--font-display);
+  font-size: 14px;
+  margin: 0 0 10px;
+}
+
+.voice-pref-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: space-between;
+  margin: 9px 0;
+}
+
+.voice-pref-row > span { color: var(--ink-soft, #6d6659); font-size: 13px; }
+.voice-pref-row select,
+.voice-pref-row input:not([type="checkbox"]) { max-width: 230px; min-width: 0; }
+.voice-pref-control { align-items: center; display: flex; gap: 6px; max-width: 100%; }
+.voice-wake-control input { width: 132px; }
+
+.voice-preset-row,
+.voice-check-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.voice-preset-row { margin: 0 0 12px; }
+.voice-preset-row .btn.active { background: var(--pine-tint, #e3ece7); border-color: color-mix(in srgb, var(--pine) 38%, var(--line)); color: var(--pine-deep); }
+.voice-check-row { justify-content: flex-start; }
+.voice-check-row input { accent-color: var(--pine, #38665a); }
+.voice-check-result { font-size: 12px; line-height: 1.55; margin: 7px 0 0; }
+.voice-preflight-list { color: var(--ink-soft, #6d6659); font-size: 12px; line-height: 1.55; margin: 8px 0 0; padding-left: 18px; }
+.assistant-settings-model { color: var(--ink-faint, #a2937c); font-size: 11.5px; line-height: 1.5; margin: auto 0 0; }
 
 /* 空状态：吉祥物 + 一句短提示 + 建议胶囊，压缩纵向留白。 */
 .assistant-empty {
@@ -1553,6 +2314,16 @@ onBeforeUnmount(() => {
 
 .assistant-net-toggle .pill { font-size: 10.5px; padding: 2px 7px; }
 
+.assistant-compose-hint {
+  color: var(--ink-faint, #a2937c);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .assistant-compose-hint { display: none; }
+}
+
 .assistant-footnote {
   color: var(--ink-faint, #a2937c);
   flex: 0 0 auto;
@@ -1564,6 +2335,8 @@ onBeforeUnmount(() => {
 
 @media (prefers-reduced-motion: reduce) {
   .assistant-status-chip.busy .app-icon { animation: none; }
+  .voice-session-ring.second,
+  .assistant-settings-drawer { animation: none; }
   .assistant-send,
   .assistant-suggestion { transition: none; }
   .assistant-send:hover:not(:disabled),

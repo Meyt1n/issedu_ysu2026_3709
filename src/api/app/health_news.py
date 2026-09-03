@@ -157,6 +157,58 @@ def seasonal_catalog() -> dict[str, list[dict[str, Any]]]:
                 "source": "seasonal_calendar",
                 "source_name": "本地季节日历",
             },
+            {
+                "id": "autumn-dry-air",
+                "kind": "seasonal_tip",
+                "title": "空气偏干时，把舒适度放进每日照护清单",
+                "summary": (
+                    "秋季室内空气变干时，可以关注饮水、休息和环境舒适度。"
+                    "这些是一般生活提醒；若不适持续或加重，请及时联系医务人员。"
+                ),
+                "tag": "居家环境",
+                "chat_prompt": "秋季空气偏干，居家环境和日常照护一般可以注意什么？",
+                "source": "seasonal_calendar",
+                "source_name": "本地季节日历",
+            },
+            {
+                "id": "autumn-window-airing",
+                "kind": "seasonal_tip",
+                "title": "每天短时通风，让室内空气保持流动",
+                "summary": (
+                    "天气允许时可以安排短时开窗通风，并根据家人感受调整时间。"
+                    "通风提醒不替代针对具体症状的医学判断。"
+                ),
+                "tag": "居家习惯",
+                "chat_prompt": "秋季家里怎样安排短时通风和保暖，比较适合作为日常提醒？",
+                "source": "seasonal_calendar",
+                "source_name": "本地季节日历",
+            },
+            {
+                "id": "autumn-gentle-walk",
+                "kind": "seasonal_tip",
+                "title": "天气舒适时，把活动拆成一小段",
+                "summary": (
+                    "外出前先看天气和家人状态，把活动安排成轻松、可随时结束的小段。"
+                    "如有明显不适，不要勉强活动，并优先咨询医务人员。"
+                ),
+                "tag": "日常活动",
+                "chat_prompt": "秋天天气舒适时，家庭日常活动可以怎样安排得更稳妥？",
+                "source": "seasonal_calendar",
+                "source_name": "本地季节日历",
+            },
+            {
+                "id": "autumn-family-checkin",
+                "kind": "seasonal_tip",
+                "title": "晚间做一次家庭照护小复盘",
+                "summary": (
+                    "可以在固定时间简单回顾当天的饮水、休息和已确认事项，"
+                    "把需要继续观察的问题记下来，方便之后与医生或药师沟通。"
+                ),
+                "tag": "家庭协作",
+                "chat_prompt": "家庭每天做照护小复盘时，可以记录哪些一般信息？",
+                "source": "seasonal_calendar",
+                "source_name": "本地季节日历",
+            },
         ],
         "winter": [
             {

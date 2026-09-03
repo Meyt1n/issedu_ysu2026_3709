@@ -37,10 +37,10 @@ export interface VoicePreferences {
 }
 
 export const DEFAULT_VOICE_PREFERENCES: VoicePreferences = {
-  silenceMs: 15_000,
-  continuationSilenceMs: 18_000,
+  silenceMs: 10_000,
+  continuationSilenceMs: 12_000,
   confirmSound: true,
-  doubleWake: false,
+  doubleWake: true,
   wakePhrase: DEFAULT_WAKE_PHRASE,
   voiceCommands: true,
   autoSendDelayMs: 3000,
@@ -58,8 +58,9 @@ export const AUTO_SEND_PRESETS = [
 export const SILENCE_PRESETS = [
   { id: 'short', label: '很快（约 1.6 秒）', silenceMs: 1600, continuationSilenceMs: 2400 },
   { id: 'standard', label: '较快（约 2.2 秒）', silenceMs: 2200, continuationSilenceMs: 3200 },
-  { id: 'long', label: '适中（约 3.0 秒）', silenceMs: 3000, continuationSilenceMs: 4200 },
-  { id: 'sentence', label: '句末（约 15 秒，默认）', silenceMs: 15_000, continuationSilenceMs: 18_000 },
+  { id: 'medium', label: '适中（约 4.0 秒）', silenceMs: 4000, continuationSilenceMs: 5000 },
+  { id: 'long', label: '宽松（约 7.0 秒）', silenceMs: 7000, continuationSilenceMs: 8500 },
+  { id: 'sentence', label: '句末（约 10 秒，默认）', silenceMs: 10_000, continuationSilenceMs: 12_000 },
 ] as const
 
 function storage(): Storage | null {
@@ -112,7 +113,7 @@ function sanitizePreferences(raw: Partial<VoicePreferences> | null): VoicePrefer
 }
 
 /**
- * v1→v2 迁移：v1 的默认 2.2s 静音是「未定制」存量，统一升级到 15s 句末静音；
+ * v1→v2 迁移：v1 的默认 2.2s 静音是「未定制」存量，统一升级到 10s 句末静音；
  * 用户主动改过的其他值保留（仍按新钳制范围校验）。
  */
 function migrateLegacyPreferences(target: Storage): VoicePreferences | null {

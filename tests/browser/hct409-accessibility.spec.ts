@@ -155,7 +155,7 @@ test.describe('axe automated WCAG 2.1 AA scans', () => {
     await expect(page.getByRole('heading', { name: '待确认事项' })).toBeVisible()
     await expect(page.getByRole('heading', { name: '最近识别的药品' })).toBeVisible()
     await expect(page.getByRole('heading', { name: '家庭成员状态' })).toBeVisible()
-    await expect(page.getByText('Synthetic medicine', { exact: true })).toHaveCount(2)
+    await expect(page.getByText('Synthetic medicine', { exact: true })).toHaveCount(1)
     await expect(page.getByText('识别候选，不是健康事实')).toBeVisible()
     await expect(page.locator('.home-dashboard-member strong')).toHaveText('Synthetic member')
   })
@@ -201,6 +201,11 @@ test.describe('keyboard path and focus visibility', () => {
     await page.keyboard.press('Tab')
     await expect(page.getByLabel('密码', { exact: true })).toBeFocused()
     await page.keyboard.type(FORMAL_TEST_PASSWORD)
+
+    // 密码框后面是「显示密码」切换按钮（HCT-516 引入）。它是真实可操作控件，
+    // 必须留在 Tab 序列里供键盘用户核对输入，所以这里如实走过这一站。
+    await page.keyboard.press('Tab')
+    await expect(page.getByRole('button', { name: '显示密码' })).toBeFocused()
 
     await page.keyboard.press('Tab')
     await expect(page.getByRole('button', { name: '登录家庭空间' })).toBeFocused()

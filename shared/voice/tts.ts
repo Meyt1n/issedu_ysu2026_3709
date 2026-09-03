@@ -172,6 +172,7 @@ let activeSynth: SpeechSynthesisLike | null = null
 let activeVoice: SpeechVoiceLike | null = null
 let activeFinish: (() => void) | null = null
 let activeOnProgress: ((progress: SpeakProgress) => void) | null = null
+let isPaused = false
 
 export function stopSpeaking(): void {
   speechToken += 1
@@ -181,7 +182,39 @@ export function stopSpeaking(): void {
   activeOnProgress = null
   activeSynth = null
   activeVoice = null
+  isPaused = false
   speechWindow()?.speechSynthesis?.cancel()
+}
+
+/** 暂停当前朗读 */
+export function pauseSpeaking(): boolean {
+  const synth = speechWindow()?.speechSynthesis
+  if (!synth || !activeSynth || activeSegments.length === 0) return false
+  try {
+    synth.pause()
+    isPaused = true
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** 恢复朗读 */
+export function resumeSpeaking(): boolean {
+  const synth = speechWindow()?.speechSynthesis
+  if (!synth || !activeSynth || activeSegments.length === 0 || !isPaused) return false
+  try {
+    synth.resume()
+    isPaused = false
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** 检查是否处于暂停状态 */
+export function isSpeakingPaused(): boolean {
+  return isPaused
 }
 
 /** 跳过当前句，继续下一段；已是最后一段则结束。 */

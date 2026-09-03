@@ -143,6 +143,198 @@ test('成员前台入口未绑定家庭时展示个人前台品牌，并引导�
   await expect(page.getByTestId('member-portal-entry-guide')).toHaveCount(0)
 })
 
+test('成员前台已打开时，后台登录会自动刷新家庭绑定和 PIN 候选人', async ({ context }) => {
+  const member = await context.newPage()
+  await installEntryApi(member)
+  await member.goto('/?portal=member')
+  await expect(member.getByTestId('member-unbound-gate')).toBeVisible()
+
+  const admin = await context.newPage()
+  await installEntryApi(admin)
+  await admin.goto('/?portal=admin')
+  await submitFormalLogin(admin, 'parent-admin')
+  await expect(admin.locator('.app-frame')).toBeVisible()
+
+  // The member page was mounted before the admin session existed. Its
+  // cross-port polling must make the newly bound family selectable without a
+  // manual refresh, while keeping the member page on its own face/PIN login
+  // surface instead of restoring the administrator's staging state.
+  await expect(member.getByTestId('member-unbound-gate')).toHaveCount(0)
+  await expect(member.getByRole('heading', { name: '选择家庭成员' })).toHaveCount(0)
+  await expect(member.getByRole('group', { name: '选择账号登录凭据' })).toBeVisible()
+  await expect(member.getByRole('button', { name: '刷脸进入', exact: true })).toBeVisible()
+  await expect(member.getByRole('button', { name: 'PIN登录', exact: true })).toBeVisible()
+  await expect(member.getByRole('option', { name: '奶奶' })).toBeVisible()
+
+  // 绑定家庭持久保存在本机：管理员退出后，成员前台仍保留刷脸 / PIN 选人，
+  // 不重新弹回「去管理后台登录」门禁（HCT-456 / HCT-511「登录一次即绑定」）。
+  await admin.getByRole('button', { name: '退出当前身份' }).click()
+  await expect(member.getByTestId('member-unbound-gate')).toHaveCount(0)
+  await expect(member.getByRole('button', { name: 'PIN登录', exact: true })).toBeVisible()
+  await context.close()
+})
+
+const rebindHouseholdA = {
+  id: 'household-rebind-a',
+  name: '甲家庭',
+  created_by: 'admin-a',
+  created_at: '2026-08-25T00:00:00Z',
+}
+
+const rebindHouseholdB = {
+  id: 'household-rebind-b',
+  name: '乙家庭',
+  created_by: 'admin-b',
+  created_at: '2026-08-25T00:00:00Z',
+}
+
+const rebindHouseholdByActor: Record<string, typeof rebindHouseholdA> = {
+  'admin-a': rebindHouseholdA,
+  'admin-b': rebindHouseholdB,
+}
+
+const rebindMembersByActor: Record<string, Array<typeof ownerMember>> = {
+  'admin-a': [
+    {
+      id: 'member-a-owner',
+      household_id: rebindHouseholdA.id,
+      display_name: '甲家长',
+      role: 'SELF',
+      actor_id: 'admin-a',
+      created_at: '2026-08-25T00:00:00Z',
+    },
+    {
+      id: 'member-a-grandma',
+      household_id: rebindHouseholdA.id,
+      display_name: '奶奶甲',
+      role: 'DEPENDENT',
+      actor_id: 'grandma-a',
+      created_at: '2026-08-25T00:00:00Z',
+    },
+  ],
+  'admin-b': [
+    {
+      id: 'member-b-owner',
+      household_id: rebindHouseholdB.id,
+      display_name: '乙家长',
+      role: 'SELF',
+      actor_id: 'admin-b',
+      created_at: '2026-08-25T00:00:00Z',
+    },
+    {
+      id: 'member-b-grandpa',
+      household_id: rebindHouseholdB.id,
+      display_name: '爷爷乙',
+      role: 'DEPENDENT',
+      actor_id: 'grandpa-b',
+      created_at: '2026-08-25T00:00:00Z',
+    },
+  ],
+}
+
+/**
+ * 换绑回归（HCT-456 / HCT-511）：按登录账号动态返回不同家庭与成员，
+ * 覆盖「后台 A→B 换绑后，已打开的成员前台 PIN 名单自动切换」。
+ */
+async function installRebindApi(page: Page): Promise<void> {
+  let currentActor = ''
+  await page.route('**/api/v1/**', async route => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname
+    const respond = (body: unknown, status = 200) => route.fulfill({
+      status,
+      contentType: 'application/json',
+      body: JSON.stringify(body),
+    })
+
+    if (request.method() === 'POST' && path === '/api/v1/auth/login') {
+      const submitted = request.postDataJSON() as { actor_id?: string } | null
+      currentActor = submitted?.actor_id?.trim() ?? ''
+      return respond({
+        actor_id: currentActor,
+        session_token: 'x'.repeat(48),
+        expires_at: (Date.now() + 1_800_000) / 1000,
+      })
+    }
+    if (request.method() === 'POST' && path === '/api/v1/auth/logout') {
+      currentActor = ''
+      return respond({ status: 'logged_out' })
+    }
+    if (request.method() === 'GET' && path === '/api/v1/households') {
+      const household = rebindHouseholdByActor[currentActor]
+      return respond(household ? [household] : [])
+    }
+    if (request.method() === 'GET' && path.endsWith('/members')) {
+      return respond(rebindMembersByActor[currentActor] ?? [])
+    }
+    if (request.method() === 'GET' && path === '/api/v1/meta/capabilities') {
+      return respond({
+        phase: 'local',
+        available: ['api', 'face-recognition-local'],
+        unavailable: [],
+        instance_id: 'boot-rebind',
+      })
+    }
+    // 时间线、任务、复核、授权等一律空集，聚焦换绑行为。
+    return respond([])
+  })
+}
+
+test('后台切换管理员账号会换绑家庭，成员前台 PIN 名单自动切换', async ({ context }) => {
+  const member = await context.newPage()
+  await installRebindApi(member)
+  await member.goto('/?portal=member')
+  await expect(member.getByTestId('member-unbound-gate')).toBeVisible()
+
+  const admin = await context.newPage()
+  await installRebindApi(admin)
+  await admin.goto('/?portal=admin')
+
+  // 管理员 A 登录后台，绑定甲家庭。
+  await submitFormalLogin(admin, 'admin-a')
+  await expect(admin.locator('.app-frame')).toBeVisible()
+
+  // 前台跨端口轮询读到甲家庭绑定，PIN 名单出现「奶奶甲」，且无乙家庭成员。
+  await expect(member.getByTestId('member-unbound-gate')).toHaveCount(0)
+  await expect(member.getByRole('option', { name: '奶奶甲' })).toBeVisible()
+  await expect(member.getByRole('option', { name: '爷爷乙' })).toHaveCount(0)
+
+  // 管理员 A 退出：绑定持久保留，前台 PIN 名单不变。
+  await admin.getByRole('button', { name: '退出当前身份' }).click()
+  await expect(admin.getByLabel('正式账号', { exact: true })).toBeVisible()
+  await expect(member.getByRole('option', { name: '奶奶甲' })).toBeVisible()
+
+  // 管理员 B 登录后台，换绑乙家庭：前台 PIN 名单自动切到「爷爷乙」。
+  await submitFormalLogin(admin, 'admin-b')
+  await expect(admin.locator('.app-frame')).toBeVisible()
+  await expect(member.getByRole('option', { name: '爷爷乙' })).toBeVisible()
+  await expect(member.getByRole('option', { name: '奶奶甲' })).toHaveCount(0)
+
+  await context.close()
+})
+
+test('后台已登录后打开成员前台仍显示刷脸和 PIN，不恢复管理员选人中间态', async ({ context }) => {
+  const admin = await context.newPage()
+  await installEntryApi(admin)
+  await admin.goto('/?portal=admin')
+  await submitFormalLogin(admin, 'parent-admin')
+  await expect(admin.locator('.app-frame')).toBeVisible()
+
+  const member = await context.newPage()
+  await installEntryApi(member)
+  await member.goto('/?portal=member')
+
+  await expect(member.getByTestId('member-unbound-gate')).toHaveCount(0)
+  await expect(member.getByRole('heading', { name: '选择家庭成员' })).toHaveCount(0)
+  await expect(member.getByRole('group', { name: '选择账号登录凭据' })).toBeVisible()
+  await expect(member.getByRole('button', { name: '刷脸进入', exact: true })).toBeVisible()
+  await expect(member.getByRole('button', { name: 'PIN登录', exact: true })).toBeVisible()
+
+  await member.getByRole('button', { name: 'PIN登录', exact: true }).click()
+  await expect(member.getByRole('option', { name: '奶奶' })).toBeVisible()
+  await context.close()
+})
+
 test('管理后台入口展示全家管理品牌，并只提供账号密码', async ({ page }) => {
   await installEntryApi(page)
   await page.goto('/?portal=admin')

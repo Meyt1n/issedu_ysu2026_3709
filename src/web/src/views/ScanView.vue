@@ -4,6 +4,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { apiClient } from '../api/client'
 import type { VisionTask } from '../api/types'
 import AppIcon from '../components/AppIcon.vue'
+import ScanRadarOverlay from '../components/showcase/ScanRadarOverlay.vue'
 import {
   formatError,
   pushToast,
@@ -60,6 +61,15 @@ const showAllTasks = ref(false)
 const visibleTasks = computed(() =>
   showAllTasks.value ? tasks.value : tasks.value.slice(0, TASK_PREVIEW),
 )
+
+const radarTask = computed(() => {
+  const ordered = [...tasks.value].sort(
+    (left, right) => Date.parse(right.created_at) - Date.parse(left.created_at),
+  )
+  return ordered.find(task => task.status === 'queued' || task.status === 'running')
+    ?? ordered.find(task => task.status === 'succeeded' || task.status === 'failed' || task.status === 'timeout')
+    ?? null
+})
 
 const hasActiveTasks = computed(
   () => tasks.value.some(task => task.status === 'queued' || task.status === 'running'),
@@ -184,6 +194,8 @@ onBeforeUnmount(() => {
       </label>
     </div>
   </section>
+
+  <ScanRadarOverlay :task="radarTask" />
 
   <VisionQualityPanel
     :member-id="session.selectedMemberId || undefined"

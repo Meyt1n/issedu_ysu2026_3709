@@ -28,7 +28,13 @@ import { buildFactsFromTimeline } from '../ui/projection'
 interface EventTypeOption {
   value: string
   label: string
-  fields: Array<{ key: string; label: string; type: 'text' | 'date' | 'number'; required?: boolean; placeholder?: string }>
+  fields: Array<{ key: string; label: string; type: 'text' | 'date' | 'number'; required?: boolean; placeholder?: string; min?: number }>
+}
+
+type HealthEntryValue = string | number | null | undefined
+
+function entryValueText(value: HealthEntryValue): string {
+  return value == null ? '' : String(value)
 }
 
 const EVENT_TYPE_OPTIONS: EventTypeOption[] = [
@@ -39,7 +45,7 @@ const EVENT_TYPE_OPTIONS: EventTypeOption[] = [
       { key: 'drug', label: '药品名称', type: 'text', required: true, placeholder: '例如 阿莫西林胶囊' },
       { key: 'ingredient', label: '主要成分', type: 'text', placeholder: '例如 阿莫西林' },
       { key: 'expiry_date', label: '有效期至', type: 'date' },
-      { key: 'stock', label: '当前库存（片/粒）', type: 'number' },
+      { key: 'stock', label: '当前库存（片/粒）', type: 'number', min: 0 },
     ],
   },
   {
@@ -106,9 +112,11 @@ const compensationBusy = ref(false)
 const replayResult = ref<ProjectionReplayResult | null>(null)
 const replaying = ref(false)
 
+const entryValues = reactive<Record<string, HealthEntryValue>>({})
+
 const entryDraft = reactive({
   eventType: EVENT_TYPE_OPTIONS[0]!.value,
-  values: {} as Record<string, string>,
+  values: entryValues,
 })
 
 const currentOption = computed(
@@ -137,11 +145,27 @@ const visibleTimeline = computed(() =>
   showAllTimeline.value ? orderedTimeline.value : orderedTimeline.value.slice(0, TIMELINE_PREVIEW),
 )
 
+const entryValidationMessage = computed(() => {
+  for (const field of currentOption.value.fields.filter(field => field.type === 'number')) {
+    const raw = entryValueText(entryDraft.values[field.key]).trim()
+    if (!raw) continue
+    const number = Number(raw)
+    if (!Number.isFinite(number)) return `${field.label}请输入有效数字。`
+    if (entryDraft.eventType === 'medication_added' && field.key === 'stock') {
+      if (number < 0 || !Number.isInteger(number)) return '当前库存请输入不小于 0 的整数。'
+    } else if (field.min !== undefined && number < field.min) {
+      return `${field.label}不能小于${field.min}。`
+    }
+  }
+  return ''
+})
+
 const canSubmitEntry = computed(() => {
   if (!session.selectedMemberId || submitting.value) return false
-  return currentOption.value.fields
+  const requiredFieldsPresent = currentOption.value.fields
     .filter(field => field.required)
-    .every(field => (entryDraft.values[field.key] ?? '').trim().length > 0)
+    .every(field => entryValueText(entryDraft.values[field.key]).trim().length > 0)
+  return requiredFieldsPresent && !entryValidationMessage.value
 })
 
 async function loadProfile(): Promise<void> {
@@ -164,7 +188,8 @@ async function loadProfile(): Promise<void> {
 }
 
 function resetEntryValues(): void {
-  entryDraft.values = {}
+  // 动态 input 共用这一份响应式对象；替换对象会让后续 v-model 失去稳定目标。
+  for (const key of Object.keys(entryValues)) delete entryValues[key]
   formError.value = ''
 }
 
@@ -173,9 +198,15 @@ async function submitEntry(): Promise<void> {
   const memberId = session.selectedMemberId
   if (!householdId || !memberId || !canSubmitEntry.value) return
 
+  if (entryValidationMessage.value) {
+    formError.value = entryValidationMessage.value
+    return
+  }
+
   const payload: Record<string, unknown> = {}
   for (const field of currentOption.value.fields) {
-    const raw = (entryDraft.values[field.key] ?? '').trim()
+    // type="number" 的 v-model 在 Vue 中会产生 number，不能直接调用 trim()。
+    const raw = entryValueText(entryDraft.values[field.key]).trim()
     if (!raw) continue
     if (field.key === 'times') {
       payload[field.key] = raw
@@ -438,12 +469,14 @@ onMounted(() => void loadProfile())
               :type="field.type"
               :required="field.required"
               :placeholder="field.placeholder"
+              :min="field.type === 'number' && field.min !== undefined ? field.min : undefined"
+              :step="entryDraft.eventType === 'medication_added' && field.key === 'stock' ? 1 : undefined"
               autocomplete="off"
             />
           </label>
-          <p v-if="formError" class="notice error" role="alert">
+          <p v-if="formError || entryValidationMessage" class="notice error" role="alert">
             <AppIcon name="alert" :size="16" />
-            {{ formError }}
+            {{ formError || entryValidationMessage }}
           </p>
           <button type="submit" class="btn btn-primary" :disabled="!canSubmitEntry">
             {{ submitting ? '正在记录' : '确认并记录' }}

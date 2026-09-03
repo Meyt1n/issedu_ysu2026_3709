@@ -212,7 +212,7 @@ watch(() => sessionContextKey(session), () => void load())
 
     <ListStatusAnnouncer :message="listStatusMessage" />
 
-    <footer class="disclaimer">教学演示，不用于诊断或治疗。</footer>
+    <footer class="disclaimer">仅作健康记录与提醒。</footer>
   </main>
 </template>
 

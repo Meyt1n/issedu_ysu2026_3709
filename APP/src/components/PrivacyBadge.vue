@@ -8,8 +8,8 @@ const { session } = useSession()
 
 const text = computed(() =>
   session.dataMode === 'demo'
-    ? '演示数据（虚构）· 健康数据不出网'
-    : '本地家庭服务器 · 健康数据默认不出网',
+    ? '本地数据 · 不联网'
+    : '家庭服务器 · 默认不出网',
 )
 </script>
 

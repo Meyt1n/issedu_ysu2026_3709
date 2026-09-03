@@ -12,12 +12,10 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from unittest.mock import patch
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
 
 from app.cloud_llm import (
     CloudChatClient,
@@ -25,7 +23,7 @@ from app.cloud_llm import (
     cloud_backend_enabled,
     is_usable_cloud_endpoint,
 )
-from app.config import Settings, get_settings
+from app.config import get_settings
 from app.tool_call import (
     OllamaClient,
     build_chat_client,
@@ -312,16 +310,6 @@ def test_response_format_is_omitted_when_the_gateway_lacks_it(
     assert "tools" not in seen["body"]
 
 
-def test_response_format_mode_is_strictly_limited_to_the_three_supported_options() -> None:
-    with pytest.raises(ValidationError, match="LLM_API_RESPONSE_FORMAT_MODE"):
-        Settings(_env_file=None, llm_api_response_format_mode="xml")
-
-    normalized = Settings(
-        _env_file=None, llm_api_response_format_mode=" JSON_OBJECT "
-    ).llm_api_response_format_mode
-    assert normalized == "json_object"
-
-
 def test_rejected_json_contract_retries_without_it_even_with_no_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -452,7 +440,7 @@ def test_deterministic_4xx_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def test_api_key_never_reaches_a_log_line(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """An upstream error that echoes the key must not leak it into logs."""
 
@@ -461,17 +449,12 @@ def test_api_key_never_reaches_a_log_line(
 
     _patch_httpx(monkeypatch, handler)
 
-    with patch("app.cloud_llm.logger.warning") as warning:
+    with caplog.at_level("WARNING"):
         with pytest.raises(RuntimeError):
             _client().chat(model="m", messages=[{"role": "user", "content": "q"}])
 
-    rendered_logs = " ".join(
-        str(argument)
-        for call in warning.call_args_list
-        for argument in call.args
-    )
-    assert API_KEY not in rendered_logs
-    assert "***" in rendered_logs
+    assert API_KEY not in caplog.text
+    assert "***" in caplog.text
 
 
 def test_unreachable_endpoint_reports_unavailable_without_raising(

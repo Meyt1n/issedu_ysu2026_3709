@@ -43,6 +43,9 @@ import {
   skipSpeakingSegment,
   speakText,
   stopSpeaking,
+  pauseSpeaking,
+  resumeSpeaking,
+  isSpeakingPaused,
   touchChatThread,
   validateWakePhrase,
   WAKE_PHRASE_PRESETS,
@@ -87,8 +90,6 @@ interface ChatEntry {
   sources?: string[]
   /** 只保留本次回答返回的引用；会话恢复不持久化，避免与服务端索引版本产生二义。 */
   citations?: AssistantCitation[]
-  /** 本次回答的服务端证据预览；只在当前内存会话保留，用于无证据状态提示。 */
-  evidencePreview?: EvidencePreview | null
   suggestedQuestions?: string[]
   queryType?: string | null
   networkUsed?: boolean
@@ -121,6 +122,7 @@ const voicePreview = ref('')
 const voiceMode = ref<DictationMode>('off')
 const speakingIndex = ref<number | null>(null)
 const speakingProgress = ref('')
+const speakingPaused = ref(false)
 const needMicGesture = ref(false)
 const chatEnd = ref<HTMLElement | null>(null)
 const orchestrationPhase = ref<string | null>(null)
@@ -173,8 +175,6 @@ const listening = computed(() =>
   voiceMode.value === 'wake' || voiceMode.value === 'active' || voiceMode.value === 'command',
 )
 const liveMode = computed(() => session.dataMode === 'live')
-const serverLabel = computed(() => session.serverBaseUrl.trim() || '（未填写服务器地址）')
-const assistantReady = computed(() => liveMode.value && Boolean(session.serverBaseUrl.trim()))
 
 /**
  * MOB-161：只有服务端显式声明 external-web 能力时才允许打开联网搜索。
@@ -331,7 +331,6 @@ function restoreChatSession(entries: StoredChatEntry[]): void {
     degradeReason: entry.degradeReason,
     sources: entry.sources,
     suggestedQuestions: entry.suggestedQuestions,
-    evidencePreview: undefined,
   }))
   scrollToEnd()
 }
@@ -684,14 +683,27 @@ function startReplySpeech(index: number, content: string, resumeListeningAfter: 
   return started
 }
 
+function toggleSpeechPause(): void {
+  if (speakingIndex.value === null) return
+  if (isSpeakingPaused()) {
+    resumeSpeaking()
+    speakingPaused.value = false
+  } else {
+    pauseSpeaking()
+    speakingPaused.value = true
+  }
+}
+
 function toggleSpeech(index: number, content: string): void {
   if (speakingIndex.value === index) {
     stopSpeaking()
     speakingIndex.value = null
     speakingProgress.value = ''
+    speakingPaused.value = false
     return
   }
   if (listening.value) stopVoiceInput()
+  speakingPaused.value = false
   if (!startReplySpeech(index, content, false)) {
     voiceError.value = '当前无法语音播报，请阅读文字回答。可先安装 Natural 类中文语音包。'
   }
@@ -740,9 +752,6 @@ function applyAssistantReply(entryIndex: number, reply: AssistantResponse): void
   entry.degradeReason = reply.degrade_reason
   entry.sources = reply.sources
   entry.citations = reply.citations
-  // 某些旧服务端只在 SSE evidence_preview 事件中发送预览，完成事件没有
-  // 重复携带；同一轮请求内可安全沿用该事件，避免无证据回答丢失明确提示。
-  entry.evidencePreview = reply.evidence_preview ?? liveEvidencePreview.value ?? null
   entry.suggestedQuestions = (reply.suggested_questions ?? []).filter(
     (item) => typeof item === 'string' && item.trim(),
   )
@@ -777,19 +786,14 @@ function applyNetworkSearchFailure(reply: AssistantResponse, question: string, o
 }
 
 /** 取消/结束回复的收尾：保留已显示内容并明确标记为不完整。 */
-function settleCancelledReply(entryIndex: number): void {
+function settleCancelledReply(entryIndex: number, streamingEntry: ChatEntry): void {
   const entry = history.value[entryIndex]
-  // `history` is a ref, so Vue exposes pushed entries as reactive proxies.
-  // Comparing that proxy with the pre-push object (`streamingEntry`) is not
-  // identity-safe and used to leave a cancelled bubble stuck at "generating".
-  const isCurrentStreamingEntry = entry?.role === 'assistant' && entry.replyStatus === 'streaming'
-  if (isCurrentStreamingEntry && entry.content.trim()) {
+  if (entry === streamingEntry && entry.content.trim()) {
     entry.replyStatus = keepPartialReply ? 'ended' : 'stopped'
     entry.degraded = true
     entry.degradeReason = keepPartialReply ? 'reply_ended' : 'user_stopped'
     entry.sources = undefined
     entry.citations = undefined
-    entry.evidencePreview = undefined
     entry.suggestedQuestions = undefined
     entry.networkUsed = false
     entry.externalDomains = []
@@ -798,8 +802,8 @@ function settleCancelledReply(entryIndex: number): void {
       ? '已结束回复，保留已生成的内容'
       : '已停止，已保留未完整内容；可点击“重新提问”'
   } else {
-    if (isCurrentStreamingEntry) history.value.splice(entryIndex, 1)
-    cancelStatus.value = keepPartialReply ? '已结束回复，尚未生成可保留内容' : '已停止'
+    if (entry === streamingEntry) history.value.splice(entryIndex, 1)
+    cancelStatus.value = '已停止'
   }
   keepPartialReply = false
   persistChatSession()
@@ -859,10 +863,9 @@ async function send(
   scrollToEnd()
 
   if (!liveMode.value) {
-    history.value.push({
-      role: 'assistant',
-      content:
-        '当前是演示模式，助手不会连接家庭服务器。请到「我的」切换为「家庭服务器（联机）」，填写电脑后端地址（例如 http://192.168.x.x:8000）后再提问。',
+      history.value.push({
+        role: 'assistant',
+        content: '请先连接家庭服务器。',
       createdAt: Date.now(),
       degraded: true,
       degradeReason: 'demo_mode',
@@ -876,9 +879,9 @@ async function send(
   }
 
   if (!session.serverBaseUrl.trim()) {
-    history.value.push({
-      role: 'assistant',
-      content: '尚未填写家庭服务器地址。请到「我的」填写电脑上 FastAPI 的局域网地址后再试。',
+      history.value.push({
+        role: 'assistant',
+        content: '请先填写家庭服务器地址。',
       createdAt: Date.now(),
       degraded: true,
       degradeReason: 'missing_server',
@@ -893,9 +896,9 @@ async function send(
 
   const client = createLiveApiClient()
   if (!client) {
-    history.value.push({
-      role: 'assistant',
-      content: '当前登录会话不可用，请先在「我的」完成联机登录后再使用助手。',
+      history.value.push({
+        role: 'assistant',
+        content: '请先登录家庭服务器。',
       createdAt: Date.now(),
       degraded: true,
       degradeReason: 'auth_required',
@@ -930,11 +933,9 @@ async function send(
   const requestOpts = { ...requestOptions(), signal: controller.signal }
 
   // 流式展示：token 直接写入这条气泡；结束回复/停止时按需保留或移除。
-  history.value.push({ role: 'assistant', content: '', createdAt: Date.now(), replyStatus: 'streaming' })
+  const streamingEntry: ChatEntry = { role: 'assistant', content: '', createdAt: Date.now(), replyStatus: 'streaming' }
+  history.value.push(streamingEntry)
   const entryIndex = history.value.length - 1
-  // Read the entry back from the ref so token mutations go through Vue's
-  // reactive proxy and render incrementally on Android WebView as well.
-  const streamingEntry = history.value[entryIndex]!
 
   let streamStarted = false
   let streamCancelled = false
@@ -976,7 +977,7 @@ async function send(
       applyNetworkSearchFailure(reply, content, networkSearchForThisTurn)
     } catch (streamError) {
       if (controller.signal.aborted || streamCancelled || isAssistantCancellation(streamError)) {
-        settleCancelledReply(entryIndex)
+        settleCancelledReply(entryIndex, streamingEntry)
         return
       }
       if (streamStarted && streamingEntry.content.trim()) {
@@ -995,7 +996,7 @@ async function send(
     }
   } catch (cause) {
     if (controller.signal.aborted || isAssistantCancellation(cause)) {
-      settleCancelledReply(entryIndex)
+      settleCancelledReply(entryIndex, streamingEntry)
     } else {
       const message =
         cause instanceof ApiClientError
@@ -1007,7 +1008,7 @@ async function send(
       const fallbackContent =
         '本地模型或其依赖当前不可用，无法生成回答。家庭事实、任务与提醒不受影响，可直接在对应页面查看。'
       const entry = history.value[entryIndex]
-      if (entry?.role === 'assistant' && entry.replyStatus === 'streaming') {
+      if (entry === streamingEntry) {
         entry.content = fallbackContent
         entry.replyStatus = 'incomplete'
         entry.degraded = true
@@ -1130,30 +1131,14 @@ onBeforeUnmount(() => {
       <div>
         <p class="eyebrow">随身助手</p>
         <h1>语音提问</h1>
-        <p class="lede">
-          点按下方按钮开启麦克风，再说「{{ wakePhrase }}」；离开页面或切到后台会立即停止聆听。
-          说完静音后会倒计时自动发送；等待时可说「取消」「继续说」，或说「发送吧」立即发送。
-        </p>
+        <p class="lede">使用语音或文字提问</p>
       </div>
-      <RouterLink class="ghost-link" to="/me/voice-check">语音自检</RouterLink>
-      <RouterLink class="ghost-link" to="/me">联机设置</RouterLink>
+      <RouterLink class="ghost-link" to="/me">设置</RouterLink>
     </header>
 
     <section class="card status-card" aria-label="连接状态">
       <p>
-        <strong>{{ liveMode ? '联机' : '演示' }}</strong>
-        · 服务器 {{ serverLabel }}
-      </p>
-      <p class="meta-line">
-        {{
-          liveMode
-            ? '联机后走本地多智能体流式接口；识别文字确认发送才请求家庭服务器，音频不会上传。'
-            : '演示模式不调用后端。切换联机并填写电脑局域网地址后即可对话。'
-        }}
-      </p>
-      <p v-if="assistantReady && liveMode" class="meta-line">
-        家庭 {{ session.currentHouseholdId || '未选' }} · 成员 {{ session.currentMemberId || '未选' }}
-        · 会话按身份/家庭/成员隔离（仅本标签页）
+        <strong>{{ liveMode ? '家庭服务器' : '本地数据' }}</strong>
       </p>
       <div class="network-search">
         <label class="network-toggle">
@@ -1163,7 +1148,7 @@ onBeforeUnmount(() => {
             :disabled="sending || !networkSearchAvailable"
             :aria-describedby="networkSearchDisabledReason ? 'network-search-reason' : undefined"
           />
-          允许本次脱敏联网参考
+          联网参考
         </label>
         <p
           v-if="networkSearchDisabledReason"
@@ -1173,16 +1158,6 @@ onBeforeUnmount(() => {
         >
           {{ networkSearchDisabledReason }}联网搜索保持关闭，助手只用家庭服务器上的本地知识回答。
         </p>
-        <details class="network-scope">
-          <summary class="network-scope-summary">出网范围说明</summary>
-          <ul class="network-scope-list">
-            <li v-if="liveMode">会出网：这一轮里被服务端判定需要外部参考的检索词。</li>
-            <li v-else>演示模式不会出网；切换联机且服务端开放能力后，才会按本开关决定是否请求外部参考。</li>
-            <li>不会出网：成员姓名、健康事件正文、用药记录、位置与家庭标识。</li>
-            <li>默认关闭。关掉后立即只用本地知识，不保留任何隐式授权。</li>
-            <li>联网结果只作参考，需人工确认，不构成诊断、处方或剂量建议。</li>
-          </ul>
-        </details>
       </div>
     </section>
 
@@ -1190,7 +1165,6 @@ onBeforeUnmount(() => {
       <div class="thread-card-header">
         <div>
           <h2>会话历史</h2>
-          <p class="meta-line">当前账号、家庭和成员分别保存；只在本标签页保留，不会上传服务器。</p>
         </div>
         <div class="thread-actions">
           <button type="button" class="btn btn-secondary" :disabled="sending" @click="startNewThread">
@@ -1276,27 +1250,17 @@ onBeforeUnmount(() => {
           <span v-if="entry.replyStatus === 'stopped' || entry.replyStatus === 'ended'">；未得出引用完整性结论。</span>
           <span v-else-if="entry.replyStatus === 'incomplete'">；请重新提问以获得完整回答。</span>
         </p>
-        <p v-if="entry.degraded" class="meta-line">降级说明：{{ entry.degradeReason || '受控降级' }}</p>
-        <p v-if="entry.agentTraceSummary" class="meta-line">{{ entry.agentTraceSummary }}</p>
         <p v-if="entry.networkUsed" class="meta-line">
-          已启用联网参考 · 需人工确认，不作诊断
-          <template v-if="entry.externalDomains?.length">
-            · 来源域名：{{ entry.externalDomains.join('、') }}
-          </template>
-          <template v-else>· 服务端未返回来源域名</template>
+          已使用联网参考
         </p>
         <AssistantEvidencePanel
           v-if="entry.role === 'assistant' && entry.content"
           :citations="entry.citations"
           :sources="entry.sources"
-          :evidence-preview="entry.evidencePreview"
           :degraded="entry.degraded"
           :degrade-reason="entry.degradeReason"
         />
-        <div
-          v-if="entry.role === 'assistant' && (entry.content || (sending && index === history.length - 1))"
-          class="bubble-actions"
-        >
+        <div v-if="entry.role === 'assistant' && entry.content" class="bubble-actions">
           <button
             v-if="sending && index === history.length - 1"
             type="button"
@@ -1315,7 +1279,6 @@ onBeforeUnmount(() => {
             重新提问
           </button>
           <button
-            v-if="entry.content"
             type="button"
             class="btn btn-secondary"
             :aria-pressed="speakingIndex === index"
@@ -1324,7 +1287,14 @@ onBeforeUnmount(() => {
             {{ speakingIndex === index ? '停止朗读' : '朗读回答' }}
           </button>
           <button
-            v-if="entry.content"
+            v-if="speakingIndex === index"
+            type="button"
+            class="btn btn-secondary"
+            @click="toggleSpeechPause"
+          >
+            {{ speakingPaused ? '继续朗读' : '暂停朗读' }}
+          </button>
+          <button
             type="button"
             class="btn btn-secondary"
             :disabled="sending"
@@ -1450,13 +1420,6 @@ onBeforeUnmount(() => {
     </form>
 
     <section class="card voice-prefs-hint" aria-label="语音偏好说明">
-      <p class="meta-line">
-        唤醒词与听写偏好可在
-        <RouterLink to="/me/accessibility">无障碍设置</RouterLink>
-        或
-        <RouterLink to="/me/voice-check">语音自检</RouterLink>
-        中调整。
-      </p>
       <label class="pref-row">
         <span>唤醒词</span>
         <input
@@ -1486,9 +1449,6 @@ onBeforeUnmount(() => {
           </option>
         </select>
       </label>
-      <p class="meta-line">
-        听写结束后无新输入会倒计时自动发送；可说取消/继续说，或说「发送吧」立即发送。开放域语句不会当作指令执行。
-      </p>
     </section>
   </main>
 </template>

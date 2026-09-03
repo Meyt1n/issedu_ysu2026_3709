@@ -57,7 +57,7 @@ function confirmClear(): void {
     <header class="screen-header">
       <p class="eyebrow">隐私与数据权利</p>
       <h1>本地数据管理</h1>
-      <p class="screen-subtitle">隐私告知版本 {{ PRIVACY_NOTICE_VERSION }}。移动端只管理本机设置，不替代服务端健康数据删除或导出流程。</p>
+      <p class="screen-subtitle">隐私告知 {{ PRIVACY_NOTICE_VERSION }}</p>
     </header>
 
     <section class="card" aria-labelledby="notice-title">
@@ -66,7 +66,7 @@ function confirmClear(): void {
         <h2 id="notice-title">当前隐私边界</h2>
       </div>
       <ul class="divided-list">
-        <li>演示模式只使用虚构数据；联机模式只连接你配置的家庭服务器。</li>
+        <li>本地数据仅用于应用设置；家庭数据由家庭服务器管理。</li>
         <li>正式登录凭据、密码、PIN 和健康正文不写入 localStorage。</li>
         <li>联系人和服务器地址仅用于本机设置与主动拨号/联机，不上传到健康事件。</li>
         <li>视觉模型和健康事实仍由网页端/家庭服务器处理；本应用不在本地保存模型权重。</li>
@@ -98,7 +98,7 @@ function confirmClear(): void {
 
     <section class="card" aria-labelledby="clear-title">
       <h2 id="clear-title">清理本机设置</h2>
-      <p class="meta-line">清理会移除联系人、服务器地址、开发期身份、成员选择、无障碍偏好和运行时能力状态；不会删除家庭服务器上的健康事实。</p>
+      <p class="meta-line">清理会移除联系人、服务器地址、成员选择和无障碍偏好。</p>
       <button type="button" class="btn btn-danger btn-block" @click="requestClear">清理本机设置</button>
       <p v-if="clearMessage" class="notice" :data-tone="clearError ? 'error' : 'success'" role="status">{{ clearMessage }}</p>
     </section>
@@ -106,7 +106,7 @@ function confirmClear(): void {
     <div v-if="clearConfirmOpen" class="dialog-backdrop" @click.self="cancelClear">
       <section class="confirm-dialog card" role="dialog" aria-modal="true" aria-labelledby="clear-dialog-title" aria-describedby="clear-dialog-description">
         <h2 id="clear-dialog-title">确认清理本机设置？</h2>
-        <p id="clear-dialog-description">清理后需要重新选择模式、服务器和联系人。服务器上的健康数据不会被删除。</p>
+        <p id="clear-dialog-description">清理后需要重新设置应用。</p>
         <div class="btn-row dialog-actions">
           <button type="button" class="btn btn-danger" @click="confirmClear">确认清理</button>
           <button type="button" class="btn btn-quiet" @click="cancelClear">取消</button>

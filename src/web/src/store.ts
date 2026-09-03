@@ -61,13 +61,22 @@ export const FACE_FAMILY_STORAGE_KEY = 'hct:face-family-household'
 // household whose gallery may be searched.
 const FACE_FAMILY_COOKIE_KEY = 'hct-face-family-household'
 const SESSION_STORAGE_KEY = 'hct:auth-session'
+// 家庭绑定需要跨 8080/8081 共享，但 Bearer 会话不能共享：8081 只持有
+// 管理员会话，8080 只持有成员会话。此前共用一个 Cookie 会让 8080 恢复
+// 管理员并渲染成 PIN 选人中间态，从而遮住刷脸入口。
 const SESSION_COOKIE_KEY = 'hct-auth-session'
+const PORTAL_SESSION_COOKIE_KEYS: Record<'member' | 'admin' | 'auto', string> = {
+  member: 'hct-auth-session-member',
+  admin: 'hct-auth-session-admin',
+  auto: SESSION_COOKIE_KEY,
+}
 
 interface PersistedSession {
   token: string
   expiresAt: number
   actorId: string
   accessPurpose: string
+  portal?: PortalName
 }
 
 export interface BoundPinCandidate {
@@ -405,6 +414,7 @@ export function signOut(): void {
 }
 
 function readPersistedSession(): PersistedSession | null {
+  const cookieKey = PORTAL_SESSION_COOKIE_KEYS[activePortalEntryMode()]
   const parse = (raw: string): PersistedSession | null => {
     try {
       const parsed = JSON.parse(raw) as Partial<PersistedSession>
@@ -422,6 +432,7 @@ function readPersistedSession(): PersistedSession | null {
             typeof parsed.accessPurpose === 'string' && parsed.accessPurpose.trim()
               ? parsed.accessPurpose
               : 'family-care',
+          portal: parsed.portal === 'member' || parsed.portal === 'admin' ? parsed.portal : undefined,
         }
       }
     } catch {
@@ -443,9 +454,21 @@ function readPersistedSession(): PersistedSession | null {
     const pair = cookie
       .split(';')
       .map(item => item.trim())
-      .find(item => item.startsWith(`${SESSION_COOKIE_KEY}=`))
-    if (!pair) return null
-    return parse(decodeURIComponent(pair.slice(SESSION_COOKIE_KEY.length + 1)))
+      .find(item => item.startsWith(`${cookieKey}=`))
+    if (pair) return parse(decodeURIComponent(pair.slice(cookieKey.length + 1)))
+
+    // Before portal-specific cookies existed, the old shared cookie was only
+    // an administrator's persisted session in the real 8081 entry. Migrate
+    // it there so the admin page can republish the binding/readiness snapshot;
+    // never use this fallback on 8080.
+    if (activePortalEntryMode() === 'admin') {
+      const legacyPair = cookie
+        .split(';')
+        .map(item => item.trim())
+        .find(item => item.startsWith(`${SESSION_COOKIE_KEY}=`))
+      if (legacyPair) return parse(decodeURIComponent(legacyPair.slice(SESSION_COOKIE_KEY.length + 1)))
+    }
+    return null
   } catch {
     return null
   }
@@ -453,6 +476,7 @@ function readPersistedSession(): PersistedSession | null {
 
 function writePersistedSession(payload: PersistedSession): void {
   const encoded = JSON.stringify(payload)
+  const cookieKey = PORTAL_SESSION_COOKIE_KEYS[activePortalEntryMode()]
   try {
     globalThis.localStorage?.setItem(SESSION_STORAGE_KEY, encoded)
   } catch {
@@ -462,7 +486,7 @@ function writePersistedSession(payload: PersistedSession): void {
     if (globalThis.document) {
       const maxAge = Math.max(60, Math.floor(payload.expiresAt - Date.now() / 1000))
       globalThis.document.cookie =
-        `${SESSION_COOKIE_KEY}=${encodeURIComponent(encoded)}; Path=/; SameSite=Lax; Max-Age=${maxAge}`
+        `${cookieKey}=${encodeURIComponent(encoded)}; Path=/; SameSite=Lax; Max-Age=${maxAge}`
     }
   } catch {
     // Ignore cookie persistence failures; the in-memory session still works.
@@ -470,6 +494,7 @@ function writePersistedSession(payload: PersistedSession): void {
 }
 
 function clearPersistedSession(): void {
+  const cookieKey = PORTAL_SESSION_COOKIE_KEYS[activePortalEntryMode()]
   try {
     globalThis.localStorage?.removeItem(SESSION_STORAGE_KEY)
   } catch {
@@ -477,7 +502,7 @@ function clearPersistedSession(): void {
   }
   try {
     if (globalThis.document) {
-      globalThis.document.cookie = `${SESSION_COOKIE_KEY}=; Max-Age=0; Path=/; SameSite=Lax`
+      globalThis.document.cookie = `${cookieKey}=; Max-Age=0; Path=/; SameSite=Lax`
     }
   } catch {
     // Ignore cookie cleanup failures.
@@ -617,13 +642,25 @@ function writeFaceBindingCookie(value: string): void {
 }
 
 function readBoundFaceHousehold(): BoundFaceHousehold | null {
+  // The cookie is the cross-port snapshot written by the currently logged-in
+  // admin. Prefer it over a stale port-local cache, then mirror it locally so
+  // the next read cannot resurrect an older household.
+  const shared = readFaceBindingCookie()
+  if (shared) {
+    try {
+      globalThis.localStorage?.setItem(FACE_FAMILY_STORAGE_KEY, JSON.stringify(shared))
+    } catch {
+      // Keep using the shared cookie when localStorage is unavailable.
+    }
+    return shared
+  }
+
   try {
     const raw = globalThis.localStorage?.getItem(FACE_FAMILY_STORAGE_KEY)?.trim() ?? ''
     const local = parseBoundFaceHousehold(raw)
     if (local) {
-      // Upgrade an existing 5174/5184-only binding without asking the family
-      // to register again.  Reloading the bound portal mirrors it to the
-      // same-host cookie, which the 5173/5183 member portal can then read.
+      // Upgrade an existing port-local binding without asking the family to
+      // register again. The shared cookie remains the preferred source above.
       writeFaceBindingCookie(JSON.stringify(local))
       return local
     }
@@ -732,6 +769,7 @@ async function enterAuthenticatedSession(
         expiresAt: state.sessionExpiresAt,
         actorId: state.actorId,
         accessPurpose: state.accessPurpose,
+        portal: persistedSessionPortal(),
       })
     }
     return
@@ -753,6 +791,7 @@ async function enterAuthenticatedSession(
       expiresAt: state.sessionExpiresAt,
       actorId: state.actorId,
       accessPurpose: state.accessPurpose,
+      portal: persistedSessionPortal(),
     })
   }
 }
@@ -761,11 +800,26 @@ function clearAdminReadyIfAdminEntry(): void {
   if (activePortalEntryMode() === 'admin') clearAdminReadyCookie()
 }
 
+function persistedSessionPortal(): PortalName {
+  const entryMode = activePortalEntryMode()
+  return entryMode === 'member' || entryMode === 'admin' ? entryMode : state.portal
+}
+
 /** 刷新页面后从本机持久化的 Bearer 会话恢复登录态（HCT-428）。 */
 export async function restoreSessionFromCookie(): Promise<boolean> {
   const persisted = readPersistedSession()
   if (!persisted) {
     clearAdminReadyIfAdminEntry()
+    return false
+  }
+
+  // 绑定家庭可以跨端口共享，但登录身份不能跨端口恢复。尤其不能把
+  // 8081 的管理员 token 带到 8080，否则欢迎页会落入管理员 PIN 选人态。
+  // 没有 portal 标记的旧会话不在成员入口自动恢复，避免把历史管理员
+  // 会话误当成员会话；管理员入口允许一次性迁移旧会话并升级存储格式。
+  const entryMode = activePortalEntryMode()
+  const isLegacyAdminSession = entryMode === 'admin' && !persisted.portal
+  if (entryMode !== 'auto' && persisted.portal !== entryMode && !isLegacyAdminSession) {
     return false
   }
 

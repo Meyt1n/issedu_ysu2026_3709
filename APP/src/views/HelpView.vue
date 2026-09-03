@@ -114,7 +114,7 @@ async function speakImportant(): Promise<void> {
       <AppIcon name="phone" :size="24" />
       拨打急救电话 120
     </button>
-    <p class="meta-line">点按后会打开手机拨号界面；本应用是教学演示，请在真实紧急情况下拨打。</p>
+    <p class="meta-line">请在紧急情况下拨打。</p>
 
     <button
       v-if="phoneHref"

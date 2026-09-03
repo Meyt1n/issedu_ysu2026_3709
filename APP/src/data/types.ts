@@ -333,6 +333,8 @@ export interface HouseholdOption {
   id: string
   /** 服务端授权范围内的家庭名称；仅用于展示，不参与权限判定。 */
   name: string
+  /** 家庭主人身份标识；仅用于移动端区分管理员/成员展示，不参与权限判定。 */
+  createdBy?: string
 }
 
 /** 知识条目的一个只读分块；`index` 用于把助手引用定位到具体段落。 */

@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { RouterLink, useRouter } from 'vue-router'
+import { useRouter } from 'vue-router'
 
 import AppIcon from '@/components/AppIcon.vue'
 import SwitchRow from '@/components/SwitchRow.vue'
 import { createSpeaker } from '@/composables/useSpeech'
 import {
   AUTO_SEND_PRESETS,
-  inspectChineseVoicePacks,
   isSpeechOutputSupported,
   listChineseVoices,
   loadVoicePreferences,
@@ -16,7 +15,6 @@ import {
   validateWakePhrase,
   WAKE_PHRASE_PRESETS,
   type SpeechVoiceLike,
-  type VoicePackReport,
   type VoicePreferences,
 } from '@/composables/useVoiceInput'
 import {
@@ -38,8 +36,6 @@ const {
 } = useA11y()
 
 const feedbackSpeaker = createSpeaker(() => true)
-const voiceReport = ref<VoicePackReport | null>(null)
-const voiceChecking = ref(false)
 const voicePrefs = ref<VoicePreferences>(loadVoicePreferences())
 const wakePhraseDraft = ref(voicePrefs.value.wakePhrase)
 const wakePhraseError = ref('')
@@ -131,16 +127,7 @@ function onVoiceChange(enabled: boolean): void {
 }
 
 function tryVoice(): void {
-  feedbackSpeaker.speak('语音播报测试：家健镜会用语音读出重要提醒和操作结果。')
-}
-
-async function checkVoicePacks(): Promise<void> {
-  voiceChecking.value = true
-  try {
-    voiceReport.value = await inspectChineseVoicePacks()
-  } finally {
-    voiceChecking.value = false
-  }
+  feedbackSpeaker.speak('语音播报已开启，重要提醒会通过语音播报。')
 }
 </script>
 
@@ -154,13 +141,11 @@ async function checkVoicePacks(): Promise<void> {
     <header class="screen-header">
       <p class="eyebrow">无障碍模式</p>
       <h1>无障碍设置</h1>
-      <p class="screen-subtitle">所有设置保存在本机；状态同时用图标和文字表达，不只依赖颜色。</p>
     </header>
 
     <section class="card">
       <SwitchRow
         title="长辈模式"
-        description="一键开启：特大字号 + 语音播报 + 简化导航 + 更大按钮"
         :model-value="settings.elderMode"
         @update:model-value="onElderModeChange"
       />
@@ -179,7 +164,6 @@ async function checkVoicePacks(): Promise<void> {
           {{ option.label }}
         </button>
       </div>
-      <p class="meta-line">深色模式为夜间设计的森林夜配色；跟随系统时会随手机深浅色自动切换。</p>
     </section>
 
     <section class="card" aria-labelledby="font-title">
@@ -201,7 +185,6 @@ async function checkVoicePacks(): Promise<void> {
     <section class="card">
       <SwitchRow
         title="高对比度"
-        description="加深文字与边框颜色，适合视力较弱或强光环境"
         :model-value="settings.highContrast"
         @update:model-value="setHighContrast"
       />
@@ -210,7 +193,6 @@ async function checkVoicePacks(): Promise<void> {
     <section class="card">
       <SwitchRow
         title="语音播报"
-        description="用语音读出今日安排、风险提醒和操作结果（使用手机自带语音）"
         :model-value="settings.voiceBroadcast"
         @update:model-value="onVoiceChange"
       />
@@ -269,19 +251,16 @@ async function checkVoicePacks(): Promise<void> {
       </label>
       <SwitchRow
         title="听写提示音"
-        description="口述结束开始倒计时时轻量播报提示（可关闭）"
         :model-value="voicePrefs.confirmSound"
         @update:model-value="value => toggleVoicePref('confirmSound', value)"
       />
       <SwitchRow
         title="双次唤醒确认"
-        description="连续识别两次唤醒词才进入听写，降低误唤醒（唤醒词见上方设置）"
         :model-value="voicePrefs.doubleWake"
         @update:model-value="value => toggleVoicePref('doubleWake', value)"
       />
       <SwitchRow
         title="听写后语音指令"
-        description="听写结束后聆听白名单指令：取消、继续说、发送吧（立即发送）、上一条再说一遍、停止朗读、重说"
         :model-value="voicePrefs.voiceCommands"
         @update:model-value="value => toggleVoicePref('voiceCommands', value)"
       />
@@ -290,30 +269,12 @@ async function checkVoicePacks(): Promise<void> {
           <AppIcon name="sound" :size="18" />
           试听一段
         </button>
-        <button type="button" class="btn btn-quiet" :disabled="voiceChecking" @click="checkVoicePacks">
-          <AppIcon name="sound" :size="18" />
-          {{ voiceChecking ? '检测中…' : '检查中文语音包' }}
-        </button>
       </div>
-      <div v-if="voiceReport" class="voice-report" role="status">
-        <p>{{ voiceReport.guidance }}</p>
-        <p v-if="voiceReport.names.length" class="meta-line">
-          本机中文音色：{{ voiceReport.names.slice(0, 6).join('；') }}
-          <template v-if="voiceReport.names.length > 6">…</template>
-        </p>
-        <p class="meta-line">
-          听感准备说明见仓库
-          <code>docs/demo/中文语音包与听感准备说明.md</code>
-          （安装 Natural 类简体中文包可改善机械感）。
-        </p>
-      </div>
-      <RouterLink class="ghost-link" to="/me/voice-check">打开完整语音预检页</RouterLink>
     </section>
 
     <section class="card">
       <SwitchRow
         title="减少动效"
-        description="关闭过渡动画；系统开启“减弱动态效果”时会自动生效"
         :model-value="settings.reduceMotion"
         @update:model-value="setReduceMotion"
       />
@@ -323,9 +284,6 @@ async function checkVoicePacks(): Promise<void> {
       恢复默认设置
     </button>
 
-    <footer class="disclaimer">
-      语音播报依赖手机系统的中文语音包；若无声音，请在系统设置中检查“文字转语音”。
-    </footer>
   </main>
 </template>
 
@@ -345,12 +303,6 @@ html[data-contrast='high'] .font-preview { border: 2px solid #000; background: #
   gap: 8px;
   margin-top: 8px;
 }
-.voice-report {
-  margin-top: 10px;
-  display: grid;
-  gap: 6px;
-}
-.voice-report p { margin: 0; line-height: 1.45; }
 .subheading { margin: 12px 0 8px; font-size: 0.95rem; }
 .pref-row {
   display: flex;
@@ -378,14 +330,5 @@ html[data-contrast='high'] .font-preview { border: 2px solid #000; background: #
   margin-bottom: 8px;
 }
 .wake-error { color: var(--danger, #b42318); }
-.ghost-link {
-  display: inline-flex;
-  margin-top: 10px;
-  color: var(--accent);
-  font-weight: 600;
-  text-decoration: none;
-  min-height: var(--tap);
-  align-items: center;
-}
 .meta-line { color: var(--c-ink-soft); font-size: 0.9rem; }
 </style>

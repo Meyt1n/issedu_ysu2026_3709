@@ -164,6 +164,7 @@ export function presentHealthNewsFreshness(
  */
 export function refreshOutcomeMessage(news: HealthNewsResponse | null): string {
   if (!news) return '刷新未取回内容，已保留原有资讯。'
+  if (news.status === 'local_only') return '已刷新'
   const freshness = presentHealthNewsFreshness(news)
   if (!freshness.fromCache) return '已刷新，本次是家庭服务器新取回的内容。'
   if (freshness.expired) {

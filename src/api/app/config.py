@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     # Tests or isolated diagnostics must opt into the legacy actor header explicitly.
     allow_dev_actor_header: bool = False
     # HCT-453：成员前台（5173）与管理后台（5174）两个开发入口共用一个 API。
-    cors_origins: str = "http://localhost:5173,http://localhost:5174"
+    cors_origins: str = "http://localhost:5173,http://localhost:5174,https://localhost"
     database_url: str = "sqlite+pysqlite:///./homecare-dev.sqlite3"
     request_id_header: str = "X-Request-ID"
     cursor_signing_key: str = "dev-only-change-me"
@@ -212,16 +212,6 @@ class Settings(BaseSettings):
         normalized = (value or "").strip().casefold()
         if normalized not in {"allowlist", "open"}:
             raise ValueError("AGENT_WEB_SEARCH_EGRESS_MODE must be 'allowlist' or 'open'")
-        return normalized
-
-    @field_validator("llm_api_response_format_mode")
-    @classmethod
-    def validate_llm_api_response_format_mode(cls, value: str) -> str:
-        normalized = (value or "").strip().casefold()
-        if normalized not in {"json_schema", "json_object", "none"}:
-            raise ValueError(
-                "LLM_API_RESPONSE_FORMAT_MODE must be 'json_schema', 'json_object' or 'none'"
-            )
         return normalized
 
     @model_validator(mode="after")

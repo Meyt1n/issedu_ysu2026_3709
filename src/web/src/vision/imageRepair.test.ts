@@ -118,10 +118,31 @@ describe('vision quality check with one local repair pass', () => {
     })
 
     expect(outcome?.repaired).toBe(true)
+    expect(outcome?.upscaled).toBe(true)
     expect(outcome?.file).toBe(repaired)
     expect(outcome?.result.decision).toBe('PASS')
     expect(seen).toEqual(['prepared', 'repaired'])
     expect(files).toEqual([prepared, repaired])
+  })
+
+  it('放大到最小尺寸不算画质修复：upscaled 为真而 repaired 为假', async () => {
+    const original = new File(['raw'], 'box.jpg', { type: 'image/jpeg' })
+    const prepared = new File(['prepared'], 'box.jpg', { type: 'image/jpeg' })
+    const repairImage = vi.fn()
+
+    const outcome = await runVisionQualityCheckWithRepair({
+      file: original,
+      isCurrent: () => true,
+      // 小图被等比放大到 640×480 下限，但像素内容未增强。
+      prepareImage: async () => ({ file: prepared, changed: true }),
+      repairImage,
+      check: async () => qualityResult(),
+    })
+
+    expect(outcome?.upscaled).toBe(true)
+    expect(outcome?.repaired).toBe(false)
+    expect(outcome?.file).toBe(prepared)
+    expect(repairImage).not.toHaveBeenCalled()
   })
 
   it('does not rewrite a passing image that has no repairable reasons', async () => {
@@ -137,6 +158,7 @@ describe('vision quality check with one local repair pass', () => {
     })
 
     expect(outcome?.repaired).toBe(false)
+    expect(outcome?.upscaled).toBe(false)
     expect(outcome?.file).toBe(original)
     expect(repairImage).not.toHaveBeenCalled()
   })

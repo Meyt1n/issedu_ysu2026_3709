@@ -205,17 +205,30 @@ interface QualityCheckRepairInput {
   repairImage?: (file: File, reasons: readonly string[]) => Promise<{ file: File, changed: boolean }>
 }
 
+export interface QualityCheckRepairOutcome {
+  result: VisionQualityResponse
+  file: File
+  /**
+   * 是否真的做过像素级增强（亮度/对比度/锐化）。
+   * 只有这一项为真时，才能对用户说「已帮你调清楚一点」。
+   */
+  repaired: boolean
+  /** 是否仅为满足最小尺寸做过等比放大——那不是画质修复，别当成修复宣称。 */
+  upscaled: boolean
+}
+
 export async function runVisionQualityCheckWithRepair(
   input: QualityCheckRepairInput,
-): Promise<{ result: VisionQualityResponse, file: File, repaired: boolean } | null> {
+): Promise<QualityCheckRepairOutcome | null> {
   let current = input.file
+  let upscaled = false
   let repaired = false
 
   const prepared = await (input.prepareImage ?? prepareVisionImage)(current)
   if (!input.isCurrent()) return null
   if (prepared.changed) {
     current = prepared.file
-    repaired = true
+    upscaled = true
     input.onFileChanged?.(current)
   }
 
@@ -237,5 +250,5 @@ export async function runVisionQualityCheckWithRepair(
     }
   }
 
-  return { result, file: current, repaired }
+  return { result, file: current, repaired, upscaled }
 }

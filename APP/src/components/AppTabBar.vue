@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 
 import AppIcon, { type IconName } from '@/components/AppIcon.vue'
 import { useA11y } from '@/stores/accessibility'
+import { useSession } from '@/stores/session'
 
 interface TabItem {
   to: string
@@ -12,6 +13,7 @@ interface TabItem {
 }
 
 const { settings } = useA11y()
+const { session } = useSession()
 const route = useRoute()
 
 const NORMAL_TABS: TabItem[] = [
@@ -30,7 +32,18 @@ const ELDER_TABS: TabItem[] = [
   { to: '/me', label: '我的', icon: 'user' },
 ]
 
-const tabs = computed(() => (settings.elderMode ? ELDER_TABS : NORMAL_TABS))
+/** 成员端对齐网页成员前台：只保留自己的今日、拍药盒、求助和我的。 */
+const MEMBER_TABS: TabItem[] = [
+  { to: '/', label: '今日', icon: 'home' },
+  { to: '/scan', label: '拍药盒', icon: 'camera' },
+  { to: '/help', label: '求助', icon: 'phone' },
+  { to: '/me', label: '我的', icon: 'user' },
+]
+
+const tabs = computed(() => {
+  if (session.mobileRole === 'member') return MEMBER_TABS
+  return settings.elderMode ? ELDER_TABS : NORMAL_TABS
+})
 
 function isActive(tab: TabItem): boolean {
   if (tab.to === '/') return route.path === '/'

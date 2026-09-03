@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 
-export type ThemeId = 'warm' | 'classic' | 'dusk' | 'sakura' | 'ocean' | 'indigo'
+export type ThemeId = 'warm' | 'classic' | 'dusk' | 'sakura' | 'ocean' | 'indigo' | 'minimal'
 
 export interface ThemeOption {
   id: ThemeId
@@ -12,6 +12,7 @@ export interface ThemeOption {
 
 export const THEMES: ThemeOption[] = [
   { id: 'warm', name: '暖阳纸笺', tagline: '默认 · 温馨纸感', swatches: ['#f6f1e6', '#38665a', '#c26744'] },
+  { id: 'minimal', name: '简洁模式', tagline: '纯净无装饰', swatches: ['#ffffff', '#2d3748', '#718096'] },
   { id: 'classic', name: '晨雾简白', tagline: '致敬第一版界面', swatches: ['#f3f6f4', '#0c5265', '#218269'] },
   { id: 'dusk', name: '青珀夜航', tagline: '夜间守护 · 深色', swatches: ['#1a231f', '#4fa98a', '#e0916a'] },
   { id: 'sakura', name: '樱语粉黛', tagline: '柔软粉调', swatches: ['#faf3f1', '#a8506c', '#d98a5f'] },

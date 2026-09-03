@@ -146,13 +146,21 @@ const creating = ref(false)
 const createError = ref('')
 const localError = ref('')
 const selectingMember = computed(() => session.status === 'selecting-member')
-const pinCandidates = computed(() =>
-  selectingMember.value ? memberPortalPinCandidates() : getBoundPinCandidates(),
-)
+const deviceBindingRevision = ref(0)
+const pinCandidates = computed(() => {
+  // Cookie/localStorage are not reactive sources. The revision is bumped by
+  // the cross-portal polling below when the admin signs in or changes the
+  // bound family, so an already-open member page sees the new candidates.
+  void deviceBindingRevision.value
+  return selectingMember.value ? memberPortalPinCandidates() : getBoundPinCandidates()
+})
 const pickedMemberId = ref(pinCandidates.value[0]?.id ?? '')
 const memberPin = ref('')
 const accountFieldLabel = computed(() => (entryMode === 'member' ? '家庭管理员账号' : '正式账号'))
-const boundPinReady = computed(() => getBoundPinCandidates().length > 0)
+const boundPinReady = computed(() => {
+  void deviceBindingRevision.value
+  return getBoundPinCandidates().length > 0
+})
 const adminReady = ref(readAdminReadyCookie())
 const capabilitiesReady = ref(Boolean(session.capabilities))
 let adminReadyPoll: number | null = null
@@ -162,14 +170,17 @@ watch(
     adminReady.value = readAdminReadyCookie()
   },
 )
-const unboundGate = computed(() =>
-  memberUnboundGate(entryMode, getBoundFaceHouseholdId(), {
+const unboundGate = computed(() => {
+  // Keep the household read in the same reactive boundary as the ready
+  // cookie. This matters when the member page was opened before admin login.
+  void deviceBindingRevision.value
+  return memberUnboundGate(entryMode, getBoundFaceHouseholdId(), {
     instanceId: session.capabilities?.instance_id ?? '',
     readyInstanceId: adminReady.value?.instanceId ?? '',
     readyHouseholdId: adminReady.value?.householdId ?? '',
     capabilitiesPending: !capabilitiesReady.value,
-  }),
-)
+  })
+})
 const adminRegisterUrl = computed(() => crossPortalUrl('admin'))
 
 const householdDraft = reactive({
@@ -268,6 +279,7 @@ async function probeFaceCapability(): Promise<void> {
 }
 
 onMounted(() => {
+  refreshDeviceBindingSnapshot()
   void refreshCapabilities().finally(() => {
     capabilitiesReady.value = true
     adminReady.value = readAdminReadyCookie()
@@ -275,9 +287,7 @@ onMounted(() => {
   if (!unboundGate.value.blocked && credentialMode.value === 'face' && !session.capabilities) {
     void probeFaceCapability()
   }
-  adminReadyPoll = window.setInterval(() => {
-    adminReady.value = readAdminReadyCookie()
-  }, 2000)
+  adminReadyPoll = window.setInterval(refreshDeviceBindingSnapshot, 2000)
 })
 
 onBeforeUnmount(() => {
@@ -360,6 +370,15 @@ function usePasswordFallback(): void {
   localError.value = ''
   registerMode.value = false
   credentialMode.value = entryMode === 'member' ? 'pin' : 'password'
+}
+
+function refreshDeviceBindingSnapshot(): void {
+  adminReady.value = readAdminReadyCookie()
+  // Keep refs that also drive the face tab in sync with the shared cookie. A
+  // member page can remain mounted while the admin signs in on another tab.
+  householdId.value = getBoundFaceHouseholdId()
+  boundFaceHouseholdName.value = getBoundFaceHouseholdName()
+  deviceBindingRevision.value += 1
 }
 
 function openPasswordRecovery(): void {
@@ -813,8 +832,11 @@ async function submitCreate(): Promise<void> {
           <a v-if="crossEntryLink.url" :href="crossEntryLink.url">{{ crossEntryLink.label }}</a>
           <span v-else>{{ crossEntryLink.label }}（{{ crossPortalPortsHint(crossEntryLink.target) }}）</span>
         </p>
+        <!-- 安全边界文案：本地优先承诺 + 非诊断声明 + 急救指引。
+             这三句是登录页的合规底线（NFR-02 / hct405 安全边界），任何入口模式都要出现，
+             不能因为改版精简掉；HCT-510 精简登录页时曾漏掉，此处恢复完整版。 -->
         <p class="welcome-disclaimer">
-          家庭健康记录仅供日常参考，不提供诊断或用药决策。
+          健康信息默认只保存在家里。家庭健康记录仅供日常参考，不提供诊断、处方或用药决策；紧急情况请联系医生或当地急救服务。
         </p>
       </section>
 

@@ -3,8 +3,11 @@ import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch,
 
 import AppIcon from './components/AppIcon.vue'
 import AccountSecurityDialog from './components/AccountSecurityDialog.vue'
+import CareAtlasBackdrop from './components/CareAtlasBackdrop.vue'
 import CommandPalette from './components/CommandPalette.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
+import GuardianPet from './components/showcase/GuardianPet.vue'
+import VisualBootOverlay from './components/showcase/VisualBootOverlay.vue'
 import SkeletonList from './components/SkeletonList.vue'
 import {
   dismissToast,
@@ -131,6 +134,28 @@ const toastIcon: Record<string, string> = {
 const paletteRef = ref<InstanceType<typeof CommandPalette> | null>(null)
 const accountSecurityOpen = ref(false)
 
+/* ── 系统启动仪式：登录成功后每次浏览器会话播放一次（HCT-533） ── */
+
+const BOOT_SEEN_KEY = 'hct-boot-seen'
+const bootVisible = ref(false)
+let bootSeenInMemory = false
+
+function showBootOnce(): void {
+  if (bootVisible.value || bootSeenInMemory) return
+  try {
+    if (globalThis.sessionStorage?.getItem(BOOT_SEEN_KEY) === '1') return
+    globalThis.sessionStorage?.setItem(BOOT_SEEN_KEY, '1')
+  } catch {
+    // 隐私模式或受限浏览器下退化为本次页面内只播放一次。
+  }
+  bootSeenInMemory = true
+  bootVisible.value = true
+}
+
+function completeBoot(): void {
+  bootVisible.value = false
+}
+
 /* ── 主题切换 ── */
 
 const themeMenuOpen = ref(false)
@@ -182,9 +207,19 @@ function prefetchViews(): void {
 watch(
   () => session.status,
   status => {
-    if (status === 'ready') prefetchViews()
+    if (status === 'ready') {
+      prefetchViews()
+      showBootOnce()
+    }
   },
+  { immediate: true },
 )
+
+const ambientState = computed(() => {
+  if (session.loadingScope) return 'ambient-loading'
+  if (session.pendingReviewCount > 0) return 'ambient-attention'
+  return 'ambient-steady'
+})
 
 async function onHouseholdChange(event: Event): Promise<void> {
   const target = event.target as HTMLSelectElement
@@ -233,13 +268,18 @@ onBeforeUnmount(() => {
   <div class="aurora" aria-hidden="true"><span /><span /><span /></div>
   <div class="fireflies" aria-hidden="true"><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /></div>
   <div class="leaves" aria-hidden="true"><i /><i /><i /><i /></div>
+  <CareAtlasBackdrop
+    v-if="session.status === 'ready' && session.currentView !== 'bigscreen' && currentTheme === 'warm'"
+  />
   <div ref="glowEl" class="cursor-glow" aria-hidden="true" />
+
+  <VisualBootOverlay :visible="bootVisible" :capabilities="session.capabilities" @complete="completeBoot" />
 
   <main v-if="session.status !== 'ready'" lang="zh-CN">
     <WelcomeView />
   </main>
 
-  <div v-else class="app-frame" :class="{ mini: sidebarMini }">
+  <div v-else class="app-frame" :class="[ambientState, { mini: sidebarMini }]">
     <aside class="sidebar">
       <div class="brand">
         <span class="brand-mark"><AppIcon name="home" :size="24" /></span>
@@ -275,6 +315,12 @@ onBeforeUnmount(() => {
       </template>
 
       <div class="sidebar-foot">
+        <!-- 常驻隐私声明：本地优先是本系统的核心承诺，需要在任何页面都能看到，
+             不能只在首页侧栏或大屏出现。矮视口下由紧凑档缩排，不占额外行数。 -->
+        <p class="privacy-note">
+          <AppIcon name="lock" :size="15" />
+          <span>{{ session.portal === 'admin' ? '健康数据默认只保存在本地。' : '健康信息只保存在家里 · 详见使用帮助' }}</span>
+        </p>
         <button type="button" class="sidebar-collapse" :title="sidebarMini ? '展开导航' : '收起导航'" @click="toggleSidebar">
           <AppIcon name="arrow-right" :size="15" style="transform: rotate(180deg)" />
           <span v-if="!sidebarMini">收起导航</span>
@@ -431,6 +477,7 @@ onBeforeUnmount(() => {
   <ConfirmDialog />
   <AccountSecurityDialog :open="accountSecurityOpen" @close="accountSecurityOpen = false" />
   <CommandPalette v-if="session.status === 'ready'" ref="paletteRef" :nav-items="visibleNavItems" />
+  <GuardianPet v-if="session.status === 'ready'" />
 
   <div class="toast-region" role="status" aria-live="polite">
     <div v-for="toast in session.toasts" :key="toast.id" class="toast" :class="toast.kind">

@@ -69,6 +69,12 @@ function interactionSummary(candidate: ReviewCandidate): string {
   return (candidate.interaction_warnings ?? []).map(item => item.message).join('；')
 }
 
+/** 单候选行是否有可展示的补充说明；没有就不渲染那一段，免得留空行。 */
+function hasCandidateNotes(candidate: ReviewCandidate | undefined): boolean {
+  if (!candidate) return false
+  return (candidate.evidence?.length ?? 0) > 0 || (candidate.interaction_warnings?.length ?? 0) > 0
+}
+
 function primaryDrugName(task: ReviewTask): string {
   return task.candidates[0]?.drug_name?.trim() || '待确认药品'
 }
@@ -392,21 +398,21 @@ onMounted(() => void loadTasks())
             </span>
           </label>
         </div>
-        <p
-          v-else-if="task.candidates.length === 1"
-          class="review-single-candidate"
-        >
-          <span v-if="task.candidates[0]?.evidence?.length" class="text-faint">
-            证据来源：{{ task.candidates[0].evidence.join('、') }}
-          </span>
-          <span
-            v-if="task.candidates[0]?.interaction_warnings?.length"
-            class="text-soft"
-            style="color: var(--clay)"
-          >
-            组合提醒：{{ interactionSummary(task.candidates[0]) }}
-          </span>
-        </p>
+        <!-- 单候选时只有真的有证据/组合提醒才渲染这段，避免留一条 0 高度空行。 -->
+        <template v-else-if="task.candidates.length === 1">
+          <p v-if="hasCandidateNotes(task.candidates[0])" class="review-single-candidate">
+            <span v-if="task.candidates[0]?.evidence?.length" class="text-faint">
+              证据来源：{{ task.candidates[0].evidence.join('、') }}
+            </span>
+            <span
+              v-if="task.candidates[0]?.interaction_warnings?.length"
+              class="text-soft"
+              style="color: var(--clay)"
+            >
+              组合提醒：{{ interactionSummary(task.candidates[0]) }}
+            </span>
+          </p>
+        </template>
         <p v-else class="notice warn" style="margin: 0">
           <AppIcon name="info" :size="15" />
           没有可用候选，请选择「人工修正」手工填写，或跳过并补拍。

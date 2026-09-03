@@ -50,6 +50,16 @@ def test_health_news_winter_mentions_warmth() -> None:
     assert "保暖" in joined or "冬季" in joined
 
 
+def test_health_news_autumn_catalog_has_distinct_care_cards() -> None:
+    payload = build_health_news(
+        when=datetime(2026, 9, 2, tzinfo=ZoneInfo("Asia/Shanghai")),
+    )
+    assert payload.season == "autumn"
+    assert len(payload.items) >= 6
+    assert len({item.id for item in payload.items}) == len(payload.items)
+    assert all(item.source == "seasonal_calendar" for item in payload.items)
+
+
 SAMPLE_RSS = """<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
   <channel>

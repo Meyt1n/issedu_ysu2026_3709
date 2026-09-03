@@ -23,7 +23,7 @@ export interface NavItem {
 }
 
 // 管理员后台固定五组导航（HCT-439 阶段三）：
-// 日常照护 / 证据录入 / 安全与洞察 / 权限与凭证 / 家庭与研发。
+// 日常照护 / 证据录入 / 安全与洞察 / 账户安全 / 家庭洞察。
 export const NAV_ITEMS: readonly NavItem[] = [
   { view: 'member-home', label: '我的家庭', icon: 'home', group: '我的照护' },
   { view: 'member-capture', label: '拍照录药', icon: 'scan', group: '我的照护' },
@@ -39,8 +39,8 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { view: 'risks', label: '用药安全', icon: 'shield', group: '安全与洞察' },
   { view: 'graph', label: '健康图谱', icon: 'compass', group: '安全与洞察' },
   { view: 'assistant', label: '健康助手', icon: 'assistant', group: '安全与洞察', portals: ['admin'] },
-  { view: 'face-credentials', label: '登录设置', icon: 'lock', group: '权限与凭证' },
-  { view: 'bigscreen', label: '家庭大屏', icon: 'sun', group: '家庭与研发' },
+  { view: 'face-credentials', label: '登录设置', icon: 'lock', group: '账户安全' },
+  { view: 'bigscreen', label: '家庭大屏', icon: 'sun', group: '家庭洞察' },
 ]
 
 /**

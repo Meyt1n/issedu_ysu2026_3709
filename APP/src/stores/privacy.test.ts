@@ -46,7 +46,7 @@ describe('版本化隐私告知与受控网页交接（MOB-146）', () => {
     expect(privacyNoticeRequired()).toBe(true)
 
     const spoken = privacyNoticeSpeechText()
-    expect(spoken).toContain('演示与联机模式')
+    expect(spoken).toContain('数据来源')
     expect(spoken).toContain('健康数据边界')
   })
 

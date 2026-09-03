@@ -393,6 +393,35 @@ describe('cross-portal face household binding (HCT-425)', () => {
     expect(getBoundFaceHouseholdId()).toBe('household-old')
     expect(cookie).toContain(encodeURIComponent('household-old'))
   })
+
+  it('prefers the current shared binding over a stale port-local household', () => {
+    const current = JSON.stringify({ id: 'household-current', name: '当前家庭', members: [] })
+    let cookie = `hct-face-family-household=${encodeURIComponent(current)}`
+    const setItem = vi.fn()
+    Object.defineProperty(globalThis, 'document', {
+      configurable: true,
+      value: {
+        get cookie() {
+          return cookie
+        },
+        set cookie(value: string) {
+          cookie = value
+        },
+      },
+    })
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem: vi.fn(() => JSON.stringify({ id: 'household-stale', name: '旧家庭' })),
+        setItem,
+        removeItem: vi.fn(),
+      },
+    })
+
+    expect(getBoundFaceHouseholdId()).toBe('household-current')
+    expect(getBoundFaceHouseholdName()).toBe('当前家庭')
+    expect(setItem).toHaveBeenCalledWith('hct:face-family-household', current)
+  })
 })
 
 describe('portal view guards (HCT-439)', () => {

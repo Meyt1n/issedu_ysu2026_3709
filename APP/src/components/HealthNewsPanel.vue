@@ -74,16 +74,14 @@ onMounted(() => {
       <span class="health-news-status" :data-tone="view.statusTone">{{ view.statusLabel }}</span>
     </div>
 
-    <p class="health-news-intro">{{ view.intro }}</p>
-
     <p
-      v-if="freshness.expired"
+      v-if="freshness.expired && news?.status !== 'local_only'"
       class="notice warn health-news-expired"
       role="alert"
     >
       {{ freshness.notice }}
     </p>
-    <p v-else-if="freshness.notice" class="health-news-meta" role="status">
+    <p v-else-if="freshness.notice && news?.status !== 'local_only'" class="health-news-meta" role="status">
       {{ freshness.notice }}
     </p>
 
@@ -102,14 +100,10 @@ onMounted(() => {
     </div>
     <p v-if="refreshMessage" class="health-news-meta" role="status">{{ refreshMessage }}</p>
 
-    <p v-if="view.degradedLabel" class="health-news-degraded" role="status">
-      {{ view.degradedLabel }}
-    </p>
-
-    <ListLoadingState v-if="loading && !news" label="正在读取健康资讯…" :count="2" :disc="false" />
+    <ListLoadingState v-if="loading && !news" label="正在加载…" :count="2" :disc="false" />
     <ErrorNotice v-else-if="loadError && !news" :error="loadError" :busy="loading" @retry="refreshNews" />
     <p v-else-if="loadError" class="notice warn health-news-inline-error" role="status">
-      资讯刷新未完成（{{ loadError.message }}），当前仍保留上一次读取到的内容。
+      刷新失败，已保留当前内容。
       <button type="button" class="btn btn-quiet" :disabled="loading" @click="refreshNews">
         {{ loading ? '重试中…' : '重试' }}
       </button>
@@ -119,23 +113,20 @@ onMounted(() => {
         <button type="button" class="health-news-item" @click="openItem(item)">
           <span class="health-news-tag-row">
             <span class="health-news-tag">{{ item.tag }}</span>
-            <span v-if="item.kind === 'remote' || item.source === 'remote_whitelist'" class="health-news-kind">白名单来源</span>
           </span>
           <strong>{{ item.title }}</strong>
           <span class="health-news-summary">{{ item.summary }}</span>
-          <span class="health-news-source">{{ itemSourceLine(item) }}</span>
+          <span v-if="item.source !== 'seasonal_calendar'" class="health-news-source">{{ itemSourceLine(item) }}</span>
           <span class="health-news-cta">
-            带着问题问助手
+            问助手
             <AppIcon name="chevron-right" :size="16" />
           </span>
         </button>
       </li>
     </ul>
     <p v-else class="meta-line health-news-empty" role="status">
-      当前没有可展示的健康资讯，首页其他功能仍可正常使用。
+      暂无健康资讯
     </p>
-
-    <p v-if="news?.disclaimer" class="health-news-disclaimer">{{ news.disclaimer }}</p>
   </section>
 </template>
 
@@ -186,10 +177,7 @@ onMounted(() => {
   background: var(--c-brand-softer);
 }
 
-.health-news-intro,
 .health-news-meta,
-.health-news-degraded,
-.health-news-disclaimer,
 .health-news-empty {
   margin: 0;
   color: var(--c-ink-soft);
@@ -197,14 +185,9 @@ onMounted(() => {
   line-height: 1.55;
 }
 
-.health-news-meta,
-.health-news-degraded,
-.health-news-disclaimer {
+.health-news-meta {
   font-size: 0.8rem;
 }
-
-.health-news-degraded { color: var(--c-warn-deep); }
-.health-news-disclaimer { color: var(--c-ink-faint); }
 
 .health-news-expired {
   margin: 0;

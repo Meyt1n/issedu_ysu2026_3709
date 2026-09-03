@@ -13,6 +13,22 @@ function response(): Response {
 }
 
 describe('ApiClient 鉴权传输适配', () => {
+  it('拒绝空的健康检查响应，不把同源空页面误报为已连接', async () => {
+    const client = new ApiClient({
+      fetcher: async () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        text: async () => '',
+      } as Response),
+    })
+
+    await expect(client.getHealth()).rejects.toMatchObject({
+      code: 'INVALID_HEALTH_RESPONSE',
+      status: 502,
+    })
+  })
+
   it('拒绝不受信任的明文公网地址', () => {
     expect(() => new ApiClient({ baseUrl: 'http://example.com:8000' })).toThrow('明文 HTTP')
   })

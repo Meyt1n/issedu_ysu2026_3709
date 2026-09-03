@@ -113,6 +113,10 @@ function presentApiErrorInternal(cause: unknown): ErrorPresentation {
     return retry('家庭服务器暂时无法访问，请检查网络或服务器状态后重试。', cause.requestId)
   }
 
+  if (code === 'INVALID_HEALTH_RESPONSE') {
+    return retry('家庭服务器返回的健康检查格式无效，请检查服务器地址或服务版本。', cause.requestId)
+  }
+
   if (cause.status === 401 || code === 'UNAUTHENTICATED') {
     return settings('身份已失效或尚未配置，请到“我的”检查身份后重试。')
   }

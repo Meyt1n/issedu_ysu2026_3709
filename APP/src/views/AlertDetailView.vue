@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import AppIcon from '@/components/AppIcon.vue'
@@ -29,14 +29,13 @@ const error = ref<ErrorPresentation | null>(null)
 const actionMessage = ref('')
 const actionError = ref<ErrorPresentation | null>(null)
 const acknowledging = ref(false)
-const acknowledgementKey = ref<string | null>(null)
 const supportsAcknowledgement = computed(() =>
   session.dataMode === 'demo' || hasCapability(CAPABILITY_IDS.riskAcknowledgement),
 )
 const acknowledgementStatusMessage = computed(() => {
   if (session.dataMode === 'demo') return ''
-  if (!capabilities.snapshot) return '能力探测尚未完成；请先到“我的”测试连接，本按钮会按不可用处理。'
-  return '当前家庭服务器未开放风险知晓回写；本页不会将其标记为已记录。'
+  if (!capabilities.snapshot) return '请先连接家庭服务器。'
+  return '家庭服务器暂不支持回写“已知晓”状态；本页不会将其标记为已记录。'
 })
 let loadGeneration = 0
 let loadInFlight = false
@@ -58,9 +57,6 @@ async function load(): Promise<void> {
   const expectedKey = sessionContextKey(session)
   loading.value = true
   error.value = null
-  actionMessage.value = ''
-  actionError.value = null
-  acknowledgementKey.value = null
   risk.value = null
   const memberId = String(route.params.memberId ?? '')
   const ruleId = decodeURIComponent(String(route.params.ruleId ?? ''))
@@ -85,11 +81,8 @@ async function acknowledge(): Promise<void> {
   if (!risk.value || !supportsAcknowledgement.value) return
   acknowledging.value = true
   actionError.value = null
-  const key = acknowledgementKey.value
-    ?? `risk-ack:${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`}`
-  acknowledgementKey.value = key
   try {
-    risk.value = await activeProvider().acknowledgeRisk(risk.value.memberId, risk.value.ruleId, key)
+    risk.value = await activeProvider().acknowledgeRisk(risk.value.memberId, risk.value.ruleId)
     actionMessage.value = '已记录你的知晓状态，家人可以在事件中心看到。'
   } catch (cause) {
     actionError.value = presentApiError(cause)
@@ -97,11 +90,6 @@ async function acknowledge(): Promise<void> {
     acknowledging.value = false
   }
 }
-
-onBeforeUnmount(() => {
-  // 幂等键只服务于当前页面动作；离开页面后不得复用旧风险上下文。
-  acknowledgementKey.value = null
-})
 </script>
 
 <template>

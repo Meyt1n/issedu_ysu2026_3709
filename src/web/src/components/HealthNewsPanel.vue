@@ -77,17 +77,23 @@ onMounted(() => {
     </p>
     <ul v-else class="list-plain health-news-list">
       <li v-for="item in news?.items ?? []" :key="item.id">
-        <button type="button" class="health-news-item" @click="openItem(item)">
-          <span class="health-news-tag-row">
-            <span class="health-news-tag">{{ item.tag }}</span>
-            <span v-if="item.kind === 'remote'" class="health-news-kind">白名单来源</span>
-          </span>
-          <strong>{{ item.title }}</strong>
-          <small>{{ item.summary }}</small>
-          <span class="health-news-source">{{ itemSourceLine(item) }}</span>
-          <span class="health-news-cta">
-            去问问助手
-            <AppIcon name="arrow-right" :size="16" />
+        <button
+          type="button"
+          class="health-news-item"
+          @click="openItem(item)"
+        >
+          <span class="health-news-content">
+            <span class="health-news-tag-row">
+              <span class="health-news-tag">{{ item.tag }}</span>
+              <span v-if="item.kind === 'remote'" class="health-news-kind">白名单来源</span>
+            </span>
+            <strong>{{ item.title }}</strong>
+            <small>{{ item.summary }}</small>
+            <span class="health-news-source">{{ itemSourceLine(item) }}</span>
+            <span class="health-news-cta">
+              去问问助手
+              <AppIcon name="arrow-right" :size="16" />
+            </span>
           </span>
         </button>
       </li>
@@ -139,31 +145,63 @@ onMounted(() => {
 
 .health-news-list {
   display: grid;
-  gap: 0.75rem;
+  gap: 0.85rem;
+  grid-auto-rows: 320px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.health-news-list > li {
+  display: flex;
+  min-width: 0;
 }
 
 .health-news-item {
+  align-content: stretch;
+  height: 100%;
+  isolation: isolate;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+  position: relative;
   width: 100%;
   text-align: left;
+  contain: paint;
   border: 1px solid color-mix(in srgb, var(--line, #d7dde5) 88%, transparent);
   border-radius: 16px;
-  background: color-mix(in srgb, var(--panel, #fff) 92%, var(--sky, #8ec5ff) 8%);
-  padding: 0.95rem 1rem;
   display: grid;
-  gap: 0.35rem;
   cursor: pointer;
-  transition: transform 160ms ease, border-color 160ms ease;
+  transition: transform 200ms ease, border-color 200ms ease, box-shadow 200ms ease;
+  /* 纸色晕染全覆盖（HCT-533）：四角淡彩收在纸色底上，边缘不发白、饱和度减半 */
+  background:
+    radial-gradient(circle at 0% 0%, color-mix(in srgb, var(--sky, #47708c) 10%, transparent) 0%, transparent 62%),
+    radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--pine, #38665a) 9%, transparent) 0%, transparent 58%),
+    radial-gradient(circle at 0% 100%, color-mix(in srgb, var(--pine, #38665a) 8%, transparent) 0%, transparent 54%),
+    radial-gradient(circle at 100% 100%, color-mix(in srgb, var(--sky, #47708c) 8%, transparent) 0%, transparent 58%),
+    color-mix(in srgb, var(--paper, #f6f1e6) 38%, var(--card, #fffdf8));
 }
 
 .health-news-item:hover {
-  transform: translateY(-1px);
-  border-color: color-mix(in srgb, var(--sky, #5aa7ff) 55%, var(--line, #d7dde5));
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--pine, #38665a) 45%, var(--line, #d7dde5));
+  box-shadow: 0 16px 28px rgba(63, 58, 49, 0.1);
+}
+
+.health-news-content {
+  align-content: stretch;
+  display: grid;
+  gap: 0.48rem;
+  grid-template-rows: auto auto 1fr auto auto;
+  width: 100%;
+  min-height: 100%;
+  padding: 1.15rem 1.2rem 1.1rem;
+  position: relative;
+  z-index: 2;
 }
 
 .health-news-tag-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem;
+  gap: 0.45rem;
   align-items: center;
 }
 
@@ -172,54 +210,93 @@ onMounted(() => {
   display: inline-flex;
   width: fit-content;
   border-radius: 999px;
-  padding: 0.15rem 0.55rem;
-  font-size: 0.75rem;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.74rem;
+  font-weight: 500;
 }
 
 .health-news-tag {
-  background: color-mix(in srgb, var(--sky, #8ec5ff) 22%, transparent);
-  color: var(--ink, #1d2a36);
+  background: color-mix(in srgb, var(--pine, #38665a) 18%, rgba(255, 255, 255, 0.7));
+  color: var(--pine-deep, #2a4d42);
+  border: 1px solid color-mix(in srgb, var(--pine, #38665a) 28%, transparent);
 }
 
 .health-news-kind {
-  background: color-mix(in srgb, var(--gold, #e7c27a) 28%, transparent);
-  color: var(--ink, #1d2a36);
+  background: color-mix(in srgb, var(--gold, #e7c27a) 22%, rgba(255, 255, 255, 0.7));
+  color: var(--gold-deep, #8f6b1f);
+  border: 1px solid color-mix(in srgb, var(--gold, #e7c27a) 32%, transparent);
 }
 
 .health-news-item strong {
-  font-size: 1rem;
-  color: var(--ink, #1d2a36);
+  font-size: 1.12rem;
+  line-height: 1.38;
+  color: var(--ink, #3f3a31);
+  font-weight: 600;
+  /* 标题最多 3 行，避免长短标题把同排卡片撑得参差。 */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .health-news-item small,
 .health-news-source {
-  color: var(--muted, #5b6570);
-  line-height: 1.5;
+  color: var(--ink-soft, #6d6659);
+  line-height: 1.52;
+}
+
+.health-news-item small {
+  font-size: 0.92rem;
+  /* 摘要占剩余空间并最多 4 行，行高一致后 CTA 统一锚在卡片底部。 */
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .health-news-source {
-  font-size: 0.8rem;
+  font-size: 0.82rem;
+  opacity: 0.88;
 }
 
 .health-news-cta {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
-  margin-top: 0.2rem;
-  color: var(--sky-ink, #215d9b);
-  font-size: 0.88rem;
+  gap: 0.4rem;
+  margin-top: 0.25rem;
+  color: var(--pine-deep, #2a4d42);
+  font-size: 0.9rem;
   font-weight: 600;
+  transition: gap 180ms ease;
+}
+
+.health-news-item:hover .health-news-cta {
+  gap: 0.6rem;
 }
 
 .pill.ok {
-  background: color-mix(in srgb, #6fbf73 28%, transparent);
+  background: color-mix(in srgb, var(--pine, #38665a) 24%, transparent);
+  color: var(--pine-deep, #2a4d42);
 }
 
 .pill.warn {
-  background: color-mix(in srgb, var(--gold, #e7c27a) 36%, transparent);
+  background: color-mix(in srgb, var(--gold, #e7c27a) 32%, transparent);
+  color: var(--gold-deep, #8f6b1f);
 }
 
 .pill.muted {
-  background: color-mix(in srgb, var(--line, #d7dde5) 70%, transparent);
+  background: color-mix(in srgb, var(--line, #d7dde5) 60%, transparent);
+  color: var(--ink-soft, #6d6659);
+}
+
+@media (max-width: 720px) {
+  .health-news-list {
+    grid-template-columns: 1fr;
+  }
+
+  .health-news-item {
+    height: auto;
+    min-height: 200px;
+  }
 }
 </style>

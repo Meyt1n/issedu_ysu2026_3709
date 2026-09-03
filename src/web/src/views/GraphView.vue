@@ -156,12 +156,12 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
     <div v-if="nodes.length > 0" class="graph-legend-overlay" aria-label="图例">
       <span v-for="item in legendCounts" :key="item.key" class="legend-row">
         <i :style="{ background: CATEGORY_META[item.key]!.stroke }" />
-        {{ CATEGORY_META[item.key]!.label }}
+        <span>{{ CATEGORY_META[item.key]!.label }}</span>
         <span class="legend-count">{{ item.count }}</span>
       </span>
-      <span class="legend-row" style="border-top: 1px dashed var(--line); margin-top: 2px; padding-top: 7px">
+      <span class="legend-row legend-row--total">
         <AppIcon name="timeline" :size="12" style="color: var(--ink-faint)" />
-        已确认事件
+        <span>已确认事件</span>
         <span class="legend-count">{{ graph.eventsCount }}</span>
       </span>
     </div>
@@ -211,9 +211,11 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
         r="2.8"
         :fill="CATEGORY_META[node.category]!.stroke"
       >
+        <!-- 用负 begin 错峰：动画视作已在过去开始，挂载瞬间粒子就在路径上。
+             正 begin 会让粒子在等待期停在画布原点 (0,0)，左上角露出半个点。 -->
         <animateMotion
           :dur="`${4.6 + (index % 5) * 0.9}s`"
-          :begin="`${(index % 5) * 0.7}s`"
+          :begin="`-${(index % 5) * 0.7}s`"
           repeatCount="indefinite"
           keyPoints="0;1"
           keyTimes="0;1"
@@ -223,6 +225,8 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
         </animateMotion>
       </circle>
 
+      <circle class="graph-orbit" :cx="CENTER_X" :cy="CENTER_Y" r="306" fill="none" stroke="#38665a" stroke-opacity="0.3" stroke-width="1.2" stroke-dasharray="3 10" stroke-linecap="round" />
+      <circle class="graph-orbit graph-orbit--inner" :cx="CENTER_X" :cy="CENTER_Y" r="238" fill="none" stroke="#a97e1f" stroke-opacity="0.22" stroke-width="1" stroke-dasharray="2 12" stroke-linecap="round" />
       <circle class="graph-center-pulse" :cx="CENTER_X" :cy="CENTER_Y" r="58" fill="none" stroke="#38665a" stroke-width="1.5" />
       <circle class="graph-center-sphere" :cx="CENTER_X" :cy="CENTER_Y" r="46" fill="url(#node-sphere-center)" />
       <circle :cx="CENTER_X" :cy="CENTER_Y" r="46" fill="none" stroke="#f4eddd" stroke-opacity="0.35" stroke-width="1.5" />
@@ -237,6 +241,7 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
         v-for="(node, index) in nodes"
         :key="node.id"
         class="graph-node"
+        :class="{ selected: selectedNodeId === node.id }"
         role="button"
         :aria-label="`${CATEGORY_META[node.category]!.label}：${node.label}`"
         tabindex="0"
@@ -251,6 +256,8 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
             rx="17"
             ry="4.5"
           />
+          <!-- 类别光晕 -->
+          <circle :cx="node.x" :cy="node.y" r="30" :fill="CATEGORY_META[node.category]!.stroke" opacity="0.12" />
           <circle
             :cx="node.x"
             :cy="node.y"
@@ -259,9 +266,27 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
             :stroke="CATEGORY_META[node.category]!.stroke"
             :stroke-width="selectedNodeId === node.id ? 3 : 1.8"
           />
-          <text :x="node.x" :y="node.y + 4" :fill="CATEGORY_META[node.category]!.stroke" font-size="11" font-weight="800">
-            {{ truncate(node.label, 3) }}
-          </text>
+          <!-- 类别专属图形：药品胶囊 / 过敏水滴 / 关注十字 / 计划时钟 / 照护者小人 -->
+          <g v-if="node.category === 'drug'" class="graph-glyph" :transform="`translate(${node.x} ${node.y}) rotate(-38)`">
+            <rect x="-12" y="-6" width="24" height="12" rx="6" fill="#fffdf6" :stroke="CATEGORY_META.drug!.stroke" stroke-width="2" />
+            <path d="M0 -6h6a6 6 0 0 1 0 12H0z" :fill="CATEGORY_META.drug!.stroke" opacity="0.85" />
+            <line x1="0" y1="-6" x2="0" y2="6" :stroke="CATEGORY_META.drug!.stroke" stroke-width="1.6" />
+          </g>
+          <g v-else-if="node.category === 'allergy'" class="graph-glyph" :transform="`translate(${node.x} ${node.y})`">
+            <path d="M0 -12C5.5 -5 9 -1.5 9 3a9 9 0 1 1-18 0C-9 -1.5 -5.5 -5 0 -12z" fill="#fffdf6" :stroke="CATEGORY_META.allergy!.stroke" stroke-width="2" />
+            <circle cx="-3" cy="4" r="2.1" :fill="CATEGORY_META.allergy!.stroke" opacity="0.5" />
+          </g>
+          <g v-else-if="node.category === 'disease'" class="graph-glyph" :transform="`translate(${node.x} ${node.y})`">
+            <path d="M-4 -11h8v7h7v8h-7v7h-8v-7h-7v-8h7z" fill="#fffdf6" :stroke="CATEGORY_META.disease!.stroke" stroke-width="2" stroke-linejoin="round" />
+          </g>
+          <g v-else-if="node.category === 'plan'" class="graph-glyph" :transform="`translate(${node.x} ${node.y})`">
+            <circle r="11" fill="#fffdf6" :stroke="CATEGORY_META.plan!.stroke" stroke-width="2" />
+            <path d="M0 -6V0L4.5 2.5" :stroke="CATEGORY_META.plan!.stroke" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+          </g>
+          <g v-else class="graph-glyph" :transform="`translate(${node.x} ${node.y})`">
+            <circle cy="-4.5" r="5" fill="#fffdf6" :stroke="CATEGORY_META.caregiver!.stroke" stroke-width="2" />
+            <path d="M-9 11a9 8.4 0 0 1 18 0z" fill="#fffdf6" :stroke="CATEGORY_META.caregiver!.stroke" stroke-width="2" stroke-linejoin="round" />
+          </g>
         </g>
         <text class="node-label" :x="node.x" :y="node.y + 44" text-anchor="middle">
           {{ truncate(node.label, 10) }}
@@ -306,5 +331,27 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
   fill: var(--ink);
   font-size: 11.5px;
   font-weight: 650;
+}
+
+/* 类别图形随球体微浮动；选中时整体放大并投出更明显的高光。 */
+.graph-glyph { pointer-events: none; }
+.graph-node.selected { transform: scale(1.16); }
+.graph-node.selected .graph-glyph { filter: drop-shadow(0 4px 8px rgba(42, 80, 69, 0.35)); }
+
+.graph-orbit {
+  animation: graph-orbit-spin 90s linear infinite;
+  transform-box: view-box;
+  transform-origin: 500px 330px;
+}
+
+.graph-orbit--inner { animation-duration: 64s; animation-direction: reverse; }
+
+@keyframes graph-orbit-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .graph-orbit { animation: none; }
+  .graph-node.selected { transform: none; }
 }
 </style>

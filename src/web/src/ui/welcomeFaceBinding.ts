@@ -36,7 +36,7 @@ const BLOCKED_GATE: MemberUnboundGate = {
   blocked: true,
   title: '请先到管理后台',
   message:
-    '成员前台只在管理后台保持登录时开放。请先去管理后台登录家庭管理员账号；登录期间这台电脑才可以使用刷脸或 PIN。后台退出或会话结束后，这里会自动收回。',
+    '这台电脑还没有绑定家庭。请先去管理后台登录一次家庭管理员账号；登录后会自动绑定当前家庭，之后这里就可以用刷脸或 PIN 登录家人。',
   ctaLabel: '去管理后台登录',
 }
 
@@ -93,28 +93,24 @@ export function clearAdminReadyCookie(): void {
 }
 
 /**
- * 成员前台只在管理后台当前保持登录时开放刷脸 / PIN。
- * 本机残留的家庭绑定不够；必须有与当前家庭匹配的管理员就绪 cookie。
- * `instance_id` 用于识别「关掉项目再启动」后的过期就绪标记。
+ * 成员前台只在「本机尚未绑定家庭」时拦截刷脸 / PIN。
+ *
+ * 家庭绑定由管理后台登录时写入（store.syncDeviceHouseholdBinding），持久
+ * 保存在本机（跨端口共享 Cookie + localStorage）。绑定后即可刷脸或 PIN 选人，
+ * 不再要求管理员会话持续在线：管理员退出或会话结束后，绑定仍保留，家人
+ * 仍可正常登录。这符合「后台登录一次即绑定家庭」的产品设计（HCT-456 / HCT-511）。
  */
 export function memberUnboundGate(
   entryMode: 'member' | 'admin' | 'auto',
   boundHouseholdId: string,
-  presence: MemberGatePresence = {},
+  _presence: MemberGatePresence = {},
 ): MemberUnboundGate {
   if (entryMode !== 'member') return OPEN_GATE
-  if (presence.capabilitiesPending) return BLOCKED_GATE
-  const bound = boundHouseholdId.trim()
-  if (!bound) return BLOCKED_GATE
-  const readyHousehold = presence.readyHouseholdId?.trim() ?? ''
-  if (readyHousehold !== bound) return BLOCKED_GATE
-  const instanceId = presence.instanceId?.trim() ?? ''
-  const readyInstance = presence.readyInstanceId?.trim() ?? ''
-  if (instanceId && readyInstance !== instanceId) return BLOCKED_GATE
+  if (!boundHouseholdId.trim()) return BLOCKED_GATE
   return OPEN_GATE
 }
 
-/** 单入口欢迎页只有在管理后台当前就绪时，才用本机残留绑定开刷脸。 */
+/** 单入口欢迎页在本机已绑定家庭时即可用本机绑定开刷脸。 */
 export function autoEntryMayUseBoundFace(
   boundHouseholdId: string,
   presence: MemberGatePresence = {},

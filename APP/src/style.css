@@ -665,6 +665,10 @@ html[data-contrast='high'] .notice { border: 2px solid currentColor; box-shadow:
   font-size: 1rem;
   cursor: pointer;
   text-decoration: none;
+  /* 中文按钮不拆字；空间不足时由 .btn-row 换整颗按钮到下一行。 */
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: keep-all;
   box-shadow:
     var(--shadow-btn),
     inset 0 1px 0 rgba(255, 255, 255, 0.3),
@@ -727,11 +731,14 @@ html[data-contrast='high'] .btn-danger { color: var(--c-danger-deep); }
   flex-wrap: wrap;
 }
 .btn-row > .btn {
-  flex: 1;
-  min-width: 0;
-  overflow-wrap: anywhere;
+  /* 保留按钮的最小内容宽度，避免 flex 压缩后把中文标签拆成两行。 */
+  flex: 1 1 auto;
+  min-width: max-content;
+  overflow-wrap: normal;
+  word-break: keep-all;
   text-align: center;
 }
+.btn-row > .btn.btn-block { flex-basis: 100%; min-width: 0; }
 
 /* ---- 表单 ---- */
 
@@ -1175,20 +1182,28 @@ html[data-contrast='high'] .hero .hero-eyebrow { color: #fff; }
   -webkit-backdrop-filter: blur(6px);
   backdrop-filter: blur(6px);
   border-radius: 16px;
-  padding: 10px 12px;
+  padding: 10px 8px;
   display: grid;
   gap: 2px;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25);
 }
 .hero-stat strong { font-size: 1.25rem; font-weight: 800; line-height: 1.2; }
 .hero-stat span {
-  font-size: 0.74rem;
+  font-size: clamp(0.68rem, 2.8vw, 0.74rem);
   color: rgba(255, 255, 255, 0.85);
   font-weight: 600;
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: keep-all;
 }
 html[data-contrast='high'] .hero-stat { background: #fff; box-shadow: none; }
 html[data-contrast='high'] .hero-stat strong,
 html[data-contrast='high'] .hero-stat span { color: var(--c-brand-deep); }
+
+/* 大字号也保持标签完整：给统计卡片更宽的内容列，避免中文断词。 */
+html[data-font-scale='large'] .hero-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+html[data-font-scale='xlarge'] .hero-stats { grid-template-columns: 1fr; }

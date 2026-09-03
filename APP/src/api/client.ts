@@ -196,7 +196,22 @@ export class ApiClient {
   }
 
   getHealth(options?: RequestOptions): Promise<HealthResponse> {
-    return this.request('/health', undefined, options)
+    return this.request<Partial<HealthResponse>>('/health', undefined, options).then((health) => {
+      if (
+        !health
+        || health.status !== 'ok'
+        || typeof health.service !== 'string'
+        || !health.service.trim()
+        || typeof health.version !== 'string'
+        || !health.version.trim()
+      ) {
+        throw new ApiClientError('家庭服务器返回的健康检查响应无效，请检查服务器地址或服务版本。', {
+          status: 502,
+          code: 'INVALID_HEALTH_RESPONSE',
+        })
+      }
+      return health as HealthResponse
+    })
   }
 
   getCapabilities(options?: RequestOptions): Promise<CapabilityResponse> {
