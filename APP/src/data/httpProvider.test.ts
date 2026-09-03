@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import { ApiClient, ApiClientError } from '@/api/client'
-import type { HealthEvent } from '@/api/types'
+import type { HealthEvent, PlanWorkbenchResponse } from '@/api/types'
 import type { CareTask } from './types'
 
-import { authorizationStatus, deriveTaskActionHistory, deriveTasksFromEvents, deriveWeeklyTrendFromEvents, environmentActionUnavailable, HttpDataProvider, normalizeServerTimestamp } from './httpProvider'
+import { authorizationStatus, deriveTaskActionHistory, deriveTasksFromEvents, deriveWeeklyTrendFromEvents, environmentActionUnavailable, HttpDataProvider, knowledgeDegradeReason, normalizeServerTimestamp, planActionPolicyFrom } from './httpProvider'
 import { clearCapabilities, setCapabilities } from '@/stores/capabilities'
 
 let sequence = 0
@@ -711,6 +711,146 @@ describe('服务端风险审计元数据（MOB-156）', () => {
   })
 })
 
+describe('联机风险知晓回写（MOB-156）', () => {
+  it('能力未声明时不调用风险回写接口', async () => {
+    const getRiskDetail = vi.fn()
+    const acknowledgeRisk = vi.fn()
+    const client = { getRiskDetail, acknowledgeRisk } as unknown as ApiClient
+    const provider = new HttpDataProvider(client, () => ({ actorId: 'actor-1', accessPurpose: 'family-care', householdId: 'hh-1' }))
+
+    clearCapabilities()
+    await expect(provider.acknowledgeRisk('m-1', 'risk-1', 'risk-ack-fixed')).rejects.toThrow('未声明风险知晓回写能力')
+    expect(getRiskDetail).not.toHaveBeenCalled()
+    expect(acknowledgeRisk).not.toHaveBeenCalled()
+  })
+
+  it('能力可用时携带服务端版本/指纹并映射回已知晓卡片', async () => {
+    const getRiskDetail = vi.fn().mockResolvedValue({
+      alert: {
+        rule_id: 'risk-1',
+        level: 'SEVERE',
+        message: '合成严重风险',
+        source_event_ids: ['event-1'],
+        created_at: '2026-08-20T02:00:00Z',
+        rule_version: 'rules-v7',
+        risk_fingerprint: 'f'.repeat(64),
+        acknowledgement: null,
+        deduplication_key: 'dedup-1',
+        merged_count: 1,
+        budget_status: 'VISIBLE',
+        budget_reason: '严重信号不受普通预算压制',
+        next_visible_at: null,
+        valid_until: '2026-08-21T02:00:00Z',
+        evidence_summary: '1 条脱敏来源事件',
+      },
+      source_events: [{
+        id: 'event-1',
+        event_type: 'medication_added',
+        confirmation_status: 'CONFIRMED',
+        created_at: '2026-08-20T01:00:00Z',
+      }],
+    })
+    const acknowledgeRisk = vi.fn().mockResolvedValue({
+      receipt_id: 'receipt-1',
+      household_id: 'hh-1',
+      member_id: 'm-1',
+      rule_id: 'risk-1',
+      rule_version: 'rules-v7',
+      risk_fingerprint: 'f'.repeat(64),
+      actor_id: 'actor-1',
+      acknowledged_at: '2026-08-20T02:01:00Z',
+      replayed: false,
+    })
+    const client = {
+      listHouseholds: vi.fn().mockResolvedValue([{ id: 'hh-1', name: '合成家庭' }]),
+      listMembers: vi.fn().mockResolvedValue([{ id: 'm-1', display_name: '合成成员' }]),
+      getRiskDetail,
+      acknowledgeRisk,
+    } as unknown as ApiClient
+    const provider = new HttpDataProvider(client, () => ({
+      actorId: 'actor-1',
+      accessPurpose: 'family-care',
+      householdId: 'hh-1',
+    }))
+
+    setCapabilities({ phase: 'ready', available: ['risk-acknowledgement'], unavailable: [] })
+    try {
+      const card = await provider.acknowledgeRisk('m-1', 'risk-1', 'risk-ack-fixed')
+
+      expect(getRiskDetail).toHaveBeenCalledWith('hh-1', 'm-1', 'risk-1', expect.objectContaining({ actorId: 'actor-1' }))
+      expect(acknowledgeRisk).toHaveBeenCalledWith(
+        'hh-1',
+        'm-1',
+        'risk-1',
+        { rule_version: 'rules-v7', risk_fingerprint: 'f'.repeat(64) },
+        expect.objectContaining({ idempotencyKey: 'risk-ack-fixed' }),
+      )
+      expect(card).toMatchObject({
+        ruleId: 'risk-1',
+        acknowledged: true,
+        acknowledgement: { actorId: 'actor-1', replayed: false },
+        sourceEvents: [{ id: 'event-1', eventType: 'medication_added' }],
+      })
+
+      await provider.acknowledgeRisk('m-1', 'risk-1', 'risk-ack-fixed')
+      expect(acknowledgeRisk).toHaveBeenCalledTimes(2)
+      expect(acknowledgeRisk.mock.calls[1]?.[4]).toMatchObject({ idempotencyKey: 'risk-ack-fixed' })
+    } finally {
+      clearCapabilities()
+    }
+  })
+
+  it('服务端缺少版本或指纹时拒绝写回', async () => {
+    const getRiskDetail = vi.fn().mockResolvedValue({
+      alert: {
+        rule_id: 'risk-1', level: 'WARNING', message: '不完整风险', source_event_ids: [], created_at: null,
+        rule_version: null, risk_fingerprint: null,
+      },
+      source_events: [],
+    })
+    const acknowledgeRisk = vi.fn()
+    const client = {
+      listHouseholds: vi.fn().mockResolvedValue([{ id: 'hh-1', name: '合成家庭' }]),
+      listMembers: vi.fn().mockResolvedValue([{ id: 'm-1', display_name: '合成成员' }]),
+      getRiskDetail,
+      acknowledgeRisk,
+    } as unknown as ApiClient
+    const provider = new HttpDataProvider(client, () => ({ actorId: 'actor-1', accessPurpose: 'family-care', householdId: 'hh-1' }))
+
+    setCapabilities({ phase: 'ready', available: ['risk-acknowledgement'], unavailable: [] })
+    try {
+      await expect(provider.acknowledgeRisk('m-1', 'risk-1')).rejects.toThrow('未返回完整风险版本信息')
+      expect(acknowledgeRisk).not.toHaveBeenCalled()
+    } finally {
+      clearCapabilities()
+    }
+  })
+
+  it('服务端回执字段不完整时不返回已知晓卡片', async () => {
+    const getRiskDetail = vi.fn().mockResolvedValue({
+      alert: {
+        rule_id: 'risk-1', level: 'WARNING', message: '风险', source_event_ids: [], created_at: null,
+        rule_version: 'rules-v7', risk_fingerprint: 'f'.repeat(64), acknowledgement: null,
+      },
+      source_events: [],
+    })
+    const client = {
+      listHouseholds: vi.fn().mockResolvedValue([{ id: 'hh-1', name: '合成家庭' }]),
+      listMembers: vi.fn().mockResolvedValue([{ id: 'm-1', display_name: '合成成员' }]),
+      getRiskDetail,
+      acknowledgeRisk: vi.fn().mockResolvedValue({ receipt_id: '' }),
+    } as unknown as ApiClient
+    const provider = new HttpDataProvider(client, () => ({ actorId: 'actor-1', accessPurpose: 'family-care', householdId: 'hh-1' }))
+
+    setCapabilities({ phase: 'ready', available: ['risk-acknowledgement'], unavailable: [] })
+    try {
+      await expect(provider.acknowledgeRisk('m-1', 'risk-1', 'risk-ack-fixed')).rejects.toThrow('回执不完整')
+    } finally {
+      clearCapabilities()
+    }
+  })
+})
+
 describe('环境行动卡的受控降级（MOB-157）', () => {
   it('服务端未声明能力时不把旧环境数据或本地推断显示为行动卡', () => {
     clearCapabilities()
@@ -1135,5 +1275,272 @@ describe('知识条目只读详情（MOB-162）', () => {
       effectiveFrom: '2026-08-01T00:00:00Z',
     }])
     expect(Object.keys(docs[0]!)).not.toContain('content')
+  })
+})
+
+describe('服务端计划动作边界与漏服上报', () => {
+  function workbench(patch: Record<string, unknown> = {}): PlanWorkbenchResponse {
+    return {
+      member_id: 'm1',
+      generated_at: '2026-09-03T02:00:00Z',
+      plans: [
+        {
+          plan_event_id: 'p1',
+          drug: 'A药',
+          schedule: '每日早餐后',
+          status: 'REMINDER',
+          next_action_at: '2026-09-03T00:30:00Z',
+          allowed_actions: ['CONFIRM', 'DEFER', 'SKIP', 'MISS'],
+        },
+      ],
+      ...patch,
+    } as PlanWorkbenchResponse
+  }
+
+  it('工作台的 allowed_actions 决定按钮边界，并带出快照时间与状态文案', () => {
+    const policy = planActionPolicyFrom(workbench(), 'p1')
+    expect(policy).toMatchObject({
+      source: 'FAMILY_SERVER',
+      planVersion: '2026-09-03T02:00:00Z',
+      allowedActions: ['confirm', 'defer', 'skip', 'miss'],
+      nextAllowedAt: '2026-09-03T00:30:00Z',
+    })
+    expect(policy?.windowLabel).toContain('提醒窗口')
+  })
+
+  it('只允许部分动作时按服务端裁剪，顺序稳定', () => {
+    const policy = planActionPolicyFrom(
+      workbench({
+        plans: [{
+          plan_event_id: 'p1',
+          drug: 'A药',
+          schedule: '每日早餐后',
+          status: 'NORMAL',
+          next_action_at: '2026-09-03T00:30:00Z',
+          allowed_actions: ['MISS', 'CONFIRM'],
+        }],
+      }),
+      'p1',
+    )
+    expect(policy?.allowedActions).toEqual(['confirm', 'miss'])
+  })
+
+  it('疗程结束（空 allowed_actions）、计划缺失或工作台不可用时一律只读（fail-closed）', () => {
+    const completed = workbench({
+      plans: [{
+        plan_event_id: 'p1',
+        drug: 'A药',
+        schedule: '每日早餐后',
+        status: 'COMPLETED',
+        next_action_at: '2026-09-03T00:30:00Z',
+        allowed_actions: [],
+      }],
+    })
+    expect(planActionPolicyFrom(completed, 'p1')).toBeUndefined()
+    expect(planActionPolicyFrom(workbench(), 'other-plan')).toBeUndefined()
+    expect(planActionPolicyFrom(null, 'p1')).toBeUndefined()
+  })
+
+  it('今日快照把工作台动作边界挂到任务上；工作台请求失败时任务仍可见但保持只读', async () => {
+    const events = [makeEvent({ id: 'p1', event_type: 'plan_created', payload: { drug: 'A药', schedule: '每日早餐后' } })]
+    const baseClient = {
+      listHouseholds: vi.fn().mockResolvedValue([{ id: 'h1' }]),
+      listMembers: vi.fn().mockResolvedValue([{ id: 'm1', display_name: '王秀兰', role: 'DEPENDENT' }]),
+      listMemberTimeline: vi.fn().mockResolvedValue(events),
+      listMemberRisks: vi.fn().mockResolvedValue({ alerts: [] }),
+    }
+    const ok = new HttpDataProvider(
+      { ...baseClient, getPlanWorkbench: vi.fn().mockResolvedValue(workbench()) } as unknown as ApiClient,
+      () => ({ actorId: 'actor-1', accessPurpose: 'family-care', householdId: 'h1' }),
+    )
+    const snapshot = await ok.getTodaySnapshot('m1')
+    expect(snapshot.tasks[0]!.actionPolicy?.allowedActions).toEqual(['confirm', 'defer', 'skip', 'miss'])
+
+    const degraded = new HttpDataProvider(
+      {
+        ...baseClient,
+        getPlanWorkbench: vi.fn().mockRejectedValue(new ApiClientError('boom', { status: 502, code: 'HTTP_ERROR' })),
+      } as unknown as ApiClient,
+      () => ({ actorId: 'actor-1', accessPurpose: 'family-care', householdId: 'h1' }),
+    )
+    const fallback = await degraded.getTodaySnapshot('m1')
+    expect(fallback.tasks).toHaveLength(1)
+    expect(fallback.tasks[0]!.actionPolicy).toBeUndefined()
+  })
+
+  it('plan_missed 事件推导为已记漏服并带出原因，且不改写提醒时间', () => {
+    const events = [
+      makeEvent({ id: 'p1', event_type: 'plan_created', payload: { drug: 'A药', due_time: '08:30' } }),
+      makeEvent({
+        id: 'a1',
+        event_type: 'plan_missed',
+        payload: { plan_event_id: 'p1', reason: '出门忘记带药' },
+        occurred_at: '2026-09-03T02:00:00Z',
+      }),
+    ]
+    const tasks = deriveTasksFromEvents(events, 'm1', '王秀兰')
+    expect(tasks[0]!.status).toBe('MISSED')
+    expect(tasks[0]!.missReason).toBe('出门忘记带药')
+    const due = new Date(tasks[0]!.dueAt)
+    expect(due.getHours()).toBe(8)
+    expect(due.getMinutes()).toBe(30)
+  })
+
+  it('漏服上报必须带原因，并按 miss + plan_event_id 复用幂等键', async () => {
+    const missCarePlan = vi.fn().mockResolvedValue({})
+    const client = {
+      listHouseholds: vi.fn().mockResolvedValue([{ id: 'h1' }]),
+      missCarePlan,
+    } as unknown as ApiClient
+    const provider = new HttpDataProvider(client, () => ({ actorId: 'actor-1', accessPurpose: 'family-care', householdId: '' }))
+    const task: CareTask = {
+      id: 'task-1',
+      memberId: 'm1',
+      memberName: '演示成员',
+      title: '演示计划',
+      detail: '演示',
+      level: 'INFO',
+      dueAt: '2026-09-03T08:00:00Z',
+      status: 'PENDING',
+      planEventId: 'plan-1',
+    }
+    ;(provider as unknown as { taskCache: Map<string, CareTask> }).taskCache.set(task.id, task)
+
+    await expect(provider.submitTaskAction(task.id, 'miss', { reason: '  ' })).rejects.toThrow(/原因/)
+    expect(missCarePlan).not.toHaveBeenCalled()
+
+    const updated = await provider.submitTaskAction(task.id, 'miss', { reason: '出门忘记带药' })
+
+    expect(missCarePlan).toHaveBeenCalledWith('h1', 'm1', 'plan-1', '出门忘记带药', expect.objectContaining({
+      idempotencyKey: 'miss:plan-1',
+    }))
+    expect(updated.status).toBe('MISSED')
+    expect(updated.missReason).toBe('出门忘记带药')
+    // 漏服只记录事实：提醒时间不被客户端改写。
+    expect(updated.dueAt).toBe('2026-09-03T08:00:00Z')
+  })
+})
+
+describe('知识条目检索', () => {
+  const retrieveResponse = {
+    query: '漏服',
+    results: [{
+      chunk_id: 'chunk-1',
+      document_id: 'doc-1',
+      title: '用药说明',
+      source: '家庭服务器知识库',
+      version: 'idx-2026-08-28',
+      text: '漏服时先记录事实，不要自行补服。',
+      locator: '第 3 节',
+      score: 0.8123,
+      match_reason: 'term-overlap',
+    }],
+    total: 1,
+    query_id: 'q-1',
+  }
+
+  function searchProvider(response: unknown) {
+    const retrieveKnowledge = vi.fn().mockResolvedValue(response)
+    const provider = new HttpDataProvider(
+      { retrieveKnowledge } as unknown as ApiClient,
+      () => ({ actorId: 'actor-1', accessPurpose: 'family-care', householdId: 'hh-1' }),
+    )
+    return { provider, retrieveKnowledge }
+  }
+
+  it('服务端未声明 knowledge-store 能力时不发请求，按不可用如实返回', async () => {
+    clearCapabilities()
+    const { provider, retrieveKnowledge } = searchProvider(retrieveResponse)
+
+    const result = await provider.searchKnowledge('漏服')
+
+    expect(retrieveKnowledge).not.toHaveBeenCalled()
+    expect(result).toMatchObject({ degraded: true, hits: [], total: 0 })
+    expect(result.reason).toContain('未提供知识库能力')
+  })
+
+  it('空检索词不发请求；检索词只进请求体并带上已选家庭', async () => {
+    setCapabilities({ phase: 'test', available: ['knowledge-store'], unavailable: [] })
+    const { provider, retrieveKnowledge } = searchProvider(retrieveResponse)
+
+    const blank = await provider.searchKnowledge('   ')
+    expect(blank.degraded).toBe(true)
+    expect(retrieveKnowledge).not.toHaveBeenCalled()
+
+    const result = await provider.searchKnowledge('  漏服  ')
+
+    expect(retrieveKnowledge).toHaveBeenCalledWith(
+      { query: '漏服', household_id: 'hh-1', top_k: 8 },
+      expect.objectContaining({ actorId: 'actor-1' }),
+    )
+    expect(result.degraded).toBe(false)
+    expect(result.total).toBe(1)
+    expect(result.hits[0]).toEqual({
+      chunkId: 'chunk-1',
+      documentId: 'doc-1',
+      title: '用药说明',
+      source: '家庭服务器知识库',
+      version: 'idx-2026-08-28',
+      text: '漏服时先记录事实，不要自行补服。',
+      locator: '第 3 节',
+      score: 0.8123,
+      matchReason: 'term-overlap',
+    })
+    clearCapabilities()
+  })
+
+  it('服务端降级时不展示任何命中，并把降级代码翻译成可读原因', async () => {
+    setCapabilities({ phase: 'test', available: ['knowledge-store'], unavailable: [] })
+    const { provider } = searchProvider({
+      query: '漏服',
+      results: [],
+      total: 0,
+      degraded: true,
+      degrade_reason: 'NO_AUTHORISED_DOCUMENTS',
+    })
+
+    const result = await provider.searchKnowledge('漏服')
+
+    expect(result.hits).toEqual([])
+    expect(result.reason).toContain('没有被授权的知识条目')
+    clearCapabilities()
+  })
+
+  it('降级代码逐条翻译，未知代码不猜测原因', () => {
+    expect(knowledgeDegradeReason('EMPTY_INDEX')).toContain('知识索引为空')
+    expect(knowledgeDegradeReason('NO_RELEVANT_RESULTS')).toContain('没有匹配到相关条目')
+    expect(knowledgeDegradeReason('EMPTY_QUERY')).toContain('请输入')
+    expect(knowledgeDegradeReason('SOMETHING_NEW')).toContain('未提供可展示的检索结果')
+    expect(knowledgeDegradeReason(null)).toContain('未提供可展示的检索结果')
+  })
+})
+
+describe('视觉任务主动取消', () => {
+  it('取消走 POST cancel 端点、复用同一 taskId，并原样采纳服务端终态', async () => {
+    const cancelVisionTask = vi.fn().mockResolvedValue({
+      id: 'vision-1',
+      household_id: 'h1',
+      member_id: 'm1',
+      file_id: 'stored.jpg',
+      task_type: 'ocr',
+      status: 'cancelled',
+      error_code: null,
+      error_message: null,
+      result: null,
+      model_version: null,
+      created_by: 'actor-1',
+      created_at: '2026-09-03T08:00:00Z',
+    })
+    const provider = new HttpDataProvider(
+      { cancelVisionTask } as unknown as ApiClient,
+      () => ({ actorId: 'actor-1', accessPurpose: 'family-care', householdId: 'h1' }),
+    )
+
+    const snapshot = await provider.cancelVisionTask('vision-1')
+
+    expect(cancelVisionTask).toHaveBeenCalledWith('vision-1', expect.objectContaining({
+      idempotencyKey: 'vision-cancel:vision-1',
+    }))
+    expect(snapshot).toMatchObject({ taskId: 'vision-1', status: 'cancelled', terminal: true, errorCode: null })
   })
 })

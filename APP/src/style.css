@@ -1,5 +1,5 @@
-/* 家健镜随身版设计系统 v4 —— 玻璃质感 + 氛围背景 + 深色模式 + 立体光影：
-   材质（玻璃/高光/洼地/输入底）全部抽象为变量，浅色/深色/高对比三套联动。
+/* 家健镜随身版设计系统 v5 —— 与网页端共用「暖阳纸笺」设计语言：
+   暖纸背景、松绿主色、陶土强调色和纸感卡片。保留移动端安全区、触控和无障碍令牌。
    无障碍模式由 <html> data-* 驱动：data-theme（light/dark）、data-contrast、
    data-motion、data-font-scale、data-elder。 */
 
@@ -11,76 +11,92 @@
   --hct-safe-area-right: var(--safe-area-inset-right, env(safe-area-inset-right, 0px));
   --hct-safe-area-bottom: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
   --hct-safe-area-left: var(--safe-area-inset-left, env(safe-area-inset-left, 0px));
-  --r-card: 24px;
-  --r-btn: 16px;
+  --r-card: 18px;
+  --r-btn: 13px;
   --r-pill: 999px;
   --hct-bottom-clearance: 116px;
   --speed: 0.24s;
   --ease: cubic-bezier(0.32, 0.72, 0.24, 1);
   --ease-spring: cubic-bezier(0.34, 1.45, 0.5, 1);
 
-  --c-bg: #f5f1e8;
-  --c-bg-deep: #ebe5d7;
-  --c-surface: rgba(255, 255, 255, 0.72);
+  /* 日光浅色基线：提高页面明度，同时保留纸张与松绿的品牌识别。 */
+  --c-bg: #fffaf1;
+  --c-bg-deep: #f4ecdc;
+  --c-surface: rgba(255, 255, 255, 0.9);
   --c-surface-solid: #ffffff;
 
-  --c-ink: #24352e;
-  --c-ink-soft: #53645c;
-  --c-ink-faint: #7f8d85;
-  --c-line: rgba(255, 255, 255, 0.65);
-  --c-line-strong: #c9c2b0;
+  --c-ink: #2f362f;
+  --c-ink-soft: #5a645d;
+  --c-ink-faint: #66736a;
+  --c-line: rgba(210, 224, 214, 0.9);
+  --c-line-strong: #bfd2c3;
 
-  --c-brand: #2f6d5a;
-  --c-brand-strong: #275e4d;
-  --c-brand-deep: #1b4437;
-  --c-brand-soft: rgba(47, 109, 90, 0.12);
-  --c-brand-softer: rgba(47, 109, 90, 0.07);
+  --c-brand: #3d7a63;
+  --c-brand-strong: #2e644e;
+  --c-brand-deep: #23543f;
+  --c-brand-soft: #e0efe8;
+  --c-brand-softer: rgba(61, 122, 99, 0.1);
 
-  --c-accent: #e9a05c;
-  --c-accent-deep: #8a5314;
-  --c-accent-soft: rgba(233, 160, 92, 0.16);
-  --c-danger: #d2604f;
-  --c-danger-deep: #96311f;
-  --c-danger-soft: rgba(210, 96, 79, 0.14);
-  --c-warn: #dd8a3d;
-  --c-warn-deep: #8a4f14;
-  --c-warn-soft: rgba(221, 138, 61, 0.15);
-  --c-info: #4e8d9c;
-  --c-info-deep: #2b5a66;
-  --c-info-soft: rgba(78, 141, 156, 0.14);
-  --c-calm: #57996f;
-  --c-calm-deep: #2f6647;
-  --c-calm-soft: rgba(87, 153, 111, 0.15);
+  --c-accent: #c26744;
+  --c-accent-deep: #a95336;
+  --c-accent-soft: #f6e3d8;
+  --c-danger: #ad4152;
+  --c-danger-deep: #8c3341;
+  --c-danger-soft: #f4dde0;
+  --c-warn: #a97e1f;
+  --c-warn-deep: #7c5c14;
+  --c-warn-soft: #f4e8c8;
+  --c-info: #47708c;
+  --c-info-deep: #38596f;
+  --c-info-soft: #dfe9ef;
+  --c-calm: #6e8a74;
+  --c-calm-deep: #48604d;
+  --c-calm-soft: #e6ede4;
 
   /* 材质 */
-  --glass-blur: blur(20px) saturate(1.5);
-  --glass-bg: rgba(255, 255, 255, 0.68);
-  --glass-border: rgba(255, 255, 255, 0.7);
-  --glass-chip: rgba(255, 255, 255, 0.55);
-  --sheen: rgba(255, 255, 255, 0.7);
-  --hilite: rgba(255, 255, 255, 0.6);
-  --well-bg: rgba(37, 55, 48, 0.05);
-  --input-bg: rgba(255, 255, 255, 0.82);
-  --divider: rgba(37, 55, 48, 0.08);
+  --glass-blur: blur(16px);
+  --glass-bg: rgba(255, 255, 255, 0.94);
+  --glass-border: rgba(255, 255, 255, 0.86);
+  --glass-chip: rgba(255, 255, 255, 0.88);
+  --sheen: rgba(255, 255, 255, 0.84);
+  --hilite: rgba(255, 255, 255, 0.82);
+  --well-bg: rgba(61, 122, 99, 0.065);
+  --input-bg: rgba(255, 255, 255, 0.94);
+  --divider: #e7efe8;
+
+  /* 与网页端 aurora / fireflies 层共用的氛围色；低透明度避免干扰正文。 */
+  --aurora-1: rgba(194, 103, 68, 0.38);
+  --aurora-2: rgba(61, 122, 99, 0.32);
+  --aurora-3: rgba(169, 126, 31, 0.22);
+  --firefly-color: rgba(194, 103, 68, 0.72);
 
   --grad-brand:
-    radial-gradient(120% 140% at 85% -20%, rgba(255, 236, 200, 0.35) 0%, transparent 55%),
-    linear-gradient(135deg, #418569 0%, #2f6d5a 52%, #1f5240 100%);
-  --grad-btn: linear-gradient(180deg, #3b7f67 0%, #2f6d5a 55%, #295f4e 100%);
+    radial-gradient(120% 140% at 85% -20%, rgba(194, 103, 68, 0.22) 0%, transparent 55%),
+    linear-gradient(135deg, #3d7a63 0%, #2e644e 70%, #23543f 100%);
+  --grad-btn: linear-gradient(180deg, #528f75 0%, #3d7a63 55%, #2e644e 100%);
+  --app-bg:
+    radial-gradient(900px 520px at 95% -12%, rgba(194, 103, 68, 0.09), transparent 60%),
+    radial-gradient(720px 500px at -12% 34%, rgba(61, 122, 99, 0.13), transparent 56%),
+    radial-gradient(660px 440px at 70% 108%, rgba(169, 126, 31, 0.09), transparent 58%),
+    var(--c-bg);
 
-  --shadow-card: 0 16px 40px -20px rgba(37, 55, 48, 0.28);
-  --shadow-float: 0 22px 52px -20px rgba(37, 55, 48, 0.4);
-  --shadow-press: 0 6px 16px -10px rgba(37, 55, 48, 0.35);
-  --shadow-btn: 0 10px 22px -10px rgba(47, 109, 90, 0.6);
-  --focus-ring: #2f6d5a;
+  --shadow-card: 0 1px 2px rgba(84, 70, 41, 0.04), 0 10px 30px -12px rgba(84, 70, 41, 0.14);
+  --shadow-float: 0 2px 4px rgba(84, 70, 41, 0.05), 0 18px 40px -14px rgba(84, 70, 41, 0.2);
+  --shadow-press: 0 4px 12px -8px rgba(84, 70, 41, 0.22);
+  --shadow-btn: 0 10px 22px -11px rgba(46, 100, 78, 0.46);
+  --focus-ring: #3d7a63;
 
-  /* 氛围色斑 */
-  --blob-a: rgba(65, 133, 105, 0.34);
-  --blob-b: rgba(238, 173, 108, 0.3);
-  --blob-c: rgba(78, 141, 156, 0.24);
-  --deco-ring: rgba(47, 109, 90, 0.14);
-  --deco-ring-2: rgba(233, 160, 92, 0.22);
-  --deco-leaf: rgba(47, 109, 90, 0.16);
+  /* 兼容旧版 scoped 视图：统一映射到当前暖阳纸笺令牌，避免主题切换后
+     知识库引用高亮、焦点环、错误提示等样式因变量缺失而静默失效。 */
+  --accent: var(--c-accent);
+  --surface: var(--c-surface);
+  --text: var(--c-ink);
+  --muted: var(--c-ink-soft);
+  --danger: var(--c-danger);
+  --line: var(--c-line);
+  --c-border: var(--c-line);
+  --c-surface-soft: var(--well-bg);
+  --c-ink-muted: var(--c-ink-faint);
 }
 
 html[data-font-scale='large'] {
@@ -100,22 +116,23 @@ html[data-elder='on'] {
 
 /* ---- 深色模式（森林夜） ---- */
 html[data-theme='dark'] {
-  --c-bg: #0f1714;
-  --c-bg-deep: #18231e;
-  --c-surface: rgba(26, 38, 33, 0.66);
-  --c-surface-solid: #1b2721;
+  /* 深色模式也保持足够的环境亮度，避免 OLED 黑底导致层次丢失。 */
+  --c-bg: #17251f;
+  --c-bg-deep: #21372c;
+  --c-surface: rgba(42, 61, 51, 0.84);
+  --c-surface-solid: #2b4437;
 
   --c-ink: #e9f1eb;
-  --c-ink-soft: #aabbb1;
-  --c-ink-faint: #7d8f85;
-  --c-line: rgba(255, 255, 255, 0.1);
-  --c-line-strong: #47584f;
+  --c-ink-soft: #c7d7cc;
+  --c-ink-faint: #a2b5a8;
+  --c-line: rgba(210, 234, 219, 0.2);
+  --c-line-strong: #587765;
 
-  --c-brand: #4aa17f;
-  --c-brand-strong: #58b28f;
-  --c-brand-deep: #9fe0c4;
-  --c-brand-soft: rgba(74, 161, 127, 0.16);
-  --c-brand-softer: rgba(74, 161, 127, 0.1);
+  --c-brand: #69c59b;
+  --c-brand-strong: #7bd3a9;
+  --c-brand-deep: #bcebd1;
+  --c-brand-soft: rgba(105, 197, 155, 0.2);
+  --c-brand-softer: rgba(105, 197, 155, 0.14);
 
   --c-accent: #f0aa66;
   --c-accent-deep: #ffd9a8;
@@ -133,32 +150,34 @@ html[data-theme='dark'] {
   --c-calm-deep: #b4e6c7;
   --c-calm-soft: rgba(102, 179, 132, 0.16);
 
-  --glass-bg: rgba(24, 36, 30, 0.62);
-  --glass-border: rgba(255, 255, 255, 0.12);
-  --glass-chip: rgba(255, 255, 255, 0.07);
-  --sheen: rgba(255, 255, 255, 0.12);
-  --hilite: rgba(255, 255, 255, 0.09);
-  --well-bg: rgba(255, 255, 255, 0.06);
-  --input-bg: rgba(255, 255, 255, 0.07);
-  --divider: rgba(255, 255, 255, 0.08);
+  --glass-bg: rgba(39, 58, 48, 0.84);
+  --glass-border: rgba(255, 255, 255, 0.18);
+  --glass-chip: rgba(255, 255, 255, 0.12);
+  --sheen: rgba(255, 255, 255, 0.16);
+  --hilite: rgba(255, 255, 255, 0.14);
+  --well-bg: rgba(148, 221, 180, 0.12);
+  --input-bg: rgba(255, 255, 255, 0.12);
+  --divider: rgba(215, 235, 221, 0.16);
+
+  --aurora-1: rgba(240, 170, 102, 0.28);
+  --aurora-2: rgba(74, 161, 127, 0.3);
+  --aurora-3: rgba(102, 179, 132, 0.2);
+  --firefly-color: rgba(240, 170, 102, 0.68);
 
   --grad-brand:
     radial-gradient(130% 130% at 80% -25%, rgba(255, 214, 156, 0.16) 0%, transparent 55%),
-    linear-gradient(135deg, #235244 0%, #1a4034 52%, #102b22 100%);
-  --grad-btn: linear-gradient(180deg, #3f8f71 0%, #2f7a5d 55%, #276750 100%);
+    linear-gradient(135deg, #356a57 0%, #285743 52%, #1e4134 100%);
+  --grad-btn: linear-gradient(180deg, #67bf96 0%, #459f78 55%, #347e5e 100%);
+  --app-bg:
+    radial-gradient(820px 520px at 96% -12%, rgba(224, 145, 106, 0.12), transparent 60%),
+    radial-gradient(720px 520px at -12% 36%, rgba(79, 169, 138, 0.11), transparent 56%),
+    #17251f;
 
   --shadow-card: 0 18px 44px -20px rgba(0, 0, 0, 0.6);
   --shadow-float: 0 24px 56px -20px rgba(0, 0, 0, 0.7);
   --shadow-press: 0 6px 16px -10px rgba(0, 0, 0, 0.6);
   --shadow-btn: 0 10px 24px -10px rgba(0, 0, 0, 0.55);
-  --focus-ring: #7fd7b3;
-
-  --blob-a: rgba(74, 161, 127, 0.17);
-  --blob-b: rgba(240, 170, 102, 0.11);
-  --blob-c: rgba(99, 169, 184, 0.12);
-  --deco-ring: rgba(255, 255, 255, 0.08);
-  --deco-ring-2: rgba(240, 170, 102, 0.16);
-  --deco-leaf: rgba(255, 255, 255, 0.09);
+  --focus-ring: #9ce4be;
 
   color-scheme: dark;
 }
@@ -200,11 +219,22 @@ html[data-contrast='high'] {
   --divider: #3a453f;
   --grad-brand: linear-gradient(0deg, #123f32, #123f32);
   --grad-btn: linear-gradient(0deg, #123f32, #123f32);
+  --app-bg: #ffffff;
   --shadow-card: none;
   --shadow-float: 0 0 0 2px #000000;
   --shadow-press: none;
   --shadow-btn: none;
   --focus-ring: #000000;
+  /* 高对比模式显式收紧兼容别名，保证旧视图也满足黑白强对比门槛。 */
+  --accent: #000000;
+  --surface: #ffffff;
+  --text: #000000;
+  --muted: #1c2621;
+  --danger: #8f1f0e;
+  --line: #3a453f;
+  --c-border: #000000;
+  --c-surface-soft: #ffffff;
+  --c-ink-muted: #313d37;
   color-scheme: light;
 }
 
@@ -222,10 +252,9 @@ html { font-size: calc(16px * var(--scale)); }
 
 body {
   margin: 0;
-  background: var(--c-bg);
+  background: var(--app-bg);
   color: var(--c-ink);
-  font-family: 'PingFang SC', 'HarmonyOS Sans SC', 'MiSans', 'Microsoft YaHei',
-    ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-family: 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', 'Segoe UI', system-ui, sans-serif;
   line-height: 1.55;
   text-rendering: optimizeLegibility;
   -webkit-tap-highlight-color: transparent;
@@ -234,6 +263,115 @@ body {
   min-height: 100vh;
   min-height: 100dvh;
   transition: background 0.4s ease, color 0.4s ease;
+}
+
+/* 与网页端一致的轻纸纹；纯 CSS 生成，不请求外部资源。 */
+body::after {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  content: '';
+  opacity: 0.045;
+  mix-blend-mode: soft-light;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ---------- 网页端同款氛围动效（移动端轻量版） ---------- */
+
+.ambient-aurora {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.ambient-aurora span {
+  position: absolute;
+  width: clamp(230px, 72vw, 420px);
+  height: clamp(230px, 72vw, 420px);
+  border-radius: 50%;
+  filter: blur(48px);
+  opacity: 0.42;
+  will-change: transform;
+  mix-blend-mode: soft-light;
+}
+
+.ambient-aurora span:nth-child(1) {
+  top: -18%;
+  right: -26%;
+  background: radial-gradient(circle, var(--aurora-1), transparent 68%);
+  animation: ambient-aurora-drift 25s ease-in-out infinite;
+}
+
+.ambient-aurora span:nth-child(2) {
+  top: 30%;
+  left: -34%;
+  background: radial-gradient(circle, var(--aurora-2), transparent 68%);
+  animation: ambient-aurora-drift 32s ease-in-out -9s infinite reverse;
+}
+
+.ambient-aurora span:nth-child(3) {
+  right: 8%;
+  bottom: -24%;
+  background: radial-gradient(circle, var(--aurora-3), transparent 68%);
+  animation: ambient-aurora-drift 29s ease-in-out -16s infinite;
+}
+
+@keyframes ambient-aurora-drift {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  33% { transform: translate3d(24px, -18px, 0) scale(1.06); }
+  66% { transform: translate3d(-18px, 16px, 0) scale(0.95); }
+}
+
+.ambient-fireflies {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.ambient-fireflies i {
+  position: absolute;
+  bottom: -18px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--firefly-color), transparent 72%);
+  opacity: 0;
+  animation: ambient-firefly-rise linear infinite;
+}
+
+.ambient-fireflies i:nth-child(1) { left: 10%; animation-duration: 20s; animation-delay: -2s; }
+.ambient-fireflies i:nth-child(2) { left: 24%; width: 4px; height: 4px; animation-duration: 26s; animation-delay: -11s; }
+.ambient-fireflies i:nth-child(3) { left: 39%; animation-duration: 18s; animation-delay: -6s; }
+.ambient-fireflies i:nth-child(4) { left: 52%; width: 8px; height: 8px; animation-duration: 29s; animation-delay: -18s; }
+.ambient-fireflies i:nth-child(5) { left: 66%; width: 4px; height: 4px; animation-duration: 22s; animation-delay: -8s; }
+.ambient-fireflies i:nth-child(6) { left: 76%; animation-duration: 25s; animation-delay: -15s; }
+.ambient-fireflies i:nth-child(7) { left: 88%; width: 5px; height: 5px; animation-duration: 19s; animation-delay: -4s; }
+.ambient-fireflies i:nth-child(8) { left: 94%; width: 4px; height: 4px; animation-duration: 27s; animation-delay: -21s; }
+
+@keyframes ambient-firefly-rise {
+  0% { opacity: 0; transform: translate3d(0, 0, 0) scale(0.72); }
+  14% { opacity: 0.7; }
+  54% { opacity: 0.35; transform: translate3d(18px, -46vh, 0) scale(1); }
+  88% { opacity: 0.55; }
+  100% { opacity: 0; transform: translate3d(-14px, -96vh, 0) scale(0.78); }
+}
+
+/* 纯装饰层在高对比和减弱动效模式中完全关闭，避免影响可读性。 */
+html[data-contrast='high'] .ambient-aurora,
+html[data-contrast='high'] .ambient-fireflies,
+html[data-motion='reduced'] .ambient-aurora,
+html[data-motion='reduced'] .ambient-fireflies {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ambient-aurora,
+  .ambient-fireflies { display: none; }
 }
 
 html[data-motion='reduced'] *,
@@ -256,123 +394,11 @@ html[data-motion='reduced'] *::after {
   }
 }
 
-/* ---- 氛围背景场景 ---- */
-
-.bg-scene {
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  overflow: hidden;
-  pointer-events: none;
-}
-
-/* AI 生成的水彩氛围底图：随主题切换，缓慢 Ken Burns 呼吸 */
-.bg-art {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  opacity: 0;
-  transition: opacity 0.6s ease;
-  animation: kenburns 70s ease-in-out infinite alternate;
-  will-change: transform;
-}
-html[data-theme='light'] .bg-art--light { opacity: 0.62; }
-html[data-theme='dark'] .bg-art--dark { opacity: 0.85; }
-
-@keyframes kenburns {
-  from { transform: scale(1) translateY(0); }
-  to { transform: scale(1.08) translateY(-1.5%); }
-}
-
-.blob {
-  position: absolute;
-  border-radius: 50%;
-  will-change: transform;
-}
-.blob-a {
-  width: 62vmax;
-  height: 62vmax;
-  left: -22vmax;
-  top: -18vmax;
-  background: radial-gradient(circle, var(--blob-a) 0%, transparent 68%);
-  animation: drift-a 34s ease-in-out infinite alternate;
-}
-.blob-b {
-  width: 48vmax;
-  height: 48vmax;
-  right: -18vmax;
-  top: 8vh;
-  background: radial-gradient(circle, var(--blob-b) 0%, transparent 66%);
-  animation: drift-b 42s ease-in-out infinite alternate;
-}
-.blob-c {
-  width: 56vmax;
-  height: 56vmax;
-  left: 8vw;
-  bottom: -30vmax;
-  background: radial-gradient(circle, var(--blob-c) 0%, transparent 66%);
-  animation: drift-c 48s ease-in-out infinite alternate;
-}
-
-@keyframes drift-a {
-  from { transform: translate3d(0, 0, 0) scale(1); }
-  to { transform: translate3d(9vw, 7vh, 0) scale(1.14); }
-}
-@keyframes drift-b {
-  from { transform: translate3d(0, 0, 0) scale(1.08); }
-  to { transform: translate3d(-8vw, 12vh, 0) scale(0.94); }
-}
-@keyframes drift-c {
-  from { transform: translate3d(0, 0, 0) scale(1); }
-  to { transform: translate3d(6vw, -9vh, 0) scale(1.1); }
-}
-
-.ring-deco {
-  position: absolute;
-  border-radius: 50%;
-  border: 1.5px solid var(--deco-ring);
-}
-.ring-deco--a {
-  width: 260px;
-  height: 260px;
-  right: -70px;
-  top: 16vh;
-  animation: bob 12s ease-in-out infinite alternate;
-}
-.ring-deco--b {
-  width: 150px;
-  height: 150px;
-  left: -40px;
-  top: 58vh;
-  border-style: dashed;
-  border-color: var(--deco-ring-2);
-  animation: spin-slow 60s linear infinite;
-}
-
-.leaf-deco {
-  position: absolute;
-  color: var(--deco-leaf);
-  animation: bob 14s ease-in-out infinite alternate;
-}
-.leaf-deco--a { right: 12vw; top: 66vh; transform: rotate(-18deg); }
-.leaf-deco--b { left: 9vw; top: 30vh; transform: rotate(24deg) scale(0.72); animation-delay: -6s; }
-
-@keyframes bob {
-  from { translate: 0 0; }
-  to { translate: 0 -22px; }
-}
-@keyframes spin-slow {
-  to { transform: rotate(360deg); }
-}
-
-html[data-contrast='high'] .bg-scene { display: none; }
-
 h1, h2, h3, p { margin: 0; overflow-wrap: anywhere; }
-h1 { font-size: 1.5rem; line-height: 1.25; font-weight: 800; letter-spacing: 0.01em; }
-h2 { font-size: 1.08rem; line-height: 1.35; font-weight: 800; }
-h3 { font-size: 1rem; font-weight: 700; }
+h1, h2, h3 { font-family: 'Noto Serif SC', 'Source Han Serif SC', 'STZhongsong', 'SimSun', Georgia, serif; }
+h1 { font-size: 1.5rem; line-height: 1.25; font-weight: 650; letter-spacing: 0.015em; }
+h2 { font-size: 1.08rem; line-height: 1.35; font-weight: 650; }
+h3 { font-size: 1rem; font-weight: 650; }
 ul, ol { margin: 0; padding: 0; list-style: none; }
 a { color: var(--c-brand); }
 
@@ -404,6 +430,8 @@ html[data-contrast='high'] :focus-visible { outline-width: 4px; }
   width: 100%;
   max-width: 560px;
   margin: 0 auto;
+  position: relative;
+  z-index: 1;
   padding: max(20px, var(--hct-safe-area-top)) max(18px, var(--hct-safe-area-right))
     calc(var(--hct-bottom-clearance) + var(--hct-safe-area-bottom)) max(18px, var(--hct-safe-area-left));
   display: grid;
@@ -424,7 +452,7 @@ html[data-contrast='high'] :focus-visible { outline-width: 4px; }
   .screen {
     max-width: 960px;
     padding-top: max(14px, var(--hct-safe-area-top));
-    padding-inline: max(24px, var(--hct-safe-area-right)) max(24px, var(--hct-safe-area-left));
+    padding-inline: max(24px, var(--hct-safe-area-left)) max(24px, var(--hct-safe-area-right));
     gap: 14px;
   }
 
@@ -450,7 +478,7 @@ html[data-contrast='high'] :focus-visible { outline-width: 4px; }
 @media (orientation: landscape) and (max-height: 560px) {
   :root { --hct-bottom-clearance: 82px; }
 
-  .screen { padding-inline: max(16px, var(--hct-safe-area-right)) max(16px, var(--hct-safe-area-left)); gap: 12px; }
+  .screen { padding-inline: max(16px, var(--hct-safe-area-left)) max(16px, var(--hct-safe-area-right)); gap: 12px; }
   .card { padding: 14px; }
   .hero { padding: 14px 16px; gap: 9px; }
   .tabbar-wrap { bottom: calc(8px + var(--hct-safe-area-bottom)); padding-inline: 12px; }
@@ -462,10 +490,10 @@ html[data-contrast='high'] :focus-visible { outline-width: 4px; }
 @media (horizontal-viewport-segments: 2) {
   .screen {
     max-width: 100%;
-    padding-inline: max(28px, var(--hct-safe-area-right)) max(28px, var(--hct-safe-area-left));
+    padding-inline: max(28px, var(--hct-safe-area-left)) max(28px, var(--hct-safe-area-right));
   }
 
-  .tabbar-wrap { padding-inline: max(20px, var(--hct-safe-area-right)) max(20px, var(--hct-safe-area-left)); }
+  .tabbar-wrap { padding-inline: max(20px, var(--hct-safe-area-left)) max(20px, var(--hct-safe-area-right)); }
 }
 
 .page-enter-active {

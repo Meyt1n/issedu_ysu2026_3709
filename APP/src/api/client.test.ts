@@ -33,6 +33,26 @@ describe('ApiClient 鉴权传输适配', () => {
     expect(() => new ApiClient({ baseUrl: 'http://example.com:8000' })).toThrow('明文 HTTP')
   })
 
+  it('为时间线请求保留可审计的页面上下文', async () => {
+    let url = ''
+    const client = new ApiClient({
+      baseUrl: 'http://127.0.0.1:8000',
+      fetcher: async input => {
+        url = String(input)
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          text: async () => '[]',
+        } as Response
+      },
+    })
+
+    await client.listMemberTimeline('household-1', 'member-1', undefined, 'weekly-trend')
+
+    expect(url).toBe('http://127.0.0.1:8000/api/v1/households/household-1/members/member-1/timeline?context=weekly-trend')
+  })
+
   it('正式 bearer 会话发送 Authorization，并停止发送开发期身份头', async () => {
     let request: RequestInit | undefined
     const session: AuthSession = {
@@ -181,6 +201,54 @@ describe('首页健康资讯（MOB-159）', () => {
     expect(news.status).toBe('local_only')
     expect(news.items).toEqual([])
     expect(url).not.toMatch(/duckduckgo|rss|news\.google/i)
+  })
+})
+
+describe('风险知晓回写（MOB-156）', () => {
+  it('POST 风险版本与指纹，并透传幂等键', async () => {
+    let url = ''
+    let request: RequestInit | undefined
+    const client = new ApiClient({
+      baseUrl: 'http://192.168.1.8:8000',
+      fetcher: async (input, init) => {
+        url = String(input)
+        request = init
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'x-request-id': 'risk-ack-request-1' }),
+          text: async () => JSON.stringify({
+            receipt_id: 'receipt-1',
+            household_id: 'household-1',
+            member_id: 'member-1',
+            rule_id: 'expiry/check',
+            rule_version: 'rules-v7',
+            risk_fingerprint: 'f'.repeat(64),
+            actor_id: 'owner',
+            acknowledged_at: '2026-08-20T02:00:00Z',
+            replayed: false,
+          }),
+        } as Response
+      },
+    })
+
+    await client.acknowledgeRisk(
+      'household-1',
+      'member-1',
+      'expiry/check',
+      { rule_version: 'rules-v7', risk_fingerprint: 'f'.repeat(64) },
+      { actorId: 'owner', idempotencyKey: 'risk-ack-1' },
+    )
+
+    expect(url).toBe(
+      'http://192.168.1.8:8000/api/v1/households/household-1/members/member-1/risks/expiry%2Fcheck/acknowledge',
+    )
+    expect(request?.method).toBe('POST')
+    expect(new Headers(request?.headers).get('Idempotency-Key')).toBe('risk-ack-1')
+    expect(JSON.parse(String(request?.body))).toEqual({
+      rule_version: 'rules-v7',
+      risk_fingerprint: 'f'.repeat(64),
+    })
   })
 })
 
@@ -509,5 +577,68 @@ describe('请求回执追踪与超时区分（MOB-144）', () => {
       undefined,
       { signal: abortController.signal },
     )).rejects.toMatchObject({ code: 'CANCELLED' })
+  })
+})
+
+describe('计划动作、知识检索与任务取消的端点形态', () => {
+  function recordingClient(body: unknown = {}) {
+    const calls: { url: string; init: RequestInit }[] = []
+    const client = new ApiClient({
+      baseUrl: 'http://127.0.0.1:8000',
+      fetcher: async (input, init = {}) => {
+        calls.push({ url: String(input), init })
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          text: async () => JSON.stringify(body),
+        } as Response
+      },
+    })
+    return { client, calls }
+  }
+
+  it('漏服上报用 POST plans/missed，并对计划 ID 与原因做 URL 编码', async () => {
+    const { client, calls } = recordingClient()
+
+    await client.missCarePlan('h 1', 'm1', 'plan/1 a', '出门忘记带药')
+
+    expect(calls[0]!.init.method).toBe('POST')
+    expect(calls[0]!.url).toBe(
+      'http://127.0.0.1:8000/api/v1/households/h 1/members/m1/plans/missed'
+      + '?plan_event_id=plan%2F1%20a&reason=%E5%87%BA%E9%97%A8%E5%BF%98%E8%AE%B0%E5%B8%A6%E8%8D%AF',
+    )
+  })
+
+  it('计划工作台是只读 GET，不带请求体', async () => {
+    const { client, calls } = recordingClient({ member_id: 'm1', generated_at: '2026-09-03T02:00:00Z', plans: [] })
+
+    await client.getPlanWorkbench('h1', 'm1')
+
+    expect(calls[0]!.url).toBe('http://127.0.0.1:8000/api/v1/households/h1/members/m1/plan-workbench')
+    expect(calls[0]!.init.body).toBeUndefined()
+  })
+
+  it('知识检索走 POST body，检索词不进 URL', async () => {
+    const { client, calls } = recordingClient({ query: '漏服', results: [], total: 0 })
+
+    await client.retrieveKnowledge({ query: '漏服怎么记录', household_id: 'h1', top_k: 8 })
+
+    expect(calls[0]!.url).toBe('http://127.0.0.1:8000/api/v1/knowledge/retrieve')
+    expect(calls[0]!.url).not.toContain('漏服')
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({
+      query: '漏服怎么记录',
+      household_id: 'h1',
+      top_k: 8,
+    })
+  })
+
+  it('取消视觉任务用 POST cancel，并对任务 ID 做编码', async () => {
+    const { client, calls } = recordingClient()
+
+    await client.cancelVisionTask('vision/1 abc')
+
+    expect(calls[0]!.init.method).toBe('POST')
+    expect(calls[0]!.url).toBe('http://127.0.0.1:8000/api/v1/vision-tasks/vision%2F1%20abc/cancel')
   })
 })

@@ -212,6 +212,23 @@ export function cancelStepUp(): void {
 }
 
 /**
+ * 修改当前身份的登录密码。
+ *
+ * 服务端会撤销该身份的全部会话并签发新会话，因此这里直接采纳新会话：
+ * `generation` 自增会让联机 Provider 与页面缓存自动失效，用户不必重新登录。
+ * 两个密码只作为参数传给适配器，不写入 store、存储或日志。
+ */
+export async function changePassword(
+  adapter: AuthAdapter,
+  input: { currentPassword: string; newPassword: string },
+): Promise<void> {
+  const next = await adapter.changePassword(input)
+  adopt(next)
+  // 旧会话已被服务端作废：与旧会话关联的查询、轮询和上传草稿一并丢弃。
+  runCleanups('context')
+}
+
+/**
  * 统一处理 API/鉴权异常中的会话失效信号。
  * 返回 true 表示已进入重新认证状态，调用方只需展示提示，不要再重试写操作。
  */
@@ -261,6 +278,7 @@ export function useAuth() {
     beginStepUp,
     confirmStepUp,
     cancelStepUp,
+    changePassword,
     isWriteBlocked,
     requireReauth,
   }

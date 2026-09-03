@@ -214,7 +214,7 @@ watch(() => sessionContextKey(session), () => void reload())
       <EmptyState
         v-if="filtered.length === 0"
         icon="shield"
-        title="该等级下暂无提醒"
+        title="确实没有该等级的风险提醒"
         hint="规则重新计算后结果会更新"
       />
       <RouterLink

@@ -69,7 +69,7 @@ watch(() => sessionContextKey(session), () => void reload())
       <EmptyState
         v-if="members.length === 0 && !error"
         icon="family"
-        title="当前身份没有可用家庭成员"
+        title="确实没有可用的家庭成员"
         hint="请到“我的”检查联机身份、家庭和授权设置。"
       />
       <RouterLink

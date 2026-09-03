@@ -13,8 +13,11 @@ import type {
   Household,
   KnowledgeDocumentDetailResponse,
   KnowledgeDocumentSummaryResponse,
+  KnowledgeRetrieveResponse,
   Member,
+  PlanWorkbenchResponse,
   RequestOptions,
+  RiskAcknowledgement,
   RiskDetailResponse,
   RiskListResponse,
   AuthorizationRead,
@@ -247,6 +250,21 @@ export class ApiClient {
   }
 
   /**
+   * 知识条目只读检索（HCT-401）。检索词只出现在请求体里，不进 URL、不写本机存储；
+   * 服务端先按权限预过滤再检索，无授权条目/空索引/无相关结果都以 degraded 如实返回。
+   */
+  retrieveKnowledge(
+    input: { query: string; household_id?: string; member_id?: string; top_k?: number },
+    options?: RequestOptions,
+  ): Promise<KnowledgeRetrieveResponse> {
+    return this.request(
+      '/api/v1/knowledge/retrieve',
+      { method: 'POST', body: JSON.stringify(input) },
+      options,
+    )
+  }
+
+  /**
    * 设置或更新当前身份在某个家庭的六位 PIN（HCT-427 的二次确认凭据）。
    * PIN 只出现在请求体里，不进 URL；服务端只保存哈希。
    */
@@ -262,8 +280,18 @@ export class ApiClient {
     return this.request(`/api/v1/households/${householdId}/members`, undefined, options)
   }
 
-  listMemberTimeline(householdId: string, memberId: string, options?: RequestOptions): Promise<HealthEvent[]> {
-    return this.request(`/api/v1/households/${householdId}/members/${memberId}/timeline`, undefined, options)
+  listMemberTimeline(
+    householdId: string,
+    memberId: string,
+    options?: RequestOptions,
+    context?: 'today-snapshot' | 'weekly-trend',
+  ): Promise<HealthEvent[]> {
+    const suffix = context ? `?context=${context}` : ''
+    return this.request(
+      `/api/v1/households/${householdId}/members/${memberId}/timeline${suffix}`,
+      undefined,
+      options,
+    )
   }
 
   /** 授权列表（HCT-102，仅 Owner；非 Owner 服务端隐藏式拒绝 403/404）。 */
@@ -284,6 +312,20 @@ export class ApiClient {
     return this.request(
       `/api/v1/households/${householdId}/members/${memberId}/risks/${encodeURIComponent(ruleId)}`,
       undefined,
+      options,
+    )
+  }
+
+  acknowledgeRisk(
+    householdId: string,
+    memberId: string,
+    ruleId: string,
+    input: { rule_version: string; risk_fingerprint: string },
+    options?: RequestOptions,
+  ): Promise<RiskAcknowledgement> {
+    return this.request(
+      `/api/v1/households/${householdId}/members/${memberId}/risks/${encodeURIComponent(ruleId)}/acknowledge`,
+      { method: 'POST', body: JSON.stringify(input) },
       options,
     )
   }
@@ -329,6 +371,41 @@ export class ApiClient {
     )
   }
 
+  /**
+   * 记录一次漏服事实（HCT-308 计划动作之一，与网页端 `记录漏服` 同一接口）。
+   * 只写事实，不做补服、剂量或换药判断；原因由用户填写，服务端按 `miss:<计划>:<当日>` 幂等。
+   */
+  missCarePlan(
+    householdId: string,
+    memberId: string,
+    planEventId: string,
+    reason: string,
+    options?: RequestOptions,
+  ): Promise<HealthEvent> {
+    return this.request(
+      `/api/v1/households/${householdId}/members/${memberId}/plans/missed?plan_event_id=${encodeURIComponent(planEventId)}&reason=${encodeURIComponent(reason)}`,
+      { method: 'POST' },
+      options,
+    )
+  }
+
+  /**
+   * 计划工作台：服务端按家庭时区给出每条计划的状态、下一次动作时间与**允许动作**。
+   * 移动端把 `allowed_actions` 当作唯一的动作边界来源（缺失即只读，fail-closed），
+   * 不在客户端推断安全窗口。只需成员读权限。
+   */
+  getPlanWorkbench(
+    householdId: string,
+    memberId: string,
+    options?: RequestOptions,
+  ): Promise<PlanWorkbenchResponse> {
+    return this.request(
+      `/api/v1/households/${householdId}/members/${memberId}/plan-workbench`,
+      undefined,
+      options,
+    )
+  }
+
   checkVisionQuality(
     file: File,
     mediaType: 'image' | 'video' = 'image',
@@ -364,6 +441,18 @@ export class ApiClient {
     return this.request(
       `/api/v1/vision-tasks/${encodeURIComponent(taskId)}`,
       { method: 'GET' },
+      options,
+    )
+  }
+
+  /**
+   * 取消排队中/处理中的视觉任务（与网页端同一接口）。
+   * 服务端返回的 `cancelled` 终态实测不带错误码，调用方按终态展示，不虚构原因。
+   */
+  cancelVisionTask(taskId: string, options?: RequestOptions): Promise<VisionTask> {
+    return this.request(
+      `/api/v1/vision-tasks/${encodeURIComponent(taskId)}/cancel`,
+      { method: 'POST' },
       options,
     )
   }

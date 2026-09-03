@@ -87,6 +87,9 @@ async function copyReviewTaskId(): Promise<void> { try { await navigator.clipboa
 function openReview(): void { if (!reviewTarget.value.url) { handoffMessage.value = reviewTarget.value.reason ?? '当前无法打开网页复核。'; return }; window.open(reviewTarget.value.url, '_blank', 'noopener,noreferrer'); handoffMessage.value = '已打开受控网页复核入口。网页端完成后请返回本页刷新任务状态。' }
 const polling = createVisionTaskPolling(taskId => activeProvider().fetchVisionTaskStatus(taskId))
 const noticeState = ref<VisionNoticeSupport>(visionNoticeSupport())
+/** 主动取消任务的请求态与错误；与回查轮询的错误分开展示，避免混淆。 */
+const cancelBusy = ref(false)
+const cancelError = ref('')
 /** 每个任务只提醒一次，避免"重试回查"再次触发通知。 */
 const notifiedTaskId = ref('')
 const statusTagTone = computed(() => {
@@ -98,6 +101,26 @@ const statusTagTone = computed(() => {
 
 async function enableNotice(): Promise<void> {
   noticeState.value = await requestVisionNoticePermission()
+}
+
+/**
+ * 主动取消当前视觉任务。
+ *
+ * 复用同一 taskId 调服务端 `/vision-tasks/{id}/cancel`，不重新上传、不新建任务；
+ * 服务端返回的终态原样采纳（`cancelled` 实测不带错误码，界面不虚构原因）。
+ */
+async function cancelVisionTask(): Promise<void> {
+  const target = polling.state.value.snapshot?.taskId || handoff.value.taskId
+  if (!target || cancelBusy.value) return
+  cancelBusy.value = true
+  cancelError.value = ''
+  try {
+    polling.adopt(await activeProvider().cancelVisionTask(target))
+  } catch (cause) {
+    cancelError.value = presentApiError(cause).message
+  } finally {
+    cancelBusy.value = false
+  }
 }
 
 watch(() => polling.state.value.phase, (phase) => {
@@ -599,7 +622,17 @@ onBeforeUnmount(() => {
           >
             {{ noticeState === 'unsupported' ? '此环境不支持本地通知' : noticeState === 'denied' ? '通知已被系统拒绝' : '开启完成提醒（本地通知）' }}
           </button>
+          <button
+            v-if="polling.state.value.snapshot && !polling.state.value.snapshot.terminal"
+            type="button"
+            class="btn btn-danger"
+            :disabled="cancelBusy"
+            @click="cancelVisionTask"
+          >
+            {{ cancelBusy ? '正在取消…' : '取消这次识别' }}
+          </button>
         </div>
+        <p v-if="cancelError" class="notice" data-tone="error" role="alert">{{ cancelError }}</p>
         <p class="meta-line">
           本地提醒只在应用内触发、不含健康数据；未开启或被拒绝时仅保留本页状态，不会发送远程推送。
         </p>
