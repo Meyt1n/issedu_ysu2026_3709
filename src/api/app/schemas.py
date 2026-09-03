@@ -1,3 +1,4 @@
+import math
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
@@ -370,6 +371,26 @@ class HealthEventCreate(BaseModel):
     idempotency_key: str | None = Field(default=None, max_length=128)
     compensates_event_id: str | None = Field(default=None, max_length=36)
     occurred_at: UtcDatetime | None = None
+
+    @model_validator(mode="after")
+    def validate_medication_stock(self) -> "HealthEventCreate":
+        """药品库存只能是不小于 0 的整数，防止绕过前端直接写入异常事实。"""
+        if self.event_type not in {
+            "medication_added",
+            "medication_confirmed",
+            "medication_corrected",
+        } or "stock" not in self.payload:
+            return self
+        raw_stock = self.payload.get("stock")
+        if isinstance(raw_stock, bool):
+            raise ValueError("MEDICATION_STOCK_INVALID")
+        try:
+            stock = float(raw_stock)
+        except (TypeError, ValueError):
+            raise ValueError("MEDICATION_STOCK_INVALID") from None
+        if not math.isfinite(stock) or stock < 0 or not stock.is_integer():
+            raise ValueError("MEDICATION_STOCK_INVALID")
+        return self
 
 
 class HealthEventCompensationCreate(BaseModel):

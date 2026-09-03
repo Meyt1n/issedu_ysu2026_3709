@@ -47,26 +47,24 @@ describe('memberUnboundGate (HCT-511)', () => {
     expect(gate.ctaLabel).toBe('去管理后台登录')
   })
 
-  it('blocks the member page after a leftover household bind if admin is not logged in', () => {
-    expect(memberUnboundGate('member', 'household-1').blocked).toBe(true)
+  it('opens the member page once a household is bound, even if admin is no longer online', () => {
+    expect(memberUnboundGate('member', 'household-1').blocked).toBe(false)
   })
 
-  it('blocks the member page until capabilities have been fetched', () => {
+  it('opens the member page while capabilities are still pending, once bound', () => {
     expect(memberUnboundGate('member', 'household-1', {
       capabilitiesPending: true,
       readyInstanceId: 'boot-1',
       readyHouseholdId: 'household-1',
-    }).blocked).toBe(true)
+    }).blocked).toBe(false)
   })
 
-  it('blocks the member page when this API process has no matching admin login', () => {
-    const gate = memberUnboundGate('member', 'household-1', {
+  it('opens the member page without requiring a matching admin-ready instance', () => {
+    expect(memberUnboundGate('member', 'household-1', {
       instanceId: 'boot-2',
       readyInstanceId: 'boot-1',
       readyHouseholdId: 'household-1',
-    })
-    expect(gate.blocked).toBe(true)
-    expect(gate.title).toBe('请先到管理后台')
+    }).blocked).toBe(false)
   })
 
   it('opens the member page when admin-ready matches this household', () => {
@@ -90,11 +88,11 @@ describe('memberUnboundGate (HCT-511)', () => {
 })
 
 describe('autoEntryMayUseBoundFace (HCT-516)', () => {
-  it('rejects leftover household binds when admin is not logged in', () => {
-    expect(autoEntryMayUseBoundFace('household-1')).toBe(false)
+  it('allows face on the auto entry once a household is bound', () => {
+    expect(autoEntryMayUseBoundFace('household-1')).toBe(true)
   })
 
-  it('allows face on the auto entry only when admin-ready matches', () => {
+  it('keeps allowing face when admin-ready matches', () => {
     expect(autoEntryMayUseBoundFace('household-1', {
       readyHouseholdId: 'household-1',
     })).toBe(true)

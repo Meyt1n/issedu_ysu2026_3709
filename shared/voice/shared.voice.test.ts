@@ -71,7 +71,7 @@ describe('shared voice recognition', () => {
     } as unknown as SpeechRecognitionResultLike)).toBe('小燕小燕')
   })
 
-  it('configures multi-alternative recognition', () => {
+  it('configures single-alternative recognition for lower latency', () => {
     class FakeRecognition {
       lang = ''
       continuous = false
@@ -92,7 +92,7 @@ describe('shared voice recognition', () => {
     })
     try {
       const recognition = createSpeechRecognition('zh-CN', { continuous: true, interimResults: true })
-      expect(recognition?.maxAlternatives).toBe(3)
+      expect(recognition?.maxAlternatives).toBe(1)
     } finally {
       if (previous === undefined) delete (globalThis as { window?: unknown }).window
       else Object.defineProperty(globalThis, 'window', { configurable: true, value: previous })
@@ -127,12 +127,12 @@ describe('hotwords and chat session', () => {
       key: (index: number) => [...store.keys()][index] ?? null,
       get length() { return store.size },
     })
-    // 决策 1A：默认句末静音 15 秒；语音回复偏好默认关闭、音色默认自动优选。
-    expect(DEFAULT_VOICE_PREFERENCES.silenceMs).toBe(15_000)
-    expect(loadVoicePreferences().silenceMs).toBe(15_000)
+    // 优化后：默认句末静音 10 秒；双重唤醒默认开启；语音回复偏好默认关闭、音色默认自动优选。
+    expect(DEFAULT_VOICE_PREFERENCES.silenceMs).toBe(10_000)
+    expect(loadVoicePreferences().silenceMs).toBe(10_000)
     expect(loadVoicePreferences().autoSpeakReplies).toBe(false)
     expect(loadVoicePreferences().preferredVoiceName).toBe('')
-    expect(loadVoicePreferences().doubleWake).toBe(DEFAULT_VOICE_PREFERENCES.doubleWake)
+    expect(loadVoicePreferences().doubleWake).toBe(true)
     const saved = saveVoicePreferences({
       confirmSound: false,
       doubleWake: false,
@@ -148,7 +148,7 @@ describe('hotwords and chat session', () => {
     vi.unstubAllGlobals()
   })
 
-  it('migrates v1 preferences to v2 and upgrades the stock 2.2s silence to 15s', () => {
+  it('migrates v1 preferences to v2 and upgrades the stock 2.2s silence to 10s', () => {
     const store = new Map<string, string>()
     vi.stubGlobal('localStorage', {
       getItem: (key: string) => store.get(key) ?? null,
@@ -165,8 +165,8 @@ describe('hotwords and chat session', () => {
       wakePhrase: '家健镜',
     }))
     const migrated = loadVoicePreferences()
-    expect(migrated.silenceMs).toBe(15_000)
-    expect(migrated.continuationSilenceMs).toBe(18_000)
+    expect(migrated.silenceMs).toBe(10_000)
+    expect(migrated.continuationSilenceMs).toBe(12_000)
     expect(migrated.confirmSound).toBe(false)
     expect(migrated.wakePhrase).toBe('家健镜')
     expect(store.has('hct-voice-prefs:v1')).toBe(false)
@@ -343,7 +343,7 @@ describe('hotwords and chat session', () => {
   })
 
   it('dictation silence timeout finishes utterance into ready mode', () => {
-    expect(DICTATION_SILENCE_MS).toBe(15_000)
+    expect(DICTATION_SILENCE_MS).toBe(10_000)
     vi.useFakeTimers()
     const instances: Array<{
       onstart: (() => void) | null
@@ -396,8 +396,8 @@ describe('hotwords and chat session', () => {
         getPreferences: () => ({
           ...DEFAULT_VOICE_PREFERENCES,
           doubleWake: false,
-          silenceMs: DICTATION_SILENCE_MS,
-          continuationSilenceMs: DICTATION_SILENCE_MS,
+          silenceMs: 10_000,
+          continuationSilenceMs: 12_000,
         }),
       })
       controller.startWake()
@@ -410,7 +410,7 @@ describe('hotwords and chat session', () => {
       } as unknown as SpeechRecognitionEventLike)
       expect(draft).toContain('查询用药提醒')
       expect(modes).toContain('active')
-      vi.advanceTimersByTime(DICTATION_SILENCE_MS + 50)
+      vi.advanceTimersByTime(10_000 + 50)
       expect(modes.at(-1)).toBe('ready')
       expect(complete).toContain('查询用药提醒')
       controller.dispose()
@@ -477,7 +477,7 @@ describe('dictation continuation (决策 1A / 根因 B)', () => {
     } as unknown as SpeechRecognitionEventLike
   }
 
-  it('a 10s pause does not finish the utterance; follow-up speech accumulates', () => {
+  it('a 9s pause does not finish the utterance; follow-up speech accumulates', () => {
     vi.useFakeTimers()
     const { instances, restore } = setupFakeRecognition()
     const modes: string[] = []
@@ -492,22 +492,24 @@ describe('dictation continuation (决策 1A / 根因 B)', () => {
         getPreferences: () => ({
           ...DEFAULT_VOICE_PREFERENCES,
           doubleWake: false,
-          silenceMs: 15_000,
-          continuationSilenceMs: 18_000,
+          silenceMs: 10_000,
+          continuationSilenceMs: 12_000,
         }),
       })
       controller.startWake()
       const active = instances[0]!
       active.onresult?.(resultEvent('小燕小燕今天血压有点高'))
       expect(modes).toContain('active')
-      vi.advanceTimersByTime(10_000)
+      vi.advanceTimersByTime(9_000)
       expect(modes.at(-1)).toBe('active')
       active.onresult?.(resultEvent('小燕小燕今天血压有点高 还需要复测吗'))
-      vi.advanceTimersByTime(10_000)
+      vi.advanceTimersByTime(9_000)
       expect(modes.at(-1)).toBe('active')
       expect(draft).toContain('还需要复测吗')
-      vi.advanceTimersByTime(5100)
-      expect(modes.at(-1)).toBe('ready')
+      vi.advanceTimersByTime(3_100)
+      // 进入 ready 后会自动进入 command 模式（400ms 延迟）
+      expect(modes).toContain('ready')
+      expect(['ready', 'command']).toContain(modes.at(-1))
       controller.dispose()
     } finally {
       vi.useRealTimers()
@@ -533,13 +535,13 @@ describe('dictation continuation (决策 1A / 根因 B)', () => {
           ...DEFAULT_VOICE_PREFERENCES,
           doubleWake: false,
           voiceCommands: true,
-          silenceMs: 15_000,
-          continuationSilenceMs: 18_000,
+          silenceMs: 10_000,
+          continuationSilenceMs: 12_000,
         }),
       })
       controller.startWake()
       instances[0]!.onresult?.(resultEvent('小燕小燕查询用药提醒'))
-      vi.advanceTimersByTime(15_050)
+      vi.advanceTimersByTime(10_050)
       expect(modes.at(-1)).toBe('ready')
       // 400ms 后进入指令聆听
       vi.advanceTimersByTime(450)

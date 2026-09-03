@@ -8,6 +8,9 @@ import { validateServerBaseUrl } from '@/utils/serverUrl'
 
 export type DataMode = 'demo' | 'live'
 
+/** 移动端展示角色；角色只裁剪入口和展示范围，服务端授权仍是最终边界。 */
+export type MobileRole = 'admin' | 'member'
+
 /** real=HCT-107 正式登录会话；dev-actor=开发期 X-Actor-Id 联调路径。 */
 export type AuthMode = 'real' | 'dev-actor'
 
@@ -31,6 +34,8 @@ export interface SessionSettings {
   caregiverPhone: string
   /** 当前正在查看/照护的成员 */
   currentMemberId: string
+  /** 当前移动端展示角色；联机模式会根据家庭主人身份自动同步。 */
+  mobileRole: MobileRole
 }
 
 export const SESSION_STORAGE_KEY = 'hct-mobile.session.v1'
@@ -45,6 +50,7 @@ export const DEFAULT_SESSION: SessionSettings = {
   caregiverName: '',
   caregiverPhone: '',
   currentMemberId: '',
+  mobileRole: 'admin',
 }
 
 /**
@@ -112,8 +118,8 @@ export function useAuthorizationBoundary() {
   return { authorizationBoundary, requireAuthorizationReverification, resumeAuthorizationBoundary }
 }
 /** 影响联机数据边界的会话指纹；身份、目的、家庭服务器或正式会话变化都必须丢弃旧 Provider 缓存。 */
-export function sessionContextKey(source: Pick<SessionSettings, 'dataMode' | 'serverBaseUrl' | 'actorId' | 'accessPurpose'> & { authMode?: AuthMode; currentHouseholdId?: string }): string {
-  return [source.dataMode, source.serverBaseUrl.trim(), source.authMode ?? 'real', source.actorId.trim(), source.accessPurpose.trim(), source.currentHouseholdId ?? '', String(authorizationBoundary.generation), String(authGeneration())].join('\u001f')
+export function sessionContextKey(source: Pick<SessionSettings, 'dataMode' | 'serverBaseUrl' | 'actorId' | 'accessPurpose'> & { authMode?: AuthMode; currentHouseholdId?: string; mobileRole?: MobileRole }): string {
+  return [source.dataMode, source.serverBaseUrl.trim(), source.authMode ?? 'real', source.actorId.trim(), source.accessPurpose.trim(), source.currentHouseholdId ?? '', source.mobileRole ?? 'admin', String(authorizationBoundary.generation), String(authGeneration())].join('\u001f')
 }
 
 export function normalizeSession(raw: unknown): SessionSettings {
@@ -138,6 +144,7 @@ export function normalizeSession(raw: unknown): SessionSettings {
     caregiverName: text(record.caregiverName, ''),
     caregiverPhone: caregiverPhone ?? '',
     currentMemberId: text(record.currentMemberId, ''),
+    mobileRole: record.mobileRole === 'member' ? 'member' : 'admin',
   }
 }
 
@@ -174,6 +181,7 @@ const SCOPE_FIELDS: readonly (keyof SessionSettings)[] = [
   'accessPurpose',
   'currentHouseholdId',
   'currentMemberId',
+  'mobileRole',
 ]
 
 export function updateSession(patch: Partial<SessionSettings>): void {

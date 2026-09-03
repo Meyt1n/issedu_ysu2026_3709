@@ -18,15 +18,13 @@ from app.health_news import build_health_news
 from app.health_news_adapter import (
     HealthNewsSourceProfile,
     RemoteNewsDraft,
+    _localize_english_draft,
+    _round_robin_merge,
     draft_to_item,
     health_news_ops_snapshot,
     parse_html_list_payload,
     parse_rss_payload,
     reset_health_news_state,
-)
-from app.health_news_adapter import (
-    _localize_english_draft,
-    _round_robin_merge,
 )
 from app.main import app
 from app.security import get_actor_id
@@ -50,6 +48,16 @@ def test_health_news_winter_mentions_warmth() -> None:
     assert payload.season == "winter"
     joined = " ".join(item.summary for item in payload.items)
     assert "保暖" in joined or "冬季" in joined
+
+
+def test_health_news_autumn_catalog_has_distinct_care_cards() -> None:
+    payload = build_health_news(
+        when=datetime(2026, 9, 2, tzinfo=ZoneInfo("Asia/Shanghai")),
+    )
+    assert payload.season == "autumn"
+    assert len(payload.items) >= 6
+    assert len({item.id for item in payload.items}) == len(payload.items)
+    assert all(item.source == "seasonal_calendar" for item in payload.items)
 
 
 SAMPLE_RSS = """<?xml version="1.0" encoding="UTF-8"?>

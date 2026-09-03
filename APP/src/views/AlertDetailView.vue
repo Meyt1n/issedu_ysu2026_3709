@@ -34,7 +34,7 @@ const supportsAcknowledgement = computed(() =>
 )
 const acknowledgementStatusMessage = computed(() => {
   if (session.dataMode === 'demo') return ''
-  if (!capabilities.snapshot) return '能力探测尚未完成；请先到“我的”测试连接，本按钮会按不可用处理。'
+  if (!capabilities.snapshot) return '请先连接家庭服务器。'
   return '家庭服务器暂不支持回写“已知晓”状态；本页不会将其标记为已记录。'
 })
 let loadGeneration = 0

@@ -29,10 +29,16 @@ services:
       dockerfile: docker/api.Dockerfile
     restart: unless-stopped
     profiles: ["basic", "enhanced", "dev"]
+    # Keep the container aligned with the operator's local .env. The explicit
+    # service variables below still win for container-only paths such as db:
+    # 3306 and /app/data, while cloud/weather/search switches and credentials
+    # are available to the same API process that is being tested locally.
+    env_file:
+      - .env
     environment:
       APP_ENV: ${APP_ENV:-development}
       ALLOW_DEV_ACTOR_HEADER: ${ALLOW_DEV_ACTOR_HEADER:-false}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:5174}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:5174,https://localhost}
       DEFAULT_HOUSEHOLD_TIME_ZONE: ${DEFAULT_HOUSEHOLD_TIME_ZONE:-UTC}
       DATABASE_URL: mysql+pymysql://${MYSQL_USER:-homecare}:${MYSQL_PASSWORD:-change-me}@db:3306/${MYSQL_DATABASE:-homecare}?charset=utf8mb4
       PYTHONPATH: /app/src/api:/app/src
@@ -49,6 +55,7 @@ services:
     volumes:
       - ./data/master-data:/app/data/master-data:ro
       - ./data/files:/app/data/files
+      - ./models/face:/app/models/face:ro
     depends_on:
       db:
         condition: service_healthy

@@ -66,6 +66,9 @@ const cameraAvailable = computed(() => {
 })
 const membersStatusMessage = computed(() => {
   if (membersLoading.value || error.value) return ''
+  if (session.mobileRole === 'member') {
+    return members.value.length > 0 ? '已加载当前成员，可直接拍摄药盒。' : '当前没有可用的成员录入对象。'
+  }
   return members.value.length > 0
     ? `已加载 ${members.value.length} 位家庭成员，可选择录入对象。`
     : '当前没有可用的家庭成员。'
@@ -270,8 +273,16 @@ async function loadMembers(): Promise<void> {
   try {
     const nextMembers = await activeProvider().listMembers()
     if (generation !== memberLoadGeneration || expectedKey !== sessionContextKey(session)) return
-    members.value = nextMembers
-    memberId.value = session.currentMemberId || nextMembers[0]?.id || ''
+    if (session.mobileRole === 'member') {
+      const preferred = nextMembers.find(member => member.id === session.currentMemberId)
+        ?? nextMembers.find(member => member.role === 'SELF')
+        ?? nextMembers[0]
+      members.value = preferred ? [preferred] : []
+      memberId.value = preferred?.id || ''
+    } else {
+      members.value = nextMembers
+      memberId.value = session.currentMemberId || nextMembers[0]?.id || ''
+    }
   } catch (cause) {
     if (generation !== memberLoadGeneration || expectedKey !== sessionContextKey(session)) return
     error.value = presentListApiError(cause)
@@ -312,7 +323,7 @@ onBeforeUnmount(() => {
     <header class="screen-header">
       <p class="eyebrow">多证据视觉录入</p>
       <h1>拍药盒</h1>
-      <p class="screen-subtitle">拍摄药盒正面，系统先做质量检查，再给出多渠道证据候选；只有人工确认后才会写入健康档案。</p>
+      <p class="screen-subtitle">拍摄药盒正面</p>
       <PrivacyBadge />
     </header>
 
@@ -338,7 +349,7 @@ onBeforeUnmount(() => {
       data-tone="warn"
       role="status"
     >
-      尚未完成后端能力探测；请先到“我的”测试连接。未确认提供视觉任务前，拍摄和相册入口保持禁用。
+      请先连接家庭服务器。
     </p>
     <p
       v-else-if="session.dataMode === 'live' && !visionTaskAvailable"
@@ -346,7 +357,7 @@ onBeforeUnmount(() => {
       data-tone="warn"
       role="status"
     >
-      当前家庭服务器未提供视觉任务，拍摄和相册入口已禁用；不会把未提供的识别接口包装成可用功能。
+      当前家庭服务器暂不支持识别。
     </p>
     <p
       v-else-if="session.dataMode === 'live' && !writesAllowed"
@@ -354,19 +365,16 @@ onBeforeUnmount(() => {
       data-tone="warn"
       role="status"
     >
-      登录会话已失效或尚未登录，拍摄、上传和识别入口已禁用；请重新登录后再提交，避免重复创建任务。
+      请先登录。
     </p>
 
     <p v-if="!cameraAvailable" class="notice" data-tone="warn" role="status">
       {{ imageInputUnavailableMessage() }}
     </p>
-    <p v-if="session.dataMode === 'demo'" class="notice" data-tone="info" role="status">
-      演示模式不提供短视频识别链路（无真实抽帧服务）；短视频入口已隐藏，图片拍摄不受影响。
-    </p>
     <p v-else-if="!videoEntryAvailable && session.dataMode === 'live' && capabilities.snapshot" class="notice" data-tone="info" role="status">
-      当前家庭服务器未声明短视频任务能力（vision-task-video），短视频入口已隐藏；图片拍摄不受影响。
+      暂不支持短视频识别。
     </p>
-    <label class="field">
+    <label v-if="session.mobileRole === 'admin'" class="field">
       为哪位成员录入
       <select v-model="memberId" :disabled="membersLoading || members.length === 0">
         <option v-for="member in members" :key="member.id" :value="member.id">
@@ -374,6 +382,9 @@ onBeforeUnmount(() => {
         </option>
       </select>
     </label>
+    <p v-else-if="memberId" class="member-scope-note" role="status">
+      当前成员
+    </p>
 
     <div class="card">
       <div
@@ -532,7 +543,6 @@ onBeforeUnmount(() => {
           <button type="button" class="btn" :disabled="!reviewTarget.url" @click="openReview">打开网页复核</button>
         </div>
         <p v-if="handoffMessage" class="meta-line" role="status">{{ handoffMessage }}</p>
-        <p v-if="handoff.source === 'DEMO'" class="meta-line">演示模式不会创建真实复核任务。</p>
       </section>
       <section
         v-if="polling.state.value.phase !== 'idle'"

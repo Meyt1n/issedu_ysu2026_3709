@@ -38,6 +38,12 @@ describe('会话设置规范化', () => {
     expect(session.actorId).toBe('')
   })
 
+  it('移动端角色只接受管理员或成员，异常值回退管理员', () => {
+    expect(normalizeSession({ mobileRole: 'member' }).mobileRole).toBe('member')
+    expect(normalizeSession({ mobileRole: 'owner' }).mobileRole).toBe('admin')
+    expect(DEFAULT_SESSION.mobileRole).toBe('admin')
+  })
+
   it('未开启开发配置时已保存的 dev-actor 强制回退到正式鉴权', () => {
     expect(isDevActorEnabled()).toBe(true)
     setDevActorEnabledForTests(false)
@@ -75,5 +81,6 @@ describe('会话设置规范化', () => {
     expect(sessionContextKey({ dataMode: 'live', serverBaseUrl: 'http://family.local', authMode: 'dev-actor', actorId: 'actor-a', accessPurpose: 'other-purpose' })).not.toBe(base)
     expect(sessionContextKey({ dataMode: 'live', serverBaseUrl: 'http://other.local', authMode: 'dev-actor', actorId: 'actor-a', accessPurpose: 'family-care' })).not.toBe(base)
     expect(sessionContextKey({ dataMode: 'live', serverBaseUrl: 'http://family.local', authMode: 'real', actorId: 'actor-a', accessPurpose: 'family-care' })).not.toBe(base)
+    expect(sessionContextKey({ dataMode: 'live', serverBaseUrl: 'http://family.local', authMode: 'dev-actor', actorId: 'actor-a', accessPurpose: 'family-care', mobileRole: 'member' })).not.toBe(base)
   })
 })

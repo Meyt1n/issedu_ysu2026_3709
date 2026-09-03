@@ -11,19 +11,19 @@ export const router = createRouter({
   routes: [
     { path: '/', name: 'today', component: () => import('@/views/TodayView.vue'), meta: { title: '今日', requiresLiveAuth: true } },
     { path: '/scan', name: 'scan', component: () => import('@/views/ScanView.vue'), meta: { title: '拍药盒', requiresLiveAuth: true } },
-    { path: '/family', name: 'family', component: () => import('@/views/FamilyView.vue'), meta: { title: '家人', requiresLiveAuth: true } },
+    { path: '/family', name: 'family', component: () => import('@/views/FamilyView.vue'), meta: { title: '家人', requiresLiveAuth: true, adminOnly: true } },
     {
       path: '/family/:memberId',
       name: 'member-detail',
       component: () => import('@/views/MemberDetailView.vue'),
-      meta: { title: '成员档案', requiresLiveAuth: true },
+      meta: { title: '成员档案', requiresLiveAuth: true, adminOnly: true },
     },
-    { path: '/alerts', name: 'alerts', component: () => import('@/views/AlertsView.vue'), meta: { title: '提醒', requiresLiveAuth: true } },
+    { path: '/alerts', name: 'alerts', component: () => import('@/views/AlertsView.vue'), meta: { title: '提醒', requiresLiveAuth: true, adminOnly: true } },
     {
       path: '/alerts/:memberId/:ruleId',
       name: 'alert-detail',
       component: () => import('@/views/AlertDetailView.vue'),
-      meta: { title: '风险依据', requiresLiveAuth: true },
+      meta: { title: '风险依据', requiresLiveAuth: true, adminOnly: true },
     },
     // 求助页只用本机联系人，断网或未登录时仍必须可用。
     { path: '/help', name: 'help', component: () => import('@/views/HelpView.vue'), meta: { title: '紧急求助' } },
@@ -37,13 +37,13 @@ export const router = createRouter({
       path: '/knowledge',
       name: 'knowledge-library',
       component: () => import('@/views/KnowledgeLibraryView.vue'),
-      meta: { title: '知识条目', requiresLiveAuth: true },
+      meta: { title: '知识条目', requiresLiveAuth: true, adminOnly: true },
     },
     {
       path: '/knowledge/:docId',
       name: 'knowledge-document',
       component: () => import('@/views/KnowledgeDocumentView.vue'),
-      meta: { title: '知识条目', requiresLiveAuth: true },
+      meta: { title: '知识条目', requiresLiveAuth: true, adminOnly: true },
     },
     { path: '/login', name: 'login', component: () => import('@/views/LoginView.vue'), meta: { title: '登录' } },
     { path: '/me', name: 'me', component: () => import('@/views/MeView.vue'), meta: { title: '我的' } },
@@ -77,8 +77,11 @@ export const router = createRouter({
  * 「我的」「无障碍」「求助」保持可达：用户需要它们改设置、切回演示模式或紧急拨号。
  */
 router.beforeEach(to => {
-  if (to.meta.requiresLiveAuth !== true) return true
   const { session } = useSession()
+  if (to.meta.adminOnly === true && session.mobileRole === 'member') {
+    return { name: 'today' }
+  }
+  if (to.meta.requiresLiveAuth !== true) return true
   if (session.dataMode !== 'live' || session.authMode !== 'real') return true
   const { auth } = useAuth()
   if (auth.status === 'authenticated') return true

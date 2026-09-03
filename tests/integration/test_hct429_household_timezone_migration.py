@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect, text
 
 from app.config import get_settings
@@ -12,7 +13,17 @@ from app.config import get_settings
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PREVIOUS_REVISION = "0016_hct424_face_credential_status_index"
 SCHEMA_BASE_REVISION = "0010_hct405_review_wiring"
-CURRENT_REVISION = "0024_hct462_risk_disposition"
+
+
+def _current_head() -> str:
+    """The single migration head, read from the graph instead of pinned by name.
+
+    A pinned revision name made every new migration fail this suite even when
+    the migration itself was correct.
+    """
+    heads = ScriptDirectory.from_config(Config(str(REPO_ROOT / "alembic.ini"))).get_heads()
+    assert len(heads) == 1, f"expected a single migration head, found {heads}"
+    return heads[0]
 
 
 def _config(database_url: str) -> Config:
@@ -62,7 +73,6 @@ def test_timezone_migration_backfills_existing_households_and_downgrades(
 
 
 def test_timezone_migration_is_the_single_head() -> None:
-    from alembic.script import ScriptDirectory
-
     config = Config(str(REPO_ROOT / "alembic.ini"))
-    assert ScriptDirectory.from_config(config).get_heads() == [CURRENT_REVISION]
+    # One head: no unmerged branches. The head's name is not the invariant.
+    assert len(ScriptDirectory.from_config(config).get_heads()) == 1

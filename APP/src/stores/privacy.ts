@@ -18,10 +18,10 @@ export interface PrivacyNoticeSection {
 
 export const PRIVACY_NOTICE_SECTIONS: PrivacyNoticeSection[] = [
   {
-    title: '演示与联机模式',
+    title: '数据来源',
     lines: [
-      '默认是演示模式：所有成员、任务、风险和药品都是虚构教学数据，不连接任何服务器。',
-      '切换到"家庭服务器（联机）"后，应用只访问你在设置里填写的家庭服务器地址；健康数据不出家庭可信网络。',
+      '默认使用本地数据，不连接服务器。',
+      '切换到"家庭服务器"后，应用只访问你在设置里填写的地址。',
     ],
   },
   {

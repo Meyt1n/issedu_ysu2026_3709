@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import { apiClient } from '../api/client'
 import type {
+  HealthEvent,
   PlanWorkbenchItem,
   ReviewTask,
   RiskAlert,
@@ -10,11 +11,26 @@ import type {
 } from '../api/types'
 import AppIcon from '../components/AppIcon.vue'
 import CountUp from '../components/CountUp.vue'
+import HealthCalendar from '../components/HealthCalendar.vue'
 import { requestOptions, session } from '../store'
 import { isSameLocalDay, reviewDrugCandidate } from '../overview/overviewView'
+import {
+  CHART_HEIGHT,
+  CHART_PAD_X,
+  CHART_WIDTH,
+  aggregateTrends,
+  axisPositions,
+  cumulativeCounts,
+  gridPath,
+  seriesTotal,
+  toChartSeries,
+  trendDayLabels,
+  type ChartSeries,
+  type TrendSeries,
+} from '../ui/bigScreenCharts'
 import { formatDateTime, memberRoleLabel } from '../ui/labels'
 import { familyRuntimeLines } from '../ui/runtimeStatus'
-import { presentWeather } from '../weather/weatherView'
+import { calmWeatherBadge, calmWeatherMessage, presentWeather } from '../weather/weatherView'
 
 interface DayPoint {
   label: string
@@ -59,9 +75,22 @@ const weather = ref<WeatherResponse | null>(null)
 const planRows = ref<PlanRow[]>([])
 const reviewRows = ref<ReviewRow[]>([])
 const riskRows = ref<RiskRow[]>([])
+const calendarEvents = ref<HealthEvent[]>([])
+const calendarPlans = ref<PlanWorkbenchItem[]>([])
+const calendarReviews = ref<ReviewTask[]>([])
 const lastUpdated = ref<Date | null>(null)
 const weatherView = computed(() => presentWeather(weather.value))
+const calmMessage = computed(() => calmWeatherMessage())
+const calmBadge = computed(() => calmWeatherBadge())
+const weatherMood = computed(() => {
+  const condition = weather.value?.condition?.toLowerCase() ?? ''
+  if (['rain', 'storm', 'thunderstorm', 'snow', '雨', '雪', '雷'].some(word => condition.includes(word))) return 'rain'
+  if (['cloud', 'overcast', '云', '阴'].some(word => condition.includes(word))) return 'cloud'
+  return 'sun'
+})
 const runtimeLines = computed(() => familyRuntimeLines(session.capabilities))
+const runtimeOnline = computed(() => runtimeLines.value.filter(line => line.on).length)
+const runtimeTotal = computed(() => runtimeLines.value.length)
 
 let clockTimer: ReturnType<typeof setInterval> | null = null
 let refreshTimer: ReturnType<typeof setInterval> | null = null
@@ -117,21 +146,133 @@ const tickerText = computed(() => {
   return parts.join('　　·　　')
 })
 
-const sparkPath = computed(() => {
+/* 「今日事件」指标卡内的迷你周柱：一眼看出本周节奏，今天高亮。 */
+const weekBars = computed(() => {
   const points = weekSeries.value
-  if (points.length === 0) return { line: '', area: '', dots: [] as Array<{ x: number; y: number }> }
-  const width = 560
-  const height = 120
+  if (points.length === 0) return []
   const maxCount = Math.max(...points.map(point => point.count), 1)
-  const stepX = width / (points.length - 1 || 1)
-  const coords = points.map((point, index) => ({
-    x: index * stepX + 20,
-    y: 20 + (height - 40) * (1 - point.count / maxCount),
+  return points.map(point => ({
+    label: point.label,
+    count: point.count,
+    height: Math.max(8, Math.round((point.count / maxCount) * 100)),
+    today: point.label === '今天',
   }))
-  const line = coords.map((c, i) => `${i === 0 ? 'M' : 'L'} ${c.x.toFixed(1)} ${c.y.toFixed(1)}`).join(' ')
-  const area = `${line} L ${coords[coords.length - 1]!.x.toFixed(1)} ${height} L ${coords[0]!.x.toFixed(1)} ${height} Z`
-  return { line, area, dots: coords }
 })
+
+/* ── 折线图：四张同色系趋势图，全部来自已确认的真实聚合数据 ──
+ * 1 家庭事件趋势（服务端聚合） 2 成员对比 3 用药执行 4 累计新增
+ * 归桶与路径计算在 ui/bigScreenCharts.ts，此处只负责取数与拼面板。 */
+
+interface ChartCard {
+  id: string
+  title: string
+  aria: string
+  labels: string[]
+  values: number[] | null
+  series: ChartSeries[]
+  showArea: boolean
+  showLegend: boolean
+  empty: string | null
+}
+
+const trendLabels = ref<string[]>([])
+const memberTrends = ref<TrendSeries[]>([])
+const adherenceTrends = ref<TrendSeries[]>([])
+
+async function loadMemberTrends(): Promise<void> {
+  const householdId = session.selectedHouseholdId
+  const members = session.members
+  if (!householdId || members.length === 0) {
+    trendLabels.value = []
+    memberTrends.value = []
+    adherenceTrends.value = []
+    calendarEvents.value = []
+    return
+  }
+
+  const results = await Promise.allSettled(
+    members.map(member => apiClient.listMemberTimeline(householdId, member.id, requestOptions.value)),
+  )
+  const timelines = members.map((member, index) => {
+    const result = results[index]
+    return {
+      id: member.id,
+      name: member.display_name,
+      events: result?.status === 'fulfilled' ? (result.value as HealthEvent[]) : [],
+    }
+  })
+
+  const today = new Date()
+  const aggregate = aggregateTrends(timelines, today)
+  calendarEvents.value = timelines.flatMap(timeline => timeline.events)
+  trendLabels.value = trendDayLabels(today)
+  memberTrends.value = aggregate.members
+  adherenceTrends.value = aggregate.adherence
+}
+
+const weekCounts = computed(() => weekSeries.value.map(point => point.count))
+const weekLabels = computed(() => weekSeries.value.map(point => point.label))
+const weekCumulative = computed(() => cumulativeCounts(weekCounts.value))
+
+const charts = computed<ChartCard[]>(() => {
+  const hasWeek = weekCounts.value.length > 0
+  const adherenceTotal = seriesTotal(adherenceTrends.value)
+
+  return [
+    {
+      id: 'family',
+      title: '近七日家庭事件趋势',
+      aria: '近七日家庭已确认事件趋势折线图',
+      labels: weekLabels.value,
+      values: weekCounts.value,
+      series: hasWeek
+        ? toChartSeries([{ id: 'family', name: '已确认事件', color: 'var(--pine)', counts: weekCounts.value }])
+        : [],
+      showArea: true,
+      showLegend: false,
+      empty: hasWeek ? null : '暂无近七日聚合数据',
+    },
+    {
+      id: 'members',
+      title: '成员事件对比 · 近七日',
+      aria: '各位成员近七日已确认事件数量对比折线图',
+      labels: trendLabels.value,
+      values: null,
+      series: toChartSeries(memberTrends.value),
+      showArea: false,
+      showLegend: true,
+      empty: memberTrends.value.length === 0 ? '当前身份下没有可对比的成员' : null,
+    },
+    {
+      id: 'adherence',
+      title: '用药执行趋势 · 近七日',
+      aria: '近七日用药计划按时确认、延期跳过与漏服数量折线图',
+      labels: trendLabels.value,
+      values: null,
+      series: toChartSeries(adherenceTrends.value),
+      showArea: false,
+      showLegend: true,
+      empty: adherenceTotal === 0 ? '近七日没有用药执行记录' : null,
+    },
+    {
+      id: 'cumulative',
+      title: '近七日累计新增',
+      aria: '近七日已确认事件累计增长折线图',
+      labels: weekLabels.value,
+      values: weekCumulative.value,
+      series: hasWeek
+        ? toChartSeries([{ id: 'cumulative', name: '累计新增', color: 'var(--clay)', counts: weekCumulative.value }])
+        : [],
+      showArea: true,
+      showLegend: false,
+      empty: hasWeek ? null : '暂无近七日聚合数据',
+    },
+  ]
+})
+
+/* 横轴刻度固定七格，与折线共用同一套位置计算。 */
+const chartAxisX = computed(() => axisPositions(7))
+const chartGrid = gridPath()
 
 function riskLevelLabel(level: string): string {
   if (level === 'SEVERE') return '严重'
@@ -152,6 +293,8 @@ async function loadMemberPanels(householdId: string): Promise<void> {
     planRows.value = []
     reviewRows.value = []
     riskRows.value = []
+    calendarPlans.value = []
+    calendarReviews.value = []
     return
   }
 
@@ -169,8 +312,12 @@ async function loadMemberPanels(householdId: string): Promise<void> {
   const nextPlans: PlanRow[] = []
   const nextReviews: ReviewRow[] = []
   const nextRisks: RiskRow[] = []
+  const nextCalendarPlans: PlanWorkbenchItem[] = []
+  const nextCalendarReviews: ReviewTask[] = []
 
   for (const { member, plans, reviews, risks } of results) {
+    nextCalendarPlans.push(...(plans?.plans ?? []))
+    nextCalendarReviews.push(...reviews)
     const ordered = [...(plans?.plans ?? [])].sort(
       (left, right) => Date.parse(left.next_action_at) - Date.parse(right.next_action_at),
     )
@@ -214,6 +361,8 @@ async function loadMemberPanels(householdId: string): Promise<void> {
       return rank(left.level) - rank(right.level)
     })
     .slice(0, 5)
+  calendarPlans.value = nextCalendarPlans
+  calendarReviews.value = nextCalendarReviews
 }
 
 function planRow(memberName: string, plan: PlanWorkbenchItem): PlanRow {
@@ -264,13 +413,20 @@ async function loadAggregates(): Promise<void> {
 
 watch(
   () => [session.selectedHouseholdId, session.members.map(member => member.id).join(',')],
-  () => void loadAggregates(),
+  () => {
+    void loadAggregates()
+    void loadMemberTrends()
+  },
 )
 
 onMounted(() => {
   void loadAggregates()
+  void loadMemberTrends()
   clockTimer = setInterval(() => { now.value = new Date() }, 1000)
-  refreshTimer = setInterval(() => void loadAggregates(), 30_000)
+  refreshTimer = setInterval(() => {
+    void loadAggregates()
+    void loadMemberTrends()
+  }, 30_000)
 })
 
 onBeforeUnmount(() => {
@@ -280,12 +436,18 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="bigscreen" aria-label="家庭健康大屏">
+  <div class="bigscreen" :class="{ 'bigscreen--danger': severeCount > 0 }" aria-label="家庭健康大屏">
     <div class="bigscreen-top">
       <div>
         <p class="bs-kicker">家庭值守大屏</p>
         <h2 class="bigscreen-title">{{ householdName }} · 健康值守</h2>
-        <span class="bs-hint">非敏感聚合视图 · 病史、报告与对话正文不会投放到公共大屏</span>
+        <p class="bs-status-line">
+          <span class="pill" :class="runtimeOnline === runtimeTotal ? 'sage' : 'gold'">
+            本地在线 {{ runtimeOnline }}/{{ runtimeTotal }}
+          </span>
+          <span class="pill plain"><AppIcon name="lock" :size="11" style="vertical-align: -1px" /> 数据不出网</span>
+          <span v-if="pendingReviews > 0" class="pill clay">待复核 {{ pendingReviews }}</span>
+        </p>
       </div>
       <div class="clock-ring">
         <div class="bigscreen-clock">
@@ -297,32 +459,41 @@ onBeforeUnmount(() => {
 
     <div class="bigscreen-grid">
       <div class="bs-tile">
-        <span class="bs-label">家庭成员</span>
+        <span class="bs-label"><AppIcon name="members" :size="13" />家庭成员</span>
         <span class="bs-value mint"><CountUp :value="memberCount || session.members.length" /></span>
         <span class="bs-hint">全部在本地可信域内</span>
       </div>
-      <div class="bs-tile">
-        <span class="bs-label">今日新增事件</span>
+      <div class="bs-tile bs-tile--events">
+        <span class="bs-label"><AppIcon name="timeline" :size="13" />今日新增事件</span>
         <span class="bs-value warm"><CountUp :value="eventsToday" /></span>
         <span class="bs-hint">累计 {{ eventsTotal }} 条已确认事实</span>
+        <span v-if="weekBars.length > 0" class="bs-minibars" aria-hidden="true">
+          <i
+            v-for="(bar, index) in weekBars"
+            :key="`${bar.label}-${index}`"
+            :class="{ today: bar.today }"
+            :style="{ height: `${bar.height}%` }"
+            :title="`${bar.label} ${bar.count} 条`"
+          />
+        </span>
       </div>
       <div class="bs-tile">
-        <span class="bs-label">严重风险</span>
+        <span class="bs-label"><AppIcon name="shield" :size="13" />严重风险</span>
         <span class="bs-value rose" :class="{ alarm: severeCount > 0 }"><CountUp :value="severeCount" /></span>
         <span class="bs-hint">严重信号不受预算压制</span>
       </div>
       <div class="bs-tile">
-        <span class="bs-label">普通提醒</span>
+        <span class="bs-label"><AppIcon name="info" :size="13" />普通提醒</span>
         <span class="bs-value gold"><CountUp :value="ordinaryAlertCount" /></span>
         <span class="bs-hint">警告 {{ warningCount }} · 提示 {{ infoCount }} · 预算剩 {{ budgetLeft }}</span>
       </div>
       <div class="bs-tile">
-        <span class="bs-label">待人工处理</span>
+        <span class="bs-label"><AppIcon name="review" :size="13" />待人工处理</span>
         <span class="bs-value mint"><CountUp :value="pendingReviews" /></span>
         <span class="bs-hint">复核候选，确认后方可入档</span>
       </div>
       <div class="bs-tile">
-        <span class="bs-label">今日用药提醒</span>
+        <span class="bs-label"><AppIcon name="plan" :size="13" />今日用药提醒</span>
         <span class="bs-value warm"><CountUp :value="planRows.filter(row => row.today).length || planRows.length" /></span>
         <span class="bs-hint">{{ planRows.some(row => row.today) ? '按已确认计划展示' : planRows.length ? '展示最近计划' : '暂无计划' }}</span>
       </div>
@@ -339,71 +510,34 @@ onBeforeUnmount(() => {
       <div v-if="memberTiles.length === 0" class="bs-empty-inline">当前身份下没有可展示的家庭成员</div>
     </div>
 
-    <div class="bs-columns bs-columns-main">
-      <div class="bs-panel">
-        <h3>近七日已确认事件</h3>
-        <svg class="bs-spark" viewBox="0 0 600 150" role="img" aria-label="近七日已确认事件趋势">
-          <defs>
-            <linearGradient id="sparkFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stop-color="var(--pine)" stop-opacity="0.35" />
-              <stop offset="100%" stop-color="var(--pine)" stop-opacity="0" />
-            </linearGradient>
-          </defs>
-          <path v-if="sparkPath.area" class="spark-fill" :d="sparkPath.area" />
-          <path v-if="sparkPath.line" class="spark-line" :d="sparkPath.line" />
-          <circle
-            v-for="(dot, index) in sparkPath.dots"
-            :key="index"
-            class="spark-dot"
-            :cx="dot.x"
-            :cy="dot.y"
-            r="3.2"
-          />
-          <text
-            v-for="(point, index) in weekSeries"
-            :key="point.label + index"
-            class="spark-label"
-            :x="sparkPath.dots[index]?.x ?? 0"
-            y="144"
-          >
-            {{ point.label }} {{ point.count }}
-          </text>
-        </svg>
-      </div>
-
-      <div class="bs-panel">
-        <h3>本地运行状态</h3>
-        <div
-          v-for="line in runtimeLines"
-          :key="line.label"
-          class="bs-light-row"
-        >
-          <span class="bs-light" :class="line.on ? 'on' : 'off'" />
-          <span>{{ line.label }}</span>
-        </div>
-        <div class="bs-light-row">
-          <span class="bs-light" :class="pendingOutbox === 0 ? 'on' : 'off'" />
-          <span>事件出箱 · {{ pendingOutbox === 0 ? '全部送达' : `${pendingOutbox} 条待派发` }}</span>
-        </div>
-        <div class="bs-light-row">
-          <span class="bs-light" :class="weatherView.available && !weatherView.stale ? 'on' : 'off'" />
-          <span>天气行动卡 · {{ weatherView.statusLabel }} · {{ weatherView.scopeLabel }}</span>
-        </div>
-      </div>
-    </div>
-
-    <div class="bs-columns bs-columns-detail">
+    <div class="bs-columns bs-columns-detail bs-columns-focus">
       <div class="bs-panel">
         <h3>今日环境提醒</h3>
         <template v-if="weatherView.available">
           <div class="bs-weather-hero">
-            <strong>
-              {{ weather?.temperature != null ? `${weather.temperature}°` : '—' }}
-            </strong>
+            <span class="bs-weather-visual" :class="`is-${weatherMood}`" aria-hidden="true">
+              <span class="bs-weather-sun"><AppIcon name="sun" :size="30" /></span>
+              <span class="bs-weather-cloud"><AppIcon name="cloud" :size="34" /></span>
+              <span class="bs-weather-rain"><i /><i /><i /></span>
+            </span>
+            <span class="bs-temperature-wrap">
+              <AppIcon class="bs-temperature-icon" name="thermometer" :size="17" />
+              <strong>
+                {{ weather?.temperature != null ? `${weather.temperature}°` : '—' }}
+              </strong>
+            </span>
             <div>
               <span>{{ weather?.condition || weatherView.statusLabel }}</span>
               <small>{{ weatherView.scopeLabel }} · {{ weatherView.sourceLabel }}</small>
             </div>
+          </div>
+          <div v-if="weather?.humidity != null || weather?.wind" class="bs-weather-facts" aria-label="天气指标">
+            <span v-if="weather?.humidity != null">
+              <AppIcon name="cloud" :size="14" />湿度 {{ weather.humidity }}%
+            </span>
+            <span v-if="weather?.wind">
+              <AppIcon class="bs-weather-wind-icon" name="wind" :size="16" />{{ weather.wind }}
+            </span>
           </div>
           <ul v-if="weatherCards.length" class="bs-list">
             <li v-for="card in weatherCards" :key="card.rule_id" class="bs-list-row">
@@ -413,7 +547,17 @@ onBeforeUnmount(() => {
               <span>{{ card.message }}</span>
             </li>
           </ul>
-          <p v-else class="bs-empty">暂无环境行动建议</p>
+          <div v-else class="bs-weather-calm">
+            <span class="bs-weather-calm-visual" aria-hidden="true">
+              <span class="bs-weather-calm-spark" />
+              <AppIcon name="sparkle" :size="20" />
+            </span>
+            <div>
+              <strong>今天没有特别提醒</strong>
+              <span>{{ calmMessage }}</span>
+            </div>
+            <span class="bs-weather-calm-badge">{{ calmBadge }}</span>
+          </div>
         </template>
         <p v-else class="bs-empty">{{ weatherView.statusLabel }} · 不影响家庭健康记录</p>
       </div>
@@ -433,7 +577,57 @@ onBeforeUnmount(() => {
         </ul>
         <p v-else class="bs-empty">暂无已确认用药计划</p>
       </div>
+    </div>
 
+    <div class="bs-columns bs-columns-charts">
+      <div v-for="chart in charts" :key="chart.id" class="bs-panel bs-chart-panel">
+        <h3>{{ chart.title }}</h3>
+        <p v-if="chart.empty" class="bs-empty">{{ chart.empty }}</p>
+        <svg v-else class="bs-linechart" :viewBox="`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`" role="img" :aria-label="chart.aria">
+          <path class="bs-chart-grid" :d="chartGrid" />
+          <g v-for="series in chart.series" :key="`${chart.id}-${series.id}`">
+            <path
+              v-if="chart.showArea && series.area"
+              class="bs-chart-area"
+              :d="series.area"
+              :fill="series.color"
+            />
+            <path
+              v-if="series.line"
+              class="bs-chart-line"
+              :class="{ 'bs-chart-line--thin': chart.series.length > 1 }"
+              :d="series.line"
+              :stroke="series.color"
+            />
+            <circle
+              v-for="(dot, index) in series.dots"
+              :key="`${chart.id}-${series.id}-${index}`"
+              class="bs-chart-dot"
+              :cx="dot.x"
+              :cy="dot.y"
+              :r="chart.series.length > 1 ? 2.6 : 3.4"
+              :fill="series.color"
+            />
+          </g>
+          <text
+            v-for="(label, index) in chart.labels"
+            :key="`${chart.id}-label-${index}`"
+            class="bs-chart-label"
+            :x="chartAxisX[index] ?? CHART_PAD_X"
+            y="146"
+          >
+            {{ chart.values ? `${label} ${chart.values[index] ?? 0}` : label }}
+          </text>
+        </svg>
+        <div v-if="chart.showLegend && !chart.empty" class="bs-chart-legend" aria-hidden="true">
+          <span v-for="series in chart.series" :key="`${chart.id}-legend-${series.id}`">
+            <i :style="{ background: series.color }" />{{ series.name }}
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <div class="bs-columns bs-columns-detail bs-columns-secondary">
       <div class="bs-panel">
         <h3>待复核识别候选</h3>
         <ul v-if="reviewRows.length" class="bs-list">
@@ -460,6 +654,34 @@ onBeforeUnmount(() => {
           </li>
         </ul>
         <p v-else class="bs-empty">当前没有脱敏风险摘要</p>
+      </div>
+    </div>
+
+    <div class="bs-calendar-panel">
+      <HealthCalendar
+        :events="calendarEvents"
+        :plans="calendarPlans"
+        :reviews="calendarReviews"
+      />
+    </div>
+
+    <div class="bs-panel bs-runtime-panel">
+      <h3>本地运行状态</h3>
+      <div
+        v-for="line in runtimeLines"
+        :key="line.label"
+        class="bs-light-row"
+      >
+        <span class="bs-light" :class="line.on ? 'on' : 'off'" />
+        <span>{{ line.label }}</span>
+      </div>
+      <div class="bs-light-row">
+        <span class="bs-light" :class="pendingOutbox === 0 ? 'on' : 'off'" />
+        <span>事件出箱 · {{ pendingOutbox === 0 ? '全部送达' : `${pendingOutbox} 条待派发` }}</span>
+      </div>
+      <div class="bs-light-row">
+        <span class="bs-light" :class="weatherView.available && !weatherView.stale ? 'on' : 'off'" />
+        <span>天气行动卡 · {{ weatherView.statusLabel }} · {{ weatherView.scopeLabel }}</span>
       </div>
     </div>
 

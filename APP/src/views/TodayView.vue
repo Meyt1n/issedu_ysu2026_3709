@@ -59,6 +59,7 @@ const confetti = ref<InstanceType<typeof ConfettiBurst> | null>(null)
 const sessionKey = computed(() => sessionContextKey(session))
 let reloadGeneration = 0
 let reloadInFlight = false
+let reloadQueued = false
 
 /** MOB-135：任务操作历史。服务端条目按需加载；本地待确认/失败条目只存内存。 */
 const historyOpen = ref(false)
@@ -222,6 +223,19 @@ function summaryText(): string {
 async function loadMembers(expectedKey: string, generation: number): Promise<boolean> {
   const nextMembers = await activeProvider().listMembers()
   if (expectedKey !== sessionKey.value || generation !== reloadGeneration) return false
+  if (session.mobileRole === 'member') {
+    // 成员端只保留自己的成员卡片；当前成员无效时优先使用 SELF，
+    // 再退回服务端实际返回的第一位授权成员，绝不把全家列表展示给成员。
+    const preferred = nextMembers.find(m => m.id === session.currentMemberId)
+      ?? nextMembers.find(m => m.role === 'SELF')
+      ?? nextMembers[0]
+    members.value = preferred ? [preferred] : []
+    if (session.currentMemberId !== (preferred?.id ?? '')) {
+      updateSession({ currentMemberId: preferred?.id ?? '' })
+    }
+    return true
+  }
+
   members.value = nextMembers
   const exists = nextMembers.some(m => m.id === session.currentMemberId)
   if (!exists) {
@@ -261,7 +275,10 @@ async function loadSnapshot(expectedKey = sessionKey.value, generation = reloadG
 }
 
 async function reload(options: { preserveSnapshot?: boolean } = {}): Promise<void> {
-  if (reloadInFlight) return
+  if (reloadInFlight) {
+    reloadQueued = true
+    return
+  }
   reloadInFlight = true
   const generation = ++reloadGeneration
   const expectedKey = sessionKey.value
@@ -283,6 +300,10 @@ async function reload(options: { preserveSnapshot?: boolean } = {}): Promise<voi
   } finally {
     if (generation === reloadGeneration) loading.value = false
     reloadInFlight = false
+    if (reloadQueued) {
+      reloadQueued = false
+      void reload()
+    }
   }
 }
 
@@ -440,12 +461,11 @@ onMounted(reload)
       <AppIcon name="mic" :size="22" />
       <span class="link-card-text">
         <strong>语音助手</strong>
-        <span class="meta-line">说「小燕小燕」提问；联机后连接电脑后端</span>
       </span>
       <AppIcon name="chevron-right" :size="18" />
     </RouterLink>
 
-    <label class="field">
+    <label v-if="session.mobileRole === 'admin'" class="field">
       当前成员
       <select v-model="memberSelection" :disabled="loading" @change="onMemberChange">
         <option v-for="member in members" :key="member.id" :value="member.id">
@@ -453,7 +473,6 @@ onMounted(reload)
         </option>
       </select>
     </label>
-
     <ErrorNotice v-if="error" :error="error" :busy="loading" @retry="reload" />
     <ErrorNotice
       v-if="partialError"
@@ -471,13 +490,12 @@ onMounted(reload)
       <EmptyState
         icon="family"
         title="当前身份没有可用家庭成员"
-        hint="请到“我的”检查联机身份、家庭和授权设置；没有成员时不会显示空健康数据。"
       />
     </template>
 
     <template v-else-if="snapshot">
       <ReminderStatusCard :state="reminderState" />
-      <EnvironmentActionCard :state="snapshot.environmentAction" />
+      <EnvironmentActionCard v-if="session.mobileRole === 'admin'" :state="snapshot.environmentAction" />
 
       <section aria-labelledby="tasks-title">
         <div class="section-heading">
@@ -492,7 +510,6 @@ onMounted(reload)
             v-if="pendingTasks.length === 0 && escalatedTasks.length === 0"
             icon="check"
             title="今日任务都处理完了"
-            hint="新的提醒会按等级出现在这里"
           />
           <TaskCard
             v-for="task in [...pendingTasks, ...escalatedTasks]"
@@ -516,7 +533,7 @@ onMounted(reload)
         </details>
       </section>
 
-      <section aria-labelledby="history-title">
+      <section v-if="session.mobileRole === 'admin'" aria-labelledby="history-title">
         <div class="section-heading">
           <h2 id="history-title"><span class="heading-dot" data-tone="info" aria-hidden="true"></span>任务操作历史</h2>
           <button type="button" class="section-link" @click="toggleHistory">
@@ -561,7 +578,7 @@ onMounted(reload)
         </div>
       </section>
 
-      <section aria-labelledby="trend-title">
+      <section v-if="session.mobileRole === 'admin'" aria-labelledby="trend-title">
         <div class="section-heading">
           <h2 id="trend-title"><span class="heading-dot" data-tone="accent" aria-hidden="true"></span>近 7 天完成情况</h2>
         </div>
@@ -576,7 +593,7 @@ onMounted(reload)
         </div>
       </section>
 
-      <section aria-labelledby="risks-title">
+      <section v-if="session.mobileRole === 'admin'" aria-labelledby="risks-title">
         <div class="section-heading">
           <h2 id="risks-title"><span class="heading-dot" data-tone="warn" aria-hidden="true"></span>待关注风险</h2>
           <RouterLink class="section-link" to="/alerts">查看全部</RouterLink>
@@ -611,13 +628,37 @@ onMounted(reload)
         </div>
       </section>
 
+      <section v-else aria-labelledby="member-risks-title">
+        <div class="section-heading">
+          <h2 id="member-risks-title"><span class="heading-dot" data-tone="warn" aria-hidden="true"></span>需要留意</h2>
+        </div>
+        <div class="plain-list" style="margin-top: 10px">
+          <EmptyState
+            v-if="topRisks.length === 0"
+            icon="shield"
+            title="暂无需要留意的情况"
+          />
+          <article v-for="risk in topRisks" :key="risk.ruleId" class="card member-risk-row">
+            <div class="risk-row">
+              <span class="icon-disc" :data-tone="riskLevelTone(risk.level)" aria-hidden="true">
+                <AppIcon name="alert" :size="19" />
+              </span>
+              <div class="risk-body">
+                <p class="risk-message">{{ risk.message }}</p>
+                <span class="meta-line"><LevelTag kind="risk" :value="risk.level" /></span>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
       <section aria-labelledby="recent-title">
         <div class="section-heading">
           <h2 id="recent-title"><span class="heading-dot" data-tone="info" aria-hidden="true"></span>最近变化</h2>
         </div>
         <ul class="card divided-list event-timeline" style="margin-top: 10px">
           <li v-if="snapshot.recentEvents.length === 0">
-            <span class="meta-line">尚无已确认健康事件，可拍摄药盒或在网页端手工录入一条事实。</span>
+            <span class="meta-line">暂无记录</span>
           </li>
           <li
             v-for="event in snapshot.recentEvents"
@@ -635,9 +676,7 @@ onMounted(reload)
 
     <ListStatusAnnouncer :message="listStatusMessage" />
 
-    <footer class="disclaimer">
-      教学演示，不用于诊断或治疗。系统不改变任何用药决定；紧急情况请联系医生或当地急救服务。
-    </footer>
+    <footer class="disclaimer">仅作健康记录与提醒；紧急情况请联系医生或急救服务。</footer>
 
     <ConfettiBurst ref="confetti" />
   </main>

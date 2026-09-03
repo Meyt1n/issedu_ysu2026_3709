@@ -19,6 +19,7 @@ import {
   refreshCapabilities,
   recoverPasswordWithPin,
   selectedMember,
+  selectHousehold,
   session,
   setView,
   signOut,
@@ -392,6 +393,35 @@ describe('cross-portal face household binding (HCT-425)', () => {
     expect(getBoundFaceHouseholdId()).toBe('household-old')
     expect(cookie).toContain(encodeURIComponent('household-old'))
   })
+
+  it('prefers the current shared binding over a stale port-local household', () => {
+    const current = JSON.stringify({ id: 'household-current', name: '当前家庭', members: [] })
+    let cookie = `hct-face-family-household=${encodeURIComponent(current)}`
+    const setItem = vi.fn()
+    Object.defineProperty(globalThis, 'document', {
+      configurable: true,
+      value: {
+        get cookie() {
+          return cookie
+        },
+        set cookie(value: string) {
+          cookie = value
+        },
+      },
+    })
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem: vi.fn(() => JSON.stringify({ id: 'household-stale', name: '旧家庭' })),
+        setItem,
+        removeItem: vi.fn(),
+      },
+    })
+
+    expect(getBoundFaceHouseholdId()).toBe('household-current')
+    expect(getBoundFaceHouseholdName()).toBe('当前家庭')
+    expect(setItem).toHaveBeenCalledWith('hct:face-family-household', current)
+  })
 })
 
 describe('portal view guards (HCT-439)', () => {
@@ -463,6 +493,50 @@ describe('portal view guards (HCT-439)', () => {
     expect(session.portal).toBe('admin')
     setView('member-capture')
     expect(session.currentView).toBe('overview')
+  })
+
+  it('keeps a member on the shared assistant view when the household scope reloads', async () => {
+    // 侧栏给成员提供「健康助手」入口（SHARED_VIEWS），因此重新加载家庭作用域
+    // 时不能把他踢回首页——此前该判定只认 MEMBER_VIEWS，多家庭成员在助手页
+    // 切换家庭就会被弹走。
+    vi.spyOn(apiClient, 'listHouseholds').mockResolvedValue([
+      {
+        id: 'household-a',
+        name: '爷爷奶奶家',
+        created_by: 'parent-admin',
+        created_at: '2026-08-24T00:00:00Z',
+      },
+      {
+        id: 'household-b',
+        name: '外公外婆家',
+        created_by: 'parent-admin',
+        created_at: '2026-08-24T00:00:00Z',
+      },
+    ])
+    vi.spyOn(apiClient, 'listMembers').mockResolvedValue([
+      {
+        id: 'member-grandma',
+        household_id: 'household-a',
+        display_name: '奶奶',
+        role: 'DEPENDENT',
+        actor_id: 'grandma-account',
+        created_at: '2026-08-24T00:00:00Z',
+      },
+    ])
+    vi.spyOn(apiClient, 'getCapabilities').mockResolvedValue({
+      phase: 'local',
+      available: ['api'],
+      unavailable: [],
+    })
+
+    await loginAs('grandma-account')
+    expect(session.portal).toBe('member')
+    setView('assistant')
+    expect(session.currentView).toBe('assistant')
+
+    await selectHousehold('household-b')
+
+    expect(session.currentView).toBe('assistant')
   })
 })
 

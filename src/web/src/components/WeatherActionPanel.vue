@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 
 import type { WeatherResponse } from '../api/types'
-import { presentWeather } from '../weather/weatherView'
+import { calmWeatherBadge, calmWeatherMessage, presentWeather } from '../weather/weatherView'
 import AppIcon from './AppIcon.vue'
 
 const props = withDefaults(
@@ -32,7 +32,16 @@ const conditionLabel = computed(() => {
   return conditionLabels[condition.toLowerCase()] ?? condition
 })
 
+const weatherMood = computed(() => {
+  const condition = props.weather?.condition?.toLowerCase() ?? ''
+  if (['rain', 'storm', 'thunderstorm', 'snow', '雨', '雪', '雷'].some(word => condition.includes(word))) return 'rain'
+  if (['cloud', 'overcast', '云', '阴'].some(word => condition.includes(word))) return 'cloud'
+  return 'sun'
+})
+
 const updatedLabel = computed(() => view.value.sourceLabel.replace(/^来源时间\s*/, '更新于 '))
+const calmMessage = computed(() => calmWeatherMessage())
+const calmBadge = computed(() => calmWeatherBadge())
 </script>
 
 <template>
@@ -61,8 +70,16 @@ const updatedLabel = computed(() => view.value.sourceLabel.replace(/^来源时�
 
     <div v-if="view.available" class="weather-action-body">
       <div class="weather-reading" :class="{ stale: view.stale }">
-        <span class="weather-temperature">
-          {{ weather?.temperature != null ? `${weather.temperature}°` : '—' }}
+        <span class="weather-reading-visual" :class="`is-${weatherMood}`" aria-hidden="true">
+          <span class="weather-sun"><AppIcon name="sun" :size="28" /></span>
+          <span class="weather-cloud"><AppIcon name="cloud" :size="32" /></span>
+          <span class="weather-rain"><i /><i /><i /></span>
+        </span>
+        <span class="weather-temperature-wrap">
+          <AppIcon class="weather-temperature-icon" name="thermometer" :size="18" />
+          <span class="weather-temperature">
+            {{ weather?.temperature != null ? `${weather.temperature}°` : '—' }}
+          </span>
         </span>
         <div class="weather-reading-copy">
           <strong>{{ conditionLabel }}</strong>
@@ -72,15 +89,15 @@ const updatedLabel = computed(() => view.value.sourceLabel.replace(/^来源时�
 
       <div class="weather-metrics" aria-label="天气指标">
         <div class="weather-metric">
-          <span>湿度</span>
+          <span class="weather-metric-label"><AppIcon name="cloud" :size="14" />湿度</span>
           <strong>{{ weather?.humidity != null ? `${weather.humidity}%` : '暂无' }}</strong>
         </div>
         <div v-if="weather?.wind" class="weather-metric">
-          <span>风况</span>
+          <span class="weather-metric-label"><AppIcon class="weather-wind-icon" name="wind" :size="16" />风况</span>
           <strong>{{ weather.wind }}</strong>
         </div>
         <div v-if="weather?.aqi != null" class="weather-metric">
-          <span>空气质量</span>
+          <span class="weather-metric-label"><AppIcon name="compass" :size="14" />空气质量</span>
           <strong>AQI {{ weather.aqi }}</strong>
         </div>
       </div>
@@ -99,11 +116,15 @@ const updatedLabel = computed(() => view.value.sourceLabel.replace(/^来源时�
           </div>
         </article>
         <div v-if="(weather?.action_cards.length ?? 0) === 0" class="weather-calm">
-          <AppIcon name="check" :size="18" />
+          <span class="weather-calm-visual" aria-hidden="true">
+            <span class="weather-calm-spark" />
+            <AppIcon name="sparkle" :size="19" />
+          </span>
           <div>
             <strong>今天没有特别提醒</strong>
-            <span>按日常节奏安排活动即可。</span>
+            <span>{{ calmMessage }}</span>
           </div>
+          <span class="weather-calm-badge">{{ calmBadge }}</span>
         </div>
       </div>
     </div>
@@ -116,13 +137,6 @@ const updatedLabel = computed(() => view.value.sourceLabel.replace(/^来源时�
       </div>
     </div>
 
-    <footer class="weather-evidence">
-      <span><AppIcon name="lock" :size="13" />{{ view.scopeLabel }}天气</span>
-      <p v-if="view.stale" class="weather-degraded">{{ view.detail }}</p>
-      <p class="weather-disclaimer">
-        {{ weather?.disclaimer ?? '环境行动建议仅供日常生活安排参考，不构成诊断或用药建议。' }}
-      </p>
-      <span class="weather-sr-only">规则版本 {{ weather?.ruleset_version ?? '待配置' }}</span>
-    </footer>
+    <span v-if="view.stale" class="weather-inline-note">{{ view.detail }}</span>
   </section>
 </template>

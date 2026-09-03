@@ -11,7 +11,21 @@ from sqlalchemy import create_engine, inspect, text
 from app.config import get_settings
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CURRENT_HEAD = "0024_hct462_risk_disposition"
+
+
+def _current_head() -> str:
+    """The single migration head, read from the migration graph.
+
+    Pinning the revision name here meant every legitimate new migration broke
+    this suite in four different files.  The invariant worth testing is that the
+    graph has exactly one head and that upgrades reach it — not what it is
+    called this week.
+    """
+    heads = ScriptDirectory.from_config(Config(str(REPO_ROOT / "alembic.ini"))).get_heads()
+    assert len(heads) == 1, f"expected a single migration head, found {heads}"
+    return heads[0]
+
+
 RESTORED_TABLES = {
     "projection_checkpoint",
     "review_task",
@@ -41,7 +55,9 @@ def _alembic_config(database_url: str) -> Config:
 def test_migration_graph_has_one_merged_head() -> None:
     script = ScriptDirectory.from_config(Config(str(REPO_ROOT / "alembic.ini")))
 
-    assert script.get_heads() == [CURRENT_HEAD]
+    # One head means no unmerged branches: a fresh deployment and an upgraded
+    # one converge on the same schema.
+    assert len(script.get_heads()) == 1, script.get_heads()
 
 
 @pytest.mark.parametrize(
@@ -107,7 +123,7 @@ def test_existing_schema_branch_can_upgrade_to_merged_head(
             current_revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-        assert current_revision == CURRENT_HEAD
+        assert current_revision == _current_head()
     finally:
         engine.dispose()
         get_settings.cache_clear()

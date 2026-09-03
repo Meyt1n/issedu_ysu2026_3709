@@ -148,7 +148,7 @@ describe('assistant voice capability boundary', () => {
     expect(transcriptAfterWakePhrase('请帮我查一下')).toBe('')
   })
 
-  it('configures continuous interim recognition with multi-alternative accuracy', () => {
+  it('configures continuous interim recognition with single-alternative latency', () => {
     class FakeRecognition {
       lang = ''
       continuous = false
@@ -170,7 +170,8 @@ describe('assistant voice capability boundary', () => {
     })
     expect(recognition?.continuous).toBe(true)
     expect(recognition?.interimResults).toBe(true)
-    expect(recognition?.maxAlternatives).toBe(3)
+    // 只取一个候选：备选项从 3 降到 1，减少识别处理延迟与浏览器 CPU 占用。
+    expect(recognition?.maxAlternatives).toBe(1)
   })
 })
 

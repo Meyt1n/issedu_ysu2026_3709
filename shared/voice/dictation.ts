@@ -225,7 +225,7 @@ export function createDictationController(
     const next = createSpeechRecognition('zh-CN', {
       continuous: true,
       interimResults: true,
-      maxAlternatives: 3,
+      maxAlternatives: 1,
     })
     if (!next) {
       fatal = true

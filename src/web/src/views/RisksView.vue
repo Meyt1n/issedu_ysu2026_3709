@@ -225,17 +225,14 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
     <div class="stat-cell rose">
       <span class="cell-cap"><AppIcon name="alert" :size="14" />严重信号</span>
       <span class="cell-num">{{ riskList?.severe_count ?? 0 }}<small>个</small></span>
-      <span class="cell-sub">严重告警不受预算压制，单独提醒</span>
     </div>
     <div class="stat-cell gold">
       <span class="cell-cap"><AppIcon name="shield" :size="14" />警告信号</span>
       <span class="cell-num">{{ riskList?.warning_count ?? 0 }}<small>个</small></span>
-      <span class="cell-sub">普通提醒合并展示，受每日预算约束</span>
     </div>
     <div class="stat-cell sky">
       <span class="cell-cap"><AppIcon name="info" :size="14" />全部信号</span>
       <span class="cell-num">{{ riskList?.total ?? 0 }}<small>个</small></span>
-      <span class="cell-sub">{{ selectedMember?.display_name ?? '当前成员' }} · 已去重</span>
     </div>
   </section>
 

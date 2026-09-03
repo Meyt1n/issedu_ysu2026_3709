@@ -21,25 +21,25 @@ export function localDataInventory(): LocalDataItem[] {
   return [
     {
       key: SESSION_STORAGE_KEY,
-      label: '联机设置与紧急联系人',
+      label: '连接与紧急联系人',
       saved: true,
-      note: '服务器地址、身份来源、访问目的、成员选择、紧急联系人称呼与电话',
+      note: '服务器地址、成员选择、联系人称呼与电话',
     },
     {
       key: A11Y_STORAGE_KEY,
-      label: '无障碍偏好',
+      label: '无障碍设置',
       saved: true,
-      note: '长辈模式、字号、对比度、语音播报、减少动效',
+      note: '长辈模式、字号、对比度、语音播报与动效',
     },
     {
       key: PRIVACY_ACK_STORAGE_KEY,
-      label: '隐私告知确认',
+      label: '隐私确认',
       saved: true,
-      note: '仅记录已读版本与时间；清理本地设置时保留，避免反复弹窗',
+      note: '仅记录已读版本与时间',
     },
-    { key: 'memory:credentials', label: '登录密码 / PIN / 会话凭据', saved: false, note: '只在本机内存，退出或刷新即消失，从不写入存储' },
-    { key: 'memory:capabilities', label: '后端能力探测快照', saved: false, note: '仅运行时有效，切换上下文即丢弃' },
-    { key: 'memory:runtime', label: '查询、任务、上传与识别运行状态', saved: false, note: '内存态，页面离开或会话切换即清理' },
+    { key: 'memory:credentials', label: '登录信息', saved: false, note: '仅在当前运行期间使用' },
+    { key: 'memory:capabilities', label: '服务状态', saved: false, note: '仅在当前运行期间使用' },
+    { key: 'memory:runtime', label: '临时运行数据', saved: false, note: '离开页面或切换账户后清除' },
     { key: 'memory:health', label: '健康数据与照片', saved: false, note: '不在本机持久化；照片仅拍摄识别用途，不自动保存' },
   ]
 }
@@ -64,8 +64,8 @@ export function clearLocalData(): LocalDataClearResult {
     return { ok: false, failures: ['浏览器存储当前不可用（可能是隐私模式），无法清理'], cleared }
   }
   const targets: Array<[string, string]> = [
-    [SESSION_STORAGE_KEY, '联机设置与紧急联系人'],
-    [A11Y_STORAGE_KEY, '无障碍偏好'],
+    [SESSION_STORAGE_KEY, '连接与紧急联系人'],
+    [A11Y_STORAGE_KEY, '无障碍设置'],
   ]
   for (const [key, label] of targets) {
     try {

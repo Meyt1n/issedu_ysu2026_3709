@@ -108,11 +108,7 @@ watch(() => sessionContextKey(session), () => void reload())
 
     <ListStatusAnnouncer :message="listStatusMessage" />
 
-    <p class="notice">
-      授权范围由家庭服务器在接口层过滤；本页不会推断或显示未授权的内容。调整授权请使用网页端“授权设置”。
-    </p>
-
-    <footer class="disclaimer">教学演示，不用于诊断或治疗。</footer>
+    <footer class="disclaimer">仅作健康记录与提醒。</footer>
   </main>
 </template>
 

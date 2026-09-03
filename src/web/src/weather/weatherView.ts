@@ -17,6 +17,50 @@ const DEGRADED_REASONS: Record<string, string> = {
   error: '天气服务暂时异常，正在显示最后一次有效缓存。',
 }
 
+const CALM_WEATHER_MESSAGES = [
+  '阳光正好，给今天留一点从容。',
+  '风把节奏吹松一些，稳稳向前。',
+  '云朵替天空留了空白，也给自己留点呼吸。',
+  '今天也辛苦了，按自己的步子慢慢来。',
+  '把平常的一天过好，就是很棒的坚持。',
+  '轻装出发，给自己一个小小的肯定。',
+  '你已经做得很好，今天继续保持好心情。',
+  '不赶路，照顾好当下的每一个小片刻。',
+  '今天的空气很安静，适合把心情放松一点。',
+  '日子会一格一格变好，今天也算一格。',
+  '给自己一个温柔的开始，剩下的慢慢来。',
+  '平稳就是今天的好消息，继续保持自己的节奏。',
+] as const
+
+const CALM_WEATHER_BADGES = [
+  '舒展一下',
+  '稳稳向前',
+  '留点呼吸',
+  '慢慢来',
+  '很棒的坚持',
+  '轻装出发',
+  '好心情',
+  '照顾当下',
+  '放松一点',
+  '一格一格好起来',
+  '温柔开始',
+  '保持节奏',
+] as const
+
+function localDayIndex(date: Date): number {
+  const start = new Date(date.getFullYear(), 0, 1)
+  const current = new Date(date.getFullYear(), date.getMonth(), date.getDate())
+  return Math.floor((current.getTime() - start.getTime()) / 86_400_000)
+}
+
+export function calmWeatherMessage(date: Date = new Date()): string {
+  return CALM_WEATHER_MESSAGES[localDayIndex(date) % CALM_WEATHER_MESSAGES.length]
+}
+
+export function calmWeatherBadge(date: Date = new Date()): string {
+  return CALM_WEATHER_BADGES[localDayIndex(date) % CALM_WEATHER_BADGES.length]
+}
+
 function formatSourceTime(value?: string | null): string {
   if (!value) return '来源时间待提供'
   const date = new Date(value)

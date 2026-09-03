@@ -1,5 +1,6 @@
 import { ApiClient, ApiClientError } from '@/api/client'
 import { CAPABILITY_IDS, hasCapability } from '@/stores/capabilities'
+import { useSession } from '@/stores/session'
 import type { AuthorizationRead, HealthEvent, HealthNewsResponse, Member, RequestOptions, RiskAlert, RiskListResponse, UploadedFile, VisionTask } from '@/api/types'
 import type {
   CareTask,
@@ -621,6 +622,7 @@ export class HttpDataProvider implements DataProvider {
   private readonly client: ApiClient
   private readonly context: () => SessionContext
   private householdId: string | null = null
+  private householdCreatedBy: string | null = null
   private householdTimeZone: string | null = null
   private memberCache = new Map<string, Member>()
   private taskCache = new Map<string, CareTask>()
@@ -695,6 +697,7 @@ export class HttpDataProvider implements DataProvider {
     }
     const choose = (household: (typeof households)[number]) => {
       this.householdId = household.id
+      this.householdCreatedBy = household.created_by
       this.householdTimeZone = typeof household.time_zone === 'string' && household.time_zone.trim()
         ? household.time_zone.trim()
         : null
@@ -722,10 +725,24 @@ export class HttpDataProvider implements DataProvider {
     })
   }
 
-  /** 服务端授权范围内的家庭列表；只暴露 ID 与名称，供界面显式选择。 */
+  /** 服务端授权范围内的家庭列表；供界面显式选择和区分移动端展示角色。 */
   async listHouseholds(): Promise<HouseholdOption[]> {
     const households = await this.client.listHouseholds(this.options())
-    return households.map(household => ({ id: household.id, name: household.name }))
+    return households.map(household => ({
+      id: household.id,
+      name: household.name,
+      createdBy: household.created_by,
+    }))
+  }
+
+  /** 联机进入业务页时也同步角色，避免必须先打开“我的”才切换成员端。 */
+  private syncMobileRole(): void {
+    const actorId = this.context().actorId.trim()
+    if (!actorId || !this.householdCreatedBy) return
+    const nextRole = this.householdCreatedBy === actorId ? 'admin' : 'member'
+    const { session, updateSession } = useSession()
+    if (session.mobileRole === nextRole) return
+    updateSession({ mobileRole: nextRole, currentMemberId: '' })
   }
 
   async getHealthNews(): Promise<HealthNewsResponse> {
@@ -752,6 +769,7 @@ export class HttpDataProvider implements DataProvider {
   async listMembers(): Promise<MemberSummary[]> {
     const householdId = await this.resolveHouseholdId()
     const members = await this.client.listMembers(householdId, this.options())
+    this.syncMobileRole()
     this.memberCache = new Map(members.map(m => [m.id, m]))
 
     // 家庭 owner 可读授权列表；非 owner（照护者）返回 404，

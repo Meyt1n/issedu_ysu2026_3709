@@ -15,9 +15,9 @@ describe('本地数据清单与清理（MOB-146）', () => {
     const saved = items.filter(item => item.saved).map(item => item.label)
     const notSaved = items.filter(item => !item.saved).map(item => item.label)
 
-    expect(saved).toEqual(['联机设置与紧急联系人', '无障碍偏好', '隐私告知确认'])
-    expect(notSaved.join()).toContain('会话凭据')
-    expect(notSaved.join()).toContain('能力探测快照')
+    expect(saved).toEqual(['连接与紧急联系人', '无障碍设置', '隐私确认'])
+    expect(notSaved.join()).toContain('登录信息')
+    expect(notSaved.join()).toContain('服务状态')
     expect(notSaved.join()).toContain('健康数据')
   })
 
@@ -29,7 +29,7 @@ describe('本地数据清单与清理（MOB-146）', () => {
     const result = clearLocalData()
 
     expect(result.ok).toBe(true)
-    expect(result.cleared).toEqual(['联机设置与紧急联系人', '无障碍偏好'])
+    expect(result.cleared).toEqual(['连接与紧急联系人', '无障碍设置'])
     expect(localStorage.getItem(SESSION_STORAGE_KEY)).toBeNull()
     expect(localStorage.getItem(A11Y_STORAGE_KEY)).toBeNull()
     expect(localStorage.getItem(PRIVACY_ACK_STORAGE_KEY)).not.toBeNull()

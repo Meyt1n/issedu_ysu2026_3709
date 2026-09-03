@@ -152,9 +152,6 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
     <div class="card-heading" style="margin-bottom: 0">
       <div>
         <h2 class="hero-greeting">健康计划中心</h2>
-        <p class="hero-sub">
-          医嘱事实只读；提醒的确认、延期与跳过在安全时间窗内进行，每一次操作都会留下记录。
-        </p>
       </div>
       <label class="context-select">
         成员
@@ -188,7 +185,7 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
       <div v-else-if="plans.length === 0" class="empty-state">
         <AppIcon class="empty-art" name="plan" :size="40" />
         <strong>还没有已确认的用药计划</strong>
-        <p>请先在「成员档案」录入一条「创建用药计划」事实，计划将出现在这里。</p>
+        <p class="plans-empty-hint">请先在「成员档案」录入一条「创建用药计划」事实，计划将出现在这里。</p>
       </div>
       <ul v-else class="list-plain">
         <li v-for="plan in plans" :key="plan.plan_event_id" class="row-card">

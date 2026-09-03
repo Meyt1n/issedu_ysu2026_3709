@@ -40,7 +40,6 @@ import {
   summarizeEventPayload,
 } from '../ui/labels'
 import { isSameLocalDay, memberEventCount, reviewDrugCandidate } from '../overview/overviewView'
-import { familyRuntimeLines } from '../ui/runtimeStatus'
 
 const timeline = ref<HealthEvent[]>([])
 const memberState = ref<MemberState | null>(null)
@@ -55,7 +54,6 @@ const loadError = ref('')
 let removeHealthRefreshListener: (() => void) | null = null
 
 const greeting = computed(() => greetingByHour())
-const runtimeLines = computed(() => familyRuntimeLines(session.capabilities))
 const recentEvents = computed(() => [...timeline.value].reverse().slice(0, 6))
 const eventsCount = computed(() => {
   const value = memberState.value?.state?.events_count
@@ -82,11 +80,8 @@ const orderedPlans = computed(() =>
 )
 
 const todayPlans = computed(() => {
-  const today = orderedPlans.value.filter(plan => isSameLocalDay(plan.next_action_at))
-  return (today.length > 0 ? today : orderedPlans.value).slice(0, 4)
+  return orderedPlans.value.filter(plan => isSameLocalDay(plan.next_action_at)).slice(0, 4)
 })
-
-const hasTodayPlans = computed(() => orderedPlans.value.some(plan => isSameLocalDay(plan.next_action_at)))
 
 const pendingOverviewItems = computed<PendingOverviewItem[]>(() => {
   const items: PendingOverviewItem[] = []
@@ -157,7 +152,9 @@ const memberOverviewRows = computed(() =>
       role: memberRoleLabel(member.role),
       eventCount,
       updatedAt: state?.updated_at ?? null,
-      status: state ? (eventCount > 0 ? '有已同步记录' : '暂无已同步记录') : '状态暂不可见',
+      // 状态签：区分「有记录 / 无记录 / 投影不可见」三态。
+      // 事件数为 0 与「当前身份看不到状态」含义不同，必须让用户分得清。
+      status: state ? (eventCount > 0 ? '有已同步记录' : '暂无已同步记录') : '状态暂未记录',
       tone: state ? (eventCount > 0 ? 'pine' : 'gold') : 'plain',
     }
   }),
@@ -295,8 +292,6 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
     {{ loadError }}
   </p>
 
-  <HealthNewsPanel />
-
   <section class="stat-strip" aria-label="家庭健康概况">
     <div class="stat-cell pine">
       <span class="cell-cap"><AppIcon name="members" :size="14" />家庭成员</span>
@@ -356,9 +351,10 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
       />
     </div>
 
-    <section class="home-dashboard-card" aria-labelledby="pending-overview-title">
+    <section class="home-dashboard-card overview-section overview-section--pending" aria-labelledby="pending-overview-title">
       <div class="sec-head">
         <span class="sec-no">01</span>
+        <span class="overview-sec-icon" aria-hidden="true"><AppIcon name="review" :size="15" /></span>
         <h3 id="pending-overview-title">待确认事项</h3>
         <span class="sec-line" />
         <button type="button" class="btn btn-ghost btn-small" @click="setView('review')">
@@ -379,14 +375,25 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
           </button>
         </li>
       </ul>
-      <p v-else class="home-dashboard-empty">当前没有待复核、待知晓或升级提醒事项。</p>
+      <div v-else class="pending-empty-state">
+        <span class="pending-empty-visual" aria-hidden="true">
+          <span class="pending-empty-orbit" />
+          <AppIcon name="check" :size="24" />
+        </span>
+        <span class="pending-empty-copy">
+          <strong>今天的照护节奏很平稳</strong>
+          <span>没有待复核、待知晓或升级事项，继续保持。</span>
+        </span>
+        <span class="pill sage">已巡检</span>
+      </div>
     </section>
   </section>
 
   <section class="home-dashboard-grid home-dashboard-secondary" aria-label="家庭健康动态">
-    <section class="home-dashboard-card" aria-labelledby="medication-overview-title">
+    <section class="home-dashboard-card overview-section overview-section--medication" aria-labelledby="medication-overview-title">
       <div class="sec-head">
         <span class="sec-no">02</span>
+        <span class="overview-sec-icon" aria-hidden="true"><AppIcon name="plan" :size="15" /></span>
         <h3 id="medication-overview-title">今日用药</h3>
         <span class="sec-line" />
         <button type="button" class="btn btn-ghost btn-small" @click="setView('plans')">
@@ -394,14 +401,21 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
           <AppIcon name="arrow-right" :size="14" />
         </button>
       </div>
-      <p class="home-dashboard-caption">
-        {{ selectedMember?.display_name ?? '当前成员' }} ·
-        {{ hasTodayPlans ? '今日已确认计划' : '今日暂无计划，展示近期已确认计划' }}
-      </p>
       <SkeletonList v-if="loading" :rows="3" />
-      <p v-else-if="todayPlans.length === 0" class="home-dashboard-empty">
-        暂无可展示的已确认用药计划，识别候选不会自动进入这里。
-      </p>
+      <div v-else-if="todayPlans.length === 0" class="medication-empty-state">
+        <span class="medication-empty-ambient" aria-hidden="true">
+          <i /><i /><i /><i />
+        </span>
+        <span class="medication-empty-visual" aria-hidden="true">
+          <span class="medication-empty-orbit" />
+          <AppIcon name="plan" :size="24" />
+        </span>
+        <span class="medication-empty-copy">
+          <strong>今天先轻轻休息一下</strong>
+          <span>新的确认计划会在这里亮起。</span>
+        </span>
+        <span class="pill sage">保持从容</span>
+      </div>
       <ul v-else class="home-dashboard-list">
         <li v-for="plan in todayPlans" :key="plan.plan_event_id" class="home-dashboard-plan-row">
           <div>
@@ -413,9 +427,10 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
       </ul>
     </section>
 
-    <section class="home-dashboard-card" aria-labelledby="recent-scan-overview-title">
+    <section class="home-dashboard-card overview-section overview-section--scan" aria-labelledby="recent-scan-overview-title">
       <div class="sec-head">
         <span class="sec-no">03</span>
+        <span class="overview-sec-icon" aria-hidden="true"><AppIcon name="scan" :size="15" /></span>
         <h3 id="recent-scan-overview-title">最近识别的药品</h3>
         <span class="sec-line" />
         <button type="button" class="btn btn-ghost btn-small" @click="setView('review')">
@@ -439,9 +454,10 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
     </section>
   </section>
 
-  <section class="home-dashboard-card home-dashboard-members" aria-labelledby="member-overview-title">
+  <section class="home-dashboard-card home-dashboard-members overview-section overview-section--members" aria-labelledby="member-overview-title">
     <div class="sec-head">
       <span class="sec-no">04</span>
+      <span class="overview-sec-icon" aria-hidden="true"><AppIcon name="members" :size="15" /></span>
       <h3 id="member-overview-title">家庭成员状态</h3>
       <span class="sec-line" />
       <button type="button" class="btn btn-ghost btn-small" @click="setView('members')">
@@ -471,11 +487,12 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
     <p v-else class="home-dashboard-empty">当前身份下没有可展示的家庭成员。</p>
   </section>
 
-  <div class="grid-main-side" style="gap: 34px">
-    <section aria-label="近期变化">
+  <div class="grid-main-side overview-lower-grid" style="gap: 34px">
+    <section class="home-dashboard-card overview-section overview-section--changes" aria-label="近期变化">
       <div class="sec-head">
         <!-- 编号沿视觉阅读顺序递增：01 待确认 → 02 用药 → 03 识别 → 04 成员 → 05 近期变化。 -->
         <span class="sec-no">05</span>
+        <span class="overview-sec-icon" aria-hidden="true"><AppIcon name="timeline" :size="15" /></span>
         <h3>近期变化</h3>
         <span class="sec-line" />
         <button type="button" class="btn btn-ghost btn-small" @click="setView('members')">
@@ -507,46 +524,15 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
       </ul>
     </section>
 
-    <aside class="side-rail">
-      <div class="rail-block">
-        <span class="rail-title"><AppIcon name="lock" :size="15" />本地运行状态</span>
-        <span class="rail-line">
-          <strong>{{ session.capabilities ? 'API 已连接' : 'API 状态未知' }}</strong>
-          · 阶段 {{ session.capabilities?.phase ?? '未知' }}<br />
-          网络出口默认拒绝，天气仅发送城市代码。
-        </span>
-        <div class="capability-chips">
-          <span
-            v-for="line in runtimeLines"
-            :key="line.label"
-            class="pill"
-            :class="line.on ? 'sage' : 'plain'"
-          >
-            {{ line.label }}
-          </span>
-        </div>
-      </div>
-
-      <div class="rail-block">
-        <span class="rail-title"><AppIcon name="key" :size="15" />谁能看到这些数据</span>
-        <span class="rail-line">
-          {{ session.isOwnerView
-            ? '你是家庭管理员，可以为子女或照护者配置字段级授权，并随时撤回。'
-            : '你是授权照护者，仅能看到授权范围内的成员与字段，范围与到期时间以授权记录为准。' }}
-        </span>
-        <button
-          v-if="session.isOwnerView"
-          type="button"
-          class="btn btn-ghost btn-small"
-          style="justify-self: start"
-          @click="setView('authorizations')"
-        >
-          管理授权
-          <AppIcon name="arrow-right" :size="14" />
-        </button>
-      </div>
+    <aside v-if="session.isOwnerView" class="overview-authorization-action">
+      <button type="button" class="btn btn-ghost btn-small" @click="setView('authorizations')">
+        管理授权
+        <AppIcon name="arrow-right" :size="14" />
+      </button>
     </aside>
   </div>
+
+  <HealthNewsPanel />
 </template>
 
 <style scoped>
@@ -558,16 +544,103 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
 
 .home-dashboard-primary {
   align-items: stretch;
-  grid-template-columns: minmax(0, 1.25fr) minmax(360px, 0.75fr);
+  grid-template-columns: 1fr;
 }
 
 .home-dashboard-secondary {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.overview-lower-grid {
+  grid-template-columns: 1fr;
+}
+
+.overview-lower-grid .side-rail {
+  border-left: 0;
+  border-top: 1px solid var(--line);
+  padding-left: 0;
+  padding-top: 18px;
+  position: static;
+}
+
+.overview-authorization-action {
+  align-items: center;
+  display: flex;
+  justify-content: flex-end;
+  min-height: 0;
+}
+
 .home-dashboard-weather {
+  align-self: start;
+  display: grid;
   min-width: 0;
 }
+
+/* 天气卡按内容收紧，避免为了配齐右列高度制造大块空白。 */
+.home-dashboard-weather > .weather-action-panel {
+  align-content: start;
+  grid-template-rows: none;
+  height: auto;
+}
+
+.home-dashboard-weather .weather-action-body {
+  align-content: start;
+}
+
+/* 天气与 01 待确认各自占满一行；宽屏下待确认内容横向铺开，减少空白。 */
+.overview-section--pending .home-dashboard-list {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.overview-section--pending .home-dashboard-list-row {
+  min-height: 54px;
+}
+
+.pending-empty-state {
+  align-items: center;
+  background: color-mix(in srgb, var(--clay-tint) 28%, transparent);
+  border: 1px solid color-mix(in srgb, var(--clay) 18%, var(--line-soft));
+  border-radius: 16px;
+  display: flex;
+  gap: 14px;
+  min-height: 96px;
+  padding: 14px 18px;
+}
+
+.pending-empty-visual {
+  align-items: center;
+  background: color-mix(in srgb, var(--card) 84%, transparent);
+  border: 1px solid color-mix(in srgb, var(--clay) 24%, transparent);
+  border-radius: 50%;
+  color: var(--clay-deep);
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 52px;
+  justify-content: center;
+  position: relative;
+  width: 52px;
+}
+
+.pending-empty-orbit {
+  border: 1px dashed color-mix(in srgb, var(--clay) 42%, transparent);
+  border-radius: 50%;
+  inset: -5px;
+  position: absolute;
+  animation: pending-orbit 5s linear infinite reverse;
+}
+
+@keyframes pending-orbit {
+  to { transform: rotate(360deg); }
+}
+
+.pending-empty-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.pending-empty-copy strong { color: var(--clay-deep); font-size: 15px; }
+.pending-empty-copy span { color: var(--ink-soft); font-size: 12.5px; }
 
 .home-dashboard-card {
   display: flex;
@@ -577,8 +650,96 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
   padding: 22px;
   border: 1px solid rgba(190, 167, 125, 0.28);
   border-radius: 22px;
-  background: rgba(255, 252, 243, 0.76);
+  /* 纸色晕染全覆盖（HCT-533）：底色即带 accent 淡彩，四角呼吸渐变直达边缘，边缘不再发白。 */
+  background:
+    var(--card-texture, none),
+    linear-gradient(
+      150deg,
+      color-mix(in srgb, var(--overview-accent, var(--pine)) 8%, var(--card)),
+      var(--card) 46%,
+      color-mix(in srgb, var(--overview-accent, var(--pine)) 5%, var(--card))
+    );
   box-shadow: 0 14px 34px rgba(94, 71, 42, 0.06);
+}
+
+.overview-section {
+  isolation: isolate;
+  overflow: hidden;
+  position: relative;
+}
+
+.overview-section::after {
+  border: 1px solid var(--overview-accent);
+  border-radius: 50%;
+  content: "";
+  height: 82px;
+  opacity: 0.08;
+  pointer-events: none;
+  position: absolute;
+  right: -32px;
+  top: -34px;
+  width: 82px;
+  z-index: 1;
+}
+
+.overview-section--pending { --overview-accent: var(--clay-deep); --card-pattern: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='132' height='132' viewBox='0 0 132 132'%3E%3Cg fill='none' stroke='%23b06a45' stroke-opacity='.17' stroke-width='1.2' stroke-linejoin='round'%3E%3Cpath d='M30 26l8 8-8 8-8-8z'/%3E%3Cpath d='M98 92l8 8-8 8-8-8z'/%3E%3C/g%3E%3Cg stroke='%23b06a45' stroke-opacity='.12' stroke-width='1.4' stroke-linecap='round'%3E%3Cpath d='M92 24v12M86 30h12'/%3E%3C/g%3E%3C/svg%3E"); }
+.overview-section--medication { --overview-accent: var(--pine-deep); --card-pattern: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='132' height='132' viewBox='0 0 132 132'%3E%3Cg stroke='%234d7c6b' stroke-opacity='.18' stroke-width='2.6' stroke-linecap='round'%3E%3Cpath d='M36 28v14M29 35h14'/%3E%3Cpath d='M96 96v14M89 103h14'/%3E%3C/g%3E%3Cg fill='%234d7c6b' fill-opacity='.12'%3E%3Crect x='88' y='22' width='16' height='8' rx='4' transform='rotate(-24 96 26)'/%3E%3C/g%3E%3C/svg%3E"); }
+.overview-section--scan { --overview-accent: var(--sky); --card-pattern: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='132' height='132' viewBox='0 0 132 132'%3E%3Cg fill='none' stroke='%2355809c' stroke-opacity='.16' stroke-width='1.2'%3E%3Ccircle cx='34' cy='32' r='6'/%3E%3Ccircle cx='34' cy='32' r='11' stroke-dasharray='3 4'/%3E%3Ccircle cx='98' cy='98' r='5'/%3E%3Ccircle cx='98' cy='98' r='9' stroke-dasharray='2 4'/%3E%3C/g%3E%3Ccircle cx='34' cy='32' r='1.7' fill='%2355809c' fill-opacity='.3'/%3E%3C/svg%3E"); }
+.overview-section--members { --overview-accent: var(--gold); --card-pattern: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='132' height='132' viewBox='0 0 132 132'%3E%3Cg fill='%23b08a2e' fill-opacity='.16'%3E%3Cpath d='M34 36c-3.2-2.8-6.4-5.5-6.4-8.7 0-2.1 1.7-3.8 3.7-3.8 1 0 2 .5 2.7 1.4a3.4 3.4 0 0 1 2.7-1.4c2 0 3.7 1.7 3.7 3.8 0 3.2-3.2 5.9-6.4 8.7z'/%3E%3Cpath d='M98 104c-2.6-2.3-5.2-4.5-5.2-7.1 0-1.7 1.4-3.1 3-3.1.9 0 1.7.4 2.2 1.1a2.8 2.8 0 0 1 2.2-1.1c1.6 0 3 1.4 3 3.1 0 2.6-2.6 4.8-5.2 7.1z'/%3E%3C/g%3E%3C/svg%3E"); }
+.overview-section--changes { --overview-accent: var(--rose); --card-pattern: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='132' height='132' viewBox='0 0 132 132'%3E%3Cg fill='none' stroke='%23b2596b' stroke-opacity='.16' stroke-width='1.5' stroke-linecap='round'%3E%3Cpath d='M24 36c4-5 8-5 12 0s8 5 12 0'/%3E%3Cpath d='M84 100c4-5 8-5 12 0s8 5 12 0'/%3E%3Cpath d='M96 30c3-4 6-4 9 0'/%3E%3C/g%3E%3C/svg%3E"); }
+.overview-section--calendar { --overview-accent: var(--sage, #6e8a74); --card-pattern: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='132' height='132' viewBox='0 0 132 132'%3E%3Cg fill='%236e8a74' fill-opacity='.18'%3E%3Ccircle cx='32' cy='32' r='1.8'/%3E%3Ccircle cx='42' cy='32' r='1.8'/%3E%3Ccircle cx='32' cy='42' r='1.8'/%3E%3Ccircle cx='42' cy='42' r='1.8'/%3E%3Ccircle cx='96' cy='96' r='1.8'/%3E%3Ccircle cx='106' cy='96' r='1.8'/%3E%3Ccircle cx='96' cy='106' r='1.8'/%3E%3Ccircle cx='106' cy='106' r='1.8'/%3E%3C/g%3E%3C/svg%3E"); }
+
+.calendar-head-note {
+  align-items: center;
+  color: var(--ink-faint);
+  display: inline-flex;
+  font-size: 11.5px;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.calendar-head-note i {
+  background: var(--sage, #6e8a74);
+  border-radius: 50%;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--sage, #6e8a74) 13%, transparent);
+  display: inline-block;
+  height: 7px;
+  width: 7px;
+}
+
+/* 日历卡与相邻卡片保持呼吸距离。 */
+/*
+ * 与成员卡同理（图三修复）：本卡是 .view-container（定高 grid）的直接子项，
+ * overflow:hidden 会清零 grid 自动最小尺寸，整卡被压成只剩标题的一条。
+ * 月历内容较高，必须恢复 min-content 参与行高计算，让页面自然下滚。
+ */
+.overview-section--calendar {
+  margin-top: 22px;
+  overflow: visible;
+}
+
+.overview-section > * { position: relative; z-index: 2; }
+
+/* 新闻卡收在首页最底部，与月历卡保持同一段呼吸距离。 */
+.health-news-panel {
+  margin-top: 22px;
+}
+
+.overview-section .sec-head { color: var(--ink); }
+
+.overview-sec-icon {
+  align-items: center;
+  background: color-mix(in srgb, var(--overview-accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--overview-accent) 24%, transparent);
+  border-radius: 9px;
+  color: var(--overview-accent);
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 27px;
+  justify-content: center;
+  margin-left: -5px;
+  transform: translateY(-1px);
+  width: 27px;
 }
 
 .home-dashboard-card .sec-head {
@@ -612,18 +773,27 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
   line-height: 1.65;
 }
 
-/* 列表在卡片内部滚动，避免行内容溢出卡片下边缘（图一修复）。 */
+/* 列表在卡片内部滚动，避免行内容溢出卡片下边缘（图一修复）。
+   grid 隐式列会取 max-content：行内 nowrap 的长药名会把轨道撑到千余像素，
+   卡片里因此多出一条横向滚动条。minmax(0, 1fr) 把轨道锁在容器宽度内。
+   高度不再写死 340px：同行卡片等高对齐时，写死高度会在卡片底部留出
+   近百像素空洞。改为 flex 撑满剩余空间，超出部分仍在列表内滚动。 */
 .home-dashboard-list {
   display: grid;
   align-content: start;
   flex: 1 1 auto;
   gap: 9px;
+  grid-template-columns: minmax(0, 1fr);
   margin: 0;
   padding: 0 2px 2px 0;
   list-style: none;
   min-height: 0;
-  max-height: 340px;
+  overflow-x: hidden;
   overflow-y: auto;
+}
+
+.home-dashboard-list > li {
+  min-width: 0;
 }
 
 .home-dashboard-list-row .pill,
@@ -659,15 +829,20 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
   transform: translateY(-1px);
 }
 
+/* 长药名与风险原文允许折到两行再省略：单行 nowrap 会把 200–800px 的正文
+   直接裁掉，用户在首页看不到自己要判断的关键信息。 */
 .home-dashboard-list-detail {
   min-width: 0;
   flex: 1;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
   color: var(--ink-soft, #6d6659);
   font-size: 13px;
   line-height: 1.45;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .home-dashboard-plan-row {
@@ -680,19 +855,131 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
   gap: 4px;
 }
 
-.home-dashboard-plan-row strong {
+/* 药名与安排同样允许折两行：窄栏（1024px 两列）下单行会裁掉过半药名。 */
+.home-dashboard-plan-row strong,
+.home-dashboard-plan-row span:not(.pill) {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.medication-empty-state {
+  align-items: center;
+  background: color-mix(in srgb, var(--pine-tint) 58%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pine) 20%, var(--line-soft));
+  border-radius: 16px;
+  display: flex;
+  gap: 13px;
+  justify-content: space-between;
+  margin-top: 16px;
+  min-height: 196px;
+  overflow: hidden;
+  padding: 14px 16px;
+  position: relative;
+}
+
+.medication-empty-state > * {
+  position: relative;
+  z-index: 1;
+}
+
+.medication-empty-state::before,
+.medication-empty-state::after {
+  border: 1px solid color-mix(in srgb, var(--pine) 14%, transparent);
+  border-radius: 50%;
+  content: "";
+  height: 210px;
+  left: 50%;
+  pointer-events: none;
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 210px;
+}
+
+.medication-empty-state::after {
+  border-style: dashed;
+  height: 270px;
+  opacity: 0.7;
+  transform: translate(-50%, -50%) rotate(25deg);
+  width: 270px;
+}
+
+.medication-empty-ambient {
+  inset: 0;
+  pointer-events: none;
+  position: absolute !important;
+}
+
+.medication-empty-ambient i {
+  background: var(--pine);
+  border-radius: 50%;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--pine) 10%, transparent);
+  height: 5px;
+  opacity: 0.45;
+  position: absolute;
+  width: 5px;
+}
+
+.medication-empty-ambient i:nth-child(1) { left: 18%; top: 26%; }
+.medication-empty-ambient i:nth-child(2) { right: 23%; top: 21%; }
+.medication-empty-ambient i:nth-child(3) { bottom: 22%; left: 27%; }
+.medication-empty-ambient i:nth-child(4) { bottom: 26%; right: 15%; }
+
+.medication-empty-visual {
+  margin-left: 7%;
+}
+
+.medication-empty-visual {
+  align-items: center;
+  background: color-mix(in srgb, var(--card) 84%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pine) 24%, transparent);
+  border-radius: 50%;
+  color: var(--pine-deep);
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 52px;
+  justify-content: center;
+  position: relative;
+  width: 52px;
+}
+
+.medication-empty-orbit {
+  border: 1px dashed color-mix(in srgb, var(--pine) 42%, transparent);
+  border-radius: 50%;
+  inset: -5px;
+  position: absolute;
+  animation: medication-orbit 4.5s linear infinite;
+}
+
+@keyframes medication-orbit {
+  to { transform: rotate(360deg); }
+}
+
+.medication-empty-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.medication-empty-copy strong { color: var(--pine-deep); font-size: 15px; }
+.medication-empty-copy span { color: var(--ink-soft); font-size: 12.5px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .medication-empty-orbit,
+  .pending-empty-orbit { animation: none; }
+}
+
+.home-dashboard-plan-row strong {
   color: var(--ink, #3f3a31);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .home-dashboard-plan-row span:not(.pill) {
-  overflow: hidden;
   color: var(--ink-soft, #6d6659);
   font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .home-dashboard-members {
@@ -736,8 +1023,19 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 8px;
 }
+
+/* 姓名可截断、状态签不收缩：窄格子里先压姓名，别把签压变形。 */
+.home-dashboard-member-head strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-dashboard-member-head .pill { flex: 0 0 auto; }
 
 .home-dashboard-member-role,
 .home-dashboard-member-meta {
@@ -753,9 +1051,9 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
 .home-dashboard-card .pill.plain { background: var(--paper-deep); color: #4f493f; }
 
 @media (max-width: 1050px) {
-  .home-dashboard-primary {
-    grid-template-columns: 1fr;
-  }
+.home-dashboard-primary {
+  grid-template-columns: 1fr;
+}
 }
 
 @media (max-width: 760px) {
@@ -774,8 +1072,19 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
     margin-top: 14px;
   }
 
+  .overview-section--pending .home-dashboard-list {
+    grid-template-columns: 1fr;
+  }
+
+  .pending-empty-state {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  /* 单列后横向空间充裕，正文放开到三行。 */
   .home-dashboard-list-detail {
-    white-space: normal;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
   }
 }
 </style>

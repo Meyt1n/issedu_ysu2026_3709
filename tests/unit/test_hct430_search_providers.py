@@ -418,7 +418,7 @@ def test_cited_page_fetch_follows_public_https_redirect(monkeypatch) -> None:
         def iter_bytes(self):
             yield (
                 "<html><body><p>本迪布焦病毒病疫情一般性公共卫生提醒。</p></body></html>"
-            ).encode("utf-8")
+            ).encode()
 
         def __enter__(self):
             return self

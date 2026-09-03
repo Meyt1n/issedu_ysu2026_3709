@@ -266,7 +266,7 @@ const ADMIN_BRANDING: PortalEntryBranding = {
   chips: [
     { icon: 'members', text: '成员档案' },
     { icon: 'review', text: '复核入档' },
-    { icon: 'key', text: '授权管理' },
+    { icon: 'lock', text: '安全登录' },
   ],
   credentialOrder: ['password'],
   defaultCredential: 'password',

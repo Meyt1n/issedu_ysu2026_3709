@@ -1,38 +1,31 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 
+import { Capacitor } from '@capacitor/core'
 import AppIcon from '@/components/AppIcon.vue'
 import SwitchRow from '@/components/SwitchRow.vue'
 import ErrorNotice from '@/components/ErrorNotice.vue'
 import ListLoadingState from '@/components/ListLoadingState.vue'
 import { createSpeaker } from '@/composables/useSpeech'
 import { ApiClient, ApiClientError } from '@/api/client'
-import { buildInfoLine } from '@/buildInfo'
 import { presentApiError, presentListApiError, type ErrorPresentation } from '@/api/errors'
-import { requestOutcomeLabel, requestTraces, type RequestTraceEntry } from '@/api/requestLog'
 import { clearLocalData, localDataInventory } from '@/stores/localData'
 import { resetDemoData } from '@/data/demoProvider'
 import { activeProvider, clearHouseholdSelection, selectHousehold } from '@/data'
 import type { HouseholdOption } from '@/data/types'
 import { currentAuthAdapter, familyAuthAdapter } from '@/data/authAdapter'
 import { useA11y } from '@/stores/accessibility'
-import { buildOnboardingChecklist, stepStatusLabel } from '@/utils/onboardingSteps'
 import {
   canPromptInstall,
   dismissInstallEntry,
   installDismissed,
-  pwaSupportSpeechText,
   recoverShellCaches,
   serviceWorkerSupported,
   triggerInstallPrompt,
 } from '@/stores/pwa'
-import {
-  capabilityDescription,
-  capabilityLabel,
-  useCapabilities,
-} from '@/stores/capabilities'
+import { useCapabilities } from '@/stores/capabilities'
 import { getAuthSession, useAuth } from '@/stores/auth'
-import { isDevActorEnabled, resetSession, useAuthorizationBoundary, useSession, type AuthMode } from '@/stores/session'
+import { resetSession, useAuthorizationBoundary, useSession, type MobileRole } from '@/stores/session'
 import { tapFeedback } from '@/utils/haptics'
 import { normalizePhoneNumber } from '@/utils/phone'
 import { DEFAULT_SERVER_URL_POLICY, validateServerBaseUrl } from '@/utils/serverUrl'
@@ -41,26 +34,17 @@ const { settings, setElderMode } = useA11y()
 const { session, updateSession } = useSession()
 const { auth, signOut, beginStepUp, confirmStepUp, cancelStepUp } = useAuth()
 const { authorizationBoundary, resumeAuthorizationBoundary } = useAuthorizationBoundary()
-const {
-  capabilities: capabilityState,
-  setCapabilities,
-  clearCapabilities,
-} = useCapabilities()
+const { setCapabilities, clearCapabilities } = useCapabilities()
 const feedbackSpeaker = createSpeaker(() => true)
 
-const devActorAllowed = isDevActorEnabled()
+const isNativeApp = Capacitor.isNativePlatform()
 const connectionState = ref<'idle' | 'testing' | 'ok' | 'failed'>('idle')
 const connectionMessage = ref('')
 const connectionError = ref<ErrorPresentation | null>(null)
-const capabilityProbeError = ref<ErrorPresentation | null>(null)
-/** MOB-144：最近请求与回执（本机诊断，只读内存，不落盘）。 */
-const traceView = ref<RequestTraceEntry[]>([])
-function refreshTraceView(): void {
-  traceView.value = [...requestTraces()].slice(0, 10)
-}
 
-/** MOB-146：本地数据管理与数据权利。 */
+/** MOB-146：本地数据管理。 */
 const localDataItems = localDataInventory()
+const savedLocalDataItems = localDataItems.filter(item => item.saved)
 const clearArmed = ref(false)
 const clearResult = ref<{ ok: boolean; failures: string[]; cleared: string[] } | null>(null)
 let clearArmTimer: ReturnType<typeof setTimeout> | null = null
@@ -84,17 +68,6 @@ function armClearLocalData(): void {
   clearResult.value = result
 }
 
-const dataRightsTarget = computed(() =>
-  session.dataMode === 'live' && session.serverBaseUrl
-    ? `当前联机家庭服务器：${session.serverBaseUrl}`
-    : '当前为演示模式（未连接任何服务器；演示数据为虚构，无需办理）',
-)
-
-function formatTraceTime(iso: string): string {
-  const time = new Date(iso)
-  return Number.isNaN(time.getTime()) ? iso : time.toLocaleTimeString('zh-CN', { hour12: false })
-}
-
 const demoResetMessage = ref('')
 /** MOB-151：安装入口与外壳缓存恢复（只清 shell 前缀缓存，不碰任何健康数据）。 */
 const installPromptAvailable = ref(false)
@@ -110,8 +83,8 @@ function refreshInstallAvailability(): void {
 async function onInstallClick(): Promise<void> {
   const outcome = await triggerInstallPrompt()
   installMessage.value = outcome === 'prompted'
-    ? '已请求系统安装引导；若浏览器未弹出，请使用浏览器菜单里的“安装应用/添加到主屏幕”。'
-    : '当前浏览器暂未提供安装引导，请使用浏览器菜单里的“安装应用/添加到主屏幕”。'
+    ? '安装已开始'
+    : '请使用浏览器菜单安装应用'
   refreshInstallAvailability()
 }
 
@@ -123,7 +96,7 @@ function onDismissInstall(): void {
 async function onRecoverShellClick(): Promise<void> {
   if (!recoveryArmed.value) {
     recoveryArmed.value = true
-    recoveryMessage.value = '将只清理本机的离线外壳缓存并刷新，不影响服务端健康数据。再次点击确认执行。'
+    recoveryMessage.value = '再次点击确认清理缓存。'
     if (recoveryArmTimer) clearTimeout(recoveryArmTimer)
     recoveryArmTimer = setTimeout(() => {
       recoveryArmed.value = false
@@ -153,8 +126,6 @@ const contactError = ref('')
 const contactCallMessage = ref('')
 const serverBaseUrlDraft = ref(session.serverBaseUrl)
 const serverAddressError = ref('')
-const actorIdDraft = ref(session.actorId)
-const accessPurposeDraft = ref(session.accessPurpose)
 const authBusy = ref(false)
 const authMessage = ref('')
 const authError = ref('')
@@ -169,27 +140,6 @@ let householdsLoadInFlight = false
 const currentHousehold = computed(
   () => households.value.find(item => item.id === session.currentHouseholdId) ?? null,
 )
-const needsHouseholdChoice = computed(
-  () => households.value.length > 1 && !session.currentHouseholdId,
-)
-
-/**
- * MOB-164 三步清单：只读地汇总已有状态，不改变任何授权判定，也不触发请求。
- * 能力数量为 null 表示尚未完成探测，清单文案按「不可用」口径描述。
- */
-const onboardingChecklist = computed(() =>
-  buildOnboardingChecklist({
-    liveMode: session.dataMode === 'live',
-    serverBaseUrl: session.serverBaseUrl,
-    serverAddressError: serverAddressError.value,
-    householdCount: households.value.length,
-    selectedHouseholdId: session.currentHouseholdId,
-    selectedHouseholdName: currentHousehold.value?.name ?? '',
-    connectionState: connectionState.value,
-    connectionError: connectionError.value?.message ?? '',
-    capabilityAvailableCount: capabilityState.snapshot?.available.length ?? null,
-  }),
-)
 
 /** 读取服务端授权范围内的家庭列表；错误不暴露隐藏家庭是否存在。 */
 async function loadHouseholds(): Promise<HouseholdOption[]> {
@@ -200,11 +150,12 @@ async function loadHouseholds(): Promise<HouseholdOption[]> {
   try {
     const options = await activeProvider().listHouseholds()
     households.value = options
+    syncMobileRole(options)
     // 已选家庭不在列表里（被撤权、删除或授权变化）：清除选择回到安全态，不自动换一个，
     // 并把确切原因告诉用户 —— 守卫刻意保留了这个失效选择，就是为了能在这里解释。
     if (session.currentHouseholdId && !options.some(item => item.id === session.currentHouseholdId)) {
       clearHouseholdSelection()
-      householdMessage.value = '之前选择的家庭已不可用（可能已被撤权或删除），选择已清除，请重新选择；页面不会自动切到另一个家庭。'
+      householdMessage.value = '当前家庭不可用，已清除选择。'
     }
     return options
   } catch (cause) {
@@ -227,27 +178,54 @@ async function onHouseholdChange(nextId: string): Promise<void> {
   householdMessage.value = ''
   // selectHousehold 走 updateSession，会触发上下文清理（Provider 缓存、上传草稿、当前成员）。
   selectHousehold(nextId)
+  syncMobileRole(households.value)
   cancelStepUp()
   stepUpCode.value = ''
   // 旧家庭的能力快照不再适用；立即重探而不是留一个空状态让入口全禁用。
   clearCapabilities()
   await probeCapabilities()
-  householdMessage.value = `已切换到「${label}」，旧家庭的查询、上传草稿和能力快照已清除。`
+  householdMessage.value = `已切换到「${label}」`
 }
 const serverAddressPlaceholder = DEFAULT_SERVER_URL_POLICY.allowPrivateHttp
-  ? '例如 http://192.168.1.10:8000（受控 Debug 联调）'
-  : '例如 https://family.example.test（发布构建仅 HTTPS）'
+  ? '例如 http://192.168.1.10:8000'
+  : '例如 https://family.example.test'
 const serverAddressHelp = DEFAULT_SERVER_URL_POLICY.allowPrivateHttp
-  ? '当前为开发/Android Debug 构建：明文 HTTP 仅允许家庭局域网或本机地址，公网仍须使用 HTTPS。'
-  : '当前为发布构建：服务器必须使用 HTTPS；家庭局域网 HTTP 仅在受控 Debug 联调包开放。'
+  ? '请输入家庭服务器地址。'
+  : '请输入 HTTPS 家庭服务器地址。'
 
 const usesRealAuth = computed(() => session.authMode === 'real')
 const signedIn = computed(() => auth.status === 'authenticated')
-const sessionExpiryLabel = computed(() => {
-  if (!auth.expiresAt) return ''
-  const time = Date.parse(auth.expiresAt)
-  return Number.isFinite(time) ? new Date(time).toLocaleString() : ''
+const isMemberMode = computed(() => session.mobileRole === 'member')
+
+const detectedMobileRole = computed<MobileRole | null>(() => {
+  if (session.dataMode !== 'live') return null
+  const actorId = (usesRealAuth.value ? auth.actorId : session.actorId).trim()
+  if (!actorId) return null
+  const household = households.value.find(item => item.id === session.currentHouseholdId)
+    ?? (households.value.length === 1 ? households.value[0] : null)
+  if (!household?.createdBy) return null
+  return household.createdBy === actorId ? 'admin' : 'member'
 })
+const mobileRoleMessage = ref('')
+
+function syncMobileRole(options: HouseholdOption[]): void {
+  if (session.dataMode !== 'live') return
+  const actorId = (usesRealAuth.value ? auth.actorId : session.actorId).trim()
+  const household = options.find(item => item.id === session.currentHouseholdId)
+    ?? (options.length === 1 ? options[0] : null)
+  if (!actorId || !household?.createdBy) return
+  const role: MobileRole = household.createdBy === actorId ? 'admin' : 'member'
+  if (session.mobileRole !== role) updateSession({ mobileRole: role, currentMemberId: '' })
+  mobileRoleMessage.value = `已按服务器身份识别为${role === 'admin' ? '家庭管理员' : '家庭成员'}端。`
+}
+
+function onMobileRoleChange(role: MobileRole): void {
+  if (detectedMobileRole.value) return
+  updateSession({ mobileRole: role, currentMemberId: '' })
+  mobileRoleMessage.value = role === 'member'
+    ? '已切换为家庭成员端：只显示自己的今日安排、拍药盒、求助和基础设置。'
+    : '已切换为家庭管理员端：恢复完整家庭照护入口。'
+}
 
 function onElderModeChange(enabled: boolean): void {
   setElderMode(enabled)
@@ -281,7 +259,7 @@ function persistContact(): void {
   updateSession({ caregiverName: name, caregiverPhone: phone })
 }
 
-function testContactCall(): void {
+function contactCaregiver(): void {
   const phone = normalizePhoneNumber(caregiverPhoneDraft.value)
   if (!phone) {
     contactError.value = '请先保存一个有效的联系人号码。'
@@ -291,38 +269,9 @@ function testContactCall(): void {
   const confirmed = typeof window.confirm !== 'function'
     || window.confirm(`将打开手机拨号界面：${phone}。确认继续吗？`)
   if (confirmed) {
-    contactCallMessage.value = '已请求系统拨号界面；如果设备或 PWA 未打开电话应用，请复制号码后手动拨打。'
+    contactCallMessage.value = '正在拨号'
     window.location.href = `tel:${phone}`
   }
-}
-
-function persistConnectionSession(): void {
-  // 身份、访问目的或服务器变化后，下一页不得继续展示旧家庭/成员状态。
-  updateSession({
-    actorId: actorIdDraft.value,
-    accessPurpose: accessPurposeDraft.value,
-    currentMemberId: '',
-  })
-  connectionState.value = 'idle'
-  connectionMessage.value = ''
-  connectionError.value = null
-  capabilityProbeError.value = null
-  clearCapabilities()
-}
-
-function onAuthModeChange(mode: AuthMode): void {
-  if (mode === 'dev-actor' && !devActorAllowed) return
-  authMessage.value = ''
-  authError.value = ''
-  stepUpCode.value = ''
-  cancelStepUp()
-  // 切换身份来源等于换一套凭据；旧查询、上传和能力探测必须一起丢弃。
-  updateSession({ authMode: mode, actorId: mode === 'dev-actor' ? actorIdDraft.value : '', currentMemberId: '' })
-  connectionState.value = 'idle'
-  connectionMessage.value = ''
-  connectionError.value = null
-  capabilityProbeError.value = null
-  clearCapabilities()
 }
 
 /**
@@ -380,7 +329,7 @@ async function submitSignOut(): Promise<void> {
     await signOut(currentAuthAdapter())
     households.value = []
     householdMessage.value = ''
-    authMessage.value = '已退出登录，本机不再保留该会话的查询、上传和能力探测结果。'
+    authMessage.value = '已退出登录'
     connectionState.value = 'idle'
     connectionMessage.value = ''
   } catch (cause) {
@@ -443,7 +392,6 @@ function persistServerAddress(): void {
   connectionState.value = 'idle'
   connectionMessage.value = ''
   connectionError.value = null
-  capabilityProbeError.value = null
   clearCapabilities()
 }
 
@@ -452,7 +400,6 @@ function onModeChange(mode: 'demo' | 'live'): void {
   connectionState.value = 'idle'
   connectionMessage.value = ''
   connectionError.value = null
-  capabilityProbeError.value = null
   clearCapabilities()
 }
 
@@ -472,12 +419,10 @@ function probeOptions() {
 
 /** 重探服务端能力；供测试连接与家庭切换共用。 */
 async function probeCapabilities(): Promise<ReturnType<typeof setCapabilities> | null> {
-  capabilityProbeError.value = null
   try {
     return setCapabilities(await probeClient().getCapabilities(probeOptions()))
   } catch (cause) {
     clearCapabilities()
-    capabilityProbeError.value = presentApiError(cause)
     return null
   }
 }
@@ -494,16 +439,13 @@ async function testConnection(): Promise<void> {
   connectionState.value = 'testing'
   connectionMessage.value = ''
   connectionError.value = null
-  capabilityProbeError.value = null
   clearCapabilities()
   try {
-    const health = await probeClient().getHealth(probeOptions())
+    await probeClient().getHealth(probeOptions())
     const probe = await probeCapabilities()
     resumeAuthorizationBoundary()
     connectionState.value = 'ok'
-    connectionMessage.value = `已连接：${health.service} ${health.version}${
-      probe ? `，已探测 ${probe.available.length} 项可用能力` : '；能力探测未完成'
-    }`
+    connectionMessage.value = probe ? '已连接' : '部分功能暂不可用'
     // 连接可用后再读家庭列表：多家庭时要求显式选择，单家庭自动选定。
     await loadHouseholds().catch(() => undefined)
   } catch (cause) {
@@ -515,11 +457,10 @@ async function testConnection(): Promise<void> {
 
 function restoreDemoData(): void {
   resetDemoData()
-  demoResetMessage.value = '演示数据已恢复到初始状态。'
+  demoResetMessage.value = '已恢复默认数据。'
 }
 
 onMounted(() => {
-  refreshTraceView()
   // 联机且已具备取数条件时预读家庭列表，让选择器一进页面就能用。
   if (session.dataMode !== 'live') return
   if (usesRealAuth.value && !signedIn.value) return
@@ -535,59 +476,60 @@ onMounted(() => {
       <h1>我的</h1>
     </header>
 
-    <section class="card onboarding-card" aria-labelledby="onboarding-title">
-      <div class="card-title-row">
-        <h2 id="onboarding-title">联机三步</h2>
-        <span class="tag" :data-tone="onboardingChecklist.complete ? 'calm' : 'warn'">
-          {{ onboardingChecklist.complete ? '已就绪' : '待完成' }}
-        </span>
-      </div>
-      <p v-if="onboardingChecklist.summary" class="meta-line" role="status">
-        {{ onboardingChecklist.summary }}
-      </p>
-      <ol class="onboarding-steps">
-        <li
-          v-for="(step, index) in onboardingChecklist.steps"
-          :key="step.id"
-          class="onboarding-step"
-          :data-status="step.status"
-        >
-          <p class="onboarding-step-head">
-            <span class="onboarding-step-index" aria-hidden="true">{{ index + 1 }}</span>
-            <strong>{{ step.title }}</strong>
-            <span class="onboarding-step-status">{{ stepStatusLabel(step.status) }}</span>
-          </p>
-          <p class="onboarding-step-detail">{{ step.detail }}</p>
-          <p v-if="step.nextAction" class="onboarding-step-next">下一步：{{ step.nextAction }}</p>
-        </li>
-      </ol>
-      <button
-        type="button"
-        class="btn btn-quiet onboarding-recheck"
-        :disabled="connectionState === 'testing'"
-        :aria-busy="connectionState === 'testing'"
-        @click="testConnection"
-      >
-        <AppIcon name="refresh" :size="16" />
-        {{ connectionState === 'testing' ? '自检中…' : '重新自检' }}
-      </button>
-    </section>
-
     <section class="card" aria-labelledby="elder-title">
       <h2 id="elder-title" class="visually-hidden-title">长辈模式</h2>
       <SwitchRow
         title="长辈模式"
-        description="特大字号 + 语音播报 + 简化导航（今日 / 拍药盒 / 求助 / 我的）"
         :model-value="settings.elderMode"
         @update:model-value="onElderModeChange"
       />
     </section>
 
-    <RouterLink class="card link-card" to="/assistant">
+    <section class="card" aria-labelledby="mobile-role-title">
+      <div class="card-title-row">
+        <h2 id="mobile-role-title">手机端身份</h2>
+        <span class="tag" :data-tone="isMemberMode ? 'info' : 'calm'">
+          {{ isMemberMode ? '家庭成员' : '家庭管理员' }}
+        </span>
+      </div>
+      <fieldset class="mode-fieldset">
+        <legend class="visually-hidden-title">手机端身份</legend>
+        <label class="mode-option">
+          <input
+            type="radio"
+            name="mobile-role"
+            value="admin"
+            :checked="session.mobileRole === 'admin'"
+            :disabled="Boolean(detectedMobileRole)"
+            @change="onMobileRoleChange('admin')"
+          />
+          <span>
+            <strong>家庭管理员</strong>
+          </span>
+        </label>
+        <label class="mode-option">
+          <input
+            type="radio"
+            name="mobile-role"
+            value="member"
+            :checked="session.mobileRole === 'member'"
+            :disabled="Boolean(detectedMobileRole)"
+            @change="onMobileRoleChange('member')"
+          />
+          <span>
+            <strong>家庭成员</strong>
+          </span>
+        </label>
+      </fieldset>
+      <p v-if="!detectedMobileRole && mobileRoleMessage" class="notice" data-tone="success" role="status">
+        {{ mobileRoleMessage }}
+      </p>
+    </section>
+
+    <RouterLink v-if="!isMemberMode" class="card link-card" to="/assistant">
       <AppIcon name="mic" :size="22" />
       <span class="link-card-text">
         <strong>语音助手</strong>
-        <span class="meta-line">唤醒「小燕小燕」· 连家庭服务器（电脑后端）提问</span>
       </span>
       <AppIcon name="chevron-right" :size="18" />
     </RouterLink>
@@ -596,16 +538,6 @@ onMounted(() => {
       <AppIcon name="settings" :size="22" />
       <span class="link-card-text">
         <strong>无障碍设置</strong>
-        <span class="meta-line">字号、对比度、语音播报、动效</span>
-      </span>
-      <AppIcon name="chevron-right" :size="18" />
-    </RouterLink>
-
-    <RouterLink class="card link-card" to="/me/voice-check">
-      <AppIcon name="sound" :size="22" />
-      <span class="link-card-text">
-        <strong>语音自检</strong>
-        <span class="meta-line">麦克风、中文语音包与联机服务器预检</span>
       </span>
       <AppIcon name="chevron-right" :size="18" />
     </RouterLink>
@@ -625,31 +557,30 @@ onMounted(() => {
           v-model="caregiverPhoneDraft"
           type="tel"
           inputmode="tel"
-          placeholder="用于「求助」页一键拨号"
+          placeholder="请输入联系人电话"
           :aria-invalid="Boolean(contactError)"
           :aria-describedby="contactError ? 'contact-help contact-error' : 'contact-help'"
           @change="persistContact"
         />
       </label>
-      <p id="contact-help" class="meta-line">仅保存在本机，用于求助页和风险卡的“联系家人”按钮，不会上传。</p>
+      <span id="contact-help" class="visually-hidden">联系人电话</span>
       <p v-if="contactError" id="contact-error" class="notice" data-tone="error" role="alert">{{ contactError }}</p>
       <p v-if="contactCallMessage" class="notice" data-tone="info" role="status">{{ contactCallMessage }}</p>
       <button
         v-if="normalizePhoneNumber(caregiverPhoneDraft)"
         type="button"
         class="btn btn-quiet btn-block"
-        @click="testContactCall"
+        @click="contactCaregiver"
       >
-        测试拨号（需再次确认）
+        拨打电话
       </button>
     </section>
 
-    <section class="card" aria-labelledby="pwa-title">
+    <section v-if="!isNativeApp" class="card" aria-labelledby="pwa-title">
       <div class="h-icon-row">
         <span class="row-icon" data-tone="info" aria-hidden="true"><AppIcon name="shield" :size="16" /></span>
-        <h2 id="pwa-title">安装与离线恢复</h2>
+        <h2 id="pwa-title">应用安装</h2>
       </div>
-      <p class="meta-line">{{ pwaSupportSpeechText() }}</p>
       <template v-if="serviceWorkerSupported()">
         <div v-if="!installDismissed" class="pwa-install-row">
           <button type="button" :disabled="!installPromptAvailable" @click="onInstallClick">
@@ -658,7 +589,7 @@ onMounted(() => {
           <button type="button" class="secondary" @click="onDismissInstall">不再提示</button>
         </div>
         <p v-if="!installDismissed && !installPromptAvailable" class="meta-line">
-          当前浏览器未触发安装引导：请使用浏览器菜单中的“安装应用 / 添加到主屏幕”，安装后可获得离线外壳与全屏体验。
+          请使用浏览器菜单中的“安装应用 / 添加到主屏幕”。
         </p>
         <p v-if="installMessage" class="notice" data-tone="info" role="status">{{ installMessage }}</p>
         <div class="pwa-recovery-row">
@@ -667,7 +598,7 @@ onMounted(() => {
           </button>
         </div>
         <p class="meta-line">
-          外壳缓存异常、版本回滚后打不开或页面显示旧外壳时使用；只清理本机离线外壳，不会影响服务端健康数据。
+          清理应用缓存
         </p>
         <p v-if="recoveryMessage" class="notice" :data-tone="recoveryMessage.includes('失败') ? 'error' : 'info'" role="status">
           {{ recoveryMessage }}
@@ -681,7 +612,7 @@ onMounted(() => {
         <h2 id="source-title">数据来源</h2>
       </div>
       <fieldset class="mode-fieldset">
-        <legend class="meta-line">选择应用连接的数据</legend>
+        <legend class="visually-hidden-title">数据来源</legend>
         <label class="mode-option">
           <input
             type="radio"
@@ -691,8 +622,7 @@ onMounted(() => {
             @change="onModeChange('demo')"
           />
           <span>
-            <strong>演示模式（默认）</strong>
-            <span class="meta-line">内置虚构数据，开箱即用，不连接任何服务器</span>
+            <strong>本地数据</strong>
           </span>
         </label>
         <label class="mode-option">
@@ -704,15 +634,14 @@ onMounted(() => {
             @change="onModeChange('live')"
           />
           <span>
-            <strong>家庭服务器（联机）</strong>
-            <span class="meta-line">连接主仓库 FastAPI；适配层为起步版本，需联调验收</span>
+            <strong>家庭服务器</strong>
           </span>
         </label>
       </fieldset>
 
             <template v-if="session.dataMode === 'live'">
         <p v-if="authorizationBoundary.status === 'reverification-required'" class="notice" data-tone="warn" role="alert">
-          授权边界已失效。为保护隐私，成员、任务、风险、事件和视觉候选不会从本地恢复；请重新测试连接后再加载数据。
+          请重新连接服务器。
         </p>
         <label class="field">
           服务器地址
@@ -724,66 +653,17 @@ onMounted(() => {
             :aria-describedby="serverAddressError ? 'server-address-help server-address-error' : 'server-address-help'"
             @change="persistServerAddress"
           />
-          <small id="server-address-help">{{ serverAddressHelp }}留空表示同源。</small>
+            <small id="server-address-help">{{ serverAddressHelp }}</small>
         </label>
         <p v-if="serverAddressError" id="server-address-error" class="notice" data-tone="error" role="alert">{{ serverAddressError }}</p>
 
-        <fieldset v-if="devActorAllowed" class="mode-fieldset">
-          <legend class="meta-line">身份来源</legend>
-          <label class="mode-option">
-            <input
-              type="radio"
-              name="auth-mode"
-              value="real"
-              :checked="session.authMode === 'real'"
-              @change="onAuthModeChange('real')"
-            />
-            <span>
-              <strong>正式登录（默认）</strong>
-              <span class="meta-line">账号密码登录家庭服务器，使用短生命周期会话</span>
-            </span>
-          </label>
-          <label class="mode-option">
-            <input
-              type="radio"
-              name="auth-mode"
-              value="dev-actor"
-              :checked="session.authMode === 'dev-actor'"
-              @change="onAuthModeChange('dev-actor')"
-            />
-            <span>
-              <strong>开发期身份（仅本地联调）</strong>
-              <span class="meta-line">直接发送 X-Actor-Id；仅在开启开发配置的构建里可选，不能用于生产</span>
-            </span>
-          </label>
-        </fieldset>
-        <p v-else class="meta-line">
-          当前为正式构建：只能使用正式登录，开发期 X-Actor-Id 路径未启用。
-        </p>
-
-        <label v-if="session.authMode === 'dev-actor'" class="field">
-          开发期身份（仅本地联调）
-          <input v-model="actorIdDraft" type="text" placeholder="Actor ID" @change="persistConnectionSession" />
-        </label>
-        <label class="field">
-          访问目的代码（X-Access-Purpose）
-          <input v-model="accessPurposeDraft" type="text" placeholder="family-care" @change="persistConnectionSession" />
-        </label>
-        <p v-if="session.authMode === 'dev-actor' && !session.actorId.trim()" class="notice" data-tone="warn" role="status">
-          请先填写开发身份；未配置身份时不会加载任何家庭或健康数据。
-        </p>
-        <p v-else-if="!session.accessPurpose.trim()" class="notice" data-tone="warn" role="status">
-          请先填写访问目的代码；访问目的为空时不会加载任何家庭或健康数据。
-        </p>
         <button
           type="button"
           class="btn btn-block"
-          :disabled="connectionState === 'testing'
-            || (session.authMode === 'dev-actor' && !session.actorId.trim())
-            || !session.accessPurpose.trim()"
+          :disabled="connectionState === 'testing'"
           @click="testConnection"
         >
-          {{ connectionState === 'testing' ? '正在测试…' : '测试连接' }}
+          {{ connectionState === 'testing' ? '连接中…' : '连接服务器' }}
         </button>
         <p
           v-if="connectionMessage"
@@ -792,9 +672,6 @@ onMounted(() => {
           role="status"
         >
           {{ connectionMessage }}
-        </p>
-        <p v-if="capabilityProbeError" class="notice" data-tone="warn" role="status">
-          能力限制暂时无法读取：{{ capabilityProbeError.message }} 未声明的能力均按不可用处理，请先不要使用相关入口。
         </p>
         <ErrorNotice v-if="connectionError" :error="connectionError" :busy="connectionState === 'testing'" @retry="testConnection" />
 
@@ -808,13 +685,10 @@ onMounted(() => {
 
           <template v-else-if="households.length">
             <p v-if="currentHousehold" class="meta-line">
-              数据来源：{{ currentHousehold.name }}<template v-if="households.length > 1">（共 {{ households.length }} 个可访问家庭，可切换）</template>
-            </p>
-            <p v-if="needsHouseholdChoice" class="notice" data-tone="warn" role="alert">
-              当前身份可以访问 {{ households.length }} 个家庭。请显式选择一个后再加载数据；应用不会替你选默认家庭。
+              {{ currentHousehold.name }}
             </p>
             <label v-if="households.length > 1" class="field">
-              选择家庭
+              家庭
               <select
                 :value="session.currentHouseholdId"
                 :disabled="householdsLoading"
@@ -824,69 +698,21 @@ onMounted(() => {
                 <option v-for="item in households" :key="item.id" :value="item.id">{{ item.name }}</option>
               </select>
             </label>
-            <p v-else class="meta-line">当前身份只被授权访问这一个家庭；出现多个家庭时这里会要求显式选择。</p>
           </template>
 
-          <p v-else-if="!householdError" class="meta-line">尚未读取家庭列表；测试连接后会自动读取。</p>
+          <p v-else-if="!householdError" class="meta-line">暂无家庭</p>
 
           <p v-if="householdMessage" class="notice" data-tone="info" role="status">{{ householdMessage }}</p>
           <ErrorNotice v-if="householdError" :error="householdError" :busy="householdsLoading" @retry="loadHouseholds" />
-          <p class="meta-line">
-            选择家庭不等于获得权限：成员、字段、动作、目的和期限仍由家庭服务器逐次校验。本机只保存家庭标识，不保存家庭健康数据。
-          </p>
-        </section>
-
-        <section
-          v-if="capabilityState.snapshot"
-          class="capability-panel"
-          aria-labelledby="capability-title"
-          aria-live="polite"
-        >
-          <div class="h-icon-row">
-            <span class="row-icon" data-tone="info" aria-hidden="true"><AppIcon name="shield" :size="16" /></span>
-            <h3 id="capability-title">服务能力与限制</h3>
-          </div>
-          <p class="meta-line">能力阶段：{{ capabilityState.snapshot.phase }}</p>
-          <div class="capability-group">
-            <strong>已提供（{{ capabilityState.snapshot.available.length }}）</strong>
-            <ul v-if="capabilityState.snapshot.available.length" class="capability-list">
-              <li v-for="id in capabilityState.snapshot.available" :key="`available-${id}`">
-                <span class="tag" data-tone="calm">可用</span>
-                <span>
-                  <strong>{{ capabilityLabel(id) }}</strong>
-                  <span class="meta-line">{{ capabilityDescription(id) }}</span>
-                </span>
-              </li>
-            </ul>
-            <p v-else class="meta-line">服务没有声明可用能力。</p>
-          </div>
-          <div class="capability-group">
-            <strong>未提供或未启用（{{ capabilityState.snapshot.unavailable.length }}）</strong>
-            <ul v-if="capabilityState.snapshot.unavailable.length" class="capability-list">
-              <li v-for="id in capabilityState.snapshot.unavailable" :key="`unavailable-${id}`">
-                <span class="tag" data-tone="warn">不可用</span>
-                <span>
-                  <strong>{{ capabilityLabel(id) }}</strong>
-                  <span class="meta-line">{{ capabilityDescription(id) }} 相关入口会保持禁用。</span>
-                </span>
-              </li>
-            </ul>
-            <p v-else class="meta-line">服务没有声明未提供能力。</p>
-          </div>
-          <p class="notice" data-tone="warn" role="status">
-            未列出的能力也按不可用处理；移动端不会把接口缺失包装成可用功能。
-          </p>
         </section>
 
         <section v-if="usesRealAuth" class="auth-design-note" aria-labelledby="auth-session-title">
           <div class="h-icon-row">
             <span class="row-icon" data-tone="calm" aria-hidden="true"><AppIcon name="shield" :size="16" /></span>
-            <h3 id="auth-session-title">正式登录与会话</h3>
+            <h3 id="auth-session-title">账户</h3>
           </div>
 
           <template v-if="signedIn">
-            <p class="meta-line">当前身份：{{ auth.actorId }}</p>
-            <p v-if="sessionExpiryLabel" class="meta-line">会话有效至：{{ sessionExpiryLabel }}</p>
             <button
               type="button"
               class="btn btn-quiet btn-block"
@@ -896,13 +722,10 @@ onMounted(() => {
               {{ authBusy ? '处理中…' : '退出登录' }}
             </button>
 
-            <h4 class="step-up-title">高风险动作二次确认（PIN）</h4>
-            <p class="meta-line">
-              授权变更、删除等高风险动作需要用本家庭的 6 位 PIN 再确认一次。PIN 只保存在家庭服务器上（仅哈希），
-              本机不保留，也不会写入日志或地址栏。
-            </p>
+            <template v-if="!isMemberMode">
+            <h4 class="step-up-title">家庭 PIN</h4>
             <label class="field">
-              设置或更新家庭 PIN
+              设置 PIN
               <input
                 v-model="pinDraft"
                 type="password"
@@ -918,7 +741,7 @@ onMounted(() => {
               :disabled="authBusy || pinDraft.trim().length !== 6"
               @click="submitHouseholdPin"
             >
-              保存家庭 PIN
+              保存 PIN
             </button>
             <button
               type="button"
@@ -926,18 +749,18 @@ onMounted(() => {
               :disabled="authBusy"
               @click="startStepUp"
             >
-              发起二次确认
+              验证 PIN
             </button>
             <template v-if="auth.pendingStepUp">
               <label class="field">
-                家庭 PIN
+                PIN
                 <input
                   v-model="stepUpCode"
                   type="password"
                   inputmode="numeric"
                   autocomplete="one-time-code"
                   maxlength="6"
-                  placeholder="本家庭的 6 位 PIN"
+                  placeholder="6 位数字"
                 />
               </label>
               <button
@@ -946,41 +769,29 @@ onMounted(() => {
                 :disabled="authBusy || !stepUpCode.trim()"
                 @click="submitStepUp"
               >
-                提交二次确认
+                提交
               </button>
             </template>
+            </template>
+            <p v-else class="notice" data-tone="info" role="status">
+              管理员功能
+            </p>
           </template>
 
           <template v-else>
             <p class="notice" data-tone="warn" role="status">
-              尚未登录家庭服务器。为保护隐私，未登录状态下不会加载成员、任务、风险和事件，也不允许提交写操作。
+              未登录
             </p>
-            <RouterLink class="btn btn-block" to="/login">前往登录</RouterLink>
+            <RouterLink class="btn btn-block" to="/login">登录</RouterLink>
           </template>
 
           <p v-if="authMessage" class="notice" data-tone="success" role="status">{{ authMessage }}</p>
           <p v-if="authError" class="notice" data-tone="error" role="alert">{{ authError }}</p>
-          <ul class="divided-list">
-            <li>会话凭据只保存在内存，不写 localStorage、URL、日志或通知。</li>
-            <li>会话过期、被撤销或返回 401 时立即清理本地会话并阻断写入。</li>
-            <li>退出登录或切换家庭/成员会清除查询结果、上传草稿和能力探测快照。</li>
-          </ul>
-        </section>
-
-        <section v-else class="auth-design-note" aria-labelledby="auth-dev-title">
-          <div class="h-icon-row">
-            <span class="row-icon" data-tone="warn" aria-hidden="true"><AppIcon name="shield" :size="16" /></span>
-            <h3 id="auth-dev-title">开发期身份（未使用正式鉴权）</h3>
-          </div>
-          <p class="notice" data-tone="warn" role="status">
-            当前请求使用开发期 X-Actor-Id 头，仅供本地联调，不代表正式鉴权已接入；
-            服务端在 APP_ENV=production 或关闭 ALLOW_DEV_ACTOR_HEADER 时会直接拒绝。
-          </p>
         </section>
       </template>
 
       <template v-else>
-        <button type="button" class="btn btn-quiet btn-block" @click="restoreDemoData">恢复演示数据</button>
+        <button type="button" class="btn btn-quiet btn-block" @click="restoreDemoData">恢复默认数据</button>
         <p v-if="demoResetMessage" class="notice" data-tone="success" role="status">{{ demoResetMessage }}</p>
       </template>
     </section>
@@ -991,12 +802,11 @@ onMounted(() => {
         <h2 id="local-data-title">本地数据管理</h2>
       </div>
       <ul class="divided-list">
-        <li v-for="item in localDataItems" :key="item.key">
+        <li v-for="item in savedLocalDataItems" :key="item.key">
           <div class="card-title-row">
             <strong>{{ item.label }}</strong>
-            <span class="tag" :data-tone="item.saved ? 'info' : 'neutral'">{{ item.saved ? '本机保存' : '不保存' }}</span>
+            <span class="tag" data-tone="info">本机保存</span>
           </div>
-          <span class="meta-line">{{ item.note }}</span>
         </li>
       </ul>
       <button
@@ -1005,28 +815,13 @@ onMounted(() => {
         :data-tone="clearArmed ? 'danger' : undefined"
         @click="armClearLocalData"
       >
-        {{ clearArmed ? '再点一次确认：清理本地设置并退出联机' : '清理本地设置并退出联机' }}
+        {{ clearArmed ? '再次点击确认' : '清除本地设置' }}
       </button>
       <p v-if="clearResult && clearResult.ok" class="notice" data-tone="success" role="status">
-        已清理：{{ clearResult.cleared.join('、') }}。已回到演示模式；服务端健康事实不受影响。
+        已清除：{{ clearResult.cleared.join('、') }}
       </p>
       <p v-else-if="clearResult && !clearResult.ok" class="notice" data-tone="error" role="alert">
         清理未完成，不声称已删除：{{ clearResult.failures.join('；') }}。请检查浏览器存储设置（隐私模式可能禁用存储）后重试。
-      </p>
-      <p class="meta-line">清理不会删除或伪造服务端健康事实；导出、删除、撤回请在网页端办理（见下方"数据权利"）。</p>
-    </section>
-
-    <section class="card" aria-labelledby="data-rights-title">
-      <div class="h-icon-row">
-        <span class="row-icon" data-tone="warn" aria-hidden="true"><AppIcon name="shield" :size="16" /></span>
-        <h2 id="data-rights-title">数据权利（导出、删除、撤回）</h2>
-      </div>
-      <p class="meta-line">{{ dataRightsTarget }}</p>
-      <p class="meta-line">
-        家庭健康数据的导出、删除与撤回由家庭主人（Owner）在网页端发起：服务端提供导出清单与删除任务流程，完成后数据以服务端记录为准。
-      </p>
-      <p class="meta-line">
-        移动端不在本机复制健康数据；清理本机设置不影响服务端事实。需要办理时，请在家庭服务器的网页端登录 Owner 账号操作。
       </p>
     </section>
 
@@ -1035,49 +830,14 @@ onMounted(() => {
         <span class="row-icon" data-tone="calm" aria-hidden="true"><AppIcon name="shield" :size="16" /></span>
         <h2 id="privacy-title">隐私与边界</h2>
       </div>
-      <ul class="divided-list">
-        <li>家庭健康数据默认不出网；本应用仅连接家庭可信域内的服务器。</li>
-        <li>照护者只能看到被精细授权的字段；授权可随时在网页端撤回。</li>
-        <li>药盒识别永远需要人工确认；冲突与未知不会自动入库。</li>
-        <li>风险等级由确定性规则决定；应用不做诊断、处方或剂量判断。</li>
-        <li>没有购药、问诊、广告或任何健康消费导流。</li>
-      </ul>
       <RouterLink class="btn btn-quiet btn-block" to="/me/privacy">
         <AppIcon name="shield" :size="18" />
-        查看本地数据与隐私管理
+        隐私设置
       </RouterLink>
-      <RouterLink class="btn btn-quiet btn-block" to="/knowledge">
+      <RouterLink v-if="!isMemberMode" class="btn btn-quiet btn-block" to="/knowledge">
         <AppIcon name="eye" :size="18" />
-        阅读助手用到的知识条目（只读）
+        知识库
       </RouterLink>
-    </section>
-
-    <section class="card" aria-labelledby="trace-title">
-      <div class="h-icon-row">
-        <span class="row-icon" data-tone="info" aria-hidden="true"><AppIcon name="refresh" :size="16" /></span>
-        <h2 id="trace-title">最近请求与回执</h2>
-        <button type="button" class="btn btn-quiet" style="margin-left:auto" @click="refreshTraceView">刷新</button>
-      </div>
-      <p class="meta-line">
-        本机诊断信息：只记录请求方法、路径（不含查询串）、结局、状态、服务端请求标识与时间，不包含健康正文，也不会上传；切换身份或退出登录后自动清空。
-      </p>
-      <p v-if="traceView.length === 0" class="meta-line" role="status">
-        暂无记录；进行任何联机操作后点击“刷新”查看。
-      </p>
-      <ul v-else class="divided-list">
-        <li v-for="entry in traceView" :key="entry.seq">
-          <div class="card-title-row">
-            <strong>{{ entry.method }} {{ entry.path }}</strong>
-            <span class="tag" :data-tone="entry.outcome === 'success' ? 'calm' : entry.outcome === 'client-error' ? 'warn' : 'danger'">
-              {{ requestOutcomeLabel(entry.outcome) }}{{ entry.status !== null ? `（${entry.status}）` : '' }}
-            </span>
-          </div>
-          <span class="meta-line">请求标识：{{ entry.requestId ?? '回执信息不可用（服务端未返回请求 ID）' }}</span>
-          <span class="meta-line">时间：{{ formatTraceTime(entry.at) }}</span>
-          <span v-if="entry.idempotencyKey" class="meta-line">幂等键：{{ entry.idempotencyKey }}（同一键多次出现表示重试，服务端只落一条）</span>
-          <span v-if="entry.receiptId" class="meta-line">回执对象：{{ entry.receiptId }}</span>
-        </li>
-      </ul>
     </section>
 
     <section class="card" aria-labelledby="about-title">
@@ -1085,11 +845,7 @@ onMounted(() => {
         <span class="row-icon" data-tone="accent" aria-hidden="true"><AppIcon name="heart" :size="16" /></span>
         <h2 id="about-title">关于</h2>
       </div>
-      <p class="meta-line">家健镜随身版 {{ buildInfoLine() }} · 教学演示，不用于诊断或治疗</p>
-      <p class="meta-line">
-        配套网页端与后端：
-        <a href="https://github.com/Meyt1n/issedu_ysu2026_3709" rel="noreferrer">issedu_ysu2026_3709</a>
-      </p>
+      <p class="meta-line">家健镜随身版</p>
     </section>
   </main>
 </template>

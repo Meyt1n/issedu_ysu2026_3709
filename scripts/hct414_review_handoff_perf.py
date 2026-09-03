@@ -260,6 +260,11 @@ def _run_scenario(samples: int, warmup: int) -> dict[str, Any]:
         "master_data_root": settings.master_data_root,
         "master_data_approved_versions": settings.master_data_approved_versions,
         "vision_quality_enforce_retake": settings.vision_quality_enforce_retake,
+        # This probe drives the API with synthetic ``X-Actor-ID`` identities, so
+        # it must enable that path itself.  It previously inherited the flag from
+        # whatever ``.env`` the current machine happened to have, which made the
+        # probe pass locally and fail wherever the flag was absent.
+        "allow_dev_actor_header": settings.allow_dev_actor_header,
     }
     process = psutil.Process()
     rss_before = process.memory_info().rss
@@ -277,6 +282,7 @@ def _run_scenario(samples: int, warmup: int) -> dict[str, Any]:
             settings.master_data_root = str(master_root)
             settings.master_data_approved_versions = MASTER_VERSION
             settings.vision_quality_enforce_retake = True
+            settings.allow_dev_actor_header = True
 
             def override_get_session() -> Generator[Session, None, None]:
                 session = session_factory()

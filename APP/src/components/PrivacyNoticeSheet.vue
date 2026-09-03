@@ -49,7 +49,7 @@ function speakNotice(): void {
         </button>
       </div>
       <p class="meta-line">
-        确认只在本机记录"已读版本"；随时可在"我的 → 隐私与边界"回看。不确认也可以先使用演示模式。
+        可在“我的”中查看隐私设置。
       </p>
     </section>
   </div>

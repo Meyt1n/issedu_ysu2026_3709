@@ -79,6 +79,24 @@
   --firefly-color: rgba(233, 186, 110, 0.9);
   --cursor-glow: rgba(226, 178, 116, 0.14);
 
+  /* 卡片花纹库（HCT-536）：不同卡片用不同透明花纹，避免千篇一律。
+     通过 --card-motif 选用；默认叶子。简洁主题整体关闭。 */
+  --motif-leaf: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='148' height='148' viewBox='0 0 148 148'%3E%3Cg fill='none' stroke='%238a7f68' stroke-opacity='.15' stroke-width='1.1' stroke-linecap='round'%3E%3Cpath d='M18 30c8-9 20-12 30-8-4 10-16 14-30 8z'/%3E%3Cpath d='M33 26c2-5 6-8 11-9'/%3E%3Cpath d='M118 122c10 2 16 9 16 18-10-1-17-8-16-18z'/%3E%3Cpath d='M126 126c1-5 4-9 8-11'/%3E%3C/g%3E%3Cg fill='%23a97e5f' fill-opacity='.14'%3E%3Ccircle cx='112' cy='34' r='1.6'/%3E%3Ccircle cx='120' cy='30' r='1.3'/%3E%3Ccircle cx='126' cy='36' r='1.1'/%3E%3Ccircle cx='30' cy='112' r='1.6'/%3E%3Ccircle cx='24' cy='118' r='1.2'/%3E%3C/g%3E%3Cg fill='%238a7f68' fill-opacity='.10'%3E%3Ccircle cx='74' cy='70' r='1'/%3E%3Ccircle cx='104' cy='66' r='1'/%3E%3Ccircle cx='60' cy='96' r='1'/%3E%3Ccircle cx='94' cy='104' r='1'/%3E%3C/g%3E%3C/svg%3E");
+  --motif-dot: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='132' height='132' viewBox='0 0 132 132'%3E%3Cg fill='%236f8577'%3E%3Ccircle cx='18' cy='18' r='2' fill-opacity='.20'/%3E%3Ccircle cx='88' cy='18' r='1.2' fill-opacity='.15'/%3E%3Ccircle cx='18' cy='88' r='1.2' fill-opacity='.15'/%3E%3Ccircle cx='88' cy='88' r='2' fill-opacity='.20'/%3E%3Ccircle cx='53' cy='53' r='1.4' fill-opacity='.16'/%3E%3Ccircle cx='118' cy='53' r='1' fill-opacity='.13'/%3E%3Ccircle cx='53' cy='118' r='1' fill-opacity='.13'/%3E%3C/g%3E%3C/svg%3E");
+  --motif-sprout: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='136' height='136' viewBox='0 0 136 136'%3E%3Cg fill='none' stroke='%236e8a74' stroke-opacity='.18' stroke-width='1.2' stroke-linecap='round'%3E%3Cpath d='M30 116c0-16 6-26 18-32'/%3E%3Cpath d='M48 84c-8-1-13-5-15-12 8 0 13 4 15 12z' fill='%236e8a74' fill-opacity='.14' stroke='none'/%3E%3Cpath d='M48 84c1-8 5-13 12-15 0 8-4 13-12 15z' fill='%236e8a74' fill-opacity='.18' stroke='none'/%3E%3Cpath d='M104 34c0-10 4-16 11-20'/%3E%3Ccircle cx='104' cy='36' r='1.6' fill='%236e8a74' fill-opacity='.2' stroke='none'/%3E%3C/g%3E%3C/svg%3E");
+  --motif-wave: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140' viewBox='0 0 140 140'%3E%3Cg fill='none' stroke='%235f7f92' stroke-opacity='.17' stroke-width='1.3' stroke-linecap='round'%3E%3Cpath d='M14 40q10-9 21 0t21 0 21 0 21 0 21 0'/%3E%3Cpath d='M14 100q10-9 21 0t21 0 21 0 21 0 21 0'/%3E%3C/g%3E%3Cg fill='%235f7f92' fill-opacity='.18'%3E%3Ccircle cx='70' cy='70' r='1.5'/%3E%3Ccircle cx='34' cy='70' r='1'/%3E%3Ccircle cx='106' cy='70' r='1'/%3E%3C/g%3E%3C/svg%3E");
+  --motif-heart: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='132' height='132' viewBox='0 0 132 132'%3E%3Cg fill='%23b0713f' fill-opacity='.15'%3E%3Cpath d='M34 42c-4-6 2-13 8-9 6-4 12 3 8 9-3 4-8 7-8 7s-5-3-8-7z'/%3E%3Cpath d='M94 96c-3-4 1-9 5-6 4-3 8 2 5 6-2 3-5 4-5 4s-3-1-5-4z'/%3E%3C/g%3E%3Cg fill='%23b0713f' fill-opacity='.12'%3E%3Ccircle cx='100' cy='30' r='1.4'/%3E%3Ccircle cx='28' cy='98' r='1.4'/%3E%3Ccircle cx='66' cy='66' r='1'/%3E%3C/g%3E%3C/svg%3E");
+  --motif-cross: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='132' height='132' viewBox='0 0 132 132'%3E%3Cg fill='none' stroke='%23a97e1f' stroke-opacity='.2' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M36 30v16M28 38h16'/%3E%3Cpath d='M98 88v14M91 95h14'/%3E%3C/g%3E%3Cg fill='%23a97e1f' fill-opacity='.14'%3E%3Cpath d='M88 26v10M83 31h10'/%3E%3Ccircle cx='34' cy='98' r='1.5'/%3E%3Ccircle cx='66' cy='66' r='1'/%3E%3C/g%3E%3C/svg%3E");
+
+  /* 卡片纸感晕染：花纹 + 四角极淡暖色，纯 CSS 平铺必然全覆盖。 */
+  --card-texture:
+    var(--card-motif, var(--motif-leaf)),
+    radial-gradient(circle at 0% 0%, color-mix(in srgb, var(--pine) 6%, transparent), transparent 40%),
+    radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--gold) 5%, transparent), transparent 38%),
+    radial-gradient(circle at 0% 100%, color-mix(in srgb, var(--gold) 5%, transparent), transparent 36%),
+    radial-gradient(circle at 100% 100%, color-mix(in srgb, var(--clay) 6%, transparent), transparent 40%);
+  --card-bg: color-mix(in srgb, var(--paper) 42%, var(--card));
+
   color: var(--ink);
   font-family: var(--font-body);
   font-synthesis: none;
@@ -611,12 +629,14 @@ button:focus-visible, a:focus-visible {
   flex: 1 1 auto;
   height: 100%;
   min-height: 0;
-  margin: 0 auto;
-  max-width: 1120px;
+  /* 滚动容器铺满主区域，滚动条因此固定在浏览器最右侧；
+     两侧内边距仍按旧的 1120px 阅读列计算，保持页面内容宽度不变。 */
+  margin: 0;
+  max-width: none;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 22px 28px 28px;
+  padding: 22px max(28px, calc((100% - 1120px) / 2 + 28px)) 28px;
   scrollbar-gutter: stable;
   min-width: 0;
   width: 100%;
@@ -691,7 +711,7 @@ button:focus-visible, a:focus-visible {
 
 .card {
   backdrop-filter: blur(var(--glass-blur)) saturate(1.18);
-  background: var(--glass-card);
+  background: var(--card-texture, none), var(--card-bg, var(--card));
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-soft), inset 0 1px 0 var(--glass-highlight);
@@ -2440,6 +2460,18 @@ button:focus-visible, a:focus-visible {
   .chat-window { height: auto; min-height: 120px; }
 }
 
+/* ---------- 图标基线 ---------- */
+
+/*
+ * 图标是 flex/grid 里的等比方块，必须给它 flex-shrink: 0。
+ * 否则父容器一挤（如按钮里放长中文标签、卡片标题右侧的操作按钮），
+ * 浏览器会先压扁 SVG：14px 的箭头被压到 0，17px 的图标压到 12px，
+ * 线条随之变形。把不收缩设为全局默认，个别位置仍可覆盖。
+ */
+.app-icon {
+  flex: 0 0 auto;
+}
+
 /* ---------- 杂项 ---------- */
 
 .divider { border: 0; border-top: 1px dashed var(--line); margin: 6px 0; }
@@ -2591,7 +2623,9 @@ button:focus-visible, a:focus-visible {
   position: relative;
 }
 
-.graph-stage svg { display: block; width: 100%; }
+/* 只拉伸图谱主画布：图例浮层也在 .graph-stage 里，后代选择器会把
+   里面 12px 的 AppIcon 一起拉成满宽。 */
+.graph-stage > svg { display: block; width: 100%; }
 
 .graph-edge {
   fill: none;
@@ -2711,6 +2745,21 @@ button:focus-visible, a:focus-visible {
   margin: 0;
 }
 
+/* 值守状态行：本地在线 / 数据不出网 / 待复核，一眼可读。 */
+.bs-status-line {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 9px 0 0;
+}
+
+.bs-status-line .pill {
+  align-items: center;
+  display: inline-flex;
+  gap: 4px;
+}
+
 .bigscreen-clock {
   color: var(--pine-deep);
   font-family: var(--font-display);
@@ -2741,8 +2790,8 @@ button:focus-visible, a:focus-visible {
 .bs-tile {
   backdrop-filter: blur(8px) saturate(1.15);
   background:
-    linear-gradient(155deg, color-mix(in srgb, #ffffff 55%, transparent) 0%, transparent 46%),
-    color-mix(in srgb, var(--card) 82%, var(--pine-tint));
+    var(--card-texture, none),
+    color-mix(in srgb, var(--paper) 30%, color-mix(in srgb, var(--card) 86%, var(--pine-tint)));
   border: 1px solid color-mix(in srgb, var(--pine) 18%, var(--line-soft));
   border-radius: 16px;
   box-shadow:
@@ -2818,6 +2867,36 @@ button:focus-visible, a:focus-visible {
 
 .bs-hint { color: var(--ink-soft); font-size: 12px; }
 
+/* 指标卡内图标与迷你周柱（今日事件卡）：实用信息一眼可读。 */
+.bs-label {
+  align-items: center;
+  display: inline-flex;
+  gap: 5px;
+}
+
+.bs-label .app-icon { color: var(--pine); opacity: 0.8; }
+
+.bs-minibars {
+  align-items: flex-end;
+  display: flex;
+  gap: 3px;
+  height: 26px;
+  margin-top: 7px;
+}
+
+.bs-minibars i {
+  background: color-mix(in srgb, var(--pine) 34%, transparent);
+  border-radius: 3px 3px 1px 1px;
+  flex: 1;
+  min-height: 3px;
+  transition: background 0.2s ease;
+}
+
+.bs-minibars i.today {
+  background: var(--clay);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--clay) 18%, transparent);
+}
+
 .bs-member-strip {
   display: flex;
   flex-wrap: wrap;
@@ -2825,7 +2904,7 @@ button:focus-visible, a:focus-visible {
 }
 
 .bs-member-chip {
-  background: var(--card);
+  background: var(--card-texture, none), color-mix(in srgb, var(--paper) 36%, var(--card));
   border: 1px solid var(--line-soft);
   border-radius: 14px;
   display: grid;
@@ -2853,8 +2932,8 @@ button:focus-visible, a:focus-visible {
 .bs-panel {
   backdrop-filter: blur(8px) saturate(1.12);
   background:
-    linear-gradient(160deg, color-mix(in srgb, #ffffff 40%, transparent) 0%, transparent 42%),
-    color-mix(in srgb, var(--card) 88%, transparent);
+    var(--card-texture, none),
+    color-mix(in srgb, var(--paper) 30%, var(--card));
   border: 1px solid var(--line-soft);
   border-radius: 16px;
   box-shadow: 0 14px 30px rgba(64, 84, 74, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.5);
@@ -2882,20 +2961,81 @@ button:focus-visible, a:focus-visible {
 }
 
 .bs-columns { display: grid; gap: 12px; }
-.bs-columns-main { grid-template-columns: 1.35fr 1fr; }
 .bs-columns-detail { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.bs-columns-charts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
-.bs-spark { display: block; width: 100%; }
-.bs-spark .spark-line {
+.bs-calendar-panel { min-width: 0; }
+.bs-calendar-panel > .home-dashboard-card { margin: 0; }
+
+/* 等高行里内容较少的面板：把主体推满剩余高度，底部不留大片空白。
+   面板本身是 flex 列，主体 flex:1 后仍按内容从上往下排。 */
+.bs-columns-detail > .bs-panel,
+.bs-chart-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.bs-columns-detail > .bs-panel > .bs-list,
+.bs-chart-panel > .bs-linechart {
+  align-content: start;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* 空态文案居中占满剩余高度，而不是贴在标题下方留一大片空白。 */
+.bs-columns-detail > .bs-panel > .bs-empty,
+.bs-chart-panel > .bs-empty {
+  align-items: center;
+  display: flex;
+  flex: 1 1 auto;
+  justify-content: center;
+  min-height: 0;
+}
+
+/* ── 折线图面板：四张图共用一套暖纸配色，只靠线色区分序列 ── */
+
+.bs-linechart { display: block; height: auto; width: 100%; }
+
+.bs-chart-grid {
   fill: none;
-  stroke: var(--pine);
+  stroke: color-mix(in srgb, var(--line) 88%, transparent);
+  stroke-dasharray: 3 6;
+  stroke-width: 1;
+}
+
+/* 单序列图才铺面积，多序列只留线，避免颜色互相压住；填色由 fill 属性给线色。 */
+.bs-chart-area { fill-opacity: 0.16; stroke: none; }
+
+/* 线色与点色由模板按序列写在 stroke / fill 呈现属性上。
+   这里刻意不声明 stroke/fill：作者样式表优先级高于呈现属性，
+   一旦写死就会把多序列图刷成同一个颜色。 */
+.bs-chart-line {
+  fill: none;
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 2.4;
 }
-.bs-spark .spark-fill { fill: url(#sparkFill); opacity: 0.55; }
-.bs-spark .spark-dot { fill: var(--pine-deep); }
-.bs-spark .spark-label { fill: var(--ink-faint); font-size: 10px; text-anchor: middle; }
+
+.bs-chart-line--thin { stroke-width: 1.8; }
+
+.bs-chart-label { fill: var(--ink-faint); font-size: 10px; text-anchor: middle; }
+
+.bs-chart-legend {
+  color: var(--ink-soft);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  gap: 5px 13px;
+  margin-top: 8px;
+}
+
+.bs-chart-legend span { align-items: center; display: inline-flex; gap: 5px; }
+.bs-chart-legend i { border-radius: 999px; display: inline-block; height: 3px; width: 13px; }
+
+/* 运行状态面板独立成行时限制高度可读性。 */
+.bs-runtime-panel .bs-light-row span { font-size: 12.5px; }
+
 
 .bs-light-row { align-items: center; display: flex; gap: 10px; padding: 6px 0; }
 .bs-light { border-radius: 50%; height: 9px; width: 9px; flex: 0 0 auto; }
@@ -2906,10 +3046,35 @@ button:focus-visible, a:focus-visible {
 .bs-weather-hero {
   align-items: center;
   display: flex;
-  gap: 14px;
+  gap: 11px;
   margin-bottom: 10px;
 }
 
+.bs-weather-visual {
+  align-items: center;
+  display: inline-flex;
+  flex: 0 0 46px;
+  height: 46px;
+  justify-content: center;
+  position: relative;
+  width: 46px;
+}
+
+.bs-weather-visual > span { position: absolute; }
+.bs-weather-sun,
+.bs-weather-cloud,
+.bs-weather-rain { opacity: 0; }
+.bs-weather-sun { color: var(--gold); }
+.bs-weather-cloud { color: var(--sky); }
+.bs-weather-rain { display: flex; gap: 3px; top: 30px; }
+.bs-weather-rain i { background: var(--sky); border-radius: 99px; display: block; height: 7px; transform: rotate(22deg); width: 2px; }
+.bs-weather-visual.is-sun .bs-weather-sun { animation: weather-sun-pulse 3.2s ease-in-out infinite; opacity: 1; }
+.bs-weather-visual.is-cloud .bs-weather-cloud { animation: weather-cloud-drift 4s ease-in-out infinite; opacity: 1; }
+.bs-weather-visual.is-rain .bs-weather-cloud { animation: weather-cloud-drift 4s ease-in-out infinite; opacity: 1; }
+.bs-weather-visual.is-rain .bs-weather-rain { animation: weather-rain-fall 1.7s ease-in-out infinite; opacity: 1; }
+
+.bs-temperature-wrap { align-items: center; display: inline-flex; gap: 3px; }
+.bs-temperature-icon { color: var(--clay); animation: weather-thermometer-float 2.8s ease-in-out infinite; }
 .bs-weather-hero strong {
   color: var(--pine-deep);
   font-family: var(--font-display);
@@ -2918,8 +3083,13 @@ button:focus-visible, a:focus-visible {
   line-height: 1;
 }
 
-.bs-weather-hero span { color: var(--ink); display: block; font-weight: 650; }
+.bs-weather-hero > div:last-child > span { color: var(--ink); display: block; font-weight: 650; }
 .bs-weather-hero small { color: var(--ink-faint); display: block; font-size: 12px; margin-top: 2px; }
+
+.bs-weather-facts { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 10px; }
+.bs-weather-facts span { align-items: center; background: color-mix(in srgb, var(--sky-tint) 35%, transparent); border: 1px solid var(--line-soft); border-radius: 999px; color: var(--ink-soft); display: inline-flex; font-size: 11.5px; gap: 5px; padding: 5px 9px; }
+.bs-weather-facts .app-icon { color: var(--sky); }
+.bs-weather-facts .bs-weather-wind-icon { animation: weather-wind-sweep 1.8s ease-in-out infinite; color: var(--pine); }
 
 .bs-list {
   display: grid;
@@ -2990,8 +3160,8 @@ button:focus-visible, a:focus-visible {
 }
 
 @media (max-width: 960px) {
-  .bs-columns-main,
-  .bs-columns-detail {
+  .bs-columns-detail,
+  .bs-columns-charts {
     grid-template-columns: 1fr;
   }
 }
@@ -3152,6 +3322,107 @@ button:focus-visible, a:focus-visible {
 :root[data-theme="dusk"] input,
 :root[data-theme="dusk"] select,
 :root[data-theme="dusk"] textarea { background: var(--paper-deep); }
+
+/* ---------- 简洁模式：纯净无装饰 ---------- */
+
+:root[data-theme="minimal"] {
+  --paper: #ffffff;
+  --paper-deep: #f7f7f7;
+  --card: #ffffff;
+  --card-soft: #fafafa;
+  --ink: #2d3748;
+  --ink-soft: #4a5568;
+  --ink-faint: #718096;
+  --pine: #38665a;
+  --pine-deep: #2a5045;
+  --pine-night: #1a3630;
+  --pine-tint: #e8f0ed;
+  --clay: #c26744;
+  --clay-deep: #a5553a;
+  --clay-tint: #f5e6df;
+  --gold: #d69e2e;
+  --gold-tint: #fef3dd;
+  --rose: #c53030;
+  --rose-tint: #fed7d7;
+  --sky: #3182ce;
+  --sky-tint: #e6f2ff;
+  --sage: #48bb78;
+  --sage-tint: #e6f9ef;
+  --line: #e2e8f0;
+  --line-soft: #edf2f7;
+  --shadow-soft: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-lift: 0 4px 6px rgba(0, 0, 0, 0.07), 0 2px 4px rgba(0, 0, 0, 0.06);
+  --app-bg: #ffffff;
+  --topbar-bg: rgba(255, 255, 255, 0.92);
+  --glass-bg: rgba(255, 255, 255, 0.96);
+  --scroll-thumb: #cbd5e0;
+  --sidebar-from: #2d3748;
+  --sidebar-to: #1a202c;
+  --sidebar-active-bg: #f7fafc;
+  --sidebar-active-ink: #2d3748;
+  --btn-primary-from: #38665a;
+  --btn-primary-to: #2a5045;
+  --btn-clay-from: #c26744;
+  --btn-clay-to: #a5553a;
+  --aurora-1: transparent;
+  --aurora-2: transparent;
+  --aurora-3: transparent;
+  --sky-ink: #2c5282;
+  --gold-ink: #975a16;
+  --rose-ink: #9b2c2c;
+  --sage-ink: #22543d;
+  --glass-card: rgba(255, 255, 255, 0.7);
+  --glass-card-strong: rgba(255, 255, 255, 0.85);
+  --glass-border: rgba(0, 0, 0, 0.08);
+  --glass-highlight: rgba(255, 255, 255, 0.9);
+  --glass-input: rgba(255, 255, 255, 0.6);
+  --glass-blur: 8px;
+  --grain-opacity: 0;
+  --card-texture: none;
+  --card-bg: #ffffff;
+}
+
+/* 简洁模式：隐藏所有装饰性元素 */
+:root[data-theme="minimal"] .aurora,
+:root[data-theme="minimal"] .firefly,
+:root[data-theme="minimal"] .cursor-follow,
+:root[data-theme="minimal"] .bg-wash,
+:root[data-theme="minimal"] .overview-section-art,
+:root[data-theme="minimal"] .health-news-art,
+:root[data-theme="minimal"] .warm-boot-bg {
+  display: none !important;
+}
+
+:root[data-theme="minimal"] .overview-section-wash,
+:root[data-theme="minimal"] .health-news-wash {
+  background: transparent !important;
+}
+
+:root[data-theme="minimal"] .card,
+:root[data-theme="minimal"] .home-dashboard-card,
+:root[data-theme="minimal"] .health-news-item {
+  background: var(--card);
+  border: 1px solid var(--line);
+}
+
+/* 简洁模式：统一边框半径 */
+:root[data-theme="minimal"] .card,
+:root[data-theme="minimal"] .home-dashboard-card,
+:root[data-theme="minimal"] .health-news-item,
+:root[data-theme="minimal"] .btn {
+  border-radius: 8px;
+}
+
+/* 简洁模式：减少阴影 */
+:root[data-theme="minimal"] .card,
+:root[data-theme="minimal"] .home-dashboard-card {
+  box-shadow: none;
+}
+
+:root[data-theme="minimal"] .health-news-item:hover,
+:root[data-theme="minimal"] .home-dashboard-card:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
 
 /* ---------- 樱语粉黛：柔软粉调 ---------- */
 
@@ -3324,9 +3595,17 @@ button:focus-visible, a:focus-visible {
 .sec-no {
   color: var(--clay-deep);
   font-family: var(--font-display);
-  font-size: 14px;
+  font-size: 19px;
   font-weight: 800;
   letter-spacing: 2px;
+}
+
+.plans-empty-hint {
+  max-width: none !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  width: 100%;
 }
 
 .sec-head h3 {
@@ -3451,28 +3730,31 @@ button:focus-visible, a:focus-visible {
 /* ---------- 环境行动卡：可见、可降级、带来源与规则版本 ---------- */
 
 .weather-action-panel {
+  align-content: start;
+  /* 天气卡专属花纹：云朵与小雨滴。 */
+  --card-pattern: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='132' height='132' viewBox='0 0 132 132'%3E%3Cg fill='none' stroke='%2355809c' stroke-opacity='.16' stroke-width='1.4' stroke-linecap='round'%3E%3Cpath d='M30 34a7 7 0 0 1 13-2.4A6 6 0 0 1 46 43H32a6 6 0 0 1-2-9z'/%3E%3Cpath d='M98 96v6M92 100l-2.4 4.4M104 100l2.4 4.4'/%3E%3C/g%3E%3C/svg%3E");
   background:
-    radial-gradient(circle at 86% 12%, color-mix(in srgb, var(--sky-tint) 78%, transparent), transparent 34%),
-    linear-gradient(135deg, color-mix(in srgb, var(--paper) 92%, var(--sage-tint)), var(--paper));
+    var(--card-texture, none),
+    linear-gradient(150deg, color-mix(in srgb, var(--sky-tint) 46%, var(--card)), var(--card) 52%, color-mix(in srgb, var(--sage-tint) 40%, var(--card)));
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-soft);
   display: grid;
-  gap: 18px;
+  gap: 14px;
   overflow: hidden;
-  padding: 22px 24px;
+  padding: 18px 20px;
   position: relative;
 }
 
 .weather-action-panel::after {
   color: color-mix(in srgb, var(--sky) 11%, transparent);
   content: "☁";
-  font-size: 150px;
+  font-size: 112px;
   line-height: 1;
   pointer-events: none;
   position: absolute;
-  right: 22px;
-  top: -50px;
+  right: 16px;
+  top: -34px;
 }
 
 .weather-action-head,
@@ -3492,23 +3774,93 @@ button:focus-visible, a:focus-visible {
 .weather-status { border-radius: var(--radius-pill); font-size: 12px; font-weight: 700; padding: 7px 11px; }
 .weather-status.degraded { background: var(--gold-tint); color: var(--gold-ink); }
 /* 图二修复：面板宽度不足时按行换行，任何一栏都不得被压成一字一行。 */
-.weather-action-body { align-items: stretch; flex-wrap: wrap; gap: 20px; position: relative; z-index: 1; }
+.weather-action-body { align-items: stretch; flex-wrap: wrap; gap: 14px; position: relative; z-index: 1; }
 
 .weather-reading {
   border-right: 1px solid var(--line);
-  flex: 0 0 218px;
-  gap: 16px;
-  padding-right: 22px;
+  flex: 0 0 204px;
+  gap: 11px;
+  padding-right: 16px;
 }
 
+.bs-weather-calm {
+  align-items: center;
+  background: var(--sage-tint);
+  border: 1px solid color-mix(in srgb, var(--sage) 22%, var(--line));
+  border-radius: var(--radius-md);
+  color: var(--sage-ink);
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  min-height: 86px;
+  padding: 13px 14px;
+}
+
+.bs-weather-calm-visual { align-items: center; color: var(--sage-ink); display: inline-flex; flex: 0 0 34px; height: 34px; justify-content: center; position: relative; width: 34px; }
+.bs-weather-calm-spark { border: 1px solid currentColor; border-radius: 50%; inset: 1px; opacity: 0.32; position: absolute; animation: weather-calm-breathe 2.6s ease-in-out infinite; }
+.bs-weather-calm > div { display: grid; flex: 1; gap: 4px; min-width: 0; }
+.bs-weather-calm strong { color: var(--pine-deep); font-size: 14px; }
+.bs-weather-calm > div span { color: var(--sage-ink); font-size: 12.5px; line-height: 1.5; }
+.bs-weather-calm-badge { background: color-mix(in srgb, var(--card) 58%, transparent); border: 1px solid color-mix(in srgb, var(--sage) 20%, transparent); border-radius: var(--radius-pill); color: var(--sage-ink); flex: 0 0 auto; font-size: 11px; font-weight: 700; padding: 6px 9px; white-space: nowrap; }
+
 .weather-reading.stale { filter: saturate(0.75); }
-.weather-temperature { color: var(--sky); font-family: var(--font-display); font-size: 68px; font-weight: 700; letter-spacing: -4px; line-height: 1; }
+.weather-reading-visual {
+  align-items: center;
+  display: inline-flex;
+  flex: 0 0 48px;
+  height: 48px;
+  justify-content: center;
+  position: relative;
+  width: 48px;
+}
+
+.weather-reading-visual > span { position: absolute; }
+.weather-reading-visual .weather-sun { color: var(--gold); opacity: 0; }
+.weather-reading-visual .weather-cloud { color: var(--sky); opacity: 0; }
+.weather-reading-visual .weather-rain { display: flex; gap: 4px; opacity: 0; top: 31px; }
+.weather-reading-visual .weather-rain i {
+  background: var(--sky);
+  border-radius: 99px;
+  display: block;
+  height: 8px;
+  transform: rotate(22deg);
+  width: 2px;
+}
+.weather-reading-visual.is-sun .weather-sun { animation: weather-sun-pulse 3.2s ease-in-out infinite; opacity: 1; }
+.weather-reading-visual.is-cloud .weather-cloud { animation: weather-cloud-drift 4s ease-in-out infinite; opacity: 1; }
+.weather-reading-visual.is-rain .weather-cloud { animation: weather-cloud-drift 4s ease-in-out infinite; opacity: 1; }
+.weather-reading-visual.is-rain .weather-rain { animation: weather-rain-fall 1.7s ease-in-out infinite; opacity: 1; }
+
+@keyframes weather-sun-pulse {
+  0%, 100% { transform: scale(0.94) rotate(-6deg); }
+  50% { filter: drop-shadow(0 0 8px color-mix(in srgb, var(--gold) 40%, transparent)); transform: scale(1.08) rotate(6deg); }
+}
+
+@keyframes weather-cloud-drift {
+  0%, 100% { transform: translateX(-2px); }
+  50% { transform: translateX(3px); }
+}
+
+@keyframes weather-rain-fall {
+  0%, 100% { transform: translateY(-1px); }
+  50% { transform: translateY(3px); }
+}
+
+.weather-temperature-wrap { align-items: center; display: inline-flex; gap: 4px; }
+.weather-temperature-icon {
+  color: var(--clay);
+  animation: weather-thermometer-float 2.8s ease-in-out infinite;
+}
+.weather-temperature { color: var(--sky); font-family: var(--font-display); font-size: 56px; font-weight: 700; letter-spacing: -4px; line-height: 1; }
 .weather-reading-copy { display: grid; gap: 6px; }
 .weather-reading-copy strong { font-size: 18px; }
 .weather-reading-copy span { color: var(--ink-soft); font-size: 12.5px; }
 .weather-metrics { display: grid; flex: 1 1 250px; gap: 9px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.weather-metric { background: color-mix(in srgb, var(--card) 62%, transparent); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); display: grid; gap: 6px; min-width: 0; padding: 12px 13px; }
+.weather-metric { background: color-mix(in srgb, var(--sky-tint) 26%, var(--card)); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); display: grid; gap: 6px; min-width: 0; padding: 12px 13px; }
 .weather-metric span { color: var(--ink-faint); font-size: 11px; }
+.weather-metric-label { align-items: center; display: inline-flex; gap: 6px; }
+.weather-metric-label .app-icon { color: var(--sky); flex: 0 0 auto; }
+.weather-metric-label .weather-wind-icon { animation: weather-wind-sweep 1.8s ease-in-out infinite; color: var(--pine); }
 .weather-metric strong { color: var(--ink); font-size: 14px; overflow-wrap: anywhere; }
 /* 建议列至少 260px：放不下就整行换到下一行，绝不挤成竖排（图二）。 */
 .weather-card-list { display: grid; flex: 1 1 260px; gap: 10px; min-width: min(100%, 260px); }
@@ -3518,19 +3870,39 @@ button:focus-visible, a:focus-visible {
 .weather-advice > div { flex: 1; min-width: 0; writing-mode: horizontal-tb; }
 .weather-advice strong { font-size: 12px; font-weight: 750; }
 .weather-advice p { font-size: 13px; line-height: 1.65; margin: 3px 0 0; overflow-wrap: anywhere; }
-.weather-calm { align-items: center; background: var(--sage-tint); border: 1px solid color-mix(in srgb, var(--sage) 22%, var(--line)); border-radius: var(--radius-md); color: var(--sage-ink); display: flex; gap: 10px; min-height: 82px; padding: 14px 16px; }
+.weather-calm { align-items: center; background: var(--sage-tint); border: 1px solid color-mix(in srgb, var(--sage) 22%, var(--line)); border-radius: var(--radius-md); color: var(--sage-ink); display: flex; gap: 12px; justify-content: space-between; min-height: 82px; padding: 14px 16px; }
 .weather-calm div { display: grid; gap: 4px; }
 .weather-calm strong { color: var(--pine-deep); font-size: 14px; }
 .weather-calm span { color: var(--sage-ink); font-size: 12.5px; }
+.weather-calm > div { flex: 1; min-width: 0; }
+.weather-calm-visual { align-items: center; color: var(--sage-ink); display: inline-flex; flex: 0 0 34px; height: 34px; justify-content: center; position: relative; width: 34px; }
+.weather-calm-spark { border: 1px solid currentColor; border-radius: 50%; inset: 1px; opacity: 0.32; position: absolute; animation: weather-calm-breathe 2.6s ease-in-out infinite; }
+.weather-calm-badge { background: color-mix(in srgb, var(--card) 58%, transparent); border: 1px solid color-mix(in srgb, var(--sage) 20%, transparent); border-radius: var(--radius-pill); color: var(--sage-ink) !important; flex: 0 0 auto; font-size: 11px !important; font-weight: 700; padding: 6px 9px; white-space: nowrap; }
 .weather-unavailable { align-items: center; background: var(--paper-deep); border-radius: var(--radius-sm); color: var(--ink-soft); display: flex; gap: 15px; padding: 18px; position: relative; z-index: 1; }
 .weather-unavailable strong { color: var(--ink); }
 .weather-unavailable p { font-size: 13px; line-height: 1.6; margin: 4px 0 0; }
-.weather-evidence { border-top: 1px solid var(--line-soft); color: var(--ink-faint); display: flex; flex-wrap: wrap; font-size: 11.5px; gap: 8px 18px; padding-top: 12px; position: relative; z-index: 1; }
+.weather-evidence { border-top: 1px solid var(--line-soft); color: var(--ink-faint); display: flex; flex-wrap: wrap; font-size: 11.5px; gap: 8px 18px; margin-top: auto; padding-top: 12px; position: relative; z-index: 1; }
 .weather-evidence span { gap: 5px; }
 .weather-evidence p { flex-basis: 100%; line-height: 1.5; margin: 0; }
 .weather-evidence .weather-degraded { color: var(--gold-ink); font-weight: 650; }
 .weather-evidence .weather-disclaimer { color: var(--ink-faint); }
+.weather-inline-note { color: var(--ink-faint); font-size: 11px; line-height: 1.45; position: relative; z-index: 1; }
 .weather-sr-only { clip: rect(0 0 0 0); clip-path: inset(50%); height: 1px; overflow: hidden; position: absolute; white-space: nowrap; width: 1px; }
+
+@keyframes weather-thermometer-float {
+  0%, 100% { transform: translateY(1px) rotate(-4deg); }
+  50% { transform: translateY(-1px) rotate(4deg); }
+}
+
+@keyframes weather-wind-sweep {
+  0%, 100% { transform: translateX(-1px); }
+  50% { transform: translateX(2px); }
+}
+
+@keyframes weather-calm-breathe {
+  0%, 100% { opacity: 0.22; transform: scale(0.86); }
+  50% { opacity: 0.62; transform: scale(1.08); }
+}
 
 @media (max-width: 980px) {
   .weather-action-body { flex-wrap: wrap; }
@@ -3570,13 +3942,8 @@ button:focus-visible, a:focus-visible {
 }
 
 .seal:hover { transform: rotate(0deg) scale(1.06); }
+/* 四字按普通阅读顺序自然流入 2×2：家 的 / 温 度，不做传统竖排换列。 */
 .seal i { font-style: normal; }
-
-/* 印章按传统排法：右上→右下→左上→左下 */
-.seal i:nth-child(1) { grid-column: 2; grid-row: 1; }
-.seal i:nth-child(2) { grid-column: 2; grid-row: 2; }
-.seal i:nth-child(3) { grid-column: 1; grid-row: 1; }
-.seal i:nth-child(4) { grid-column: 1; grid-row: 2; }
 
 /* ---------- 空状态插画 ---------- */
 
@@ -4036,9 +4403,9 @@ button:focus-visible, a:focus-visible {
 .quick-card:hover { box-shadow: var(--shadow-lift); }
 .quick-card:hover .quick-arrow { transform: translateX(4px); }
 
-.quick-card.pine { background: linear-gradient(135deg, var(--pine-tint), var(--card)); }
-.quick-card.clay { background: linear-gradient(135deg, var(--clay-tint), var(--card)); }
-.quick-card.sky { background: linear-gradient(135deg, var(--sky-tint), var(--card)); }
+.quick-card.pine { background: linear-gradient(135deg, color-mix(in srgb, var(--pine-tint) 55%, var(--card)), color-mix(in srgb, var(--paper) 36%, var(--card))); }
+.quick-card.clay { background: linear-gradient(135deg, color-mix(in srgb, var(--clay-tint) 50%, var(--card)), color-mix(in srgb, var(--paper) 36%, var(--card))); }
+.quick-card.sky { background: linear-gradient(135deg, color-mix(in srgb, var(--sky-tint) 50%, var(--card)), color-mix(in srgb, var(--paper) 36%, var(--card))); }
 
 .quick-card .quick-icon {
   align-items: center;
@@ -4131,6 +4498,15 @@ button:focus-visible, a:focus-visible {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .weather-reading-visual .weather-sun,
+  .weather-reading-visual .weather-cloud,
+  .weather-reading-visual .weather-rain,
+  .weather-temperature-icon,
+  .weather-wind-icon,
+  .weather-calm-spark,
+  .bs-temperature-icon,
+  .bs-weather-wind-icon { animation: none; }
+
   .tilt-3d, .welcome-art { transform: none !important; }
   .skeleton, .route-progress, .brand:hover .brand-mark,
   .welcome-art img, .bs-value.alarm, .api-dot i { animation: none !important; }
@@ -4471,7 +4847,10 @@ button:focus-visible, a:focus-visible {
 }
 
 .legend-row i { border-radius: 50%; display: block; height: 9px; width: 9px; }
-.legend-row .legend-count { color: var(--ink-faint); margin-left: auto; padding-left: 12px; }
+/* 标签不折行、计数靠右：图例宽度按最长一行自适应，避免「已确认事件」被挤成三行。 */
+.legend-row > span:not(.legend-count) { white-space: nowrap; }
+.legend-row .legend-count { color: var(--ink-faint); margin-left: auto; padding-left: 12px; white-space: nowrap; }
+.legend-row--total { border-top: 1px dashed var(--line); margin-top: 2px; padding-top: 7px; }
 
 /* ---------- 光标追光（柔和的暖光跟随） ---------- */
 
@@ -5839,4 +6218,637 @@ button:focus-visible, a:focus-visible {
 }
 .member-help-text { color: var(--ink-soft); line-height: 1.65; margin: 0; }
 .member-help-emergency { border-left: 4px solid var(--rose); }
+
+/* ============================================================
+   展演模式 · 启动仪式 / 守护机器人 / 扫描雷达 / 玻璃卡片
+   视觉只做状态表达，不替代健康事实、规则或人工确认。
+   ============================================================ */
+
+/* ---------- 扫描雷达 ---------- */
+
+.scan-radar-overlay {
+  align-items: center;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--pine-tint) 73%, var(--card)), color-mix(in srgb, var(--card) 91%, var(--sky-tint)));
+  border: 1px solid color-mix(in srgb, var(--pine) 24%, var(--line));
+  border-radius: 18px;
+  box-shadow: 0 15px 34px rgba(64, 84, 74, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.62);
+  display: grid;
+  gap: 24px;
+  grid-template-columns: 188px 1fr;
+  margin: 0 0 16px;
+  min-height: 190px;
+  overflow: hidden;
+  padding: 16px 20px;
+  position: relative;
+}
+
+.scan-radar-overlay::after {
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--pine) 23%, transparent), transparent);
+  content: "";
+  height: 1px;
+  left: 20px;
+  position: absolute;
+  right: 20px;
+  top: 16px;
+}
+
+.scan-radar-visual { align-items: center; display: flex; flex-direction: column; gap: 8px; justify-content: center; }
+.scan-stage { aspect-ratio: 130 / 100; background: linear-gradient(160deg, var(--pine-tint), var(--card) 58%, var(--clay-tint)); border: 1px solid color-mix(in srgb, var(--pine) 26%, var(--line)); border-radius: 14px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55), 0 10px 22px rgba(64, 84, 74, 0.1); max-width: 168px; overflow: hidden; position: relative; width: 100%; }
+.scan-stage-art { color: var(--pine); height: 100%; left: 50%; opacity: 0.85; position: absolute; top: 50%; transform: translate(-50%, -50%); width: 88%; }
+.scan-stage-beam { animation: scan-stage-sweep 2.4s ease-in-out infinite; background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--clay) 34%, transparent) 45%, color-mix(in srgb, var(--clay) 52%, transparent) 50%, color-mix(in srgb, var(--clay) 34%, transparent) 55%, transparent); height: 34%; left: 0; opacity: 0; position: absolute; right: 0; top: -40%; }
+.scan-radar-overlay--queued .scan-stage-beam { animation: none; background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--gold) 30%, transparent), transparent); opacity: 0.5; top: 8%; }
+.scan-radar-overlay--error .scan-stage-beam { animation: none; background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--rose) 22%, transparent), transparent); opacity: 0.55; top: 8%; }
+.scan-stage-corner { border: 0 solid var(--clay); height: 15px; opacity: 0; position: absolute; transition: opacity 0.35s ease; width: 15px; }
+.scan-stage-corner--tl { border-left-width: 2px; border-top-width: 2px; border-top-left-radius: 6px; left: 7px; top: 7px; }
+.scan-stage-corner--tr { border-right-width: 2px; border-top-width: 2px; border-top-right-radius: 6px; right: 7px; top: 7px; }
+.scan-stage-corner--bl { border-bottom-width: 2px; border-left-width: 2px; border-bottom-left-radius: 6px; bottom: 7px; left: 7px; }
+.scan-stage-corner--br { border-bottom-width: 2px; border-right-width: 2px; border-bottom-right-radius: 6px; bottom: 7px; right: 7px; }
+.scan-radar-overlay--review .scan-stage-corner { animation: scan-corner-in 0.5s ease-out both; opacity: 1; }
+.scan-radar-overlay--review .scan-stage-beam { animation: none; opacity: 0; }
+.scan-radar-overlay--review .scan-stage { border-color: color-mix(in srgb, var(--gold) 45%, var(--line)); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55), 0 0 0 3px color-mix(in srgb, var(--gold) 14%, transparent), 0 10px 22px rgba(64, 84, 74, 0.1); }
+.scan-radar-overlay--error .scan-stage { border-color: color-mix(in srgb, var(--rose) 40%, var(--line)); }
+.scan-radar-overlay--error .scan-stage-art { animation: scan-stage-flicker 1.6s ease-in-out infinite; color: color-mix(in srgb, var(--rose) 55%, var(--pine)); }
+.scan-stage-caption { color: var(--ink-faint); font-size: 10.5px; letter-spacing: 0.04em; margin: 0; }
+
+@keyframes scan-stage-sweep {
+  0% { opacity: 0; top: -40%; }
+  12% { opacity: 0.85; }
+  88% { opacity: 0.85; }
+  100% { opacity: 0; top: 106%; }
+}
+
+@keyframes scan-corner-in {
+  from { opacity: 0; transform: scale(1.5); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes scan-stage-flicker {
+  0%, 100% { opacity: 0.85; }
+  50% { opacity: 0.5; }
+}
+
+.scan-radar-copy { min-width: 0; }
+.scan-radar-heading { align-items: flex-start; display: flex; gap: 12px; justify-content: space-between; }
+.scan-radar-heading .eyebrow { margin-bottom: 4px; }
+.scan-radar-heading h3 { color: var(--ink); font-family: var(--font-display); font-size: 19px; line-height: 1.25; margin: 0; }
+.scan-radar-status { align-items: center; background: color-mix(in srgb, var(--pine) 11%, transparent); border: 1px solid color-mix(in srgb, var(--pine) 24%, var(--line)); border-radius: 999px; color: var(--pine-deep); display: inline-flex; flex: 0 0 auto; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 10px; gap: 5px; letter-spacing: 0.05em; padding: 5px 8px; }
+.scan-radar-copy > p { color: var(--ink-soft); font-size: 12.5px; line-height: 1.6; margin: 8px 0 12px; }
+.scan-radar-steps { display: flex; flex-wrap: wrap; gap: 7px; list-style: none; margin: 0; padding: 0; }
+.scan-radar-steps li { align-items: center; color: var(--ink-faint); display: inline-flex; font-size: 11px; gap: 5px; }
+.scan-radar-steps li span { align-items: center; border: 1px solid var(--line); border-radius: 50%; display: inline-flex; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 9px; height: 17px; justify-content: center; width: 17px; }
+.scan-radar-steps li.done { color: var(--pine-deep); }
+.scan-radar-steps li.done span { background: var(--pine-tint); border-color: color-mix(in srgb, var(--pine) 28%, var(--line)); }
+.scan-radar-steps li.active { color: var(--clay-deep); font-weight: 700; }
+.scan-radar-steps li.active span { background: var(--clay-tint); border-color: color-mix(in srgb, var(--clay) 35%, var(--line)); }
+.scan-radar-overlay--review { border-color: color-mix(in srgb, var(--gold) 32%, var(--line)); }
+.scan-radar-overlay--error { border-color: color-mix(in srgb, var(--rose) 32%, var(--line)); }
+
+/* ---------- 家庭空间投影（温暖 SVG 沙盘） ---------- */
+
+.home-diorama {
+  background: var(--card-texture, none), var(--card);
+  border: 1px solid color-mix(in srgb, var(--pine) 22%, var(--line));
+  border-radius: 19px;
+  box-shadow: var(--shadow-soft);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  padding: 16px 17px 13px;
+  position: relative;
+}
+
+.diorama-heading,
+.diorama-heading > div { align-items: flex-start; display: flex; gap: 12px; justify-content: space-between; }
+.diorama-heading > div { gap: 3px; }
+.diorama-heading h3 { color: var(--ink); font-family: var(--font-display); font-size: 17px; letter-spacing: 0.5px; margin: 2px 0 0; }
+.diorama-eyebrow { color: var(--pine-deep); font-size: 11px; font-weight: 750; letter-spacing: 0.06em; }
+.diorama-live { align-items: center; color: var(--pine-deep); display: inline-flex; font-size: 10.5px; font-weight: 650; gap: 5px; }
+.diorama-live i { background: var(--pine); border-radius: 50%; box-shadow: 0 0 0 3px color-mix(in srgb, var(--pine) 13%, transparent); height: 6px; width: 6px; animation: di-live-breathe 2.8s ease-in-out infinite; }
+
+@keyframes di-live-breathe {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
+.diorama-viewport {
+  background:
+    radial-gradient(circle at 50% 86%, color-mix(in srgb, var(--gold-tint) 55%, transparent), transparent 62%),
+    linear-gradient(165deg, color-mix(in srgb, var(--pine-tint) 46%, transparent), transparent 58%),
+    color-mix(in srgb, var(--paper-deep) 55%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--pine) 16%, var(--line));
+  border-radius: 15px;
+  flex: 1;
+  margin-top: 12px;
+  min-height: 300px;
+  overflow: hidden;
+  padding: 12px 10px 52px;
+  perspective: 900px;
+  position: relative;
+}
+
+.diorama-scene {
+  --diorama-tilt-x: 0deg;
+  --diorama-tilt-y: 0deg;
+  --diorama-zoom: 1;
+  height: 100%;
+  position: relative;
+  transform: rotateX(var(--diorama-tilt-x)) rotateY(var(--diorama-tilt-y)) scale(var(--diorama-zoom));
+  transition: transform 0.3s ease-out;
+  transform-style: preserve-3d;
+  width: 100%;
+}
+
+.diorama-house-art { display: block; height: auto; left: 50%; max-width: 340px; position: absolute; top: 46%; transform: translate(-50%, -50%); width: 78%; }
+
+/* 暖色小屋 SVG 配色 */
+.di-ground { fill: color-mix(in srgb, var(--sage, #7d927e) 26%, transparent); }
+.di-wall-front { fill: var(--card); stroke: var(--pine); stroke-width: 1.8; }
+.di-wall-side { fill: color-mix(in srgb, var(--pine) 9%, var(--card)); stroke: var(--pine); stroke-width: 1.5; }
+.di-roof-front { fill: color-mix(in srgb, var(--clay) 40%, #fff); stroke: var(--clay-deep); stroke-width: 1.8; stroke-linejoin: round; }
+.di-roof-side { fill: color-mix(in srgb, var(--clay) 66%, var(--clay-deep)); stroke: var(--clay-deep); stroke-width: 1.5; stroke-linejoin: round; }
+.di-chimney { fill: color-mix(in srgb, var(--clay) 26%, var(--card)); stroke: var(--clay-deep); stroke-width: 1.4; }
+.di-door { fill: var(--pine); stroke: var(--pine-deep); stroke-width: 1.4; }
+.di-door-knob { fill: var(--gold); }
+.di-window rect { fill: #f6dfa8; stroke: var(--pine-deep); stroke-width: 1.5; }
+.di-window .di-window-bar { stroke: var(--pine-deep); stroke-width: 1.4; }
+.di-window { animation: di-window-glow 3.6s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+.di-window--side { animation-delay: 1.2s; }
+
+@keyframes di-window-glow {
+  0%, 100% { filter: drop-shadow(0 0 1px transparent); opacity: 0.92; }
+  50% { filter: drop-shadow(0 0 5px color-mix(in srgb, var(--gold) 55%, transparent)); opacity: 1; }
+}
+
+.di-bush circle { fill: var(--pine); opacity: 0.82; }
+.di-bush { transform-box: fill-box; transform-origin: bottom center; animation: di-sway 5.2s ease-in-out infinite; }
+.di-bush--right { animation-delay: 1.6s; }
+
+@keyframes di-sway {
+  0%, 100% { transform: rotate(0deg); }
+  50% { transform: rotate(1.6deg); }
+}
+
+.di-path { fill: color-mix(in srgb, var(--gold) 16%, var(--card)); }
+
+/* 烟囱炊烟：三枚小圆缓缓升起并消散。 */
+.di-smoke { color: color-mix(in srgb, var(--ink-faint) 55%, transparent); }
+.di-smoke circle { animation: di-smoke-rise 3.8s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+.di-smoke circle:nth-child(2) { animation-delay: 1.2s; }
+.di-smoke circle:nth-child(3) { animation-delay: 2.4s; }
+
+@keyframes di-smoke-rise {
+  0% { opacity: 0; transform: translateY(4px) scale(0.7); }
+  35% { opacity: 0.85; }
+  100% { opacity: 0; transform: translateY(-14px) scale(1.35); }
+}
+
+/* 视口萤火：暖金光点缓慢游移。 */
+.diorama-fireflies { height: 100%; inset: 0; pointer-events: none; position: absolute; width: 100%; }
+.diorama-fireflies i {
+  background: radial-gradient(circle, color-mix(in srgb, var(--gold) 80%, white) 0%, transparent 68%);
+  border-radius: 50%;
+  height: 7px;
+  position: absolute;
+  width: 7px;
+  animation: di-firefly-drift 9s ease-in-out infinite;
+  opacity: 0.55;
+}
+.diorama-fireflies i:nth-child(1) { left: 14%; top: 24%; }
+.diorama-fireflies i:nth-child(2) { right: 18%; top: 16%; animation-delay: -2.6s; animation-duration: 11s; }
+.diorama-fireflies i:nth-child(3) { left: 24%; bottom: 30%; animation-delay: -5.2s; animation-duration: 12s; }
+.diorama-fireflies i:nth-child(4) { right: 26%; bottom: 22%; animation-delay: -7.4s; }
+
+@keyframes di-firefly-drift {
+  0%, 100% { transform: translate(0, 0); opacity: 0.25; }
+  30% { opacity: 0.8; }
+  50% { transform: translate(14px, -12px); opacity: 0.9; }
+  80% { opacity: 0.4; }
+}
+
+/* 聚合热区按钮 */
+.diorama-room {
+  align-items: center;
+  background: color-mix(in srgb, var(--card) 86%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pine) 24%, var(--line));
+  border-radius: 12px;
+  box-shadow: 0 6px 14px rgba(64, 84, 74, 0.1);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  height: 62px;
+  justify-content: center;
+  padding: 6px 8px;
+  position: absolute;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+  width: 104px;
+  z-index: 3;
+}
+
+.diorama-room:hover,
+.diorama-room:focus-visible,
+.diorama-room.active { border-color: var(--pine); box-shadow: 0 11px 20px rgba(64, 84, 74, 0.17), 0 0 0 4px color-mix(in srgb, var(--pine) 10%, transparent); transform: translateY(-4px); }
+.diorama-room:focus-visible { outline: 3px solid color-mix(in srgb, var(--pine) 44%, transparent); outline-offset: 2px; }
+.diorama-room--family { left: 6%; top: 10%; }
+.diorama-room--tasks { right: 6%; top: 10%; }
+.diorama-room--evidence { bottom: 16%; left: 6%; }
+.diorama-room--beacon { bottom: 16%; right: 6%; }
+.diorama-room--mint svg { color: var(--pine); }
+.diorama-room--warm svg { color: var(--gold); }
+.diorama-room--clay svg { color: var(--clay); }
+.diorama-room--rose svg { color: var(--rose); }
+.diorama-room strong { color: var(--ink); font-family: var(--font-display); font-size: 21px; line-height: 1; }
+.diorama-room small { color: var(--ink-faint); font-size: 10px; }
+.diorama-room-glow { background: currentColor; border-radius: 50%; filter: blur(10px); height: 18px; opacity: 0.14; position: absolute; right: 8px; top: 8px; width: 18px; }
+
+.diorama-callout {
+  align-items: center;
+  background: color-mix(in srgb, var(--card) 88%, transparent);
+  border: 1px solid var(--line-soft);
+  border-radius: 11px;
+  bottom: 13px;
+  display: grid;
+  gap: 2px 8px;
+  grid-template-columns: auto auto 1fr;
+  left: 18px;
+  padding: 7px 10px;
+  position: absolute;
+  right: 18px;
+  z-index: 4;
+}
+
+.diorama-callout span { color: var(--pine-deep); font-size: 11px; font-weight: 700; }
+.diorama-callout strong { color: var(--ink); font-family: var(--font-display); font-size: 20px; line-height: 1; }
+.diorama-callout small { color: var(--ink-faint); font-size: 10.5px; }
+.diorama-note { align-items: center; color: var(--ink-faint); display: flex; font-size: 10.5px; gap: 5px; margin: 9px 0 0; }
+
+.diorama-explorer-tools { align-items: center; color: var(--ink-faint); display: flex; font-size: 10.5px; gap: 6px; justify-content: flex-end; margin-top: 9px; }
+.diorama-explorer-tools span { margin-right: auto; opacity: 0.82; }
+.diorama-explorer-tools button { align-items: center; background: color-mix(in srgb, var(--pine-tint) 54%, var(--card)); border: 1px solid var(--line-soft); border-radius: 6px; color: var(--pine-deep); cursor: pointer; display: inline-flex; font: inherit; height: 22px; justify-content: center; min-width: 22px; padding: 0 5px; }
+.diorama-explorer-tools button:hover { background: var(--pine-tint); border-color: color-mix(in srgb, var(--pine) 36%, var(--line)); }
+.diorama-explorer-tools button:focus-visible { outline: 2px solid color-mix(in srgb, var(--pine) 44%, transparent); outline-offset: 2px; }
+.diorama-explorer-tools output { min-width: 31px; text-align: center; }
+
+@media (max-width: 720px) {
+  .diorama-room { height: 56px; width: 88px; }
+  .diorama-room strong { font-size: 18px; }
+  .diorama-room--family, .diorama-room--evidence { left: 4%; }
+  .diorama-room--tasks, .diorama-room--beacon { right: 4%; }
+  .diorama-callout { grid-template-columns: auto auto; }
+  .diorama-callout small { grid-column: 1 / -1; }
+  .diorama-explorer-tools span { font-size: 9.5px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .diorama-scene { transform: scale(var(--diorama-zoom)); }
+  .di-window, .di-bush, .di-smoke circle, .diorama-fireflies i, .diorama-live i { animation: none; }
+  .diorama-fireflies i { opacity: 0.35; }
+}
+
+/* ---------- 展演模式：时间回溯 ---------- */
+
+.temporal-replay { background: linear-gradient(135deg, color-mix(in srgb, var(--card) 92%, transparent), color-mix(in srgb, var(--sky-tint) 31%, var(--card))); border: 1px solid color-mix(in srgb, var(--pine) 24%, var(--line)); border-radius: 18px; box-shadow: 0 14px 30px rgba(64, 84, 74, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.6); overflow: hidden; padding: 15px 17px 13px; }
+.temporal-eyebrow { color: var(--clay-deep); }
+.temporal-actions { display: inline-flex; gap: 6px; }
+.temporal-play { align-items: center; background: color-mix(in srgb, var(--pine-tint) 70%, var(--card)); border: 1px solid color-mix(in srgb, var(--pine) 28%, var(--line)); border-radius: 999px; color: var(--pine-deep); cursor: pointer; display: inline-flex; font-size: 11px; gap: 5px; padding: 6px 10px; }
+.temporal-play:hover { background: var(--pine-tint); }
+.temporal-play.active { background: var(--pine); border-color: var(--pine); color: #fff; box-shadow: 0 0 0 4px color-mix(in srgb, var(--pine) 11%, transparent); }
+.temporal-play--reverse { color: var(--clay-deep); }
+.temporal-play--reverse.active { background: var(--clay); border-color: var(--clay); }
+.temporal-stage { align-items: center; display: flex; height: 132px; justify-content: center; margin: 2px 0 0; overflow: hidden; position: relative; }
+.temporal-readout { align-items: center; display: flex; flex-direction: column; position: relative; z-index: 2; }
+.temporal-readout span { color: var(--ink-faint); font-size: 11px; }
+.temporal-readout strong { color: var(--pine-deep); font-family: var(--font-display); font-size: 42px; line-height: 0.95; text-shadow: 0 0 20px color-mix(in srgb, var(--pine) 22%, transparent); }
+.temporal-readout small { color: var(--ink-soft); font-size: 10px; margin-top: 5px; }
+.temporal-bars { align-items: flex-end; bottom: 11px; display: flex; gap: 5px; height: 48px; left: 14px; opacity: 0.62; position: absolute; right: 14px; }
+.temporal-stage::after { background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--pine) 42%, transparent), transparent); bottom: 10px; content: ""; height: 1px; left: 10px; position: absolute; right: 10px; }
+.temporal-bars i { background: color-mix(in srgb, var(--ink-faint) 34%, transparent); border-radius: 999px 999px 2px 2px; display: block; flex: 1; min-width: 5px; transition: background 0.22s ease, height 0.22s ease; }
+.temporal-bars i.passed { background: color-mix(in srgb, var(--pine) 44%, transparent); }
+.temporal-bars i.active { background: var(--clay); box-shadow: 0 0 12px color-mix(in srgb, var(--clay) 58%, transparent); }
+.temporal-controls input { accent-color: var(--pine); background: linear-gradient(90deg, var(--pine) var(--replay-progress), color-mix(in srgb, var(--line) 70%, transparent) var(--replay-progress)); border-radius: 999px; display: block; height: 4px; width: 100%; }
+.temporal-labels { color: var(--ink-faint); display: flex; font-size: 10px; justify-content: space-between; margin-top: 6px; }
+.temporal-replay > p { color: var(--ink-faint); font-size: 10.5px; margin: 8px 0 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .diorama-scene,
+  .diorama-room,
+  .temporal-bars i { transition: none; }
+  .diorama-scene { transform: scale(var(--diorama-zoom)); }
+  .vital-pulse--alert .vital-twin-stage { animation: none; }
+}
+
+/* ---------- 数字孪生投影带：大屏底部的浅色收尾区 ----------
+   与整屏同一套暖纸令牌，仅以描边与淡彩与数据区区分，不做深色突兀块。 */
+
+.bs-projection-deck {
+  background:
+    radial-gradient(640px 280px at 16% 0%, color-mix(in srgb, var(--pine) 8%, transparent), transparent 62%),
+    radial-gradient(520px 260px at 90% 100%, color-mix(in srgb, var(--clay) 7%, transparent), transparent 58%),
+    linear-gradient(168deg, color-mix(in srgb, var(--paper-deep) 55%, var(--card)), var(--card));
+  border: 1px solid color-mix(in srgb, var(--pine) 20%, var(--line));
+  border-radius: 20px;
+  box-shadow: var(--shadow-soft);
+  display: grid;
+  gap: 12px;
+  overflow: hidden;
+  padding: 16px 18px 15px;
+  position: relative;
+}
+
+.deck-head {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  justify-content: space-between;
+}
+
+.deck-title {
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  margin: 0;
+}
+
+.deck-note { color: var(--ink-faint); font-size: 11px; }
+
+.deck-grid-main {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1.3fr) minmax(300px, 1fr);
+}
+
+@media (max-width: 1050px) {
+  .deck-grid-main { grid-template-columns: 1fr; }
+}
+
+/* ---------- 展演模式：数字孪生心跳仪表盘 ---------- */
+
+.vital-pulse {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--card) 93%, transparent), color-mix(in srgb, var(--sky-tint) 32%, var(--card)));
+  border: 1px solid color-mix(in srgb, var(--pine) 25%, var(--line));
+  border-radius: 19px;
+  box-shadow: 0 18px 40px rgba(64, 84, 74, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.62);
+  min-width: 0;
+  overflow: hidden;
+  padding: 16px 17px 12px;
+  position: relative;
+}
+
+.vital-pulse::after { border: 1px solid transparent; border-radius: inherit; content: ""; inset: -1px; pointer-events: none; position: absolute; }
+.vital-pulse--alert::after { animation: vital-alert-frame 1.2s ease-in-out infinite; border-color: color-mix(in srgb, var(--rose) 70%, transparent); }
+.vital-pulse--alert .vital-signal { color: var(--rose); }
+.vital-pulse--alert .vital-signal i { background: var(--rose); box-shadow: 0 0 0 4px color-mix(in srgb, var(--rose) 14%, transparent); }
+.vital-signal.pending { color: var(--gold); }
+.vital-signal.pending i { background: var(--gold); }
+
+@keyframes vital-alert-frame {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--rose) 0%, transparent); opacity: 0.55; }
+  50% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--rose) 14%, transparent); opacity: 1; }
+}
+
+/* 数字孪生轨道核心舞台：Canvas 随主题取浅色纸调，DOM 只叠加可读数字。 */
+.vital-twin-stage {
+  border: 1px solid color-mix(in srgb, var(--pine) 14%, var(--line-soft));
+  border-radius: 14px;
+  height: 264px;
+  margin-top: 12px;
+  overflow: hidden;
+  position: relative;
+}
+
+.vital-twin-canvas { display: block; height: 100%; width: 100%; }
+
+.vital-twin-core {
+  /* 数字压在 Canvas 核心球上，加一层柔和纸色晕托底，深浅主题都读得清。 */
+  background: radial-gradient(circle, color-mix(in srgb, var(--card) 94%, transparent) 58%, transparent 78%);
+  border-radius: 50%;
+  color: var(--ink-soft);
+  left: 50%;
+  padding: 14px 16px;
+  position: absolute;
+  text-align: center;
+  top: 46%;
+  transform: translate(-50%, -50%);
+}
+
+.vital-twin-core strong { color: var(--pine-deep); display: block; font: 700 27px var(--font-display); line-height: 1; }
+.vital-twin-core strong small { font: 600 12px var(--font-body); margin-left: 1px; }
+.vital-twin-core span { display: block; font-size: 9.5px; letter-spacing: 0.06em; margin-top: 4px; }
+
+.vital-twin-chip {
+  background: color-mix(in srgb, var(--card) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pine) 22%, var(--line));
+  border-radius: 9px;
+  color: var(--ink-soft);
+  display: flex;
+  gap: 5px;
+  left: 14px;
+  padding: 5px 9px;
+  position: absolute;
+  top: 12px;
+  align-items: baseline;
+}
+
+.vital-twin-chip strong { color: var(--pine-deep); font: 700 15px var(--font-display); }
+.vital-twin-chip span { font-size: 9.5px; }
+
+.vital-pulse--alert .vital-twin-stage { animation: pulse-panel-shake 1.8s ease-in-out infinite; }
+
+@keyframes pulse-panel-shake {
+  0%, 100% { transform: translateX(0); }
+  2%, 6% { transform: translateX(-1px); }
+  4%, 8% { transform: translateX(1px); }
+}
+
+.vital-alert-stack { display: grid; gap: 5px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 11px; }
+.vital-alert-stack span { align-items: center; background: color-mix(in srgb, var(--paper-deep) 63%, transparent); border-radius: 8px; color: var(--ink-faint); display: inline-flex; font-size: 10px; gap: 5px; padding: 6px 7px; }
+.vital-alert-stack span i { background: var(--line); border-radius: 50%; height: 5px; width: 5px; }
+.vital-alert-stack span.active { color: var(--gold); }
+.vital-alert-stack span.active i { background: var(--gold); box-shadow: 0 0 0 3px color-mix(in srgb, var(--gold) 14%, transparent); }
+.vital-alert-stack span.danger { color: var(--rose); }
+.vital-alert-stack span.danger i { background: var(--rose); }
+.vital-note { color: var(--ink-faint); font-size: 10px; margin: 10px 0 0; }
+
+/* ---------- 展演模式：矩阵雨、呼吸灯与扫描全息 ---------- */
+
+.app-frame.ambient-steady::after,
+.app-frame.ambient-attention::after,
+.app-frame.ambient-loading::after { border: 1px solid transparent; border-radius: 19px; content: ""; inset: 7px; pointer-events: none; position: fixed; z-index: 6; }
+.app-frame.ambient-steady::after { animation: ambient-breathe 4.6s ease-in-out infinite; border-color: color-mix(in srgb, var(--pine) 25%, transparent); }
+.app-frame.ambient-attention::after { animation: ambient-breathe 1.9s ease-in-out infinite; border-color: color-mix(in srgb, var(--gold) 43%, transparent); }
+.app-frame.ambient-loading::after { animation: ambient-breathe 1.25s ease-in-out infinite; border-color: color-mix(in srgb, var(--sky) 48%, transparent); }
+@keyframes ambient-breathe {
+  0%, 100% { box-shadow: 0 0 0 0 transparent; opacity: 0.42; }
+  50% { box-shadow: 0 0 0 5px color-mix(in srgb, currentColor 8%, transparent), inset 0 0 20px color-mix(in srgb, currentColor 5%, transparent); opacity: 0.92; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-frame.ambient-steady::after,
+  .app-frame.ambient-attention::after,
+  .app-frame.ambient-loading::after { animation: none; }
+}
+
+/* ============================================================
+   暖阳纸笺 · 普通页面的自然照护点缀
+   只对默认暖色主题生效，且刻意避开普通家庭大屏，保持其原样。
+   ============================================================ */
+
+.care-atlas-backdrop {
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  position: fixed;
+  z-index: 0;
+}
+
+.care-atlas-backdrop::after {
+  background: linear-gradient(90deg, transparent 55%, rgba(255, 251, 243, 0.2));
+  content: "";
+  inset: 0;
+  position: absolute;
+}
+
+.care-atlas-backdrop-art {
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.1;
+  position: absolute;
+  right: -14%;
+  top: 0;
+  width: min(980px, 74vw);
+  mix-blend-mode: multiply;
+}
+
+.care-atlas-backdrop-frame {
+  bottom: -120px;
+  height: min(920px, 92vh);
+  object-fit: contain;
+  opacity: 0.07;
+  position: absolute;
+  right: -180px;
+  width: 620px;
+  mix-blend-mode: multiply;
+}
+
+:root:not([data-theme]) .app-frame:not(.showcase-mode) .view-container:not(.view-bigscreen) .page-hero {
+  isolation: isolate;
+  position: relative;
+}
+
+:root:not([data-theme]) .app-frame:not(.showcase-mode) .view-container:not(.view-bigscreen) .page-hero::after {
+  background: url('/showcase/health-matrix-rain.png') right 22% / 430px auto no-repeat;
+  content: "";
+  inset: -40px -38px -34px auto;
+  opacity: 0.1;
+  pointer-events: none;
+  position: absolute;
+  width: 470px;
+  z-index: 0;
+}
+
+:root:not([data-theme]) .app-frame:not(.showcase-mode) .view-container:not(.view-bigscreen) .page-hero > * {
+  position: relative;
+  z-index: 1;
+}
+
+:root:not([data-theme]) .app-frame:not(.showcase-mode) .view-container:not(.view-bigscreen) :is(
+  .card,
+  .row-card,
+  .graph-stage,
+  .weather-action-panel,
+  .agent-workflow-panel,
+  .agent-detail-panel,
+  .capture-example-panel,
+  .face-capture-intro,
+  .auth-success-panel,
+  .home-dashboard-card,
+  .review-candidate-row,
+  .member-status-row
+) {
+  /* HCT-534/536 纸感配方：暖米色半透底 + 透明花纹（默认叶子，可由 --card-pattern 按卡片覆盖）+ 极淡暖色对角晕染。 */
+  background-color: rgba(250, 246, 235, 0.84);
+  background-image:
+    linear-gradient(
+      150deg,
+      color-mix(in srgb, var(--pine) 7%, transparent) 0%,
+      transparent 34%,
+      transparent 62%,
+      color-mix(in srgb, var(--clay) 7%, transparent) 100%
+    ),
+    var(--card-pattern, url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='148' height='148' viewBox='0 0 148 148'%3E%3Cg fill='none' stroke='%238a7f68' stroke-opacity='.15' stroke-width='1.1' stroke-linecap='round'%3E%3Cpath d='M18 30c8-9 20-12 30-8-4 10-16 14-30 8z'/%3E%3Cpath d='M33 26c2-5 6-8 11-9'/%3E%3Cpath d='M118 122c10 2 16 9 16 18-10-1-17-8-16-18z'/%3E%3Cpath d='M126 126c1-5 4-9 8-11'/%3E%3C/g%3E%3Cg fill='%23a97e5f' fill-opacity='.14'%3E%3Ccircle cx='112' cy='34' r='1.6'/%3E%3Ccircle cx='120' cy='30' r='1.3'/%3E%3Ccircle cx='126' cy='36' r='1.1'/%3E%3Ccircle cx='30' cy='112' r='1.6'/%3E%3Ccircle cx='24' cy='118' r='1.2'/%3E%3C/g%3E%3Cg fill='%238a7f68' fill-opacity='.10'%3E%3Ccircle cx='74' cy='70' r='1'/%3E%3Ccircle cx='104' cy='66' r='1'/%3E%3Ccircle cx='60' cy='96' r='1'/%3E%3Ccircle cx='94' cy='104' r='1'/%3E%3C/g%3E%3C/svg%3E")),
+    linear-gradient(rgba(250, 246, 235, 0.72), rgba(250, 246, 235, 0.72));
+  background-position: center, center, center;
+  background-size: auto, 148px 148px, auto;
+  box-shadow: 0 10px 26px rgba(101, 87, 62, 0.07), inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+/* 首页区块卡：每张卡用 --overview-accent 着色、--card-pattern 换专属透明花纹
+   （在 OverviewView 中按卡片语义定义），色彩与纹理双重区分。 */
+:root:not([data-theme]) .app-frame:not(.showcase-mode) .view-container:not(.view-bigscreen) .home-dashboard-card {
+  background-image:
+    linear-gradient(
+      150deg,
+      color-mix(in srgb, var(--overview-accent, var(--pine)) 15%, transparent) 0%,
+      transparent 44%,
+      color-mix(in srgb, var(--overview-accent, var(--pine)) 10%, transparent) 100%
+    ),
+    var(--card-pattern, none),
+    linear-gradient(rgba(250, 246, 235, 0.72), rgba(250, 246, 235, 0.72));
+  background-position: center, center, center;
+  background-size: auto, 132px 132px, auto;
+}
+
+:root:not([data-theme]) .app-frame:not(.showcase-mode) .view-container:not(.view-bigscreen) .side-rail {
+  background: rgba(255, 252, 245, 0.34);
+  border-radius: 18px;
+  padding-bottom: 18px;
+  padding-top: 18px;
+}
+
+:root:not([data-theme]) .app-frame:not(.showcase-mode) .view-container:not(.view-bigscreen) .graph-stage {
+  background-image:
+    linear-gradient(rgba(250, 246, 237, 0.72), rgba(250, 246, 237, 0.72)),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='148' height='148' viewBox='0 0 148 148'%3E%3Cg fill='none' stroke='%238a7f68' stroke-opacity='.15' stroke-width='1.1' stroke-linecap='round'%3E%3Cpath d='M18 30c8-9 20-12 30-8-4 10-16 14-30 8z'/%3E%3Cpath d='M33 26c2-5 6-8 11-9'/%3E%3Cpath d='M118 122c10 2 16 9 16 18-10-1-17-8-16-18z'/%3E%3Cpath d='M126 126c1-5 4-9 8-11'/%3E%3C/g%3E%3Cg fill='%23a97e5f' fill-opacity='.14'%3E%3Ccircle cx='112' cy='34' r='1.6'/%3E%3Ccircle cx='120' cy='30' r='1.3'/%3E%3Ccircle cx='126' cy='36' r='1.1'/%3E%3Ccircle cx='30' cy='112' r='1.6'/%3E%3Ccircle cx='24' cy='118' r='1.2'/%3E%3C/g%3E%3Cg fill='%238a7f68' fill-opacity='.10'%3E%3Ccircle cx='74' cy='70' r='1'/%3E%3Ccircle cx='104' cy='66' r='1'/%3E%3Ccircle cx='60' cy='96' r='1'/%3E%3Ccircle cx='94' cy='104' r='1'/%3E%3C/g%3E%3C/svg%3E");
+  background-size: auto, 148px 148px;
+}
+
+:root:not([data-theme]) .app-frame:not(.showcase-mode) .view-container:not(.view-bigscreen) .assistant-empty-art {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  height: 118px;
+  margin-bottom: 0;
+  overflow: visible;
+  width: 118px;
+}
+
+:root:not([data-theme]) .app-frame:not(.showcase-mode) .view-container:not(.view-bigscreen) .assistant-empty-art img,
+:root:not([data-theme]) .app-frame:not(.showcase-mode) .view-container:not(.view-bigscreen) .assistant-empty-orb {
+  display: block;
+  height: 116px;
+  object-fit: contain;
+  width: 116px;
+  filter: drop-shadow(0 12px 15px rgba(115, 86, 51, 0.16));
+}
+
+:root:not([data-theme]) .app-frame:not(.showcase-mode) .view-container:not(.view-bigscreen) .assistant-main {
+  background-image: linear-gradient(rgba(250, 246, 235, 0.66), rgba(250, 246, 235, 0.66)), url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='148' height='148' viewBox='0 0 148 148'%3E%3Cg fill='none' stroke='%238a7f68' stroke-opacity='.15' stroke-width='1.1' stroke-linecap='round'%3E%3Cpath d='M18 30c8-9 20-12 30-8-4 10-16 14-30 8z'/%3E%3Cpath d='M33 26c2-5 6-8 11-9'/%3E%3Cpath d='M118 122c10 2 16 9 16 18-10-1-17-8-16-18z'/%3E%3Cpath d='M126 126c1-5 4-9 8-11'/%3E%3C/g%3E%3Cg fill='%23a97e5f' fill-opacity='.14'%3E%3Ccircle cx='112' cy='34' r='1.6'/%3E%3Ccircle cx='120' cy='30' r='1.3'/%3E%3Ccircle cx='126' cy='36' r='1.1'/%3E%3Ccircle cx='30' cy='112' r='1.6'/%3E%3Ccircle cx='24' cy='118' r='1.2'/%3E%3C/g%3E%3Cg fill='%238a7f68' fill-opacity='.10'%3E%3Ccircle cx='74' cy='70' r='1'/%3E%3Ccircle cx='104' cy='66' r='1'/%3E%3Ccircle cx='60' cy='96' r='1'/%3E%3Ccircle cx='94' cy='104' r='1'/%3E%3C/g%3E%3C/svg%3E");
+  background-position: center, center;
+  background-size: auto, 148px 148px;
+  background-blend-mode: normal, normal;
+}
+
+@media (max-width: 720px) {
+  .care-atlas-backdrop-art { opacity: 0.06; right: -32%; width: 118vw; }
+  .care-atlas-backdrop-frame { opacity: 0.045; right: -250px; }
+  :root:not([data-theme]) .app-frame:not(.showcase-mode) .view-container:not(.view-bigscreen) .page-hero::after {
+    opacity: 0.06;
+    right: -120px;
+  }
+}
 

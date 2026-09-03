@@ -29,7 +29,7 @@ async function expectUnboundMemberGate(page: Page): Promise<void> {
   await expect(page.getByTestId('formal-login-method')).toHaveCount(0)
   await expect(page.getByTestId('member-unbound-gate')).toBeVisible()
   await expect(page.getByRole('heading', { name: '请先到管理后台' })).toBeVisible()
-  await expect(page.getByText('成员前台只在管理后台保持登录时开放')).toBeVisible()
+  await expect(page.getByText('这台电脑还没有绑定家庭')).toBeVisible()
   const cta = page.getByRole('link', { name: '去管理后台登录' })
   await expect(cta).toBeVisible()
   await expect(cta).toHaveAttribute('href', 'http://127.0.0.1:5174/?portal=admin')
@@ -48,7 +48,7 @@ test('成员欢迎页未绑定家庭时提示去管理后台登录，不进入�
   await expectUnboundMemberGate(page)
 })
 
-test('历史本机家庭绑定在后台未登录时不开放刷脸', async ({ page }) => {
+test('历史本机家庭绑定即可开放刷脸，无需后台再次在线', async ({ page }) => {
   await installWelcomeApi(page, ['api', 'face-recognition-local'])
   await page.addInitScript(
     ([key, value]) => {
@@ -58,10 +58,11 @@ test('历史本机家庭绑定在后台未登录时不开放刷脸', async ({ pa
     ['hct:face-family-household', JSON.stringify(boundHousehold)],
   )
   await page.goto('/?portal=member')
-  await expectUnboundMemberGate(page)
+  await expect(page.getByRole('group', { name: '选择账号登录凭据' })).toBeVisible()
+  await expect(page.getByTestId('member-unbound-gate')).toHaveCount(0)
 })
 
-test('后台保持登录后本机家庭绑定才开放刷脸入口', async ({ page }) => {
+test('本机已绑定家庭后开放刷脸入口（管理员就绪快照仍兼容）', async ({ page }) => {
   await page.route('**/api/v1/**', async route => {
     const request = route.request()
     const path = new URL(request.url()).pathname
@@ -103,7 +104,7 @@ test('后台保持登录后本机家庭绑定才开放刷脸入口', async ({ pa
   await expect(page.locator('.face-capture')).toBeVisible()
 })
 
-test('成员欢迎页本机已绑定但本次 API 进程后台未就绪时仍提示去管理后台', async ({ page }) => {
+test('成员欢迎页本机已绑定即开放刷脸，不依赖本次 API 进程是否就绪', async ({ page }) => {
   await page.route('**/api/v1/**', async route => {
     const path = new URL(route.request().url()).pathname
     if (route.request().method() === 'GET' && path === '/api/v1/meta/capabilities') {
@@ -128,5 +129,6 @@ test('成员欢迎页本机已绑定但本次 API 进程后台未就绪时仍提
     ['hct:face-family-household', JSON.stringify(boundHousehold)],
   )
   await page.goto('/?portal=member')
-  await expectUnboundMemberGate(page)
+  await expect(page.getByRole('group', { name: '选择账号登录凭据' })).toBeVisible()
+  await expect(page.getByTestId('member-unbound-gate')).toHaveCount(0)
 })

@@ -7,11 +7,10 @@ import { presentApiError } from '@/api/errors'
 import { familyAuthAdapter } from '@/data/authAdapter'
 import { useAuth } from '@/stores/auth'
 import { useSession } from '@/stores/session'
-import { faceLoginDisabledReason } from '@/utils/faceLogin'
 
 const route = useRoute()
 const router = useRouter()
-const { session, updateSession } = useSession()
+const { updateSession } = useSession()
 const { auth, signIn } = useAuth()
 
 const account = ref('')
@@ -27,9 +26,6 @@ const REASON_NOTICE: Record<string, string> = {
 }
 
 const reasonNotice = computed(() => REASON_NOTICE[auth.reason] ?? '')
-const serverLabel = computed(() => session.serverBaseUrl || '同源（与页面相同的地址）')
-// HCT-505 尚未完成；保持 fail-closed，不触发摄像头或任何人脸请求。
-const faceLoginReason = faceLoginDisabledReason({ thresholdCalibrated: false })
 /** 与 HCT-512 `AuthCredentials` 密码策略对齐：至少 8 位，且含英文和数字。 */
 const PASSWORD_MIN_LENGTH = 8
 const canSubmit = computed(
@@ -74,12 +70,10 @@ function useDemoMode(): void {
     <section class="card" aria-labelledby="login-title">
       <div class="h-icon-row">
         <span class="row-icon" data-tone="calm" aria-hidden="true"><AppIcon name="shield" :size="16" /></span>
-        <h2 id="login-title">正式登录</h2>
+        <h2 id="login-title">账户登录</h2>
       </div>
 
       <p v-if="reasonNotice" class="notice" data-tone="warn" role="alert">{{ reasonNotice }}</p>
-
-      <p class="meta-line">服务器：{{ serverLabel }}</p>
 
       <form class="login-form" @submit.prevent="submit">
         <label class="field">
@@ -104,13 +98,10 @@ function useDemoMode(): void {
             autocomplete="current-password"
             :disabled="submitting"
             :aria-invalid="Boolean(errorMessage)"
-            :aria-describedby="errorMessage ? 'login-help login-error' : 'login-help'"
+            :aria-describedby="errorMessage ? 'login-error' : undefined"
             placeholder="家庭服务器密码"
           />
         </label>
-        <p id="login-help" class="meta-line">
-          密码至少 {{ PASSWORD_MIN_LENGTH }} 位，且需同时包含英文字母和数字。只用于本次登录请求，不会保存在本机、不会写入日志，也不会出现在地址栏。
-        </p>
         <p v-if="errorMessage" id="login-error" class="notice" data-tone="error" role="alert">
           {{ errorMessage }}
         </p>
@@ -120,44 +111,10 @@ function useDemoMode(): void {
       </form>
     </section>
 
-    <section class="card" aria-labelledby="face-login-title">
-      <div class="h-icon-row">
-        <span class="row-icon" data-tone="calm" aria-hidden="true"><AppIcon name="shield" :size="16" /></span>
-        <h2 id="face-login-title">刷脸登录（尚未开放）</h2>
-      </div>
-      <p id="face-login-help" class="meta-line">
-        {{ faceLoginReason }}移动端当前不会请求摄像头，也不会上传或保存人脸信息。
-        请使用账号密码登录；登录后如需高风险操作，仍按既有流程使用家庭 PIN 或二维码二次确认。
-      </p>
-      <button
-        type="button"
-        class="btn btn-quiet btn-block"
-        disabled
-        aria-disabled="true"
-        aria-describedby="face-login-help"
-      >
-        刷脸登录暂未开放
-      </button>
-      <p class="meta-line">这是教学演示级、非生产级生物识别能力，可随时改用其它登录方式。</p>
-    </section>
-
     <section class="card" aria-labelledby="login-alt-title">
       <h2 id="login-alt-title">其他方式</h2>
-      <RouterLink class="btn btn-quiet btn-block" to="/me">检查服务器与联机设置</RouterLink>
-      <button type="button" class="btn btn-quiet btn-block" @click="useDemoMode">改用演示模式</button>
-      <p class="meta-line">
-        演示模式使用内置虚构数据，不连接任何服务器，也不需要登录。
-      </p>
-    </section>
-
-    <section class="card" aria-labelledby="login-privacy-title">
-      <h2 id="login-privacy-title">这一步做了什么</h2>
-      <ul class="divided-list">
-        <li>登录成功后建立短生命周期服务端会话，凭据只保存在内存中。</li>
-        <li>会话过期、被撤销或返回 401 时立即清理本地会话，并停止所有写操作。</li>
-        <li>退出登录会清除查询结果、上传草稿和能力探测快照，不保留旧会话数据。</li>
-        <li>高风险动作仍需 PIN 或二维码一次性二次确认。</li>
-      </ul>
+      <RouterLink class="btn btn-quiet btn-block" to="/me">服务器设置</RouterLink>
+      <button type="button" class="btn btn-quiet btn-block" @click="useDemoMode">离线使用</button>
     </section>
   </main>
 </template>

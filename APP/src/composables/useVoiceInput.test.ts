@@ -53,7 +53,7 @@ describe('随身版语音输入', () => {
     expect(transcriptAfterWakePhrase('小燕小燕，查询最近的用药提醒')).toBe('查询最近的用药提醒')
   })
 
-  it('默认启用 continuous / interim / 多候选', () => {
+  it('默认启用 continuous / interim / 单候选', () => {
     class FakeRecognition {
       lang = ''
       continuous = false
@@ -79,7 +79,8 @@ describe('随身版语音输入', () => {
       })
       expect(recognition?.continuous).toBe(true)
       expect(recognition?.interimResults).toBe(true)
-      expect(recognition?.maxAlternatives).toBe(3)
+      // 只取一个候选：备选项从 3 降到 1，减少识别处理延迟与浏览器 CPU 占用。
+      expect(recognition?.maxAlternatives).toBe(1)
     } finally {
       if (previous === undefined) {
         delete (globalThis as { window?: unknown }).window

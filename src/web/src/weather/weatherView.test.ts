@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { WeatherResponse } from '../api/types'
-import { presentWeather } from './weatherView'
+import { calmWeatherBadge, calmWeatherMessage, presentWeather } from './weatherView'
 
 function response(overrides: Partial<WeatherResponse> = {}): WeatherResponse {
   return {
@@ -84,5 +84,17 @@ describe('presentWeather', () => {
     expect(view.available).toBe(false)
     expect(view.statusLabel).toBe('等待安全配置')
     expect(view.detail).toContain('获批的位置代码')
+  })
+})
+
+describe('daily calm weather copy', () => {
+  it('keeps the same copy within a day and rotates it on the next day', () => {
+    const today = new Date(2026, 8, 3)
+    const tomorrow = new Date(2026, 8, 4)
+
+    expect(calmWeatherMessage(today)).toBe(calmWeatherMessage(today))
+    expect(calmWeatherBadge(today)).toBe(calmWeatherBadge(today))
+    expect(calmWeatherMessage(today)).not.toBe(calmWeatherMessage(tomorrow))
+    expect(calmWeatherBadge(today)).not.toBe(calmWeatherBadge(tomorrow))
   })
 })

@@ -48,6 +48,18 @@ watch(
     void router.replace({ name: 'login', query: { redirect: route.fullPath } })
   },
 )
+
+/**
+ * 身份可能在联机拉取家庭成员时自动识别，而不是发生在路由跳转前。
+ * 成员端一旦识别完成，立即离开管理员专属页面，避免短暂展示越权内容。
+ */
+watch(
+  () => [session.mobileRole, route.fullPath] as const,
+  ([mobileRole]) => {
+    if (mobileRole !== 'member' || route.meta.adminOnly !== true) return
+    void router.replace({ name: 'today' })
+  },
+)
 </script>
 
 <template>
