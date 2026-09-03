@@ -24,6 +24,10 @@ export type AuthErrorCode =
   | 'STEP_UP_NOT_CONFIGURED'
   /** 该身份在多个家庭配置过 PIN，必须显式指定家庭。 */
   | 'STEP_UP_HOUSEHOLD_REQUIRED'
+  /** 新密码不满足服务端密码策略（≥8 位且同时含字母和数字）。 */
+  | 'PASSWORD_POLICY'
+  /** 新密码与当前密码相同，服务端拒绝。 */
+  | 'PASSWORD_REUSE'
 
 export class AuthAdapterError extends Error {
   readonly code: AuthErrorCode
@@ -78,6 +82,11 @@ export interface StepUpGrant {
   confirmedAt: string
 }
 
+export interface ChangePasswordInput {
+  currentPassword: string
+  newPassword: string
+}
+
 export interface AuthAdapter {
   login(input: LoginInput): Promise<AuthSession>
   logout(): Promise<void>
@@ -85,6 +94,13 @@ export interface AuthAdapter {
   getSession(): AuthSession | null
   beginStepUp(input: { action: string; method: StepUpMethod; householdId?: string }): Promise<StepUpChallenge>
   confirmStepUp(input: StepUpInput): Promise<StepUpGrant>
+  /**
+   * 修改当前身份的登录密码。
+   *
+   * 服务端会在改密成功后撤销该身份的全部会话并签发新会话，因此适配器必须
+   * 把返回的新会话写回同一个槽位；调用方不需要（也不应该）重新登录。
+   */
+  changePassword(input: ChangePasswordInput): Promise<AuthSession>
 }
 
 export interface AuthTestStubOptions {
@@ -101,13 +117,25 @@ function iso(time: number): string {
   return new Date(time).toISOString()
 }
 
+/** 密码最小长度；与主仓库 `app/password_policy.py` 的 HCT-512 策略保持一致。 */
+export const PASSWORD_MIN_LENGTH = 8
+
+/**
+ * 与主仓库 `password_meets_policy` 同一规则：长度 8–256，且同时含英文字母和数字。
+ * 客户端先校验只是为了少一次往返和更早的可读提示，最终判定仍以服务端为准。
+ */
+export function passwordMeetsPolicy(password: string): boolean {
+  if (password.length < PASSWORD_MIN_LENGTH || password.length > 256) return false
+  return /[A-Za-z]/.test(password) && /\d/.test(password)
+}
+
 /**
  * 仅供 Vitest 使用的内存测试桩，不代表正式登录实现。
  * 它刻意不接受 serverBaseUrl、不写存储，也不产生真实网络请求。
  */
 export function createAuthTestStub(options: AuthTestStubOptions = {}): AuthAdapter {
   const account = options.account ?? 'demo-account'
-  const password = options.password ?? 'demo-password'
+  let password = options.password ?? 'demo-password'
   const now = options.now ?? (() => Date.now())
   const sessionTtlMs = options.sessionTtlMs ?? 5 * 60_000
   const challengeTtlMs = options.challengeTtlMs ?? 60_000
@@ -217,6 +245,33 @@ export function createAuthTestStub(options: AuthTestStubOptions = {}): AuthAdapt
         confirmedAt: iso(now()),
       }
     },
+
+    async changePassword(input) {
+      const activeSession = requireSession()
+      if (input.currentPassword !== password) {
+        throw new AuthAdapterError('当前密码不正确', { code: 'AUTH_FAILED' })
+      }
+      if (input.currentPassword === input.newPassword) {
+        throw new AuthAdapterError('新密码不能与当前密码相同', { code: 'PASSWORD_REUSE', status: 422 })
+      }
+      if (!passwordMeetsPolicy(input.newPassword)) {
+        throw new AuthAdapterError('新密码不满足密码策略', { code: 'PASSWORD_POLICY', status: 422 })
+      }
+      password = input.newPassword
+      sequence += 1
+      const timestamp = now()
+      // 与服务端一致：旧会话全部作废，改密后立刻换成新签发的会话。
+      session = {
+        actorId: activeSession.actorId,
+        accessPurpose: activeSession.accessPurpose,
+        transport: activeSession.transport,
+        accessToken: `test-only-token-${sequence}`,
+        sessionId: `test-session-${sequence}`,
+        expiresAt: iso(timestamp + sessionTtlMs),
+      }
+      challenge = null
+      return session
+    },
   }
 }
 
@@ -274,7 +329,7 @@ export function normalizeAuthExpiresAt(value: unknown): string | null {
   return null
 }
 
-type AuthOperation = 'login' | 'logout' | 'session' | 'stepUpBegin' | 'stepUpConfirm'
+type AuthOperation = 'login' | 'logout' | 'session' | 'stepUpBegin' | 'stepUpConfirm' | 'changePassword'
 
 /** 契约不一致（缺字段、参数形态不同）统一按"暂时不可用"提示，不引导用户重试密码。 */
 const CONTRACT_MISMATCH = '家庭服务器的鉴权接口与移动端契约不一致，请联系维护者核对 HCT-107 接口。'
@@ -320,6 +375,24 @@ function mapAuthError(operation: AuthOperation, status: number, body: unknown): 
   }
   if (detail === 'STEP_UP_FAILED') {
     return new AuthAdapterError('二次确认未通过', { code: 'STEP_UP_FAILED', status })
+  }
+  // 改密的 422 是可修正的输入问题，不是接口契约缺失；必须先于下面的 422 分支判断，
+  // 否则会把"新密码太弱"误报成"服务器接口不一致"。
+  if (detail === 'PASSWORD_REUSE') {
+    return new AuthAdapterError('新密码不能与当前密码相同', { code: 'PASSWORD_REUSE', status })
+  }
+  if (detail === 'PASSWORD_FORMAT_INVALID') {
+    return new AuthAdapterError('新密码不满足密码策略', { code: 'PASSWORD_POLICY', status })
+  }
+  if (operation === 'changePassword' && status === 401) {
+    // 只在改密流程里把 401 解读为"当前密码不对"：这条路径已经带着有效会话，
+    // 不能因为输错旧密码就把用户踢回登录页。会话本身失效时服务端返回的是
+    // SESSION_INVALID / SESSION_REQUIRED / AUTH_REQUIRED，仍按会话失效处理。
+    const sessionDetails = new Set(['SESSION_INVALID', 'SESSION_REQUIRED', 'AUTH_REQUIRED'])
+    if (!sessionDetails.has(detail)) {
+      return new AuthAdapterError('当前密码不正确', { code: 'AUTH_FAILED', status })
+    }
+    return new AuthAdapterError('登录会话已失效', { code: 'SESSION_EXPIRED', status })
   }
   if (status === 422 || status === 400 || status === 404 || status === 405 || status >= 500) {
     return new AuthAdapterError(CONTRACT_MISMATCH, { code: 'AUTH_UNAVAILABLE', status })
@@ -542,6 +615,45 @@ export function createHttpAuthAdapter(options: HttpAuthAdapterOptions = {}): Aut
         action: input.action,
         confirmedAt: normalizeAuthExpiresAt(payload['confirmed_at']) ?? new Date().toISOString(),
       }
+    },
+
+    /**
+     * `POST {prefix}/change-password` → `{ actor_id, session_token, expires_at }`。
+     *
+     * 服务端要求 `Authorization: Bearer`（HCT-427 明确不接受开发期 X-Actor-Id），
+     * 并在成功后撤销该身份的全部会话、签发一条新会话。这里把新会话写回同一槽位，
+     * 用户不需要重新登录；拿不到新 token 就按契约不足处理，绝不保留已失效的旧会话。
+     * 两个密码只出现在请求体里：不进 URL、不写存储、不进日志、不进错误消息。
+     */
+    async changePassword(input) {
+      const current = activeSession()
+      if (transport !== 'bearer') {
+        throw new AuthAdapterError(
+          '当前会话不是 Bearer 传输，家庭服务器的改密接口无法校验会话；请改用正式登录后重试。',
+          { code: 'AUTH_UNAVAILABLE', status: 0 },
+        )
+      }
+      if (!input.currentPassword || !input.newPassword) {
+        throw new AuthAdapterError('请填写当前密码和新密码', { code: 'AUTH_FAILED', status: 401 })
+      }
+      if (input.currentPassword === input.newPassword) {
+        throw new AuthAdapterError('新密码不能与当前密码相同', { code: 'PASSWORD_REUSE', status: 422 })
+      }
+      if (!passwordMeetsPolicy(input.newPassword)) {
+        throw new AuthAdapterError(
+          `新密码至少 ${PASSWORD_MIN_LENGTH} 位，且需同时包含英文字母和数字。`,
+          { code: 'PASSWORD_POLICY', status: 422 },
+        )
+      }
+      const payload = await post(
+        'changePassword',
+        '/change-password',
+        { current_password: input.currentPassword, new_password: input.newPassword },
+        true,
+      )
+      const next = buildSession(payload, current.actorId)
+      slot.set(next)
+      return next
     },
   }
 }

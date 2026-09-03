@@ -212,7 +212,28 @@ export function createVisionTaskPolling(
     listeners.clear()
   }
 
-  return { state, start, stop, checkNow, dispose }
+  /**
+   * 采纳一份由页面动作（如主动取消）拿到的服务端快照。
+   *
+   * 只做两件事：停止自动回查、把服务端返回的快照原样放进 state。
+   * 终态由服务端的 `terminal` 决定，前端不改写状态、不虚构原因；
+   * 非终态快照会保留 `polling` 语义之外的 idle 态，交由页面决定是否再回查。
+   */
+  function adopt(snapshot: VisionTaskStatusSnapshot): void {
+    pausedTaskId = null
+    stopInternal()
+    lastTaskId = snapshot.taskId
+    state.value = {
+      phase: snapshot.terminal ? 'terminal' : 'idle',
+      snapshot,
+      attempts: state.value.attempts,
+      nextDelayMs: null,
+      lastCheckedAt: now().toISOString(),
+      lastError: null,
+    }
+  }
+
+  return { state, start, stop, checkNow, adopt, dispose }
 }
 
 /** 把服务端状态映射为中文标签；未知状态原样展示，不猜测。 */

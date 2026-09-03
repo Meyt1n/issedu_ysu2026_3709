@@ -351,3 +351,66 @@ export interface KnowledgeDocumentDetailResponse extends KnowledgeDocumentSummar
   chunk_count: number
   chunks: KnowledgeChunkResponse[]
 }
+
+/** 知识检索命中项（POST /api/v1/knowledge/retrieve 的 results 项）。 */
+export interface KnowledgeRetrieveResultResponse {
+  chunk_id: string
+  document_id: string
+  title: string
+  source: string
+  version: string
+  text: string
+  locator: string | null
+  score: number
+  match_reason: string
+  matched_terms?: string[]
+  matched_synonyms?: string[]
+}
+
+/**
+ * 知识检索响应（POST /api/v1/knowledge/retrieve）。
+ * 服务端先做权限预过滤再检索；无授权条目、空索引或无相关结果都以
+ * `degraded=true` + `degrade_reason` 如实返回，不跨家庭泄漏内容。
+ */
+export interface KnowledgeRetrieveResponse {
+  query: string
+  results: KnowledgeRetrieveResultResponse[]
+  total: number
+  query_id?: string | null
+  degraded?: boolean
+  degrade_reason?: string | null
+}
+
+/** 计划工作台的一条动作回执（服务端已记录的事实，不含建议）。 */
+export interface PlanWorkbenchActionResponse {
+  action: 'CONFIRM' | 'DEFER' | 'SKIP' | 'MISS'
+  recorded_at: string
+  reason?: string | null
+  delay_hours?: number | null
+}
+
+/**
+ * 计划工作台条目（GET /households/{hid}/members/{mid}/plan-workbench）。
+ * `allowed_actions` 是服务端给出的动作边界：疗程已结束时为空数组。
+ * 移动端只消费它，不自行推断可执行动作。
+ */
+export interface PlanWorkbenchItemResponse {
+  plan_event_id: string
+  drug: string
+  schedule: string
+  dose?: string | null
+  times?: string[]
+  start_date?: string | null
+  end_date?: string | null
+  status: 'NORMAL' | 'REMINDER' | 'ESCALATED' | 'COMPLETED'
+  next_action_at: string
+  last_action?: PlanWorkbenchActionResponse | null
+  action_history?: PlanWorkbenchActionResponse[]
+  allowed_actions: Array<'CONFIRM' | 'DEFER' | 'SKIP' | 'MISS'>
+}
+
+export interface PlanWorkbenchResponse {
+  member_id: string
+  generated_at: string
+  plans: PlanWorkbenchItemResponse[]
+}

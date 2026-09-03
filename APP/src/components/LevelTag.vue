@@ -9,6 +9,7 @@ import {
   taskLevelLabel,
   taskLevelTone,
   taskStatusLabel,
+  taskStatusTone,
   type Tone,
 } from '@/data/labels'
 import type { RecognitionStatus, TaskLevel, TaskStatus } from '@/data/types'
@@ -37,7 +38,7 @@ const view = computed<{ label: string; tone: Tone; prefix: string }>(() => {
     case 'taskStatus':
       return {
         label: taskStatusLabel(props.value as TaskStatus),
-        tone: props.value === 'CONFIRMED' ? 'calm' : 'neutral',
+        tone: taskStatusTone(props.value as TaskStatus),
         prefix: '处理状态',
       }
     default:

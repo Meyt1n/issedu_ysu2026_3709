@@ -5,6 +5,7 @@ import { ApiClientError } from '@/api/client'
 
 import {
   authGeneration,
+  changePassword,
   getAuthSession,
   handleAuthFailure,
   isWriteBlocked,
@@ -202,5 +203,50 @@ describe('二次确认失败不得连带清空登录会话', () => {
     expect(handled).toBe(true)
     expect(useAuth().auth.status).toBe('reauth-required')
     expect(getAuthSession()).toBeNull()
+  })
+})
+
+describe('修改密码后的会话轮换', () => {
+  beforeEach(() => {
+    resetAuthState()
+    localStorage.clear()
+  })
+
+  it('采纳服务端新会话、保持已登录，并让上下文缓存失效', async () => {
+    const adapter = createAuthTestStub({ account: 'demo-account', password: 'Current-pw1' })
+    await signIn(adapter, { account: 'demo-account', password: 'Current-pw1' })
+    const { auth } = useAuth()
+    const before = getAuthSession()?.accessToken
+    const generationBefore = authGeneration()
+
+    const scopes: string[] = []
+    const unregister = registerSessionCleanup(scope => scopes.push(scope))
+
+    await changePassword(adapter, { currentPassword: 'Current-pw1', newPassword: 'Rotated-pw2' })
+
+    expect(auth.status).toBe('authenticated')
+    expect(getAuthSession()?.accessToken).not.toBe(before)
+    expect(authGeneration()).toBeGreaterThan(generationBefore)
+    // 旧会话已被服务端作废：只清上下文缓存，不把用户踢回登录页。
+    expect(scopes).toEqual(['context'])
+    expect(isWriteBlocked()).toBe(false)
+
+    // 密码与新 token 都不得落到可序列化状态或 localStorage。
+    expect(JSON.stringify(auth)).not.toContain('Rotated-pw2')
+    expect(JSON.stringify(auth)).not.toContain('test-only-token')
+    expect(storedValues().some(value => value.includes('Rotated-pw2'))).toBe(false)
+    unregister()
+  })
+
+  it('改密失败时会话与凭据保持原样', async () => {
+    const adapter = createAuthTestStub({ account: 'demo-account', password: 'Current-pw1' })
+    await signIn(adapter, { account: 'demo-account', password: 'Current-pw1' })
+    const before = getAuthSession()?.accessToken
+
+    await expect(changePassword(adapter, { currentPassword: 'Wrong-pw1', newPassword: 'Rotated-pw2' }))
+      .rejects.toMatchObject({ code: 'AUTH_FAILED' })
+
+    expect(useAuth().auth.status).toBe('authenticated')
+    expect(getAuthSession()?.accessToken).toBe(before)
   })
 })
