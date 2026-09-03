@@ -7,6 +7,8 @@ import {
   riskLevelTone,
   taskLevelLabel,
   taskLevelTone,
+  taskStatusLabel,
+  taskStatusTone,
 } from './labels'
 
 describe('等级与状态文案映射', () => {
@@ -42,5 +44,18 @@ describe('等级与状态文案映射', () => {
     expect(memberRoleLabel('SELF')).toBe('本人')
     expect(memberRoleLabel('DEPENDENT')).toBe('被照护成员')
     expect(memberRoleLabel('CAREGIVER')).toBe('照护者')
+  })
+
+  it('任务处理状态含漏服，且状态色调与文字同时表达（不只靠颜色）', () => {
+    expect(taskStatusLabel('PENDING')).toBe('待处理')
+    expect(taskStatusLabel('CONFIRMED')).toBe('已确认')
+    expect(taskStatusLabel('DEFERRED')).toBe('已延期')
+    expect(taskStatusLabel('SKIPPED')).toBe('已跳过')
+    expect(taskStatusLabel('MISSED')).toBe('已记漏服')
+    expect(taskStatusLabel('ESCALATED')).toBe('已升级照护者')
+    expect(taskStatusTone('CONFIRMED')).toBe('calm')
+    expect(taskStatusTone('MISSED')).toBe('warn')
+    expect(taskStatusTone('ESCALATED')).toBe('danger')
+    expect(taskStatusTone('PENDING')).toBe('neutral')
   })
 })

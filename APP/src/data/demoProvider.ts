@@ -11,6 +11,8 @@ import type {
   KnowledgeChunkView,
   KnowledgeDocumentSummaryView,
   KnowledgeDocumentView,
+  KnowledgeSearchHit,
+  KnowledgeSearchResult,
   MemberDetail,
   MemberSummary,
   ProviderInfo,
@@ -547,7 +549,7 @@ export const demoProvider: DataProvider = {
     await delay(200)
     return {
       memberId,
-      tasks: clone(state.tasks.filter(t => t.memberId === memberId)).map(task => ({ ...task, actionPolicy: { planVersion: 'demo-plan-v1', source: 'FAMILY_SERVER', allowedActions: ['confirm', 'defer', 'skip'], nextAllowedAt: null, windowLabel: '（演示）由家庭服务器提供的当前允许操作范围' } })),
+      tasks: clone(state.tasks.filter(t => t.memberId === memberId)).map(task => ({ ...task, actionPolicy: { planVersion: 'demo-plan-v1', source: 'FAMILY_SERVER', allowedActions: ['confirm', 'defer', 'skip', 'miss'], nextAllowedAt: null, windowLabel: '（演示）由家庭服务器提供的当前允许操作范围' } })),
       risks: clone(state.risks.filter(r => r.memberId === memberId && !r.acknowledged)),
       recentEvents: clone((state.recentEvents[memberId] ?? []).slice(0, 4)),
       environmentAction: demoEnvironmentAction(memberId),
@@ -612,6 +614,12 @@ export const demoProvider: DataProvider = {
       const hours = payload.deferHours ?? 1
       task.status = 'DEFERRED'
       task.dueAt = new Date(Date.now() + hours * 3_600_000).toISOString()
+    } else if (action === 'miss') {
+      const reason = payload.reason?.trim()
+      if (!reason) throw new Error('记录漏服前请填写原因，便于家人了解情况')
+      // 与联机模式一致：漏服只落一条事实，不改提醒时间、不提补服或剂量。
+      task.status = 'MISSED'
+      task.missReason = reason
     } else {
       const reason = payload.reason?.trim()
       if (!reason) throw new Error('跳过前请填写原因，便于家人了解情况')
@@ -635,7 +643,7 @@ export const demoProvider: DataProvider = {
         return {
           eventId: entry.eventId,
           action: entry.action,
-          actionLabel: entry.action === 'confirm' ? '确认' : entry.action === 'defer' ? '延期' : '跳过',
+          actionLabel: entry.action === 'confirm' ? '确认' : entry.action === 'defer' ? '延期' : entry.action === 'miss' ? '记漏服' : '跳过',
           taskTitle: task?.title ?? '演示任务',
           memberName: member?.name ?? '演示成员',
           memberId,
@@ -765,6 +773,45 @@ export const demoProvider: DataProvider = {
     }
   },
 
+  /**
+   * 演示模式的知识检索：在虚构的已批准条目里做本地词面匹配。
+   * 未批准草稿不参与检索（与服务端权限预过滤语义一致）；命中片段原样展示，不改写正文。
+   */
+  async searchKnowledge(query: string): Promise<KnowledgeSearchResult> {
+    await delay(180)
+    const trimmed = query.trim()
+    if (!trimmed) {
+      return { query: trimmed, hits: [], total: 0, degraded: true, reason: '请输入要查找的内容。' }
+    }
+    const needle = trimmed.toLowerCase()
+    const hits: KnowledgeSearchHit[] = []
+    for (const doc of DEMO_KNOWLEDGE_DOCUMENTS) {
+      if (!doc.approved) continue
+      for (const chunk of doc.chunks) {
+        const inText = chunk.text.toLowerCase().includes(needle)
+        const inTitle = doc.title.toLowerCase().includes(needle)
+        if (!inText && !inTitle) continue
+        hits.push({
+          chunkId: chunk.id,
+          documentId: doc.id,
+          title: doc.title,
+          source: doc.source,
+          version: doc.version,
+          text: chunk.text,
+          locator: chunk.locator,
+          // 演示分数只为呈现排序占位，不代表任何真实检索质量。
+          score: inText ? 0.72 : 0.41,
+          matchReason: inText ? '（演示）正文包含检索词' : '（演示）标题包含检索词',
+        })
+      }
+    }
+    hits.sort((a, b) => b.score - a.score)
+    if (hits.length === 0) {
+      return { query: trimmed, hits: [], total: 0, degraded: true, reason: '（演示）没有匹配到相关条目，可换一个说法再试。' }
+    }
+    return { query: trimmed, hits, total: hits.length, degraded: false, reason: '' }
+  },
+
   async recognizeMedicine(file: File, _memberId?: string, _mediaKind?: 'image' | 'video'): Promise<RecognitionCandidate> {
     await delay(700)
     const versions = {
@@ -834,6 +881,22 @@ export const demoProvider: DataProvider = {
       nextStep: status === 'succeeded'
         ? '（演示）识别已完成；演示模式不会创建真实复核任务，网页端复核中心流程在联机模式下体验。'
         : `（演示）任务${status === 'queued' ? '已排队' : '处理中'}；下方会按退避节奏继续回查。`,
+    }
+  },
+
+  /** 演示模式取消：直接落到 cancelled 终态并停止后续回查，不虚构服务端错误码。 */
+  async cancelVisionTask(taskId: string): Promise<VisionTaskStatusSnapshot> {
+    await delay(140)
+    demoVisionTaskPollCounters.delete(taskId)
+    return {
+      taskId,
+      status: 'cancelled',
+      terminal: true,
+      errorCode: null,
+      errorMessage: null,
+      modelVersion: 'demo-vision-0.1',
+      createdAt: new Date().toISOString(),
+      nextStep: '（演示）任务已取消，不会再回查；重新拍摄会创建一个新任务。',
     }
   },
 }

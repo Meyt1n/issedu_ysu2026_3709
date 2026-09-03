@@ -138,4 +138,45 @@ describe('视觉任务状态轮询（MOB-132）', () => {
     expect(visionTaskStatusLabel('weird-new-state')).toBe('未知状态（weird-new-state）')
     expect(visionTaskStatusLabel('succeeded')).toBe('已完成')
   })
+
+  it('adopt 采纳主动取消拿到的终态：停止自动回查并原样保留服务端快照', async () => {
+    const fetchStatus = vi.fn().mockResolvedValue(snapshot({ status: 'running' }))
+    const polling = createVisionTaskPolling(fetchStatus, { initialDelayMs: 1000, factor: 2, maxDelayMs: 8000 })
+
+    polling.start('task-1')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(polling.state.value.phase).toBe('polling')
+
+    polling.adopt(snapshot({ status: 'cancelled', terminal: true, nextStep: '任务已取消' }))
+
+    expect(polling.state.value.phase).toBe('terminal')
+    expect(polling.state.value.snapshot).toMatchObject({ status: 'cancelled', errorCode: null })
+    expect(polling.state.value.nextDelayMs).toBeNull()
+    expect(polling.state.value.lastError).toBeNull()
+
+    // 采纳终态后不再排任何自动回查。
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(fetchStatus).toHaveBeenCalledTimes(1)
+    polling.dispose()
+  })
+
+  it('adopt 拿到非终态快照时不伪装成终态，也不继续自动回查', async () => {
+    const fetchStatus = vi.fn().mockResolvedValue(snapshot({ status: 'running' }))
+    const polling = createVisionTaskPolling(fetchStatus, { initialDelayMs: 1000, factor: 2, maxDelayMs: 8000 })
+
+    polling.start('task-1')
+    await vi.advanceTimersByTimeAsync(0)
+    polling.adopt(snapshot({ status: 'running', terminal: false }))
+
+    expect(polling.state.value.phase).toBe('idle')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(fetchStatus).toHaveBeenCalledTimes(1)
+
+    // 仍可对同一 taskId 手动继续回查，不会新建任务。
+    polling.checkNow()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetchStatus).toHaveBeenCalledTimes(2)
+    expect(fetchStatus.mock.calls.every(call => call[0] === 'task-1')).toBe(true)
+    polling.dispose()
+  })
 })

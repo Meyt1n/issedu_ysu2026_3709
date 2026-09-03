@@ -70,6 +70,22 @@ describe('演示数据 provider', () => {
     expect(task.skipReason).toBe('今日在医院已测量')
   })
 
+  it('记录漏服必须填写原因，只落事实且不改提醒时间', async () => {
+    const before = await demoProvider.getTodaySnapshot('m-wang')
+    const original = before.tasks.find(item => item.id === 't-am-med')
+    expect(original?.actionPolicy?.allowedActions).toContain('miss')
+
+    await expect(demoProvider.submitTaskAction('t-am-med', 'miss')).rejects.toThrow('原因')
+    const task = await demoProvider.submitTaskAction('t-am-med', 'miss', { reason: '出门忘记带药' })
+
+    expect(task.status).toBe('MISSED')
+    expect(task.missReason).toBe('出门忘记带药')
+    expect(task.dueAt).toBe(original?.dueAt)
+
+    const history = await demoProvider.listTaskActionHistory('m-wang')
+    expect(history[0]).toMatchObject({ action: 'miss', actionLabel: '记漏服', finalStatus: 'MISSED' })
+  })
+
   it('延期任务会把提醒时间推后', async () => {
     const before = Date.now()
     const task = await demoProvider.submitTaskAction('t-pm-med', 'defer', { deferHours: 2 })
@@ -225,5 +241,44 @@ describe('演示模式知识条目只读浏览（MOB-162）', () => {
 
     expect(docs.map(doc => doc.id)).toEqual(['demo-doc-medication-basics'])
     expect(docs.some(doc => doc.id === 'demo-doc-staging-draft')).toBe(false)
+  })
+
+  it('检索只覆盖已批准条目，命中片段原样返回并标注演示', async () => {
+    const result = await demoProvider.searchKnowledge('漏服')
+
+    expect(result.degraded).toBe(false)
+    expect(result.hits.length).toBeGreaterThan(0)
+    expect(result.hits.every(hit => hit.documentId === 'demo-doc-medication-basics')).toBe(true)
+    expect(result.hits[0]!.matchReason).toContain('演示')
+    expect(result.hits[0]!.text).toContain('漏服')
+  })
+
+  it('未批准草稿的正文不参与检索', async () => {
+    const result = await demoProvider.searchKnowledge('未批准内容不应出现在移动端')
+
+    expect(result.degraded).toBe(true)
+    expect(result.hits).toEqual([])
+  })
+
+  it('空检索词与无结果都如实降级，不返回旧结果', async () => {
+    expect(await demoProvider.searchKnowledge('   ')).toMatchObject({ degraded: true, hits: [], total: 0 })
+    const miss = await demoProvider.searchKnowledge('这个词一定不存在-zzz')
+    expect(miss.degraded).toBe(true)
+    expect(miss.reason).toContain('演示')
+  })
+})
+
+describe('演示模式视觉任务主动取消', () => {
+  it('取消后进入 cancelled 终态，且不虚构服务端错误码', async () => {
+    const cancelled = await demoProvider.cancelVisionTask('demo-task-1')
+
+    expect(cancelled).toMatchObject({
+      taskId: 'demo-task-1',
+      status: 'cancelled',
+      terminal: true,
+      errorCode: null,
+      errorMessage: null,
+    })
+    expect(cancelled.nextStep).toContain('演示')
   })
 })

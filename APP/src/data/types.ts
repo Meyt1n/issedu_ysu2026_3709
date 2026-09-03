@@ -3,12 +3,13 @@
 import type { HealthNewsResponse } from '@/api/types'
 
 export type TaskLevel = 'INFO' | 'GENERAL' | 'HIGH' | 'URGENT'
-export type TaskStatus = 'PENDING' | 'CONFIRMED' | 'DEFERRED' | 'SKIPPED' | 'ESCALATED'
+export type TaskStatus = 'PENDING' | 'CONFIRMED' | 'DEFERRED' | 'SKIPPED' | 'MISSED' | 'ESCALATED'
 export type CaregiverEscalationStatus = 'CREATED' | 'QUEUED' | 'VIEWED' | 'PROCESSED' | 'FAILED' | 'UNAVAILABLE' | 'UNKNOWN'
 export type RiskLevel = 'SEVERE' | 'WARNING' | 'INFO' | 'TIP' | (string & {})
 export type RecognitionStatus = 'MATCHED' | 'CONFLICT' | 'UNKNOWN' | 'REVIEW'
 
 export interface ServerTaskActionPolicy {
+  /** 服务端计划工作台快照标识（`generated_at`）；用于把动作边界回溯到某次服务端读取。 */
   planVersion: string
   source: 'FAMILY_SERVER'
   allowedActions: TaskAction[]
@@ -33,6 +34,8 @@ export interface CareTask {
   reminder?: ReminderPolicy
   lastActionAt?: string
   skipReason?: string
+  /** 漏服原因（服务端 `plan_missed` 事件的 reason）；只记录事实，不含补服建议。 */
+  missReason?: string
   /** 服务端升级/通知事件的脱敏只读摘要；APP 不推断条件、不猜测联系人。 */
   escalation?: CaregiverEscalation
 }
@@ -50,7 +53,7 @@ export interface CaregiverEscalation {
   notificationEventId?: string
 }
 
-export type TaskAction = 'confirm' | 'defer' | 'skip'
+export type TaskAction = 'confirm' | 'defer' | 'skip' | 'miss'
 
 export interface TaskActionPayload {
   deferHours?: number
@@ -368,6 +371,31 @@ export interface KnowledgeDocumentView {
   chunks: KnowledgeChunkView[]
 }
 
+/** 知识检索命中片段：只展示服务端返回的片段，不在本机做二次摘要或改写。 */
+export interface KnowledgeSearchHit {
+  chunkId: string
+  documentId: string
+  title: string
+  source: string
+  version: string
+  text: string
+  locator: string | null
+  score: number
+  matchReason: string
+}
+
+/**
+ * 知识检索结果。`degraded` 为 true 时 `hits` 必须为空，并由 `reason` 如实说明
+ * 是「无授权条目 / 索引为空 / 无相关结果」，不用旧结果或本地推断填补。
+ */
+export interface KnowledgeSearchResult {
+  query: string
+  hits: KnowledgeSearchHit[]
+  total: number
+  degraded: boolean
+  reason: string
+}
+
 export interface DataProvider {
   info(): ProviderInfo  /** 首页健康资讯；内容只来自家庭服务器或明确标注的本地季节日历。 */
   getHealthNews(): Promise<HealthNewsResponse>
@@ -396,4 +424,8 @@ export interface DataProvider {
   getKnowledgeDocument(docId: string): Promise<KnowledgeDocumentView>
   /** MOB-162：当前身份可见的已批准知识条目列表；服务端已做权限与批准过滤。 */
   listKnowledgeDocuments(): Promise<KnowledgeDocumentSummaryView[]>
+  /** 知识条目检索：检索词只随请求体发出，不写本机存储；权限过滤由服务端完成。 */
+  searchKnowledge(query: string): Promise<KnowledgeSearchResult>
+  /** 取消排队中/处理中的视觉任务；返回服务端终态快照，不虚构取消原因。 */
+  cancelVisionTask(taskId: string): Promise<VisionTaskStatusSnapshot>
 }

@@ -5,6 +5,7 @@ import {
   createAuthTestStub,
   createHttpAuthAdapter,
   normalizeAuthExpiresAt,
+  passwordMeetsPolicy,
 } from './auth'
 
 interface RecordedRequest {
@@ -379,5 +380,95 @@ describe('二次确认的配置错误不会被当成会话失效', () => {
     await adapter.beginStepUp({ action: 'confirm_high_risk', method: 'pin' })
 
     expect('household_id' in bodyOf(requests[1]!)).toBe(false)
+  })
+})
+
+describe('修改登录密码', () => {
+  const future = () => Math.floor((Date.now() + 600_000) / 1000)
+
+  async function signedInAdapter(replies: { status?: number; body?: unknown }[]) {
+    const recorded = recordingFetcher([
+      { body: { session_token: 'old-token', expires_at: future() } },
+      ...replies,
+    ])
+    const adapter = createHttpAuthAdapter({ fetcher: recorded.fetcher })
+    await adapter.login({ account: 'owner', password: 'Current-pw1' })
+    return { adapter, requests: recorded.requests }
+  }
+
+  it('密码策略与主仓库 HCT-512 一致：≥8 位且同时含字母和数字', () => {
+    expect(passwordMeetsPolicy('Abcdefg1')).toBe(true)
+    expect(passwordMeetsPolicy('Abcdef1')).toBe(false)
+    expect(passwordMeetsPolicy('abcdefghij')).toBe(false)
+    expect(passwordMeetsPolicy('12345678')).toBe(false)
+  })
+
+  it('两个密码只出现在请求体，成功后采纳服务端新签发的会话', async () => {
+    const { adapter, requests } = await signedInAdapter([
+      { body: { actor_id: 'owner', session_token: 'rotated-token', expires_at: future() } },
+    ])
+
+    const next = await adapter.changePassword({ currentPassword: 'Current-pw1', newPassword: 'Rotated-pw2' })
+
+    expect(requests[1]!.url).toBe('/api/v1/auth/change-password')
+    expect(requests[1]!.url).not.toContain('pw')
+    expect(bodyOf(requests[1]!)).toEqual({ current_password: 'Current-pw1', new_password: 'Rotated-pw2' })
+    // 改密请求本身必须带旧会话的 Bearer（服务端 HCT-427 不接受开发期身份头）。
+    expect(new Headers(requests[1]!.init.headers).get('Authorization')).toBe('Bearer old-token')
+    expect(next.accessToken).toBe('rotated-token')
+    expect(adapter.getSession()?.accessToken).toBe('rotated-token')
+  })
+
+  it('本地先拦截弱密码与重复密码，不发出请求', async () => {
+    const { adapter, requests } = await signedInAdapter([{ body: {} }])
+
+    await expect(adapter.changePassword({ currentPassword: 'Current-pw1', newPassword: 'Current-pw1' }))
+      .rejects.toMatchObject({ code: 'PASSWORD_REUSE' })
+    await expect(adapter.changePassword({ currentPassword: 'Current-pw1', newPassword: 'short1' }))
+      .rejects.toMatchObject({ code: 'PASSWORD_POLICY' })
+
+    expect(requests).toHaveLength(1)
+  })
+
+  it('服务端 422 的可修正原因不被误报成契约不一致', async () => {
+    const reuse = await signedInAdapter([{ status: 422, body: { detail: 'PASSWORD_REUSE' } }])
+    await expect(reuse.adapter.changePassword({ currentPassword: 'Current-pw1', newPassword: 'Another-pw2' }))
+      .rejects.toMatchObject({ code: 'PASSWORD_REUSE' })
+
+    const weak = await signedInAdapter([{ status: 422, body: { detail: 'PASSWORD_FORMAT_INVALID' } }])
+    await expect(weak.adapter.changePassword({ currentPassword: 'Current-pw1', newPassword: 'Another-pw2' }))
+      .rejects.toMatchObject({ code: 'PASSWORD_POLICY' })
+  })
+
+  it('旧密码错误只报密码错误并保留会话；会话本身失效才要求重新登录', async () => {
+    const wrongPassword = await signedInAdapter([{ status: 401, body: { detail: 'AUTH_FAILED' } }])
+    await expect(wrongPassword.adapter.changePassword({ currentPassword: 'Wrong-pw1', newPassword: 'Another-pw2' }))
+      .rejects.toMatchObject({ code: 'AUTH_FAILED', message: '当前密码不正确' })
+    expect(wrongPassword.adapter.getSession()).not.toBeNull()
+
+    const deadSession = await signedInAdapter([{ status: 401, body: { detail: 'SESSION_INVALID' } }])
+    await expect(deadSession.adapter.changePassword({ currentPassword: 'Current-pw1', newPassword: 'Another-pw2' }))
+      .rejects.toMatchObject({ code: 'SESSION_EXPIRED' })
+  })
+
+  it('服务端不返回新 token 时按契约不足拒绝，不保留已失效的旧会话状态', async () => {
+    const { adapter } = await signedInAdapter([{ body: { actor_id: 'owner', expires_at: future() } }])
+
+    await expect(adapter.changePassword({ currentPassword: 'Current-pw1', newPassword: 'Another-pw2' }))
+      .rejects.toMatchObject({ code: 'AUTH_UNAVAILABLE' })
+  })
+
+  it('测试桩改密后旧密码失效、新会话生效', async () => {
+    const stub = createAuthTestStub({ account: 'owner', password: 'Current-pw1' })
+    const first = await stub.login({ account: 'owner', password: 'Current-pw1' })
+
+    const rotated = await stub.changePassword({ currentPassword: 'Current-pw1', newPassword: 'Rotated-pw2' })
+    expect(rotated.accessToken).not.toBe(first.accessToken)
+
+    await stub.logout()
+    await expect(stub.login({ account: 'owner', password: 'Current-pw1' }))
+      .rejects.toBeInstanceOf(AuthAdapterError)
+    const relogin = await stub.login({ account: 'owner', password: 'Rotated-pw2' })
+    expect(relogin.actorId).toBe('owner')
   })
 })

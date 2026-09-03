@@ -7,6 +7,7 @@ import ErrorNotice from '@/components/ErrorNotice.vue'
 import ListLoadingState from '@/components/ListLoadingState.vue'
 import { createSpeaker } from '@/composables/useSpeech'
 import { ApiClient, ApiClientError } from '@/api/client'
+import { PASSWORD_MIN_LENGTH, passwordMeetsPolicy } from '@/api/auth'
 import { buildInfoLine } from '@/buildInfo'
 import { presentApiError, presentListApiError, type ErrorPresentation } from '@/api/errors'
 import { requestOutcomeLabel, requestTraces, type RequestTraceEntry } from '@/api/requestLog'
@@ -39,7 +40,7 @@ import { DEFAULT_SERVER_URL_POLICY, validateServerBaseUrl } from '@/utils/server
 
 const { settings, setElderMode } = useA11y()
 const { session, updateSession } = useSession()
-const { auth, signOut, beginStepUp, confirmStepUp, cancelStepUp } = useAuth()
+const { auth, signOut, beginStepUp, confirmStepUp, cancelStepUp, changePassword } = useAuth()
 const { authorizationBoundary, resumeAuthorizationBoundary } = useAuthorizationBoundary()
 const {
   capabilities: capabilityState,
@@ -160,6 +161,10 @@ const authMessage = ref('')
 const authError = ref('')
 const stepUpCode = ref('')
 const pinDraft = ref('')
+/* 改密草稿：只存在于组件内存，提交后立即清空，不进 store 或本机存储。 */
+const currentPasswordDraft = ref('')
+const newPasswordDraft = ref('')
+const repeatPasswordDraft = ref('')
 const households = ref<HouseholdOption[]>([])
 const householdsLoading = ref(false)
 const householdError = ref<ErrorPresentation | null>(null)
@@ -248,6 +253,27 @@ const sessionExpiryLabel = computed(() => {
   const time = Date.parse(auth.expiresAt)
   return Number.isFinite(time) ? new Date(time).toLocaleString() : ''
 })
+
+/** 客户端只做与服务端同源的前置校验（≥8 位、含字母和数字、两次一致），最终判定仍在服务端。 */
+const newPasswordPolicyOk = computed(() => passwordMeetsPolicy(newPasswordDraft.value))
+const repeatPasswordMatches = computed(
+  () => Boolean(repeatPasswordDraft.value) && newPasswordDraft.value === repeatPasswordDraft.value,
+)
+const passwordHint = computed(() => {
+  if (!newPasswordDraft.value) return `新密码至少 ${PASSWORD_MIN_LENGTH} 位，且需同时包含英文字母和数字。`
+  if (!newPasswordPolicyOk.value) return `新密码不满足要求：至少 ${PASSWORD_MIN_LENGTH} 位，且需同时包含英文字母和数字。`
+  if (newPasswordDraft.value === currentPasswordDraft.value) return '新密码不能与当前密码相同。'
+  if (repeatPasswordDraft.value && !repeatPasswordMatches.value) return '两次输入的新密码不一致。'
+  return '提交后家庭服务器会作废其它设备上的旧会话，本机自动换用新会话。'
+})
+const canChangePassword = computed(
+  () => signedIn.value
+    && !authBusy.value
+    && Boolean(currentPasswordDraft.value)
+    && newPasswordPolicyOk.value
+    && repeatPasswordMatches.value
+    && newPasswordDraft.value !== currentPasswordDraft.value,
+)
 
 function onElderModeChange(enabled: boolean): void {
   setElderMode(enabled)
@@ -367,6 +393,35 @@ async function submitHouseholdPin(): Promise<void> {
   } finally {
     // PIN 用完即弃，不留在输入框、store 或本机存储里。
     pinDraft.value = ''
+    authBusy.value = false
+  }
+}
+
+/**
+ * 修改家庭服务器登录密码。
+ *
+ * 服务端成功后会撤销该身份的全部会话并签发新会话，store 直接采纳新会话，
+ * 因此不需要重新登录。两个密码只作为参数传出，提交后立即从输入框清除，
+ * 不写 store、不写本机存储、不进日志和地址栏。
+ */
+async function submitPasswordChange(): Promise<void> {
+  if (!canChangePassword.value) return
+  authBusy.value = true
+  authError.value = ''
+  authMessage.value = ''
+  try {
+    await changePassword(familyAuthAdapter(), {
+      currentPassword: currentPasswordDraft.value,
+      newPassword: newPasswordDraft.value,
+    })
+    authMessage.value = '登录密码已修改。家庭服务器已作废其它设备上的旧会话，本机已换用新会话，无需重新登录。'
+  } catch (cause) {
+    authError.value = presentApiError(cause).message
+  } finally {
+    // 无论成功失败都立刻丢弃三个输入框里的密码。
+    currentPasswordDraft.value = ''
+    newPasswordDraft.value = ''
+    repeatPasswordDraft.value = ''
     authBusy.value = false
   }
 }
@@ -896,6 +951,56 @@ onMounted(() => {
               {{ authBusy ? '处理中…' : '退出登录' }}
             </button>
 
+            <h4 class="step-up-title">修改登录密码</h4>
+            <p class="meta-line">
+              修改成功后，家庭服务器会作废该身份在所有设备上的旧会话，并给本机换发一条新会话，
+              本机不需要重新登录。密码只随本次请求发出，不保存在本机、不写日志，也不出现在地址栏。
+            </p>
+            <form class="password-form" @submit.prevent="submitPasswordChange">
+              <label class="field" for="me-current-password">
+                当前密码
+                <input
+                  id="me-current-password"
+                  v-model="currentPasswordDraft"
+                  type="password"
+                  name="current-password"
+                  autocomplete="current-password"
+                  :disabled="authBusy"
+                  placeholder="家庭服务器当前密码"
+                />
+              </label>
+              <label class="field" for="me-new-password">
+                新密码
+                <input
+                  id="me-new-password"
+                  v-model="newPasswordDraft"
+                  type="password"
+                  name="new-password"
+                  autocomplete="new-password"
+                  :disabled="authBusy"
+                  :aria-invalid="Boolean(newPasswordDraft) && !newPasswordPolicyOk"
+                  aria-describedby="me-password-hint"
+                />
+              </label>
+              <label class="field" for="me-repeat-password">
+                再输入一次新密码
+                <input
+                  id="me-repeat-password"
+                  v-model="repeatPasswordDraft"
+                  type="password"
+                  name="repeat-password"
+                  autocomplete="new-password"
+                  :disabled="authBusy"
+                  :aria-invalid="Boolean(repeatPasswordDraft) && !repeatPasswordMatches"
+                  aria-describedby="me-password-hint"
+                />
+              </label>
+              <p id="me-password-hint" class="meta-line">{{ passwordHint }}</p>
+              <button type="submit" class="btn btn-block" :disabled="!canChangePassword">
+                {{ authBusy ? '处理中…' : '修改密码' }}
+              </button>
+            </form>
+
             <h4 class="step-up-title">高风险动作二次确认（PIN）</h4>
             <p class="meta-line">
               授权变更、删除等高风险动作需要用本家庭的 6 位 PIN 再确认一次。PIN 只保存在家庭服务器上（仅哈希），
@@ -1140,6 +1245,7 @@ html[data-contrast='high'] .mode-option { border-color: #000; background: #fff; 
 .auth-design-note h3 { margin: 0; font-size: 1rem; }
 .auth-design-note .divided-list { margin: 0; }
 .step-up-title { margin: 6px 0 0; font-size: 0.94rem; }
+.password-form { display: grid; gap: 10px; }
 .household-panel {
   display: grid;
   gap: 10px;

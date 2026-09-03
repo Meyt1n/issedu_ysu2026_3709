@@ -1,6 +1,6 @@
 import { ApiClient, ApiClientError } from '@/api/client'
 import { CAPABILITY_IDS, hasCapability } from '@/stores/capabilities'
-import type { AuthorizationRead, HealthEvent, HealthNewsResponse, Member, RequestOptions, RiskAcknowledgement, RiskAlert, RiskListResponse, UploadedFile, VisionTask } from '@/api/types'
+import type { AuthorizationRead, HealthEvent, HealthNewsResponse, Member, PlanWorkbenchResponse, RequestOptions, RiskAcknowledgement, RiskAlert, RiskListResponse, UploadedFile, VisionTask } from '@/api/types'
 import type {
   CareTask,
   CaregiverEscalation,
@@ -9,6 +9,7 @@ import type {
   HouseholdOption,
   KnowledgeDocumentSummaryView,
   KnowledgeDocumentView,
+  KnowledgeSearchResult,
   MemberDetail,
   MemberSummary,
   MedicationItem,
@@ -21,6 +22,7 @@ import type {
   RiskSummary,
   ReminderPolicy,
   RiskLevel,
+  ServerTaskActionPolicy,
   TaskAction,
   TaskActionPayload,
   TaskLevel,
@@ -60,11 +62,46 @@ function createIdempotencyKey(): string {
 }
 
 const PLAN_FACT_TYPES = new Set(['plan_created', 'plan_updated'])
-const PLAN_ACTION_TYPES = new Set(['plan_confirmed', 'plan_deferred', 'plan_skipped'])
+const PLAN_ACTION_TYPES = new Set(['plan_confirmed', 'plan_deferred', 'plan_skipped', 'plan_missed'])
 const PLAN_ESCALATION_TYPES = new Set(['care_escalated', 'care_level_escalated'])
 const CAREGIVER_NOTIFICATION_TYPE = 'caregiver_notified'
 const TASK_LEVELS: TaskLevel[] = ['INFO', 'GENERAL', 'HIGH', 'URGENT']
 const RISK_ORDER: Record<string, number> = { SEVERE: 0, WARNING: 1, INFO: 2, TIP: 3 }
+
+/**
+ * 服务端计划工作台的动作名 → 移动端动作名。
+ * 顺序即按钮顺序；服务端未列出的动作在界面上保持禁用。
+ */
+const SERVER_ACTION_MAP_ENTRIES: ReadonlyArray<['CONFIRM' | 'DEFER' | 'SKIP' | 'MISS', TaskAction]> = [
+  ['CONFIRM', 'confirm'],
+  ['DEFER', 'defer'],
+  ['SKIP', 'skip'],
+  ['MISS', 'miss'],
+]
+
+/** 计划状态文案：直译服务端状态，不追加任何医疗判断。 */
+const PLAN_STATUS_LABELS: Record<string, string> = {
+  NORMAL: '正常，未到时间',
+  REMINDER: '已到时间，仍在提醒窗口内',
+  ESCALATED: '已超出提醒窗口',
+  COMPLETED: '疗程已结束',
+}
+
+/** 知识检索降级原因：只翻译服务端给出的代码，不猜测“大概是没结果”。 */
+export function knowledgeDegradeReason(code: string | null | undefined): string {
+  switch (textOf(code)) {
+    case 'EMPTY_QUERY':
+      return '请输入要查找的内容。'
+    case 'NO_AUTHORISED_DOCUMENTS':
+      return '当前身份没有被授权的知识条目，服务端未返回任何内容。'
+    case 'EMPTY_INDEX':
+      return '家庭服务器的知识索引为空，请让管理员先在网页端导入并批准条目。'
+    case 'NO_RELEVANT_RESULTS':
+      return '没有匹配到相关条目，可换一个说法再试。'
+    default:
+      return '家庭服务器按降级返回，未提供可展示的检索结果。'
+  }
+}
 
 /** HCT-305 lacks a member-scoped, audited action-card contract, so do not call it from mobile. */
 export function environmentActionUnavailable(): EnvironmentActionState {
@@ -253,6 +290,10 @@ export function deriveTasksFromEvents(
       } else if (latest.event_type === 'plan_skipped') {
         task.status = 'SKIPPED'
         task.skipReason = textOf((latest.payload ?? {})['reason']) || undefined
+      } else if (latest.event_type === 'plan_missed') {
+        // 漏服只是一条已记录的事实：不推断补服、不改写计划、不修改提醒时间。
+        task.status = 'MISSED'
+        task.missReason = textOf((latest.payload ?? {})['reason']) || undefined
       } else {
         task.status = 'DEFERRED'
         const delay = Number((latest.payload ?? {})['delay_hours'] ?? 0)
@@ -269,6 +310,34 @@ export function deriveTasksFromEvents(
     }
     return task
   })
+}
+
+/**
+ * 把服务端计划工作台条目翻译成任务卡的动作边界。
+ *
+ * 这是移动端唯一的动作来源：服务端没有返回该计划、返回空 `allowed_actions`
+ * （疗程已结束）或字段缺失时一律返回 undefined，界面据此保持只读（fail-closed），
+ * 绝不在客户端推断安全窗口。
+ */
+export function planActionPolicyFrom(
+  workbench: PlanWorkbenchResponse | null | undefined,
+  planEventId: string,
+): ServerTaskActionPolicy | undefined {
+  if (!workbench) return undefined
+  const item = (workbench.plans ?? []).find(plan => plan.plan_event_id === planEventId)
+  if (!item) return undefined
+  const allowedActions = SERVER_ACTION_MAP_ENTRIES.filter(([serverAction]) =>
+    (item.allowed_actions ?? []).includes(serverAction),
+  ).map(([, action]) => action)
+  if (allowedActions.length === 0) return undefined
+  const nextActionAt = textOf(item.next_action_at)
+  return {
+    planVersion: textOf(workbench.generated_at) || '未提供快照时间',
+    source: 'FAMILY_SERVER',
+    allowedActions,
+    nextAllowedAt: nextActionAt || null,
+    windowLabel: `服务端计划状态：${PLAN_STATUS_LABELS[item.status] ?? item.status}`,
+  }
 }
 
 /** 即将到期阈值：7 天内提示但不改变语义。 */
@@ -863,13 +932,21 @@ export class HttpDataProvider implements DataProvider {
   async getTodaySnapshot(memberId: string): Promise<TodaySnapshot> {
     const householdId = await this.resolveHouseholdId()
     const memberName = await this.memberName(memberId)
-    const [events, risks] = await Promise.all([
+    const [events, risks, workbench] = await Promise.all([
       this.client.listMemberTimeline(householdId, memberId, this.options(), 'today-snapshot'),
       this.listRisks(memberId),
+      // 动作边界是加分项而非前置条件：拿不到工作台时任务仍可展示，只是保持只读。
+      this.client.getPlanWorkbench(householdId, memberId, this.options()).catch(() => null),
     ])
 
     const tasks = deriveTasksFromEvents(events, memberId, memberName)
-    for (const task of tasks) this.taskCache.set(task.id, task)
+    for (const task of tasks) {
+      if (task.planEventId) {
+        const policy = planActionPolicyFrom(workbench, task.planEventId)
+        if (policy) task.actionPolicy = policy
+      }
+      this.taskCache.set(task.id, task)
+    }
 
     return {
       memberId,
@@ -999,6 +1076,13 @@ export class HttpDataProvider implements DataProvider {
       await this.client.deferCarePlan(householdId, task.memberId, task.planEventId, hours, options)
       task.status = 'DEFERRED'
       task.dueAt = new Date(Date.now() + hours * 3_600_000).toISOString()
+    } else if (action === 'miss') {
+      const reason = payload.reason?.trim()
+      if (!reason) throw new Error('记录漏服前请填写原因，便于家人了解情况')
+      await this.client.missCarePlan(householdId, task.memberId, task.planEventId, reason, options)
+      // 只落一条漏服事实：不改 dueAt、不自动补服、不修改剂量或计划。
+      task.status = 'MISSED'
+      task.missReason = reason
     } else {
       const reason = payload.reason?.trim()
       if (!reason) throw new Error('跳过前请填写原因，便于家人了解情况')
@@ -1058,6 +1142,60 @@ export class HttpDataProvider implements DataProvider {
             locator: chunk.locator,
           }))
         : [],
+    }
+  }
+
+  /**
+   * 知识条目检索。
+   *
+   * 服务端未声明 `knowledge-store` 能力时直接按不可用返回，不发出请求；
+   * 权限预过滤、索引与排序都在服务端，移动端不做本地缓存、不做二次改写，
+   * 也不把检索词写入本机存储或日志。
+   */
+  async searchKnowledge(query: string): Promise<KnowledgeSearchResult> {
+    const trimmed = query.trim()
+    if (!trimmed) {
+      return { query: trimmed, hits: [], total: 0, degraded: true, reason: '请输入要查找的内容。' }
+    }
+    if (!hasCapability(CAPABILITY_IDS.knowledgeStore)) {
+      return {
+        query: trimmed,
+        hits: [],
+        total: 0,
+        degraded: true,
+        reason: '家庭服务器未提供知识库能力，检索入口保持不可用。',
+      }
+    }
+    const householdId = this.householdId ?? this.context().householdId.trim()
+    const response = await this.client.retrieveKnowledge(
+      { query: trimmed, ...(householdId ? { household_id: householdId } : {}), top_k: 8 },
+      this.options(),
+    )
+    if (response.degraded) {
+      return {
+        query: trimmed,
+        hits: [],
+        total: 0,
+        degraded: true,
+        reason: knowledgeDegradeReason(response.degrade_reason),
+      }
+    }
+    return {
+      query: trimmed,
+      hits: (response.results ?? []).map(item => ({
+        chunkId: item.chunk_id,
+        documentId: item.document_id,
+        title: item.title,
+        source: item.source,
+        version: item.version,
+        text: item.text,
+        locator: item.locator ?? null,
+        score: item.score,
+        matchReason: item.match_reason,
+      })),
+      total: response.total ?? (response.results ?? []).length,
+      degraded: false,
+      reason: '',
     }
   }
 
@@ -1133,6 +1271,18 @@ export class HttpDataProvider implements DataProvider {
   async fetchVisionTaskStatus(taskId: string): Promise<VisionTaskStatusSnapshot> {
     // 只读回查：重试必须复用同一 taskId；这里绝不创建任务或重新上传照片。
     const task = await this.client.getVisionTask(taskId, this.options())
+    return visionTaskStatusSnapshotFromTask(task)
+  }
+
+  /**
+   * 主动取消排队中/处理中的任务：复用同一 taskId，不重新上传、不重建任务。
+   * 服务端返回的终态原样展示；`cancelled` 实测不带错误码，界面不虚构原因。
+   */
+  async cancelVisionTask(taskId: string): Promise<VisionTaskStatusSnapshot> {
+    const task = await this.client.cancelVisionTask(
+      taskId,
+      this.options({ idempotencyKey: `vision-cancel:${taskId}` }),
+    )
     return visionTaskStatusSnapshotFromTask(task)
   }
 

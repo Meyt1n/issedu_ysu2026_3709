@@ -71,8 +71,19 @@ export function taskStatusLabel(status: TaskStatus): string {
     case 'CONFIRMED': return '已确认'
     case 'DEFERRED': return '已延期'
     case 'SKIPPED': return '已跳过'
+    case 'MISSED': return '已记漏服'
     case 'ESCALATED': return '已升级照护者'
     default: return '未知'
+  }
+}
+
+/** 处理状态色调；与文字标签同时呈现，不单独依赖颜色（NFR-07）。 */
+export function taskStatusTone(status: TaskStatus): Tone {
+  switch (status) {
+    case 'CONFIRMED': return 'calm'
+    case 'MISSED': return 'warn'
+    case 'ESCALATED': return 'danger'
+    default: return 'neutral'
   }
 }
 
