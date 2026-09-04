@@ -196,6 +196,35 @@ def test_chat_posts_openai_shape_and_returns_ollama_shape(
     assert result["message"]["content"] == "本地照护建议正文。"
 
 
+def test_vision_content_is_forwarded_only_by_explicitly_enabled_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "content": "文字"}}]},
+        )
+
+    _patch_httpx(monkeypatch, handler)
+    client = _client(vision_enabled=True)
+    image_content = [
+        {"type": "text", "text": "请提取图片文字"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+    ]
+
+    client.chat(
+        model="m",
+        messages=[{"role": "user", "content": image_content}],
+        max_tokens=100,
+    )
+
+    assert client.vision_enabled is True
+    assert seen["body"]["messages"][0]["content"] == image_content
+
+
 def test_tool_calls_survive_the_round_trip(monkeypatch: pytest.MonkeyPatch) -> None:
     """OpenAI returns JSON-string arguments; the tool layer must still parse."""
 

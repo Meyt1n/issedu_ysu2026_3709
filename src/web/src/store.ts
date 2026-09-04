@@ -31,6 +31,7 @@ export type ViewName =
   | 'risks'
   | 'plans'
   | 'graph'
+  | 'digital-twin'
   | 'assistant'
   | 'authorizations'
   | 'bigscreen'

@@ -41,6 +41,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { view: 'assistant', label: '健康助手', icon: 'assistant', group: '安全与洞察', portals: ['admin'] },
   { view: 'face-credentials', label: '登录设置', icon: 'lock', group: '账户安全' },
   { view: 'bigscreen', label: '家庭大屏', icon: 'sun', group: '家庭洞察' },
+  { view: 'digital-twin', label: '数字孪生', icon: 'sparkle', group: '家庭洞察', portals: ['admin'] },
 ]
 
 /**

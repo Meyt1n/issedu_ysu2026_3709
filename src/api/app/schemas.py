@@ -572,6 +572,112 @@ class RelationshipGraphRead(BaseModel):
     nodes: list[RelationshipGraphNodeRead]
 
 
+# ── HCT-519: family digital twin and durable chat memory ─────────────
+
+
+class DigitalTwinMemberRead(BaseModel):
+    id: str
+    display_name: str
+    role: str
+
+
+class DigitalTwinProjectionRead(BaseModel):
+    x: float
+    y: float
+    z: float
+
+
+class DigitalTwinNodeRead(BaseModel):
+    id: str
+    kind: Literal["household", "member", "fact", "memory", "knowledge"]
+    category: Literal[
+        "household",
+        "profile",
+        "disease",
+        "medication",
+        "allergy",
+        "plan",
+        "caregiver",
+        "chat",
+        "knowledge",
+        "note",
+    ]
+    label: str
+    detail: str | None = None
+    member_id: str | None = None
+    member_name: str | None = None
+    status: Literal["CONFIRMED", "UNCONFIRMED", "REJECTED"]
+    source_kind: str
+    source_id: str
+    source_recorded_at: UtcDatetime
+    source_excerpt: str | None = None
+    confidence: float = Field(ge=0.0, le=1.0)
+    vector_terms: list[str] = Field(default_factory=list)
+    vector_size: int = Field(ge=0)
+    projection: DigitalTwinProjectionRead
+
+
+class DigitalTwinEdgeRead(BaseModel):
+    id: str
+    source: str
+    target: str
+    relation: str
+    weight: float = Field(ge=0.0, le=1.0)
+
+
+class DigitalTwinStatsRead(BaseModel):
+    member_count: int = Field(ge=0)
+    fact_count: int = Field(ge=0)
+    memory_count: int = Field(ge=0)
+    unconfirmed_count: int = Field(ge=0)
+    knowledge_count: int = Field(ge=0)
+    edge_count: int = Field(ge=0)
+
+
+class DigitalTwinRead(BaseModel):
+    household_id: str
+    generated_at: UtcDatetime
+    vector_backend: Literal["term_vector"]
+    vector_note: str
+    members: list[DigitalTwinMemberRead]
+    nodes: list[DigitalTwinNodeRead]
+    edges: list[DigitalTwinEdgeRead]
+    stats: DigitalTwinStatsRead
+
+
+class DigitalTwinMemoryRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    household_id: str
+    member_id: str | None
+    category: str
+    label: str
+    value: str
+    attributes: dict[str, Any]
+    source_kind: str
+    source_session_id: str | None
+    source_digest: str
+    evidence_excerpt: str
+    term_vector: dict[str, int]
+    confidence: float
+    status: Literal["UNCONFIRMED", "CONFIRMED", "REJECTED"]
+    occurrence_count: int
+    first_seen_at: UtcDatetime
+    last_seen_at: UtcDatetime
+    created_by: str
+    confirmed_by: str | None
+    confirmed_at: UtcDatetime | None
+    rejected_at: UtcDatetime | None
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
+
+
+class DigitalTwinMemoryActionRead(BaseModel):
+    memory: DigitalTwinMemoryRead
+    health_event_id: str | None = None
+
+
 # ── HCT-307: Risk evidence schemas ──────────────────────────────────
 
 
@@ -1047,6 +1153,9 @@ AssistantNetworkContextLevel = Literal["query_only", "symptom", "member"]
 
 class AssistantRequest(BaseModel):
     messages: list[dict[str, Any]] = Field(min_length=1)
+    # User-only transcript for durable-memory indexing. Keeping it separate
+    # avoids inflating the context used to generate the current answer.
+    memory_messages: list[dict[str, Any]] | None = Field(default=None, max_length=24)
     model: str | None = Field(default=None, max_length=64)
     # 0.3 / 512 produced clipped, formulaic answers; a slightly warmer
     # temperature and a larger budget let the assistant explain properly.
@@ -1061,11 +1170,20 @@ class AssistantRequest(BaseModel):
     query_type_override: AssistantQueryType | None = None
     assistant_session_id: str | None = Field(default=None, max_length=64)
     clear_session_cache: bool = False
+    # Optional transient text extracted from one user-selected attachment.
+    # The browser displays only the attachment name; the server appends this
+    # text to the current user turn after enforcing the length limit.
+    attachment_text: str | None = Field(default=None, max_length=200_000)
+    attachment_name: str | None = Field(default=None, max_length=255)
 
-    @field_validator("messages")
+    @field_validator("messages", "memory_messages")
     @classmethod
-    def reject_client_system_role(cls, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def reject_client_system_role(
+        cls, messages: list[dict[str, Any]] | None
+    ) -> list[dict[str, Any]] | None:
         """Clients may only send user/assistant turns; system prompt is server-owned."""
+        if messages is None:
+            return None
         for message in messages:
             if not isinstance(message, dict):
                 raise ValueError("ASSISTANT_MESSAGE_INVALID")
@@ -1107,6 +1225,44 @@ class AssistantResponse(BaseModel):
     classifier: dict[str, Any] | None = None
     evidence_preview: dict[str, Any] | None = None
     retrieval_cache_hit: bool = False
+    # HCT-519: transparent, best-effort auto-capture of user-stated chat facts.
+    # The rows remain UNCONFIRMED until a person promotes them in the twin.
+    memory_capture: dict[str, Any] | None = None
+
+
+class AssistantFileExtractionResponse(BaseModel):
+    """Text extracted from a transient chat attachment.
+
+    The original bytes are never persisted by this endpoint. ``cloud_used``
+    is true only for image OCR performed by an explicitly enabled cloud
+    vision-capable model.
+    """
+
+    file_name: str
+    extension: str
+    media_type: str
+    text: str
+    char_count: int = Field(ge=0)
+    truncated: bool = False
+    extractor: str
+    cloud_used: bool = False
+
+
+class VisionLlmAssistResponse(BaseModel):
+    """Grounded cloud suggestion for the vision review form."""
+
+    schema_version: str
+    status: str
+    reason: str | None = None
+    model: str | None = None
+    candidate_id: str | None = None
+    drug_name: str | None = None
+    specification: str | None = None
+    active_ingredients: list[str] = Field(default_factory=list)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    evidence_ids: list[str] = Field(default_factory=list)
+    rationale: str | None = None
+    warnings: list[str] = Field(default_factory=list)
 
 
 # ── HCT-208: Correction diff schemas ──────────────────────────────────

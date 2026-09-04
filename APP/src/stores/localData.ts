@@ -29,7 +29,7 @@ export function localDataInventory(): LocalDataItem[] {
       key: A11Y_STORAGE_KEY,
       label: '无障碍设置',
       saved: true,
-      note: '长辈模式、字号、对比度、语音播报与动效',
+      note: '长辈模式、字号、对比度与动效',
     },
     {
       key: PRIVACY_ACK_STORAGE_KEY,

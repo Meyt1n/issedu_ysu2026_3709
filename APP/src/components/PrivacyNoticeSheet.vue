@@ -1,24 +1,14 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-
 import AppIcon from '@/components/AppIcon.vue'
-import { createSpeaker } from '@/composables/useSpeech'
-import { PRIVACY_NOTICE_SECTIONS, privacyNoticeSpeechText } from '@/stores/privacy'
+import { PRIVACY_NOTICE_SECTIONS } from '@/stores/privacy'
 
 const emit = defineEmits<{
   /** 用户确认已阅读；写入失败时界面仍会再次展示（fail-closed）。 */
   acknowledged: [ok: boolean]
 }>()
 
-const speech = createSpeaker(() => true)
-const spokenText = computed(() => privacyNoticeSpeechText())
-
 function acknowledge(): void {
   emit('acknowledged', true)
-}
-
-function speakNotice(): void {
-  speech.speak(spokenText.value)
 }
 </script>
 
@@ -41,9 +31,6 @@ function speakNotice(): void {
       </div>
 
       <div class="privacy-actions">
-        <button type="button" class="btn btn-quiet" @click="speakNotice">
-          朗读隐私告知
-        </button>
         <button type="button" class="btn btn-lg privacy-confirm" @click="acknowledge">
           我已阅读并知晓
         </button>
@@ -90,10 +77,9 @@ function speakNotice(): void {
 .privacy-body { min-height: 0; overflow-y: auto; display: grid; gap: 12px; padding-right: 4px; }
 .privacy-body h3 { font-size: 0.98rem; color: var(--c-brand-deep); }
 .privacy-body p { line-height: 1.65; font-size: 0.92rem; }
-.privacy-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.privacy-actions { display: grid; grid-template-columns: 1fr; gap: 10px; }
 .privacy-actions > .btn { min-width: 0; white-space: nowrap; }
 @media (max-width: 420px) {
-  .privacy-actions { grid-template-columns: 1fr; }
 }
 html[data-contrast='high'] .privacy-card { border: 2px solid #000; }
 html[data-contrast='high'] .privacy-sheet { background: #fff; }

@@ -6,6 +6,7 @@ import type {
   AssistantAgentTrace,
   AssistantCitation,
   AssistantExternalSource,
+  AssistantMemoryCapture,
 } from '../api/types'
 import {
   createChatThread,
@@ -100,6 +101,7 @@ interface ChatEntry {
   networkQuery?: string | null
   agentTrace?: AssistantAgentTrace[]
   externalSources?: AssistantExternalSource[]
+  memoryCapture?: AssistantMemoryCapture | null
 }
 
 type AgentVisualStatus = 'idle' | 'pending' | 'running' | 'completed' | 'skipped' | 'blocked' | 'degraded'
@@ -118,11 +120,13 @@ const AGENT_STAGES: AgentStage[] = [
   { id: 'rules', title: '规则核对', description: '核对确定性规则与风险依据', icon: 'alert', network: false },
   { id: 'knowledge', title: '资料检索', description: '匹配已审核的本地资料', icon: 'pill', network: false },
   { id: 'web_search', title: '联网参考', description: '获取脱敏后的公开参考', icon: 'cloud', network: true },
-  { id: 'synthesis', title: '回答生成', description: '在本机汇总证据并生成回答', icon: 'assistant', network: false },
+  { id: 'synthesis', title: '回答生成', description: '汇总证据并生成回答', icon: 'assistant', network: false },
 ]
 
 const history = ref<ChatEntry[]>([])
 const draft = ref('')
+const selectedFile = ref<File | null>(null)
+const fileInput = ref<HTMLInputElement | null>(null)
 const sending = ref(false)
 const sendError = ref('')
 const voiceError = ref('')
@@ -494,7 +498,7 @@ function formatModelLabel(model?: string | null): string {
   return model
 }
 
-const canSend = computed(() => draft.value.trim().length > 0 && !sending.value)
+const canSend = computed(() => (draft.value.trim().length > 0 || selectedFile.value !== null) && !sending.value)
 
 const SUGGESTIONS = [
   '最近有哪些健康变化需要我确认？',
@@ -524,7 +528,7 @@ const AGENT_DETAILS: Record<string, { boundary: string; action: string }> = {
     action: '在部署与本次请求都允许时，补充公开的外部参考。',
   },
   synthesis: {
-    boundary: '仅使用本机模型，健康数据不离开本机。',
+    boundary: '仅使用运维已配置的模型服务，不能绕过授权、工具白名单和输出校验。',
     action: '汇总检索到的证据，生成带出处的回答并通过安全校验。',
   },
 }
@@ -580,28 +584,29 @@ const PHASE_LABELS: Record<string, string> = {
   routing: '正在识别问题类型…',
   retrieving: '正在核对档案与本地资料…',
   searching: '正在获取脱敏联网参考…',
-  generating: '正在本机生成回答…',
+  generating: '正在生成回答…',
   validating: '正在校验引用与安全边界…',
+  remembering: '正在提取可长期保存的聊天线索…',
 }
 
 const thinkingText = computed(() => {
   if (orchestrationPhase.value && PHASE_LABELS[orchestrationPhase.value]) {
     return PHASE_LABELS[orchestrationPhase.value]
   }
-  return '正在本机核对证据并生成回答…'
+  return '正在核对证据并生成回答…'
 })
 
 const workflowSummary = computed(() => {
   if (sending.value) {
     return orchestrationPhase.value && PHASE_LABELS[orchestrationPhase.value]
       ? PHASE_LABELS[orchestrationPhase.value]
-      : '正在本机分析中…'
+      : '正在分析中…'
   }
   const traces = workflowTrace.value
   if (traces.length > 0) {
     const completed = traces.filter(trace => trace.status === 'completed').length
     const usedNetwork = traces.some(trace => trace.network_used)
-    return `已完成 ${completed} 个步骤${usedNetwork ? '，含脱敏联网参考' : '，全程在本机完成'}`
+    return `已完成 ${completed} 个步骤${usedNetwork ? '，含脱敏联网参考' : '，未使用外部网页搜索'}`
   }
   return '发送问题后，可在此查看处理进度'
 })
@@ -611,12 +616,12 @@ const workflowChipLabel = computed(() => {
   if (sending.value) {
     return orchestrationPhase.value && PHASE_LABELS[orchestrationPhase.value]
       ? PHASE_LABELS[orchestrationPhase.value]
-      : '正在本机分析…'
+      : '正在分析…'
   }
   const done = workflowTrace.value.filter(trace =>
     ['completed', 'skipped', 'blocked', 'degraded'].includes(trace.status),
   ).length
-  return done > 0 ? `本地分析 · ${done} 步完成` : '本地分析'
+  return done > 0 ? `证据分析 · ${done} 步完成` : '证据分析'
 })
 
 const selectedAgent = computed(() => AGENT_STAGES.find(stage => stage.id === selectedAgentId.value) ?? null)
@@ -814,6 +819,21 @@ function useSuggestedQuestion(question: string): void {
   void nextTick(() => draftInput.value?.focus())
 }
 
+function chooseAttachment(): void {
+  if (!sending.value) fileInput.value?.click()
+}
+
+function onAttachmentChange(event: Event): void {
+  const input = event.target as HTMLInputElement
+  selectedFile.value = input.files?.[0] ?? null
+  sendError.value = ''
+}
+
+function clearAttachment(): void {
+  selectedFile.value = null
+  if (fileInput.value) fileInput.value.value = ''
+}
+
 function resendAsMedicationSafety(replyIndex: number): void {
   for (let index = replyIndex - 1; index >= 0; index -= 1) {
     const entry = history.value[index]
@@ -866,6 +886,7 @@ function hasEvidenceDetails(entry: ChatEntry): boolean {
       || entry.routeExplanation
       || (entry.sources?.length ?? 0) > 0
       || entry.confidence
+      || (entry.memoryCapture?.saved_count ?? 0) + (entry.memoryCapture?.updated_count ?? 0) > 0
       || (entry.agentTrace?.length ?? 0) > 0
       || (entry.externalSources?.length ?? 0) > 0,
   )
@@ -876,9 +897,11 @@ function evidenceDisclosureSummary(entry: ChatEntry): string {
   const citations = entry.citations?.length ?? 0
   const steps = entry.agentTrace?.length ?? 0
   const external = entry.externalSources?.length ?? 0
+  const memories = (entry.memoryCapture?.saved_count ?? 0) + (entry.memoryCapture?.updated_count ?? 0)
   if (citations > 0) parts.push(`${citations} 条本地引用`)
   if (steps > 0) parts.push(`${steps} 个处理步骤`)
   if (external > 0) parts.push(`${external} 条外部参考`)
+  if (memories > 0) parts.push(`${memories} 条自动记忆`)
   if (entry.degraded) parts.push('受控降级说明')
   return parts.join(' · ') || '分析说明与依据状态'
 }
@@ -1061,8 +1084,9 @@ function autoResizeDraft(): void {
 watch(draft, () => autoResizeDraft())
 
 async function send(text?: string, queryTypeOverride?: string): Promise<void> {
-  const content = (text ?? draft.value).trim()
-  if (!content || sending.value) return
+  const requestedContent = (text ?? draft.value).trim()
+  const file = !text ? selectedFile.value : null
+  if ((!requestedContent && !file) || sending.value) return
 
   cancelActiveSend()
   stopVoiceInput()
@@ -1071,11 +1095,28 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
     speakingIndex.value = null
   }
   keepPartialReply = false
-  history.value.push({ role: 'user', content, revealed: content.length })
-  persistChatSession()
-  draft.value = ''
   sending.value = true
   sendError.value = ''
+  let attachmentText: string | undefined
+  let attachmentName: string | undefined
+  if (file) {
+    try {
+      const extracted = await apiClient.extractAssistantFile(file, requestOptions.value)
+      attachmentText = extracted.text
+      attachmentName = extracted.file_name
+      selectedFile.value = null
+      if (fileInput.value) fileInput.value.value = ''
+    } catch (cause) {
+      sendError.value = formatError(cause)
+      sending.value = false
+      return
+    }
+  }
+  const content = requestedContent || '请读取并总结这个文件中的文字。'
+  const visibleContent = attachmentName ? `${content}\n📎 ${attachmentName}` : content
+  history.value.push({ role: 'user', content: visibleContent, revealed: visibleContent.length })
+  persistChatSession()
+  draft.value = ''
   stopStatus.value = ''
   if (stopStatusTimer) {
     clearTimeout(stopStatusTimer)
@@ -1120,6 +1161,7 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
     entry.networkQuery = reply.network_query
     entry.agentTrace = reply.agent_trace
     entry.externalSources = reply.external_sources
+    entry.memoryCapture = reply.memory_capture
     modelLabel.value = formatModelLabel(reply.model)
     workflowTrace.value = reply.agent_trace ?? []
     workflowRouteExplanation.value = reply.route_explanation ?? null
@@ -1133,6 +1175,8 @@ async function send(text?: string, queryTypeOverride?: string): Promise<void> {
     allowNetworkSearch: allowNetworkSearch.value,
     queryTypeOverride,
     assistantSessionId: assistantSessionId.value,
+    attachmentText,
+    attachmentName,
   })
 
   let streamCancelled = false
@@ -1285,11 +1329,147 @@ onBeforeUnmount(() => {
       </ul>
       <p class="assistant-rail-note">
         <AppIcon name="lock" :size="12" />
-        对话保存在这台电脑上，不上传；退出登录后清除。
+        完整对话正文只在浏览器本机持久化；用户明确陈述的健康信息会自动提取为服务器端“未确认”线索，长期保存在家庭数字孪生中。
       </p>
     </aside>
 
     <section class="assistant-main" aria-label="对话区域">
+      <!-- 氛围背景层：纸感米白 + 水彩植物 + 中央柔光，纯装饰不承载内容（HCT-519 视觉） -->
+      <div class="assistant-ambient" aria-hidden="true">
+        <span class="ambient-mist" />
+        <span class="ambient-pattern" />
+        <span class="ambient-paper" />
+        <span class="ambient-well" />
+        <span class="ambient-arc ambient-arc-a" />
+        <span class="ambient-arc ambient-arc-b" />
+        <span class="ambient-halo" />
+
+        <!-- 左侧：会话轨与主区分隔带旁的极淡植物剪影（左中 + 左下延展） -->
+        <svg class="ambient-plant ambient-plant-left-mid" viewBox="0 0 220 560" fill="none">
+          <path
+            d="M112 556C120 448 96 336 118 224C132 158 124 92 108 26"
+            stroke="#7a8c6e"
+            stroke-opacity="0.22"
+            stroke-width="3"
+            stroke-linecap="round"
+          />
+          <g fill="#6e8a74" fill-opacity="0.15">
+            <path d="M116 470C96 466 82 452 80 432C100 434 114 450 116 470Z" />
+            <path d="M112 392C132 390 146 376 148 356C128 358 114 372 112 392Z" />
+            <path d="M118 300C98 296 84 282 82 262C102 264 116 280 118 300Z" />
+          </g>
+          <g fill="#8ba283" fill-opacity="0.13">
+            <path d="M110 336C90 330 78 316 76 296C96 300 108 316 110 336Z" />
+            <path d="M114 254C134 252 148 238 150 218C130 220 116 234 114 254Z" />
+            <path d="M112 176C94 170 82 156 80 138C98 142 110 158 112 176Z" />
+          </g>
+          <g fill="#d6c49e" fill-opacity="0.16">
+            <path d="M110 96C94 88 86 74 86 58C102 62 110 78 110 96Z" />
+            <circle cx="108" cy="22" r="5" />
+          </g>
+        </svg>
+        <svg class="ambient-plant ambient-plant-left-low" viewBox="0 0 240 200" fill="none">
+          <g stroke="#7a8c6e" stroke-opacity="0.18" stroke-width="2.6" stroke-linecap="round">
+            <path d="M22 198C30 152 52 112 92 86" />
+            <path d="M24 198C46 162 86 140 130 132" />
+            <path d="M20 198C24 158 22 122 40 88" />
+          </g>
+          <g fill="#6e8a74" fill-opacity="0.13">
+            <path d="M92 86C74 82 62 70 60 52C80 56 92 68 92 86Z" />
+            <path d="M130 132C112 128 100 116 98 98C118 102 130 114 130 132Z" />
+            <path d="M40 88C24 82 14 70 12 54C30 58 40 72 40 88Z" />
+          </g>
+          <g fill="#8ba283" fill-opacity="0.11">
+            <path d="M66 118C50 112 40 100 38 84C56 88 66 102 66 118Z" />
+            <path d="M104 160C88 156 78 144 76 128C94 132 104 146 104 160Z" />
+          </g>
+        </svg>
+
+        <!-- 右侧：竖向水彩花枝，沿右边缘向上延展 -->
+        <svg class="ambient-plant ambient-plant-right" viewBox="0 0 340 820" fill="none">
+          <defs>
+            <filter id="hctAmbSoft" x="-20%" y="-20%" width="140%" height="140%">
+              <feGaussianBlur stdDeviation="1.2" />
+            </filter>
+            <path id="hctAmbLeafA" d="M0 0C14 -22 40 -32 64 -26C54 -4 24 8 0 0Z" />
+            <path id="hctAmbLeafB" d="M0 0C-14 -22 -40 -32 -64 -26C-54 -4 -24 8 0 0Z" />
+            <g id="hctAmbBlossom">
+              <g fill="#f4ddba" fill-opacity="0.58">
+                <ellipse cx="0" cy="-12.5" rx="6.2" ry="11.5" />
+                <ellipse cx="0" cy="-12.5" rx="6.2" ry="11.5" transform="rotate(72)" />
+                <ellipse cx="0" cy="-12.5" rx="6.2" ry="11.5" transform="rotate(144)" />
+                <ellipse cx="0" cy="-12.5" rx="6.2" ry="11.5" transform="rotate(216)" />
+                <ellipse cx="0" cy="-12.5" rx="6.2" ry="11.5" transform="rotate(288)" />
+              </g>
+              <circle r="4.2" fill="#d9a273" fill-opacity="0.4" />
+            </g>
+          </defs>
+          <g stroke="#7a8c6e" stroke-opacity="0.2" stroke-linecap="round" fill="none">
+            <path d="M296 816C266 664 300 522 268 382C246 284 270 162 240 34" stroke-width="3.2" />
+            <path d="M280 520C316 500 334 470 340 436" stroke-width="2.2" />
+            <path d="M268 382C236 366 218 338 214 302" stroke-width="2.2" />
+            <path d="M272 210C238 196 220 170 216 136" stroke-width="2" />
+          </g>
+          <g filter="url(#hctAmbSoft)">
+            <use href="#hctAmbLeafA" fill="#9aac86" fill-opacity="0.17" transform="translate(292 700) rotate(-18) scale(1.15)" />
+            <use href="#hctAmbLeafB" fill="#6e8a74" fill-opacity="0.15" transform="translate(284 640) rotate(14)" />
+            <use href="#hctAmbLeafA" fill="#b8c29a" fill-opacity="0.16" transform="translate(276 548) rotate(-10) scale(1.05)" />
+            <use href="#hctAmbLeafB" fill="#9aac86" fill-opacity="0.14" transform="translate(282 470) rotate(20) scale(0.95)" />
+            <use href="#hctAmbLeafA" fill="#e3c8a0" fill-opacity="0.2" transform="translate(268 366) rotate(-24) scale(0.9)" />
+            <use href="#hctAmbLeafB" fill="#b8c29a" fill-opacity="0.15" transform="translate(262 300) rotate(10) scale(0.85)" />
+            <use href="#hctAmbLeafA" fill="#9aac86" fill-opacity="0.16" transform="translate(268 214) rotate(-14) scale(0.9)" />
+            <use href="#hctAmbLeafB" fill="#6e8a74" fill-opacity="0.13" transform="translate(246 120) rotate(18) scale(0.75)" />
+            <use href="#hctAmbLeafA" fill="#cfd8b8" fill-opacity="0.18" transform="translate(322 470) rotate(-30) scale(0.8)" />
+          </g>
+          <circle cx="340" cy="432" r="3.4" fill="#d9a273" fill-opacity="0.32" />
+          <circle cx="212" cy="298" r="3" fill="#d6c49e" fill-opacity="0.36" />
+          <circle cx="240" cy="28" r="3.6" fill="#d9a273" fill-opacity="0.3" />
+          <use href="#hctAmbBlossom" transform="translate(214 292) scale(0.8)" />
+          <use href="#hctAmbBlossom" transform="translate(214 128) scale(0.95)" />
+          <use href="#hctAmbBlossom" transform="translate(268 560) scale(1.05)" />
+        </svg>
+        <svg class="ambient-plant ambient-plant-right-top" viewBox="0 0 260 150" fill="none">
+          <path
+            d="M8 12C86 30 172 66 248 126"
+            stroke="#8ba283"
+            stroke-opacity="0.2"
+            stroke-width="2.4"
+            stroke-linecap="round"
+          />
+          <g fill="#9aac86" fill-opacity="0.15">
+            <path d="M84 30C68 26 58 16 56 2C74 6 84 16 84 30Z" />
+            <path d="M150 62C134 58 124 48 122 34C140 38 150 48 150 62Z" />
+            <path d="M196 92C212 90 224 80 228 66C210 68 200 78 196 92Z" />
+          </g>
+          <circle cx="236" cy="112" r="4" fill="#d9a273" fill-opacity="0.3" />
+          <circle cx="118" cy="34" r="2.6" fill="#d6c49e" fill-opacity="0.4" />
+        </svg>
+
+        <!-- 右下：小宠物的陪伴柔光底 + 叶芽点缀 -->
+        <span class="ambient-pet-glow" />
+        <svg class="ambient-plant ambient-pet-sprig" viewBox="0 0 130 80" fill="none">
+          <path
+            d="M6 70C34 58 62 44 92 22"
+            stroke="#8ba283"
+            stroke-opacity="0.22"
+            stroke-width="2.2"
+            stroke-linecap="round"
+          />
+          <g fill="#9aac86" fill-opacity="0.18">
+            <path d="M38 56C24 52 16 42 15 28C31 33 39 44 38 56Z" />
+            <path d="M66 40C54 34 48 24 48 12C62 18 68 30 66 40Z" />
+          </g>
+          <circle cx="96" cy="16" r="3.4" fill="#d9a273" fill-opacity="0.34" />
+          <circle cx="112" cy="30" r="2.2" fill="#d6c49e" fill-opacity="0.42" />
+        </svg>
+
+        <!-- 底部：轻微落地渐变，提升空间稳定感 -->
+        <span class="ambient-ground" />
+
+        <!-- 漂浮微尘颗粒 -->
+        <span class="ambient-dust"><i /><i /><i /><i /><i /><i /><i /></span>
+      </div>
+
       <header class="assistant-topbar">
         <div class="assistant-topbar-title">
           <h2 class="hero-greeting">本地证据助手</h2>
@@ -1329,6 +1509,24 @@ onBeforeUnmount(() => {
               opacity="0.94"
             />
             <circle cx="37" cy="34" r="7" fill="#fff" opacity="0.28" />
+          </svg>
+          <svg class="assistant-empty-sprig left" viewBox="0 0 56 44" fill="none" aria-hidden="true">
+            <path d="M4 40C15 32 28 22 50 8" stroke="#6e8a74" stroke-opacity="0.4" stroke-width="1.8" stroke-linecap="round" />
+            <g fill="#6e8a74" fill-opacity="0.34">
+              <path d="M17 31C10 27 6 20 7 12C15 16 19 24 17 31Z" />
+              <path d="M30 21C24 16 22 9 24 2C31 7 33 15 30 21Z" />
+            </g>
+            <path d="M41 14C37 9 36 4 38 0C43 3 44 10 41 14Z" fill="#8ba283" fill-opacity="0.3" />
+            <circle cx="50" cy="7" r="2" fill="#d9a273" fill-opacity="0.4" />
+          </svg>
+          <svg class="assistant-empty-sprig right" viewBox="0 0 56 44" fill="none" aria-hidden="true">
+            <path d="M4 40C15 32 28 22 50 8" stroke="#6e8a74" stroke-opacity="0.4" stroke-width="1.8" stroke-linecap="round" />
+            <g fill="#6e8a74" fill-opacity="0.34">
+              <path d="M17 31C10 27 6 20 7 12C15 16 19 24 17 31Z" />
+              <path d="M30 21C24 16 22 9 24 2C31 7 33 15 30 21Z" />
+            </g>
+            <path d="M41 14C37 9 36 4 38 0C43 3 44 10 41 14Z" fill="#8ba283" fill-opacity="0.3" />
+            <circle cx="50" cy="7" r="2" fill="#d9a273" fill-opacity="0.4" />
           </svg>
         </span>
         <strong class="assistant-empty-title">向家庭助手提问</strong>
@@ -1394,13 +1592,20 @@ onBeforeUnmount(() => {
             </span>
             <span v-if="entry.orchestrationMode === 'multi_agent'" class="chat-agent-locality">
               <AppIcon name="assistant" :size="12" style="vertical-align: -1px" />
-              分析全程在本机完成
+              已完成本次证据编排
               <span v-if="entry.networkUsed" class="chat-agent-network">已补充脱敏联网参考</span>
+            </span>
+            <span
+              v-if="(entry.memoryCapture?.saved_count ?? 0) + (entry.memoryCapture?.updated_count ?? 0) > 0"
+              class="chat-memory-capture"
+            >
+              <AppIcon name="sparkle" :size="12" style="vertical-align: -1px" />
+              已自动提取或更新 {{ (entry.memoryCapture?.saved_count ?? 0) + (entry.memoryCapture?.updated_count ?? 0) }} 条聊天线索；新线索为“未确认”状态，可在数字孪生页面核对。
             </span>
             <div v-if="(entry.agentTrace?.length ?? 0) > 0" class="chat-agent-trace" aria-label="处理步骤">
               <span v-for="trace in entry.agentTrace" :key="trace.agent_id" class="chat-agent-chip">
                 {{ trace.role }} · {{ trace.status === 'completed' ? '完成' : trace.status === 'skipped' ? '跳过' : trace.status === 'blocked' ? '拦截' : '降级' }}
-                <small>{{ trace.network_used ? '联网' : '本机' }}</small>
+                <small>{{ trace.network_used ? '联网' : '本地编排' }}</small>
               </span>
             </div>
             <template v-if="extraFactSources(entry.sources, entry.citations).length > 0">
@@ -1574,12 +1779,24 @@ onBeforeUnmount(() => {
         </span>
       </div>
       <form class="chat-compose assistant-composer" @submit.prevent="send()">
+        <input
+          ref="fileInput"
+          class="assistant-file-input"
+          type="file"
+          title="上传文件"
+          @change="onAttachmentChange"
+        />
+        <div v-if="selectedFile" class="assistant-attachment-chip" role="status">
+          <AppIcon name="upload" :size="14" />
+          <span>{{ selectedFile.name }}</span>
+          <small>发送前提取文字</small>
+          <button type="button" class="btn btn-ghost btn-small" :disabled="sending" @click="clearAttachment">移除</button>
+        </div>
         <textarea
           ref="draftInput"
           v-model="draft"
           rows="2"
           placeholder="例如：最近的用药提醒是依据什么？（回答仅供参考，不构成医疗建议）"
-          title="Enter 发送 · Shift + Enter 换行"
           @focus="onDraftFocus"
           @keydown.enter.exact.prevent="send()"
         />
@@ -1593,12 +1810,11 @@ onBeforeUnmount(() => {
         </div>
         <p v-if="voiceSendHint" class="assistant-voice-send-hint" role="status">{{ voiceSendHint }}</p>
         <div v-if="voiceMode !== 'ready' && voiceMode !== 'command'" class="chat-compose-actions assistant-composer-actions">
-          <small class="assistant-compose-hint">Enter 发送 · Shift + Enter 换行</small>
           <label
             class="assistant-net-toggle"
             :title="webSearchAvailable === false
               ? webSearchDisabledText
-              : '仅发送脱敏后的问题以补充公开参考；家庭成员与健康记录始终留在本机'"
+              : '联网搜索只发送脱敏问题，不额外发送成员档案、图片或健康记录'"
           >
             <input v-model="allowNetworkSearch" type="checkbox" :disabled="webSearchAvailable === false" />
             <AppIcon name="cloud" :size="14" />
@@ -1606,6 +1822,16 @@ onBeforeUnmount(() => {
             <span v-if="webSearchBadge" class="pill sage">{{ webSearchBadge }}</span>
           </label>
           <span class="assistant-composer-spacer" aria-hidden="true" />
+          <button
+            type="button"
+            class="btn btn-ghost btn-small assistant-attach-button"
+            :disabled="sending"
+            title="上传文件并提取其中的文字"
+            @click="chooseAttachment"
+          >
+            <AppIcon name="upload" :size="14" />
+            上传文件
+          </button>
           <button
             v-if="speechInputSupported"
             type="button"
@@ -1620,23 +1846,15 @@ onBeforeUnmount(() => {
             {{ voiceButtonLabel }}
           </button>
           <button
-            v-if="sending"
-            type="button"
-            class="btn btn-ghost btn-small"
-            aria-label="停止生成本次回答"
-            @click="cancelActiveSend(true)"
-          >
-            停止
-          </button>
-          <button
-            type="submit"
             ref="sendButton"
+            type="button"
             class="assistant-send"
-            :disabled="!canSend"
-            :aria-label="sending ? '发送中' : '发送'"
-            :title="sending ? '正在生成回答' : '发送（Enter）'"
+            :disabled="!sending && !canSend"
+            :aria-label="sending ? '停止生成本次回答' : '发送'"
+            :title="sending ? '停止生成本次回答' : '发送'"
+            @click="sending ? cancelActiveSend(true) : send()"
           >
-            <AppIcon name="arrow-up" :size="18" />
+            <AppIcon :name="sending ? 'stop' : 'arrow-up'" :size="18" />
           </button>
         </div>
       </form>
@@ -1718,6 +1936,47 @@ onBeforeUnmount(() => {
 
 <style scoped>
 /* ---------- 全幅对话画布 + 会话轨 ---------- */
+
+.assistant-file-input {
+  display: none;
+}
+
+.assistant-attachment-chip {
+  align-items: center;
+  background: color-mix(in srgb, var(--sky, #55809c) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sky, #55809c) 28%, transparent);
+  border-radius: 10px;
+  color: var(--ink, #2f3834);
+  display: flex;
+  gap: 8px;
+  margin: 0 0 8px;
+  max-width: 100%;
+  padding: 7px 9px;
+}
+
+.chat-memory-capture {
+  color: var(--clay, #9a6b34);
+  display: block;
+  line-height: 1.5;
+  margin-top: 4px;
+}
+
+.assistant-attachment-chip span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistant-attachment-chip small {
+  color: var(--ink-soft, #69746c);
+  white-space: nowrap;
+}
+
+.assistant-attach-button {
+  white-space: nowrap;
+}
 
 .assistant-shell {
   display: flex;
@@ -1849,6 +2108,209 @@ onBeforeUnmount(() => {
   min-height: 0;
   min-width: 0;
   padding: 14px clamp(16px, 2.4vw, 30px) 12px;
+  position: relative;
+}
+
+/* ---------- 氛围背景层：纸感米白 + 水彩植物 + 中央柔光（HCT-519 视觉） ----------
+   只做背景氛围：内容层全部抬到 z-index:1，装饰层 pointer-events:none，
+   不参与布局，也不遮挡输入框、按钮与文字。 */
+.assistant-main > *:not(.assistant-ambient) {
+  position: relative;
+  z-index: 1;
+}
+
+.assistant-ambient {
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  position: absolute;
+  z-index: 0;
+}
+
+.assistant-ambient > * {
+  position: absolute;
+}
+
+/* 四周极淡的渐变晕染，中央内容区保持明亮 */
+.ambient-mist {
+  background:
+    radial-gradient(42% 34% at 6% 10%, rgba(110, 138, 116, 0.1), transparent 70%),
+    radial-gradient(36% 28% at 98% 4%, rgba(226, 178, 116, 0.1), transparent 72%),
+    radial-gradient(44% 34% at 102% 74%, rgba(148, 168, 132, 0.12), transparent 72%),
+    radial-gradient(38% 30% at -2% 88%, rgba(224, 196, 148, 0.1), transparent 70%);
+  inset: 0;
+}
+
+/* 极淡的重复小纹样：叶片线稿 + 种子芽点，只作背景肌理 */
+.ambient-pattern {
+  background-image: var(--motif-leaf, none);
+  background-size: 168px 168px;
+  inset: 0;
+  opacity: 0.34;
+}
+
+/* 纸张纤维般的低频水彩斑点 */
+.ambient-paper {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='460' height='460'%3E%3Cfilter id='p'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.011 0.013' numOctaves='3' seed='11' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0.44 0 0 0 0 0.40 0 0 0 0 0.31 0 0 0 0.055 0'/%3E%3C/filter%3E%3Crect width='460' height='460' filter='url(%23p)'/%3E%3C/svg%3E");
+  background-size: 460px 460px;
+  inset: 0;
+  opacity: 0.5;
+}
+
+/* 中央柔光聚焦区：像温暖晨光照在主标题后方，不是舞台灯 */
+.ambient-well {
+  background: radial-gradient(
+    52% 46% at 50% 46%,
+    rgba(255, 253, 244, 0.72),
+    rgba(255, 251, 238, 0.3) 55%,
+    transparent 76%
+  );
+  height: 520px;
+  left: 50%;
+  top: 34%;
+  transform: translateX(-50%);
+  width: min(880px, 92%);
+}
+
+.ambient-halo {
+  background: radial-gradient(
+    46% 44% at 50% 46%,
+    rgba(240, 220, 170, 0.26),
+    rgba(230, 224, 192, 0.13) 52%,
+    transparent 74%
+  );
+  height: 440px;
+  left: 50%;
+  top: 30%;
+  transform: translateX(-50%);
+  transition: opacity 0.3s ease;
+  width: min(760px, 84%);
+}
+
+/* 有对话内容时柔光收淡，不干扰正文阅读 */
+.assistant-main:has(.chat-thread:not(.empty)) .ambient-halo {
+  opacity: 0.55;
+}
+
+/* 弧形细线：极浅的圆环切线，只为空间层次 */
+.ambient-arc {
+  border: 1px solid rgba(110, 138, 116, 0.17);
+  border-radius: 50%;
+}
+
+.ambient-arc-a {
+  height: 640px;
+  left: 50%;
+  top: -470px;
+  transform: translateX(-58%);
+  width: 640px;
+}
+
+.ambient-arc-b {
+  border-color: rgba(169, 126, 31, 0.14);
+  height: 420px;
+  right: -190px;
+  top: 16%;
+  width: 420px;
+}
+
+.ambient-plant {
+  opacity: 0.92;
+}
+
+.ambient-plant-left-mid {
+  height: 440px;
+  left: -30px;
+  top: 14%;
+  width: 180px;
+}
+
+.ambient-plant-left-low {
+  bottom: -6px;
+  height: 196px;
+  left: -44px;
+  opacity: 0.85;
+  width: 230px;
+}
+
+.ambient-plant-right {
+  height: calc(100% + 24px);
+  right: -24px;
+  top: -12px;
+  width: clamp(220px, 21vw, 330px);
+}
+
+.ambient-plant-right-top {
+  height: 122px;
+  right: 30px;
+  top: -8px;
+  width: 210px;
+}
+
+/* 右下宠物位：米白/淡绿圆形柔光底 + 细环，让宠物像陪伴入口 */
+.ambient-pet-glow {
+  background: radial-gradient(
+    closest-side,
+    rgba(255, 250, 236, 0.85),
+    rgba(226, 236, 220, 0.42) 56%,
+    transparent 78%
+  );
+  bottom: -34px;
+  height: 252px;
+  right: -14px;
+  width: 252px;
+}
+
+.ambient-pet-glow::after {
+  border: 1px solid rgba(110, 138, 116, 0.12);
+  border-radius: 50%;
+  content: "";
+  inset: 16%;
+  position: absolute;
+}
+
+.ambient-pet-sprig {
+  bottom: 22px;
+  height: 74px;
+  opacity: 0.9;
+  right: 206px;
+  width: 118px;
+}
+
+/* 底部轻微地面感 */
+.ambient-ground {
+  background:
+    linear-gradient(to top, rgba(211, 192, 152, 0.16), rgba(211, 192, 152, 0.05) 46%, transparent),
+    radial-gradient(56% 100% at 50% 118%, rgba(186, 178, 140, 0.12), transparent 72%);
+  bottom: 0;
+  height: 132px;
+  left: 0;
+  right: 0;
+}
+
+/* 柔和浮尘颗粒：极轻、缓慢， prefers-reduced-motion 时静止 */
+.ambient-dust {
+  inset: 0;
+}
+
+.ambient-dust i {
+  animation: ambient-float 16s ease-in-out infinite alternate;
+  border-radius: 50%;
+  filter: blur(1px);
+  position: absolute;
+}
+
+.ambient-dust i:nth-child(1) { animation-duration: 17s; background: rgba(233, 186, 110, 0.5); height: 5px; left: 12%; top: 20%; width: 5px; }
+.ambient-dust i:nth-child(2) { animation-delay: -6s; animation-duration: 19s; background: rgba(142, 166, 138, 0.42); height: 4px; left: 24%; top: 58%; width: 4px; }
+.ambient-dust i:nth-child(3) { animation-delay: -3s; background: rgba(226, 205, 160, 0.55); height: 3px; left: 37%; top: 12%; width: 3px; }
+.ambient-dust i:nth-child(4) { animation-delay: -9s; animation-duration: 21s; background: rgba(226, 205, 160, 0.45); height: 5px; left: 64%; top: 24%; width: 5px; }
+.ambient-dust i:nth-child(5) { animation-delay: -12s; background: rgba(233, 186, 110, 0.4); height: 4px; left: 78%; top: 44%; width: 4px; }
+.ambient-dust i:nth-child(6) { animation-delay: -4s; animation-duration: 23s; background: rgba(142, 166, 138, 0.3); height: 6px; left: 88%; top: 12%; width: 6px; }
+.ambient-dust i:nth-child(7) { animation-delay: -15s; animation-duration: 18s; background: rgba(233, 186, 110, 0.35); height: 3px; left: 52%; top: 40%; width: 3px; }
+
+@keyframes ambient-float {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(6px, -14px, 0); }
 }
 
 .assistant-topbar {
@@ -1993,7 +2455,7 @@ onBeforeUnmount(() => {
 
 .assistant-composer-spacer { flex: 1 1 auto; }
 
-/* 圆形主发送按钮（↑），与文本框同卡右下角。 */
+/* 圆形主操作按钮：空闲发送（↑），生成中停止（方块）。 */
 .assistant-send {
   align-items: center;
   background: linear-gradient(160deg, var(--btn-primary-from, #38665a), var(--btn-primary-to, #2a5045));
@@ -2247,7 +2709,45 @@ onBeforeUnmount(() => {
   height: 58px;
   justify-content: center;
   margin-bottom: 2px;
+  position: relative;
   width: 58px;
+}
+
+/* 品牌氛围：图标外的浅圆环 + 极淡光晕 + 环绕叶枝，安静不抢眼 */
+.assistant-empty-art::before {
+  border: 1px solid color-mix(in srgb, var(--pine, #38665a) 22%, transparent);
+  border-radius: 50%;
+  content: "";
+  inset: -11px;
+  opacity: 0.7;
+  position: absolute;
+}
+
+.assistant-empty-art::after {
+  border: 1px solid color-mix(in srgb, var(--gold, #a97e1f) 20%, transparent);
+  border-radius: 50%;
+  box-shadow: 0 0 34px 12px rgba(244, 228, 186, 0.35);
+  content: "";
+  inset: -24px;
+  opacity: 0.5;
+  position: absolute;
+}
+
+.assistant-empty-sprig {
+  height: 40px;
+  position: absolute;
+  top: 50%;
+  width: 52px;
+}
+
+.assistant-empty-sprig.left {
+  left: -48px;
+  transform: translateY(-58%) rotate(6deg);
+}
+
+.assistant-empty-sprig.right {
+  right: -48px;
+  transform: translateY(-58%) scaleX(-1) rotate(6deg);
 }
 
 .assistant-empty-title {
@@ -2314,16 +2814,6 @@ onBeforeUnmount(() => {
 
 .assistant-net-toggle .pill { font-size: 10.5px; padding: 2px 7px; }
 
-.assistant-compose-hint {
-  color: var(--ink-faint, #a2937c);
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-@media (max-width: 720px) {
-  .assistant-compose-hint { display: none; }
-}
-
 .assistant-footnote {
   color: var(--ink-faint, #a2937c);
   flex: 0 0 auto;
@@ -2337,6 +2827,7 @@ onBeforeUnmount(() => {
   .assistant-status-chip.busy .app-icon { animation: none; }
   .voice-session-ring.second,
   .assistant-settings-drawer { animation: none; }
+  .ambient-dust i { animation: none; }
   .assistant-send,
   .assistant-suggestion { transition: none; }
   .assistant-send:hover:not(:disabled),
@@ -2379,6 +2870,17 @@ onBeforeUnmount(() => {
   .assistant-rail-note { display: none; }
 
   .assistant-main { padding: 12px 14px 10px; }
+
+  /* 窄屏下收掉大部分装饰，只留右侧花枝的淡影 */
+  .ambient-plant-left-mid,
+  .ambient-plant-left-low,
+  .ambient-plant-right-top,
+  .ambient-pet-sprig,
+  .ambient-arc { display: none; }
+
+  .ambient-plant-right { opacity: 0.7; width: 150px; }
+
+  .ambient-pet-glow { height: 190px; right: -20px; width: 190px; }
 }
 
 .speech-segment-chips {

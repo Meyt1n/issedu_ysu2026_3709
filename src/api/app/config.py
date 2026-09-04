@@ -108,6 +108,10 @@ class Settings(BaseSettings):
     # Sending a json_schema to a provider that only knows json_object is a hard
     # 400 on every synthesis call, so this is a per-provider setting, not a flag.
     llm_api_response_format_mode: str = "json_schema"
+    # Image attachments need an OpenAI-compatible vision-capable model. Keep
+    # this explicitly disabled so a text-only cloud model cannot accidentally
+    # receive binary image data.
+    llm_api_vision_enabled: bool = False
     # Extra hosts the cloud backend may reach.  The endpoint host is allowed
     # automatically; this exists for gateways that redirect to a sibling host.
     llm_api_extra_allowed_hosts: str = ""
@@ -184,6 +188,11 @@ class Settings(BaseSettings):
     log_mask_enabled: bool = True
     upload_allowed_extensions: str = ".jpg,.jpeg,.png,.pdf,.mp4,.mov"
     upload_max_size_bytes: int = 10 * 1024 * 1024
+    # Chat attachments are transient: they are extracted in memory and are
+    # never written to FILE_ROOT. The extracted text is bounded before it can
+    # enter a model prompt or the browser request body.
+    assistant_file_max_bytes: int = Field(default=20 * 1024 * 1024, ge=1, le=50 * 1024 * 1024)
+    assistant_file_max_chars: int = Field(default=50_000, ge=1_000, le=200_000)
     # Comma-separated actor ids allowed to read ``internal`` knowledge docs.
     # Empty means internal docs are creator-only (plus household/member scopes).
     knowledge_admin_actors: str = ""

@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import AppIcon from '@/components/AppIcon.vue'
+import BrandLogo from '@/components/BrandLogo.vue'
 import { presentApiError } from '@/api/errors'
 import { familyAuthAdapter } from '@/data/authAdapter'
 import { useAuth } from '@/stores/auth'
@@ -63,6 +64,7 @@ function useDemoMode(): void {
 <template>
   <main id="main" class="screen">
     <header class="screen-header">
+      <BrandLogo :size="56" />
       <p class="eyebrow">家庭服务器</p>
       <h1>登录</h1>
     </header>

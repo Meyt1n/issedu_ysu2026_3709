@@ -174,6 +174,86 @@ test('成员前台已打开时，后台登录会自动刷新家庭绑定和 PIN 
   await context.close()
 })
 
+test('登录设置新增成员后，后台 PIN 列表和前台选人同步更新', async ({ context }) => {
+  const members = [ownerMember, grandmaMember]
+  const installMemberManagementApi = async (page: Page): Promise<void> => {
+    await page.route('**/api/v1/**', async route => {
+      const request = route.request()
+      const path = new URL(request.url()).pathname
+      const respond = (body: unknown, status = 200) => route.fulfill({
+        status,
+        contentType: 'application/json',
+        body: JSON.stringify(body),
+      })
+
+      if (request.method() === 'POST' && path === '/api/v1/auth/login') {
+        const submitted = request.postDataJSON() as { actor_id?: string } | null
+        return respond({
+          actor_id: submitted?.actor_id ?? household.created_by,
+          session_token: 'o'.repeat(48),
+          expires_at: (Date.now() + 1_800_000) / 1000,
+        })
+      }
+      if (request.method() === 'POST' && path === '/api/v1/households/household-entry-1/members') {
+        const submitted = request.postDataJSON() as { display_name: string; role: string; actor_id: string }
+        const created = {
+          id: 'member-grandpa',
+          household_id: household.id,
+          display_name: submitted.display_name,
+          role: submitted.role,
+          actor_id: submitted.actor_id,
+          created_at: '2026-09-04T00:00:00Z',
+        }
+        members.push(created)
+        return respond(created, 201)
+      }
+      if (request.method() === 'POST' && path === '/api/v1/auth/logout') return respond({ status: 'logged_out' })
+      if (request.method() === 'GET' && path === '/api/v1/households') return respond([household])
+      if (request.method() === 'GET' && path.endsWith('/members')) return respond(members)
+      if (request.method() === 'GET' && path.endsWith('/pin-status')) return respond({ configured_actor_ids: [] })
+      if (request.method() === 'GET' && path === '/api/v1/meta/capabilities') {
+        return respond({ phase: 'local', available: ['api'], unavailable: [] })
+      }
+      return respond([])
+    })
+  }
+
+  const member = await context.newPage()
+  await installMemberManagementApi(member)
+  await member.goto('/?portal=member')
+  await expect(member.getByTestId('member-unbound-gate')).toBeVisible()
+
+  const admin = await context.newPage()
+  await installMemberManagementApi(admin)
+  await admin.goto('/?portal=admin')
+  await submitFormalLogin(admin, 'parent-admin')
+  await expect(admin.locator('.app-frame')).toBeVisible()
+  await expect(admin.locator('.warm-boot')).toHaveCount(0)
+  await expect(admin.locator('.topbar .context-select')).toHaveCount(0)
+  await expect(admin.locator('.topbar .identity-admin-meta')).toHaveCount(0)
+
+  await admin.getByRole('button', { name: '登录设置', exact: true }).click()
+  const addMemberForm = admin.getByTestId('add-member-form')
+  await expect(addMemberForm).toBeVisible()
+  await expect(admin.locator('.route-progress')).toHaveCount(0)
+  const memberFieldTops = await addMemberForm.locator('label.field').evaluateAll(labels => labels.map(label => label.getBoundingClientRect().top))
+  const memberInputTops = await addMemberForm.locator('label.field input').evaluateAll(inputs => inputs.map(input => input.getBoundingClientRect().top))
+  expect(memberFieldTops).toHaveLength(2)
+  expect(memberInputTops).toHaveLength(2)
+  expect(Math.abs(memberFieldTops[0]! - memberFieldTops[1]!)).toBeLessThanOrEqual(1)
+  expect(Math.abs(memberInputTops[0]! - memberInputTops[1]!)).toBeLessThanOrEqual(1)
+  await addMemberForm.getByLabel('家人称呼', { exact: true }).fill('爷爷')
+  await addMemberForm.getByPlaceholder('例如 grandma-1').fill('grandpa-1')
+  await addMemberForm.getByTestId('add-member-submit').click()
+
+  await expect(admin.locator('select option').filter({ hasText: '爷爷' })).toHaveCount(1)
+  await expect(admin.getByText('已添加爷爷。')).toBeVisible()
+
+  await expect(member.getByTestId('member-unbound-gate')).toHaveCount(0)
+  await expect(member.getByRole('option', { name: '爷爷' })).toHaveCount(1)
+  await context.close()
+})
+
 const rebindHouseholdA = {
   id: 'household-rebind-a',
   name: '甲家庭',

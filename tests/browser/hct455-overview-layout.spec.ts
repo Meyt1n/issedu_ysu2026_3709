@@ -141,6 +141,8 @@ test('图二：天气建议横排渲染，不再被压成竖排窄列', async ({
 test('图三：家庭成员状态完整渲染，分区编号沿阅读顺序递增', async ({ page }) => {
   await signInAsAdmin(page)
 
+  await expect(page.getByRole('button', { name: '管理授权', exact: true })).toHaveCount(0)
+
   const membersCard = page.locator('.home-dashboard-members')
   await membersCard.scrollIntoViewIfNeeded()
   const rows = page.locator('.home-dashboard-member')

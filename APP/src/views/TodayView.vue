@@ -3,11 +3,11 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import AppIcon from '@/components/AppIcon.vue'
+import BrandLogo from '@/components/BrandLogo.vue'
 import ConfettiBurst from '@/components/ConfettiBurst.vue'
 import ErrorNotice from '@/components/ErrorNotice.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import EnvironmentActionCard from '@/components/EnvironmentActionCard.vue'
-import HealthNewsPanel from '@/components/HealthNewsPanel.vue'
 import ListLoadingState from '@/components/ListLoadingState.vue'
 import ListStatusAnnouncer from '@/components/ListStatusAnnouncer.vue'
 import ReminderStatusCard from '@/components/ReminderStatusCard.vue'
@@ -18,11 +18,10 @@ import TaskCard from '@/components/TaskCard.vue'
 import TrendChart from '@/components/TrendChart.vue'
 import { useCountUp } from '@/composables/useCountUp'
 import { usePullToRefresh } from '@/composables/usePullToRefresh'
-import { createSpeaker, useSpeech } from '@/composables/useSpeech'
 import { showToast } from '@/composables/useToast'
 import { presentApiError, presentListApiError, type ErrorPresentation } from '@/api/errors'
 import { activeProvider } from '@/data'
-import { eventStatusLabel, riskLevelLabel, riskLevelTone, taskLevelLabel, taskStatusLabel } from '@/data/labels'
+import { eventStatusLabel, riskLevelTone, taskLevelLabel, taskStatusLabel } from '@/data/labels'
 import type {
   CareTask,
   MemberSummary,
@@ -32,7 +31,6 @@ import type {
   TodaySnapshot,
   TrendPoint,
 } from '@/data/types'
-import { useA11y } from '@/stores/accessibility'
 import { cancelScheduledReminders, reminderState, synchronizeReminders } from '@/notifications/reminderService'
 import { sessionContextKey, useSession } from '@/stores/session'
 import { tapFeedback } from '@/utils/haptics'
@@ -41,9 +39,6 @@ import { formatDateTime, greetingByHour } from '@/utils/format'
 const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六']
 
 const { session, updateSession } = useSession()
-const { settings } = useA11y()
-const speech = useSpeech()
-const manualSpeaker = createSpeaker(() => true)
 
 const members = ref<MemberSummary[]>([])
 const snapshot = ref<TodaySnapshot | null>(null)
@@ -54,7 +49,6 @@ const partialError = ref<ErrorPresentation | null>(null)
 const actionError = ref<ErrorPresentation | null>(null)
 const busyTaskId = ref('')
 const failedAction = ref<{ taskId: string; action: TaskAction; payload: TaskActionPayload } | null>(null)
-const announced = ref(false)
 const confetti = ref<InstanceType<typeof ConfettiBurst> | null>(null)
 const sessionKey = computed(() => sessionContextKey(session))
 let reloadGeneration = 0
@@ -206,20 +200,6 @@ const listStatusMessage = computed(() => {
   return `已加载今日照护数据，${pending} 项待处理任务，${risks} 条风险提醒。`
 })
 
-function summaryText(): string {
-  if (!snapshot.value) return ''
-  const name = currentMember.value?.name ?? '当前成员'
-  const parts = [`${greeting.value}。${name}今天有 ${pendingTasks.value.length} 项照护任务待处理`]
-  const risks = snapshot.value.risks
-  if (risks.length > 0) {
-    const first = risks[0]!
-    parts.push(`${risks.length} 条风险提醒需要关注，最高等级：${riskLevelLabel(first.level)}，${first.message}`)
-  } else {
-    parts.push('暂无待关注的风险提醒')
-  }
-  return `${parts.join('；')}。`
-}
-
 async function loadMembers(expectedKey: string, generation: number): Promise<boolean> {
   const nextMembers = await activeProvider().listMembers()
   if (expectedKey !== sessionKey.value || generation !== reloadGeneration) return false
@@ -267,10 +247,6 @@ async function loadSnapshot(expectedKey = sessionKey.value, generation = reloadG
     partialError.value = presentListApiError(trendResult.reason, { partial: true })
   }
   void synchronizeReminders(snapshotResult.value.tasks)
-  if (!announced.value && settings.voiceBroadcast) {
-    announced.value = true
-    speech.speak(summaryText())
-  }
   return true
 }
 
@@ -361,7 +337,6 @@ async function onTaskAction(taskId: string, action: TaskAction, payload: TaskAct
   const label = action === 'confirm' ? '已确认' : action === 'defer' ? '已延期' : '已记录跳过'
   tapFeedback(action === 'confirm' ? [12, 60, 18] : 12)
   showToast(`${label}：${task.title}`, 'success')
-  speech.speak(`${label}：${task.title}`)
 
   // 先应用服务端回执，随后做统一整页刷新。刷新失败不再重提写操作，
   // 页面保留已收到的回执并只提供刷新重试。
@@ -373,10 +348,9 @@ async function onTaskAction(taskId: string, action: TaskAction, payload: TaskAct
   }
   await cancelScheduledReminders()
   await reload({ preserveSnapshot: true })
-  // 最后一项任务处理完：彩带庆祝 + 语音鼓励。
+  // 最后一项任务处理完：彩带庆祝。
   if (hadPending === 1 && pendingTasks.value.length === 0 && doneTasks.value.length > 0) {
     confetti.value?.fire()
-    speech.speak('今日照护任务全部完成，辛苦了！')
   }
   busyTaskId.value = ''
 }
@@ -387,14 +361,9 @@ async function retryTaskAction(): Promise<void> {
   await onTaskAction(failed.taskId, failed.action, failed.payload)
 }
 
-function speakSummary(): void {
-  manualSpeaker.speak(summaryText())
-}
-
 watch(
   () => sessionKey.value,
   () => {
-    announced.value = true
     actionError.value = null
     failedAction.value = null
     // 会话/成员/数据源切换：旧上下文的历史（含本地待确认条目）立即清空
@@ -427,7 +396,10 @@ onMounted(reload)
     <section class="hero" :data-daypart="daypart" aria-label="今日概览">
       <div class="hero-top">
         <div class="hero-text">
-          <p class="hero-eyebrow">家健镜 · 随身照护</p>
+          <div class="hero-brand">
+            <BrandLogo :size="34" />
+            <p class="hero-eyebrow">家健镜 · 随身照护</p>
+          </div>
           <h1>{{ greeting }}{{ currentMember ? `，${currentMember.name.replace(/（.*?）/g, '')}` : '' }}</h1>
           <p class="hero-sub">{{ dateLine }}</p>
         </div>
@@ -447,23 +419,9 @@ onMounted(reload)
           <span><AppIcon name="clock" :size="13" /> 最近变化</span>
         </div>
       </div>
-      <button type="button" class="btn btn-ghost" @click="speakSummary">
-        <AppIcon name="sound" :size="18" />
-        听一遍今日安排
-      </button>
     </section>
 
     <PrivacyBadge />
-
-    <HealthNewsPanel />
-
-    <RouterLink class="card link-card assistant-entry" to="/assistant">
-      <AppIcon name="mic" :size="22" />
-      <span class="link-card-text">
-        <strong>语音助手</strong>
-      </span>
-      <AppIcon name="chevron-right" :size="18" />
-    </RouterLink>
 
     <label v-if="session.mobileRole === 'admin'" class="field">
       当前成员
@@ -495,7 +453,7 @@ onMounted(reload)
 
     <template v-else-if="snapshot">
       <ReminderStatusCard :state="reminderState" />
-      <EnvironmentActionCard v-if="session.mobileRole === 'admin'" :state="snapshot.environmentAction" />
+      <EnvironmentActionCard :state="snapshot.environmentAction" />
 
       <section aria-labelledby="tasks-title">
         <div class="section-heading">
@@ -706,6 +664,8 @@ onMounted(reload)
   gap: 14px;
 }
 .hero-text { flex: 1; display: grid; gap: 5px; min-width: 0; }
+.hero-brand { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.hero-brand .hero-eyebrow { margin: 0; }
 .risk-row { display: flex; align-items: center; gap: 12px; }
 .risk-body { flex: 1; min-width: 0; display: grid; gap: 6px; }
 .risk-message { font-weight: 700; line-height: 1.4; }
@@ -721,14 +681,4 @@ onMounted(reload)
 }
 .done-tasks ul { margin-top: 8px; }
 
-.link-card {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  text-decoration: none;
-  color: inherit;
-  min-height: var(--tap);
-}
-.link-card-text { flex: 1; display: grid; gap: 2px; }
-.assistant-entry .meta-line { color: var(--c-ink-faint); font-size: 0.9rem; }
 </style>

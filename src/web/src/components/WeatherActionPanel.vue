@@ -76,10 +76,10 @@ const calmBadge = computed(() => calmWeatherBadge())
           <span class="weather-rain"><i /><i /><i /></span>
         </span>
         <span class="weather-temperature-wrap">
-          <AppIcon class="weather-temperature-icon" name="thermometer" :size="18" />
           <span class="weather-temperature">
-            {{ weather?.temperature != null ? `${weather.temperature}°` : '—' }}
+            {{ weather?.temperature != null ? weather.temperature : '—' }}<sup>°</sup>
           </span>
+          <span class="weather-temperature-unit">C</span>
         </span>
         <div class="weather-reading-copy">
           <strong>{{ conditionLabel }}</strong>
@@ -89,7 +89,7 @@ const calmBadge = computed(() => calmWeatherBadge())
 
       <div class="weather-metrics" aria-label="天气指标">
         <div class="weather-metric">
-          <span class="weather-metric-label"><AppIcon name="cloud" :size="14" />湿度</span>
+          <span class="weather-metric-label"><AppIcon name="droplet" :size="14" />湿度</span>
           <strong>{{ weather?.humidity != null ? `${weather.humidity}%` : '暂无' }}</strong>
         </div>
         <div v-if="weather?.wind" class="weather-metric">
@@ -114,6 +114,7 @@ const calmBadge = computed(() => calmWeatherBadge())
             <strong>{{ card.level === 'warning' ? '需要留意' : '生活安排' }}</strong>
             <p>{{ card.message }}</p>
           </div>
+          <span v-if="card.level !== 'warning'" class="weather-advice-badge">照护建议</span>
         </article>
         <div v-if="(weather?.action_cards.length ?? 0) === 0" class="weather-calm">
           <span class="weather-calm-visual" aria-hidden="true">

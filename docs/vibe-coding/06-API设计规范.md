@@ -67,6 +67,10 @@
 | GET | `/api/v1/households/{id}/members/{mid}/state` | 查询成员状态投影 | ✅ |
 | POST | `/api/v1/households/{id}/members/{mid}/state/checkpoints` | 创建投影 checkpoint | ✅ |
 | POST | `/api/v1/households/{id}/members/{mid}/state/replay` | 从空状态/checkpoint 重放 | ✅ |
+| GET | `/api/v1/households/{id}/digital-twin` | 返回授权过滤后的全家庭词项向量投影 | ✅ |
+| GET | `/api/v1/households/{id}/digital-twin/memories` | 按成员/状态查询长期聊天线索 | ✅ |
+| POST | `/api/v1/households/{id}/digital-twin/memories/{memory_id}/confirm` | 确认线索；疾病/药品/过敏/计划追加健康事件 | ✅ |
+| POST | `/api/v1/households/{id}/digital-twin/memories/{memory_id}/reject` | 拒绝线索并停止其展示和关系参与 | ✅ |
 | GET | `/api/v1/households/{id}/outbox` | Owner 查询 outbox 恢复状态 | ✅ |
 | POST | `/api/v1/households/{id}/outbox/dispatch` | Owner 手工触发恢复批次 | ✅ |
 
@@ -125,9 +129,13 @@ HCT-103 事件写入支持最长 128 位 `Idempotency-Key`。家庭、key、操�
 | POST | `/households/{household_id}/members/{member_id}/plans/evaluate` | Owner 对明确授权的计划执行幂等漏服、疗程结束与照护升级评估 |
 | GET | `/environment/actions` | 环境行动卡 |
 | POST | `/assistant/chat` | 本地助手 |
+| POST | `/assistant/files/extract` | 临时提取聊天附件文字，不持久化原文件 |
+| POST | `/vision-tasks/{id}/llm-assist` | 显式触发云端 OCR 证据辅助建议，不修改复核/健康事件 |
 | POST | `/models/retrain` | 追加训练 |
 | GET | `/dashboard/family` | 家庭大屏 |
 | GET | `/dashboard/model` | 模型大屏 |
+
+聊天附件接口只接受受支持的文本/文档/图片格式，先在内存中提取文字；图片没有本地 OCR 时，只有运维显式开启 HTTPS 云端视觉模型才可外发。视觉辅助接口只读取已保存的 OCR/条码证据和批准主数据候选，所有字段必须回溯到证据或候选；响应仅用于填充人工修正表单，不会自动确认或创建健康事件。云端路径是显式配置的外发扩展，不是家庭版本地模型的默认回退。
 
 ## 3. 视觉任务状态机
 
@@ -168,7 +176,11 @@ HCT-458 风险告警逐条返回 `deduplication_key`、`merged_count`、`budget_
 
 HCT-430 多智能体请求可携带受限枚举 `query_type_override`、最长 64 位的 `assistant_session_id` 和 `clear_session_cache`。响应增加 `route_explanation`、不含思考链的分类通道结果、只列工具名/资料标题/数量的 `evidence_preview` 及 `retrieval_cache_hit`；流式接口在合成前发送 `evidence_preview`，取消时发送 `cancelled`。缓存按 actor/会话/家庭/成员隔离，命中前重新核验当前授权；`POST /assistant/session-cache/clear` 只能清理当前 actor 的会话范围，`GET /assistant/session-cache/ops` 只返回当前 actor/opaque 会话的匿名条目、作用域、代理和 TTL 统计，并在读取时清理该范围的过期项，不返回问题、标识或缓存内容。`GET /assistant/web-search/ops` 只返回不含查询正文的计数；配置了知识管理员时仅允许名单 actor，名单为空时只在非生产环境允许已认证 actor。
 
-助手响应中的引用展示字段（标题、片段正文、定位）只能从同一轮已授权检索结果透传，不能由模型生成或由前端补猜；它们用于解释展示，不改变引用的身份校验。前端只在当前标签页保存按身份/家庭/成员隔离的临时会话，不新增服务端会话存储。
+HCT-519 在 `/assistant/chat` 和 `/assistant/chat/stream` 完成回答后执行尽力而为的记忆抽取，响应的 `memory_capture` 只返回状态、保存/更新数量和最小条目标识。主回答的 `messages` 保持有界近期上下文；Web 可额外传 `memory_messages`（最多 24 条、仅允许 user 角色）作为当前会话的记忆索引语料。抽取综合多轮用户原话并逐项回查证据；助手回复、服务端系统上下文和上传文件提取文字不进入抽取输入。新记录必须是 `UNCONFIRMED`，并保留成员、类别、原文摘要、摘要哈希、置信度、来源会话、时间和 `term_vector`；相同原文摘要的重放必须幂等。模型不可用或候选不能由任一用户原文词项落地时，不得中断聊天或写入记录。
+
+数字孪生读取必须在查询节点前完成家庭/成员授权过滤，知识节点继续使用文档权限域。未确认线索可以展示和计算解释性词项边，但不得进入风险、计划或成员正式状态；确认端点要求对应成员的 `WRITE_EVENTS`，只有疾病、药品、过敏和计划会追加已确认健康事件。拒绝记录不再出现在投影或相似度关系中。三维坐标是确定性展示投影，`vector_backend=term_vector`，不得称为神经语义 embedding 或隐藏思维链。
+
+助手响应中的引用展示字段（标题、片段正文、定位）只能从同一轮已授权检索结果透传，不能由模型生成或由前端补猜；它们用于解释展示，不改变引用的身份校验。Web 按身份/家庭/成员隔离在浏览器本机保存完整对话正文，不新增服务端完整会话；服务端只允许按 HCT-519 保存有原文依据的最小未确认线索。
 
 语音输入不新增 API：浏览器只把用户主动授权后的识别文字写入聊天草稿，用户发送后沿用本接口；服务端不接收或保存音频。语音回复由客户端浏览器本地 `speechSynthesis` 按用户操作播放，不改变回答、引用、权限或审计契约。
 

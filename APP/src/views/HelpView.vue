@@ -1,18 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import AppIcon from '@/components/AppIcon.vue'
-import { createSpeaker } from '@/composables/useSpeech'
-import { activeProvider } from '@/data'
-import { riskLevelLabel } from '@/data/labels'
 import { useSession } from '@/stores/session'
 import { tapFeedback } from '@/utils/haptics'
-import { detectPhoneCapability, getHelpCallConfirmation, offlineRiskSpeechMessage, type HelpCallTarget } from '@/utils/help'
-import { normalizePhoneNumber } from '@/utils/phone'
+import { detectPhoneCapability, getHelpDialHref, type HelpCallTarget } from '@/utils/help'
 
 const { session } = useSession()
-const manualSpeaker = createSpeaker(() => true)
-const speaking = ref(false)
 const online = ref(typeof navigator === 'undefined' ? true : navigator.onLine)
 const phoneCapability = computed(() =>
   detectPhoneCapability(typeof navigator === 'undefined' ? '' : navigator.userAgent),
@@ -31,72 +25,24 @@ onBeforeUnmount(() => {
   window.removeEventListener('online', updateOnlineState)
   window.removeEventListener('offline', updateOnlineState)
 })
-const pendingCall = ref<HelpCallTarget | null>(null)
-const confirmButton = ref<HTMLButtonElement | null>(null)
-const emergencyTrigger = ref<HTMLButtonElement | null>(null)
-const caregiverTrigger = ref<HTMLButtonElement | null>(null)
+const phoneHref = computed(() => getHelpDialHref('caregiver', session.caregiverPhone))
 
-const phoneHref = computed(() => {
-  const phone = normalizePhoneNumber(session.caregiverPhone)
-  return phone ? `tel:${phone}` : ''
-})
-const confirmation = computed(() =>
-  pendingCall.value
-    ? getHelpCallConfirmation(pendingCall.value, session.caregiverPhone, session.caregiverName)
-    : null,
-)
-
-function requestCall(target: HelpCallTarget): void {
-  pendingCall.value = target
-  // 设备不支持振动时 tapFeedback 会返回 false，但不会阻断确认流程或抛错。
-  tapFeedback(12)
-  void nextTick(() => confirmButton.value?.focus())
-}
-
-function closeCallDialog(): void {
-  const trigger = pendingCall.value === 'emergency' ? emergencyTrigger : caregiverTrigger
-  pendingCall.value = null
-  void nextTick(() => trigger.value?.focus())
-}
-
-function confirmCall(): void {
-  if (!confirmation.value) return
-  const href = confirmation.value.href
-  pendingCall.value = null
+function callTarget(target: HelpCallTarget): void {
+  const href = getHelpDialHref(target, session.caregiverPhone)
+  if (!href) return
   tapFeedback([12, 60, 18])
   window.location.href = href
 }
 
-async function speakImportant(): Promise<void> {
-  speaking.value = true
-  try {
-    if (!online.value) {
-      manualSpeaker.speak(offlineRiskSpeechMessage())
-      return
-    }
-    const risks = await activeProvider().listRisks()
-    const important = risks.filter(r => (r.level === 'SEVERE' || r.level === 'WARNING') && !r.acknowledged)
-    if (important.length === 0) {
-      manualSpeaker.speak('当前没有严重或较高等级的风险提醒。')
-      return
-    }
-    const text = important.map(r => `${riskLevelLabel(r.level)}：${r.memberName}，${r.message}`).join('。')
-    manualSpeaker.speak(`共有 ${important.length} 条重要提醒。${text}。`)
-  } catch {
-    manualSpeaker.speak('提醒信息暂时无法读取。')
-  } finally {
-    speaking.value = false
-  }
-}
 </script>
 
 <template>
   <main id="main" class="screen">
         <p v-if="offlineNotice" class="notice" data-tone="warn" role="status">
-      当前处于离线状态：静态求助说明、120、已保存联系人和拨号确认仍可用；动态风险提醒不会从缓存恢复。
+      当前处于离线状态：静态求助说明、120 和已保存联系人仍可用；动态风险提醒不会从缓存恢复。
     </p>
     <p v-if="phoneCapability === 'unavailable'" class="notice" data-tone="warn" role="status">
-      当前设备可能无法直接拨号。确认后会尝试交给系统处理；若未打开电话应用，请使用身边可用电话拨打 120 或联系家人。
+      当前设备可能无法直接拨号。点击后会尝试交给系统处理；若未打开电话应用，请使用身边可用电话拨打 120 或联系家人。
     </p>
 
     <header class="screen-header">
@@ -106,10 +52,9 @@ async function speakImportant(): Promise<void> {
     </header>
 
     <button
-      ref="emergencyTrigger"
       type="button"
       class="btn btn-lg btn-block emergency-btn"
-      @click="requestCall('emergency')"
+      @click="callTarget('emergency')"
     >
       <AppIcon name="phone" :size="24" />
       拨打急救电话 120
@@ -118,10 +63,9 @@ async function speakImportant(): Promise<void> {
 
     <button
       v-if="phoneHref"
-      ref="caregiverTrigger"
       type="button"
       class="btn btn-lg btn-block"
-      @click="requestCall('caregiver')"
+      @click="callTarget('caregiver')"
     >
       <AppIcon name="family" :size="24" />
       联系家人{{ session.caregiverName ? `：${session.caregiverName}` : '' }}（{{ session.caregiverPhone }}）
@@ -130,11 +74,6 @@ async function speakImportant(): Promise<void> {
       <p class="notice" data-tone="warn">还没有设置紧急联系人。</p>
       <RouterLink class="btn btn-quiet btn-block" to="/me">去「我的」页设置家人电话</RouterLink>
     </div>
-
-    <button type="button" class="btn btn-quiet btn-lg btn-block" :disabled="speaking" @click="speakImportant">
-      <AppIcon name="sound" :size="22" />
-      {{ speaking ? '正在读取…' : '语音播报当前重要提醒' }}
-    </button>
 
     <section class="card">
       <h2>拨号前可以准备什么</h2>
@@ -149,26 +88,6 @@ async function speakImportant(): Promise<void> {
       家健镜不提供在线问诊或购药入口；紧急情况请始终以医生和急救服务的判断为准。
     </footer>
 
-    <div v-if="confirmation" class="dialog-backdrop" @click.self="closeCallDialog">
-      <section
-        class="confirm-dialog card"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="call-dialog-title"
-        aria-describedby="call-dialog-description"
-        @keydown.esc="closeCallDialog"
-      >
-        <h2 id="call-dialog-title">{{ confirmation.title }}</h2>
-        <p id="call-dialog-description">{{ confirmation.description }}</p>
-        <p class="notice" data-tone="warn">拨号后将离开应用进入手机电话界面，请确认号码和当前情况。</p>
-        <div class="btn-row dialog-actions">
-          <button ref="confirmButton" type="button" class="btn btn-danger" @click="confirmCall">
-            {{ confirmation.confirmLabel }}
-          </button>
-          <button type="button" class="btn btn-quiet" @click="closeCallDialog">取消</button>
-        </div>
-      </section>
-    </div>
   </main>
 </template>
 
@@ -180,30 +99,10 @@ async function speakImportant(): Promise<void> {
   animation: sos-pulse 2.6s var(--ease) infinite;
 }
 .emergency-btn:hover { filter: brightness(1.08); }
-.dialog-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 70;
-  display: grid;
-  place-items: center;
-  padding: 20px;
-  background: rgba(15, 24, 20, 0.62);
-}
-.confirm-dialog {
-  width: min(100%, 480px);
-  margin: 0;
-  display: grid;
-  gap: 14px;
-}
-.confirm-dialog h2 { margin: 0; }
-.confirm-dialog p { margin: 0; line-height: 1.55; }
-.dialog-actions { margin-top: 4px; }
 html[data-contrast='high'] .emergency-btn {
   background: var(--c-danger);
   box-shadow: none;
   border: 2px solid #000;
   animation: none;
 }
-html[data-contrast='high'] .dialog-backdrop { background: rgba(0, 0, 0, 0.72); }
-html[data-contrast='high'] .confirm-dialog { border: 2px solid #000; box-shadow: none; }
 </style>

@@ -1,7 +1,6 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 import { nextTick } from 'vue'
 
-import { useSpeech } from '@/composables/useSpeech'
 import { useAuth } from '@/stores/auth'
 import { useSession } from '@/stores/session'
 import { focusRouteMain } from '@/utils/accessibility'
@@ -27,24 +26,6 @@ export const router = createRouter({
     },
     // 求助页只用本机联系人，断网或未登录时仍必须可用。
     { path: '/help', name: 'help', component: () => import('@/views/HelpView.vue'), meta: { title: '紧急求助' } },
-    {
-      path: '/assistant',
-      name: 'assistant',
-      component: () => import('@/views/AssistantView.vue'),
-      meta: { title: '语音助手', requiresLiveAuth: true },
-    },
-    {
-      path: '/knowledge',
-      name: 'knowledge-library',
-      component: () => import('@/views/KnowledgeLibraryView.vue'),
-      meta: { title: '知识条目', requiresLiveAuth: true, adminOnly: true },
-    },
-    {
-      path: '/knowledge/:docId',
-      name: 'knowledge-document',
-      component: () => import('@/views/KnowledgeDocumentView.vue'),
-      meta: { title: '知识条目', requiresLiveAuth: true, adminOnly: true },
-    },
     { path: '/login', name: 'login', component: () => import('@/views/LoginView.vue'), meta: { title: '登录' } },
     { path: '/me', name: 'me', component: () => import('@/views/MeView.vue'), meta: { title: '我的' } },
     {
@@ -52,12 +33,6 @@ export const router = createRouter({
       name: 'accessibility',
       component: () => import('@/views/AccessibilityView.vue'),
       meta: { title: '无障碍设置' },
-    },
-    {
-      path: '/me/voice-check',
-      name: 'voice-check',
-      component: () => import('@/views/VoiceCheckView.vue'),
-      meta: { title: '语音自检' },
     },
     {
       path: '/me/privacy',
@@ -92,8 +67,6 @@ router.beforeEach(to => {
 router.afterEach(to => {
   const title = typeof to.meta.title === 'string' ? to.meta.title : ''
   document.title = title ? `${title} · 家健镜随身版` : '家健镜随身版'
-  // 切换页面时停止上一页尚未播完的语音，避免播报串台。
-  useSpeech().stop()
-  // SPA 路由不会像原生页面加载一样重置读屏焦点；将焦点移到新页面主区域并播报页面名。
+  // SPA 路由不会像原生页面加载一样重置读屏焦点；将焦点移到新页面主区域并让读屏读取页面名。
   void nextTick(() => focusRouteMain(title || '家健镜随身版'))
 })

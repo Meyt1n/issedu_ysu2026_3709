@@ -8,9 +8,8 @@ import ListLoadingState from '@/components/ListLoadingState.vue'
 import ListStatusAnnouncer from '@/components/ListStatusAnnouncer.vue'
 import LevelTag from '@/components/LevelTag.vue'
 import PrivacyBadge from '@/components/PrivacyBadge.vue'
-import { createSpeaker } from '@/composables/useSpeech'
 import { activeProvider } from '@/data'
-import { riskLevelLabel, riskLevelTone } from '@/data/labels'
+import { riskLevelTone } from '@/data/labels'
 import type { RiskCard, RiskSummary } from '@/data/types'
 import { formatDateTime } from '@/utils/format'
 import { presentListApiError, type ErrorPresentation } from '@/api/errors'
@@ -32,7 +31,6 @@ const loading = ref(true)
 const error = ref<ErrorPresentation | null>(null)
 const partialError = ref<ErrorPresentation | null>(null)
 const levelFilter = ref<LevelFilter>('ALL')
-const manualSpeaker = createSpeaker(() => true)
 const { session } = useSession()
 let reloadGeneration = 0
 let reloadInFlight = false
@@ -103,18 +101,6 @@ async function reload(): Promise<void> {
   }
 }
 
-function speakImportant(): void {
-  const important = risks.value.filter(r => (r.level === 'SEVERE' || r.level === 'WARNING') && !r.acknowledged)
-  if (important.length === 0) {
-    manualSpeaker.speak('当前没有严重或较高等级的风险提醒。')
-    return
-  }
-  const text = important
-    .map(r => `${riskLevelLabel(r.level)}：${r.memberName}，${r.message}`)
-    .join('。')
-  manualSpeaker.speak(`共有 ${important.length} 条重要提醒。${text}。`)
-}
-
 onMounted(reload)
 watch(() => sessionContextKey(session), () => void reload())
 </script>
@@ -131,10 +117,6 @@ watch(() => sessionContextKey(session), () => void reload())
     </header>
 
     <div class="btn-row">
-      <button type="button" class="btn btn-quiet" @click="speakImportant">
-        <AppIcon name="sound" :size="18" />
-        播报重要提醒
-      </button>
       <button type="button" class="btn btn-quiet" :disabled="loading" @click="reload">
         <AppIcon name="refresh" :size="18" />
         刷新

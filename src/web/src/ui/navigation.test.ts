@@ -69,6 +69,15 @@ describe('sidebar navigation uniqueness (HCT-447)', () => {
     expect(NAV_ITEMS.some(item => item.label === '演示造数')).toBe(false)
   })
 
+  it('exposes the family digital twin only in the admin portal', () => {
+    const adminTwin = visibleNavItemsFor('admin').find(
+      item => item.view === 'digital-twin',
+    )
+    expect(adminTwin?.label).toBe('数字孪生')
+    expect(adminTwin?.group).toBe('家庭洞察')
+    expect(visibleNavItemsFor('member').some(item => item.view === 'digital-twin')).toBe(false)
+  })
+
   it('deduplicates by view even if a future entry forgets portal scoping', () => {
     // NAV_ITEMS 故意包含两条 assistant（成员/管理员各一条）；
     // 即使 portals 限定失效，visibleNavItemsFor 的去重兜底也必须只留一条。

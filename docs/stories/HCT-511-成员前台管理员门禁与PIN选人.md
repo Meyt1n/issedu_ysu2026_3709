@@ -10,6 +10,8 @@
 
 后台「人脸凭证」已改名为「登录设置」。管理员注册并创建家庭后自动进入该页：第一步给每位家人（含管理员）设 PIN，第二步可选录入人脸。
 
+2026-09-04 增量决定：管理员可在「登录设置」直接新增家庭成员，填写家人称呼和本地登录名，默认角色为 `DEPENDENT`；新增表单的「家人称呼」与「登录名」字段顶部对齐。创建成功后立即刷新后台成员数据并更新跨端口家庭绑定快照；新成员会同步出现在 PIN/人脸及各后台成员选择器、成员前台 PIN 选人中。新增成员仍需在本页保存六位 PIN 后才能完成 PIN 登录。
+
 ## 1. Story
 
 作为家庭管理员，我希望登录后台后这台电脑自动绑定当前家庭；作为家人，我希望打开成员前台时可以直接刷脸，或用 PIN 选择家人进入。
@@ -44,6 +46,7 @@
 
 - `src/api/app/schemas.py`、`routes.py`：管理员可为家庭成员设置 PIN（`PinSetRequest.actor_id` 可选）；Owner 可查询 `GET /households/{id}/pin-status`
 - `src/web/src/store.ts`、`WelcomeView.vue`、`FaceCredentialView.vue`、`api/client.ts`
+- `src/web/src/ui/memberSetup.ts`：新增成员表单的登录名校验
 - 对应单元、契约、浏览器测试、README、本 Story、需求追踪矩阵、HCT-510 交叉说明
 
 ## 5. 验收标准
@@ -55,6 +58,7 @@
 5. Given 管理后台，When 纯成员账号登录，Then 仍登出并指引去成员前台（入口锁不削弱）。
 6. Given 成员前台建家，When 创建者成为 owner，Then 仍提示去管理后台设置，不把建家后的管理员会话留在前台。
 7. Given 成员前台且本机未绑定家庭，When 打开欢迎页，Then 不展示刷脸采集与 PIN 选人，而是提示去管理后台注册或登录管理员账号。
+8. Given 管理员在「登录设置」填写有效的家人称呼和登录名，When 新增成员成功，Then 成员出现在本页 PIN/人脸选择、后台依赖 `session.members` 的成员选择器和成员前台 PIN 选人中；非法或重复登录名被拒绝，且不会进入前端成员列表。
 
 ## 6. 验证命令
 
@@ -63,6 +67,8 @@ npm run test:web
 npx playwright test tests/browser/hct453-portal-entry.spec.ts tests/browser/hct423-pin-portal.spec.ts tests/browser/hct425-welcome-face-binding.spec.ts
 uv run pytest tests/integration/test_hct423_pin_login.py tests/integration/test_hct511_owner_set_member_pin.py -q
 ```
+
+本次增量另覆盖：`src/web/src/ui/memberSetup.test.ts`、`src/web/src/api/client.test.ts`，以及 `hct453-portal-entry.spec.ts` 的新增成员跨端口同步用例。
 
 ## 7. 回滚
 
