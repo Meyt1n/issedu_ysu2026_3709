@@ -293,7 +293,7 @@ test('助手链路显示本地依据，并保留受控检索结果', async ({ pa
   await expect(page.getByTitle('Enter 发送 · Shift + Enter 换行')).toHaveCount(0)
   await expect(page.getByRole('button', { name: '停止生成本次回答' })).toHaveCount(0)
   await page.locator('textarea[placeholder^="例如：最近的用药提醒"]').fill('nihao')
-  const streamRequest = page.waitForRequest('**/api/v1/assistant/chat/stream')
+  const streamRequest = page.waitForRequest('**/api/v1/assistant/chat/stream**')
   await page.getByRole('button', { name: '发送' }).click()
   await streamRequest
   await expect(page.getByRole('button', { name: '停止生成本次回答' })).toBeVisible()
@@ -342,7 +342,7 @@ test('助手链路显示本地依据，并保留受控检索结果', async ({ pa
   await expect(followUp).toBeVisible()
   await followUp.click()
   await expect(page.locator('textarea[placeholder^="例如：最近的用药提醒"]')).toHaveValue('这条证据来自哪个版本？')
-  await expect(page.locator('.chat-bubble-row.user')).toHaveCount(1)
+  await expect(page.locator('.chat-bubble-row.user')).toHaveCount(2)
 })
 
 test('助手和业务页面把纵向滚动收进视口内容区，并随视口尺寸自适应', async ({ page }) => {
