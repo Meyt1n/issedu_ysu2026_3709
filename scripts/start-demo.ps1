@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$Model = "qwen3:4b",
+    [string]$Model = "hct402-qlora-v5",
     [int]$MysqlPort = 3307,
     [int]$ApiPort = 8000,
     [int]$WebPort = 5173,

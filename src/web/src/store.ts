@@ -200,7 +200,7 @@ export function formatError(cause: unknown): string {
     }
     if (cause.message === 'KNOWLEDGE_CRAWL_CONFIG_MISSING') {
       return (
-        '爬虫配置缺失：API 运行目录里找不到 docs/knowledge/crawl/allowlist.json 与夹具。'
+        '爬虫配置缺失：API 运行目录里找不到 src/runtime/knowledge/crawl/allowlist.json 与夹具。'
         + 'Compose 部署请重新构建 api 镜像（docker compose build api）后再试。'
       )
     }

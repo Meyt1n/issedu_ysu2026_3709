@@ -30,12 +30,27 @@ artifacts/
 # Runtime data and generated artifacts
 data/
 models/
+!src/models/
+!src/models/face/
+!src/models/face/MODEL_INFO.md
+!src/models/llm/
+!src/models/llm/hct402-qlora-v5/
+!src/models/llm/hct402-qlora-v5/Modelfile
+!src/models/llm/hct402-qlora-v5/MODEL_INFO.md
 indexes/
 logs/
 uploads/
 backups/
 *.sqlite3
 *.db
+
+# Clean runtime layout: these assets stay on the demo machine and are never
+# committed because they may contain health data or model weights.
+src/runtime/data/
+src/runtime/database/*.sqlite3
+src/runtime/logs/
+src/models/face/*.onnx
+src/models/llm/**/*.gguf
 
 # Editors / OS
 .idea/

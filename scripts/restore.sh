@@ -6,7 +6,7 @@ cd "$repo_root"
 backup_id=""
 backup_dir="backups"
 compose_project=""
-file_root="${FILE_ROOT:-./data/files}"
+file_root="${FILE_ROOT:-./src/runtime/data/files}"
 skip_health=0
 force=0
 while (($#)); do

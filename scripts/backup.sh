@@ -42,7 +42,7 @@ if ((skip_mysql == 0)); then
   [[ -s "$backup_path/mysqldump.stderr.log" ]] || rm -f "$backup_path/mysqldump.stderr.log"
 fi
 
-file_root="${FILE_ROOT:-./data/files}"
+file_root="${FILE_ROOT:-./src/runtime/data/files}"
 if ((skip_files == 0)); then
   [[ -d "$file_root" ]] || { echo "FILE_ROOT not found: $file_root" >&2; exit 1; }
   uv run python scripts/hct408_file_inventory.py --root "$file_root" \

@@ -1,6 +1,6 @@
 """Generate the local master-data snapshot used by the vision closed-loop demo.
 
-Writes ``data/master-data/demo-cn-en-v1.json`` (runtime directory, not
+Writes ``src/runtime/data/master-data/demo-cn-en-v1.json`` (runtime directory, not
 committed) in the checked ``hct-master-data/v1`` format with a canonical
 SHA-256, so ``load_master_data_snapshot`` accepts it once the version is
 approved via ``MASTER_DATA_APPROVED_VERSIONS=demo-cn-en-v1``.
@@ -21,9 +21,9 @@ import json
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SNAPSHOT_DIR = REPO_ROOT / "data" / "master-data"
+SNAPSHOT_DIR = REPO_ROOT / "src" / "runtime" / "data" / "master-data"
 VERSION = "demo-cn-en-v1"
-APPROVAL_REF = "docs/data/HCT-201-教学演示批准范围-V1.md"
+APPROVAL_REF = "doc/ 中的 HCT-201 教学演示批准范围说明"
 
 RECORDS = [
     {

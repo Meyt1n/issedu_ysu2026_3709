@@ -1,6 +1,6 @@
 """Local synonym / alias expansion for HCT-401 knowledge retrieval.
 
-Synonym groups are loaded from docs/demo/本地RAG同义词表.json so operators can
+Synonym groups are loaded from src/runtime/knowledge/synonyms/本地RAG同义词表.json so operators can
 edit aliases without code changes.  Expansion never overrides permission
 filtering or citation validation.
 """
@@ -20,7 +20,12 @@ _DEFAULT_GROUPS: tuple[tuple[str, ...], ...] = (
 )
 
 _REPO_SYNONYM_PATH = (
-    Path(__file__).resolve().parents[3] / "docs" / "demo" / "本地RAG同义词表.json"
+    Path(__file__).resolve().parents[3]
+    / "src"
+    / "runtime"
+    / "knowledge"
+    / "synonyms"
+    / "本地RAG同义词表.json"
 )
 
 

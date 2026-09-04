@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     allow_dev_actor_header: bool = False
     # HCT-453：成员前台（5173）与管理后台（5174）两个开发入口共用一个 API。
     cors_origins: str = "http://localhost:5173,http://localhost:5174,https://localhost"
-    database_url: str = "sqlite+pysqlite:///./homecare-dev.sqlite3"
+    database_url: str = "sqlite+pysqlite:///./src/runtime/database/homecare-dev.sqlite3"
     request_id_header: str = "X-Request-ID"
     cursor_signing_key: str = "dev-only-change-me"
     default_household_time_zone: str = "UTC"
@@ -26,8 +26,8 @@ class Settings(BaseSettings):
     outbox_batch_size: int = 100
     outbox_stale_seconds: int = 300
     care_plan_poll_seconds: float = Field(default=30.0, ge=5, le=3600)
-    file_root: str = "./data/files"
-    master_data_root: str = "./data/master-data"
+    file_root: str = "./src/runtime/data/files"
+    master_data_root: str = "./src/runtime/data/master-data"
     master_data_approved_versions: str = ""
     max_upload_bytes: int = 10 * 1024 * 1024
     vision_model_version: str = "unavailable"
@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     biometric_encryption_key: str = "dev-only-biometric-key-change-me"
     # Local YuNet + SFace ONNX cache for HCT-425 v3 face embeddings.  Weights
     # stay outside git; first use may download from OpenCV Zoo when enabled.
-    face_model_dir: str = "./models/face"
+    face_model_dir: str = "./src/models/face"
     face_model_auto_download: bool = True
     # Calibrate with scripts/calibrate_face_thresholds.py on local camera sets.
     face_match_threshold_sface: float = Field(default=0.40, ge=0.20, le=0.95)
@@ -80,9 +80,9 @@ class Settings(BaseSettings):
     ruleset_version: str = "rules-v0"
     knowledge_version: str = "knowledge-v0"
     embedding_version: str = "unavailable"
-    ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "unavailable"
-    ollama_timeout_seconds: float = 30.0
+    ollama_base_url: str = "http://127.0.0.1:11434"
+    ollama_model: str = "hct402-qlora-v5"
+    ollama_timeout_seconds: float = 120.0
     # ── Model backend switch (ops-only, no UI) ────────────────────────────
     # ``local`` (default) keeps every model call on this machine, which is the
     # project's default-deny posture.  ``cloud`` routes the *same* calls to an
