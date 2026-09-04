@@ -3778,8 +3778,9 @@ button:focus-visible, a:focus-visible {
 
 .weather-reading {
   border-right: 1px solid var(--line);
-  flex: 0 0 204px;
+  flex: 1 1 340px;
   gap: 11px;
+  min-width: 300px;
   padding-right: 16px;
 }
 
@@ -3847,15 +3848,13 @@ button:focus-visible, a:focus-visible {
 }
 
 .weather-temperature-wrap { align-items: center; display: inline-flex; gap: 4px; }
-.weather-temperature-icon {
-  color: var(--clay);
-  animation: weather-thermometer-float 2.8s ease-in-out infinite;
-}
-.weather-temperature { color: var(--sky); font-family: var(--font-display); font-size: 56px; font-weight: 700; letter-spacing: -4px; line-height: 1; }
+.weather-temperature { color: var(--ink); font-family: var(--font-display); font-size: 56px; font-weight: 700; letter-spacing: -4px; line-height: 1; }
+.weather-temperature sup { font-family: var(--font-body); font-size: 25px; letter-spacing: 0; margin-left: 2px; vertical-align: top; }
+.weather-temperature-unit { color: var(--ink); font-family: var(--font-display); font-size: 25px; font-weight: 700; margin-left: 2px; }
 .weather-reading-copy { display: grid; gap: 6px; }
 .weather-reading-copy strong { font-size: 18px; }
 .weather-reading-copy span { color: var(--ink-soft); font-size: 12.5px; }
-.weather-metrics { display: grid; flex: 1 1 250px; gap: 9px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.weather-metrics { display: grid; flex: 1 1 320px; gap: 9px; grid-template-columns: repeat(2, minmax(0, 1fr)); min-width: 250px; }
 .weather-metric { background: color-mix(in srgb, var(--sky-tint) 26%, var(--card)); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); display: grid; gap: 6px; min-width: 0; padding: 12px 13px; }
 .weather-metric span { color: var(--ink-faint); font-size: 11px; }
 .weather-metric-label { align-items: center; display: inline-flex; gap: 6px; }
@@ -3863,13 +3862,14 @@ button:focus-visible, a:focus-visible {
 .weather-metric-label .weather-wind-icon { animation: weather-wind-sweep 1.8s ease-in-out infinite; color: var(--pine); }
 .weather-metric strong { color: var(--ink); font-size: 14px; overflow-wrap: anywhere; }
 /* 建议列至少 260px：放不下就整行换到下一行，绝不挤成竖排（图二）。 */
-.weather-card-list { display: grid; flex: 1 1 260px; gap: 10px; min-width: min(100%, 260px); }
+.weather-card-list { display: grid; flex: 1 1 360px; gap: 10px; min-width: min(100%, 300px); }
 .weather-advice { align-items: flex-start; border: 1px solid transparent; border-radius: var(--radius-md); display: flex; gap: 11px; padding: 13px 15px; }
 .weather-advice.warning { background: var(--gold-tint); color: var(--gold-ink); }
 .weather-advice.info { background: var(--sky-tint); color: var(--sky-ink); }
 .weather-advice > div { flex: 1; min-width: 0; writing-mode: horizontal-tb; }
 .weather-advice strong { font-size: 12px; font-weight: 750; }
 .weather-advice p { font-size: 13px; line-height: 1.65; margin: 3px 0 0; overflow-wrap: anywhere; }
+.weather-advice-badge { align-self: center; background: color-mix(in srgb, var(--card) 68%, transparent); border: 1px solid color-mix(in srgb, var(--pine) 15%, transparent); border-radius: var(--radius-pill); color: var(--sage-ink); flex: 0 0 auto; font-size: 11px; font-weight: 700; padding: 7px 10px; white-space: nowrap; }
 .weather-calm { align-items: center; background: var(--sage-tint); border: 1px solid color-mix(in srgb, var(--sage) 22%, var(--line)); border-radius: var(--radius-md); color: var(--sage-ink); display: flex; gap: 12px; justify-content: space-between; min-height: 82px; padding: 14px 16px; }
 .weather-calm div { display: grid; gap: 4px; }
 .weather-calm strong { color: var(--pine-deep); font-size: 14px; }
@@ -3906,14 +3906,15 @@ button:focus-visible, a:focus-visible {
 
 @media (max-width: 980px) {
   .weather-action-body { flex-wrap: wrap; }
-  .weather-metrics { flex: 1 1 230px; }
+  .weather-reading { flex-basis: 300px; }
+  .weather-metrics { flex: 1 1 230px; min-width: 230px; }
   .weather-card-list { flex-basis: 100%; }
 }
 
 @media (max-width: 760px) {
   .weather-action-head, .weather-action-body { align-items: stretch; flex-direction: column; }
   .weather-head-actions { justify-content: flex-start; }
-  .weather-reading { border-bottom: 1px solid var(--line); border-right: 0; flex-basis: auto; padding-bottom: 18px; padding-right: 0; }
+  .weather-reading { border-bottom: 1px solid var(--line); border-right: 0; flex-basis: auto; min-width: 0; padding-bottom: 18px; padding-right: 0; }
 }
 
 /* ---------- 陶土印章 ---------- */
@@ -5425,6 +5426,33 @@ button:focus-visible, a:focus-visible {
 }
 
 .review-task-list { display: grid; gap: 14px; }
+
+.review-ai-assist {
+  background: color-mix(in srgb, var(--sky, #55809c) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sky, #55809c) 28%, transparent);
+  border-radius: 12px;
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+}
+
+.review-ai-assist-heading {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.review-ai-assist-heading > span:first-child {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+  font-weight: 650;
+}
+
+.review-ai-assist-values,
+.review-ai-assist-rationale,
+.review-ai-assist-warning { margin: 0; }
 
 .review-task-card { display: grid; gap: 14px; }
 

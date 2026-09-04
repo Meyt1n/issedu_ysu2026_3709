@@ -13,14 +13,12 @@ import {
   dismissToast,
   onHealthDataRefresh,
   refreshPendingReviewCount,
-  selectHousehold,
   selectedMember,
   session,
   setView,
   signOut,
   type ViewName,
 } from './store'
-import { householdOptionLabel, memberVisibleHouseholds } from './ui/demoData'
 import { activeNavItem, groupNavItems, NAV_ITEMS, visibleNavItemsFor } from './ui/navigation'
 import { installRipple, vMagnet } from './ui/motion'
 import { THEMES, applyTheme, currentTheme, type ThemeId } from './ui/themes'
@@ -50,6 +48,7 @@ const VIEW_LOADERS = {
   review: () => import('./views/ReviewView.vue'),
   risks: () => import('./views/RisksView.vue'),
   graph: () => import('./views/GraphView.vue'),
+  'digital-twin': () => import('./views/DigitalTwinView.vue'),
   assistant: () => import('./views/AssistantView.vue'),
   bigscreen: () => import('./views/BigScreenView.vue'),
   authorizations: () => import('./views/AuthView.vue'),
@@ -64,6 +63,7 @@ const ScanView = lazyView(VIEW_LOADERS.scan)
 const ReviewView = lazyView(VIEW_LOADERS.review)
 const RisksView = lazyView(VIEW_LOADERS.risks)
 const GraphView = lazyView(VIEW_LOADERS.graph)
+const DigitalTwinView = lazyView(VIEW_LOADERS['digital-twin'])
 const AssistantView = lazyView(VIEW_LOADERS.assistant)
 const BigScreenView = lazyView(VIEW_LOADERS.bigscreen)
 const AuthView = lazyView(VIEW_LOADERS.authorizations)
@@ -88,6 +88,7 @@ const VIEW_COMPONENTS: Record<ViewName, unknown> = {
   review: ReviewView,
   risks: RisksView,
   graph: GraphView,
+  'digital-twin': DigitalTwinView,
   assistant: AssistantView,
   authorizations: AuthView,
   bigscreen: BigScreenView,
@@ -108,19 +109,6 @@ const currentHouseholdLabel = computed(
   () => session.households.find(item => item.id === session.selectedHouseholdId)?.name ?? '家庭空间',
 )
 
-// 成员前台默认只列出 LOCAL 家庭（HCT-439 阶段五）；
-// 管理员后台看到全部家庭，演示家庭带显式标识。
-const householdOptions = computed(() => {
-  const households =
-    session.portal === 'member'
-      ? memberVisibleHouseholds([...session.households])
-      : [...session.households]
-  return households.map(household => ({
-    id: household.id,
-    label: session.portal === 'admin' ? householdOptionLabel(household) : household.name,
-  }))
-})
-
 const currentComponent = computed(() => VIEW_COMPONENTS[session.currentView])
 
 const toastIcon: Record<string, string> = {
@@ -134,21 +122,14 @@ const toastIcon: Record<string, string> = {
 const paletteRef = ref<InstanceType<typeof CommandPalette> | null>(null)
 const accountSecurityOpen = ref(false)
 
-/* ── 系统启动仪式：登录成功后每次浏览器会话播放一次（HCT-533） ── */
+/* ── 系统启动仪式：每次完成新的登录都播放（HCT-533） ── */
 
-const BOOT_SEEN_KEY = 'hct-boot-seen'
 const bootVisible = ref(false)
-let bootSeenInMemory = false
+let bootCycleActive = false
 
-function showBootOnce(): void {
-  if (bootVisible.value || bootSeenInMemory) return
-  try {
-    if (globalThis.sessionStorage?.getItem(BOOT_SEEN_KEY) === '1') return
-    globalThis.sessionStorage?.setItem(BOOT_SEEN_KEY, '1')
-  } catch {
-    // 隐私模式或受限浏览器下退化为本次页面内只播放一次。
-  }
-  bootSeenInMemory = true
+function showBootForLogin(): void {
+  if (bootVisible.value || bootCycleActive) return
+  bootCycleActive = true
   bootVisible.value = true
 }
 
@@ -209,8 +190,12 @@ watch(
   status => {
     if (status === 'ready') {
       prefetchViews()
-      showBootOnce()
+      showBootForLogin()
+      return
     }
+    // 退出、会话过期或重新认证后开启下一次登录的启动仪式。
+    bootCycleActive = false
+    bootVisible.value = false
   },
   { immediate: true },
 )
@@ -220,11 +205,6 @@ const ambientState = computed(() => {
   if (session.pendingReviewCount > 0) return 'ambient-attention'
   return 'ambient-steady'
 })
-
-async function onHouseholdChange(event: Event): Promise<void> {
-  const target = event.target as HTMLSelectElement
-  await selectHousehold(target.value)
-}
 
 /* ── 光标追光 ── */
 
@@ -338,18 +318,6 @@ onBeforeUnmount(() => {
           <h1 class="topbar-title">{{ activeNav.label }}</h1>
         </div>
         <div class="topbar-side">
-          <label v-if="householdOptions.length > 0" class="context-select">
-            家庭
-            <select
-              :value="session.selectedHouseholdId"
-              :disabled="session.loadingScope"
-              @change="onHouseholdChange"
-            >
-              <option v-for="household in householdOptions" :key="household.id" :value="household.id">
-                {{ household.label }}
-              </option>
-            </select>
-          </label>
           <button
             v-if="session.portal === 'admin' && session.currentView !== 'members'"
             v-magnet="3"
@@ -416,16 +384,13 @@ onBeforeUnmount(() => {
             class="identity-chip"
             :class="{ admin: session.portal === 'admin' }"
             :title="session.portal === 'admin'
-              ? `${currentHouseholdLabel} · ${session.actorId} · 用途 ${session.accessPurpose || '未填'}`
+              ? `${currentHouseholdLabel} · 家庭管理员`
               : `${currentHouseholdLabel} · 当前成员`"
           >
             <AppIcon name="members" :size="16" />
             <span class="identity-person">
               <strong>{{ currentMemberLabel }}</strong>
-              <small v-if="session.portal === 'admin'" class="identity-admin-meta">
-                {{ session.actorId }} · {{ session.isOwnerView ? '可管授权' : '仅授权范围' }} · {{ session.accessPurpose || '未填用途' }}
-              </small>
-              <small v-else>当前家庭成员</small>
+              <small v-if="session.portal !== 'admin'">当前家庭成员</small>
             </span>
             <span class="role-tag" :class="{ caregiver: !session.isOwnerView }">
               {{ session.isOwnerView ? '家庭管理员后台' : session.portal === 'member' ? '家庭成员' : '照护者后台' }}
@@ -468,7 +433,7 @@ onBeforeUnmount(() => {
         </Transition>
       </main>
 
-      <footer class="app-footer">
+      <footer v-if="session.currentView !== 'digital-twin'" class="app-footer">
         {{ session.portal === 'admin' ? '家庭管理后台 · ' : '家庭成员前台 · ' }}健康信息仅供家庭记录参考 · 紧急情况请联系医生或当地急救服务
       </footer>
     </div>

@@ -263,6 +263,95 @@ export interface RelationshipGraph {
   nodes: RelationshipGraphNode[]
 }
 
+export type DigitalTwinNodeKind = 'household' | 'member' | 'fact' | 'memory' | 'knowledge'
+export type DigitalTwinCategory =
+  | 'household'
+  | 'profile'
+  | 'disease'
+  | 'medication'
+  | 'allergy'
+  | 'plan'
+  | 'caregiver'
+  | 'chat'
+  | 'knowledge'
+  | 'note'
+
+export interface DigitalTwinNode {
+  id: string
+  kind: DigitalTwinNodeKind
+  category: DigitalTwinCategory
+  label: string
+  detail?: string | null
+  member_id?: string | null
+  member_name?: string | null
+  status: 'CONFIRMED' | 'UNCONFIRMED' | 'REJECTED'
+  source_kind: string
+  source_id: string
+  source_recorded_at: string
+  source_excerpt?: string | null
+  confidence: number
+  vector_terms: string[]
+  vector_size: number
+  projection: { x: number; y: number; z: number }
+}
+
+export interface DigitalTwinEdge {
+  id: string
+  source: string
+  target: string
+  relation: string
+  weight: number
+}
+
+export interface DigitalTwinResponse {
+  household_id: string
+  generated_at: string
+  vector_backend: 'term_vector'
+  vector_note: string
+  members: Array<{ id: string; display_name: string; role: string }>
+  nodes: DigitalTwinNode[]
+  edges: DigitalTwinEdge[]
+  stats: {
+    member_count: number
+    fact_count: number
+    memory_count: number
+    unconfirmed_count: number
+    knowledge_count: number
+    edge_count: number
+  }
+}
+
+export interface DigitalTwinMemory {
+  id: string
+  household_id: string
+  member_id: string | null
+  category: string
+  label: string
+  value: string
+  attributes: Record<string, unknown>
+  source_kind: string
+  source_session_id: string | null
+  source_digest: string
+  evidence_excerpt: string
+  term_vector: Record<string, number>
+  confidence: number
+  status: 'UNCONFIRMED' | 'CONFIRMED' | 'REJECTED'
+  occurrence_count: number
+  first_seen_at: string
+  last_seen_at: string
+  created_by: string
+  confirmed_by: string | null
+  confirmed_at: string | null
+  rejected_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface DigitalTwinMemoryActionResponse {
+  memory: DigitalTwinMemory
+  health_event_id: string | null
+}
+
 export interface OutboxMessage {
   id: string
   event_id: string
@@ -684,6 +773,7 @@ export interface HealthNewsResponse {
 
 export interface AssistantChatInput {
   messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>
+  memory_messages?: Array<{ role: 'user'; content: string }>
   model?: string
   temperature?: number
   max_tokens?: number
@@ -692,6 +782,41 @@ export interface AssistantChatInput {
   query_type_override?: string
   assistant_session_id?: string
   clear_session_cache?: boolean
+  attachment_text?: string
+  attachment_name?: string
+}
+
+export interface AssistantMemoryCapture {
+  status: 'CAPTURED' | 'NO_CANDIDATES' | 'MODEL_UNAVAILABLE' | 'ACCESS_DENIED' | string
+  saved_count: number
+  updated_count: number
+  items: Array<{ id: string; label: string; value: string; status: string }>
+}
+
+export interface AssistantFileExtractionResponse {
+  file_name: string
+  extension: string
+  media_type: 'image' | 'document' | string
+  text: string
+  char_count: number
+  truncated: boolean
+  extractor: string
+  cloud_used: boolean
+}
+
+export interface VisionLlmAssistResponse {
+  schema_version: string
+  status: string
+  reason?: string | null
+  model?: string | null
+  candidate_id?: string | null
+  drug_name?: string | null
+  specification?: string | null
+  active_ingredients: string[]
+  confidence?: number | null
+  evidence_ids: string[]
+  rationale?: string | null
+  warnings: string[]
 }
 
 export interface AssistantCitation {
@@ -807,6 +932,7 @@ export interface AssistantResponse {
   classifier?: Record<string, unknown> | null
   evidence_preview?: EvidencePreview | null
   retrieval_cache_hit?: boolean
+  memory_capture?: AssistantMemoryCapture | null
 }
 
 export interface AssistantTool {

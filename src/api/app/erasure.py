@@ -27,6 +27,7 @@ from app.models import (
     AccessAudit,
     Base,
     CareAuthorization,
+    DigitalTwinMemory,
     FaceCredential,
     HealthEvent,
     Household,
@@ -279,6 +280,7 @@ def request_household_erasure(
         "hard_sample",
         "training_consent",
         "export_manifest",
+        "digital_twin_memory",
     ]
     if member_id is None:
         tables_affected.insert(0, "household")
@@ -345,6 +347,12 @@ def request_household_erasure(
 
         for member in members:
             member.deleted_at = now
+        memory_stmt = session.query(DigitalTwinMemory).filter(
+            DigitalTwinMemory.household_id == household.id,
+        )
+        if member_id is not None:
+            memory_stmt = memory_stmt.filter(DigitalTwinMemory.member_id == member_id)
+        memory_deleted = memory_stmt.delete(synchronize_session=False)
         erase_household = member_id is None
         if not erase_household:
             remaining = session.scalar(
@@ -361,7 +369,7 @@ def request_household_erasure(
             layers,
             "database",
             status="completed",
-            count=len(members) + revoked + cancelled_vision + credentials_deleted,
+            count=len(members) + revoked + cancelled_vision + credentials_deleted + memory_deleted,
         )
     except Exception:
         logger.exception("ERASURE_DATABASE_FAILED task=%s", task.id)

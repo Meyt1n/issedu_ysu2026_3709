@@ -7,9 +7,8 @@ import ErrorNotice from '@/components/ErrorNotice.vue'
 import LevelTag from '@/components/LevelTag.vue'
 import ListLoadingState from '@/components/ListLoadingState.vue'
 import ListStatusAnnouncer from '@/components/ListStatusAnnouncer.vue'
-import { useSpeech } from '@/composables/useSpeech'
 import { activeProvider } from '@/data'
-import { eventStatusLabel, riskLevelLabel } from '@/data/labels'
+import { eventStatusLabel } from '@/data/labels'
 import type { RiskCard } from '@/data/types'
 import { CAPABILITY_IDS, useCapabilities } from '@/stores/capabilities'
 import { sessionContextKey, useSession } from '@/stores/session'
@@ -21,7 +20,6 @@ const route = useRoute()
 const router = useRouter()
 const { session } = useSession()
 const { capabilities, hasCapability } = useCapabilities()
-const speech = useSpeech()
 
 const risk = ref<RiskCard | null>(null)
 const loading = ref(true)
@@ -64,7 +62,6 @@ async function load(): Promise<void> {
     const nextRisk = await activeProvider().getRiskDetail(memberId, ruleId)
     if (generation !== loadGeneration || expectedKey !== sessionContextKey(session)) return
     risk.value = nextRisk
-    speech.speak(`${riskLevelLabel(risk.value.level)}风险：${risk.value.message}。${risk.value.suggestion}`)
   } catch (cause) {
     if (generation !== loadGeneration || expectedKey !== sessionContextKey(session)) return
     error.value = presentListApiError(cause)

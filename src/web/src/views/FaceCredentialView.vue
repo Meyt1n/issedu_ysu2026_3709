@@ -6,6 +6,7 @@ import type { FaceCredential } from '../api/types'
 import AppIcon from '../components/AppIcon.vue'
 import FaceVideoCapture from '../components/FaceVideoCapture.vue'
 import {
+  createIdempotencyKey,
   formatError,
   pushToast,
   refreshMembers,
@@ -14,6 +15,7 @@ import {
 } from '../store'
 import { askConfirm } from '../ui/confirm'
 import { formatDateTime } from '../ui/labels'
+import { canSubmitMemberSetup, memberSetupValidationMessage } from '../ui/memberSetup'
 import {
   beginPinEdit,
   cancelPinEdit,
@@ -47,6 +49,10 @@ const accountMemberId = ref('')
 const accountActorId = ref('')
 const accountBindingSaving = ref(false)
 const accountBindingError = ref('')
+const newMemberName = ref('')
+const newMemberActorId = ref('')
+const newMemberSaving = ref(false)
+const newMemberError = ref('')
 const confirmationCodeValid = computed(() => {
   const code = confirmationCode.value.trim()
   return code.length >= 8 && code.length <= 256
@@ -62,6 +68,14 @@ const registrationBlockReason = computed(() => {
   return ''
 })
 const canRegisterCredential = computed(() => !saving.value && !registrationBlockReason.value)
+
+const newMemberValidation = computed(() => {
+  if (!newMemberName.value.trim() && !newMemberActorId.value.trim()) return ''
+  return memberSetupValidationMessage(newMemberName.value, newMemberActorId.value)
+})
+const canCreateMember = computed(() =>
+  canSubmitMemberSetup(newMemberName.value, newMemberActorId.value, newMemberSaving.value),
+)
 
 const unboundMembers = computed(() => session.members.filter(member => !member.actor_id))
 const legacyCredentials = computed(() =>
@@ -117,6 +131,12 @@ function ensurePinRow(actorId: string): PinRowState {
     pinRows[actorId] = emptyPinRow()
   }
   return pinRows[actorId]
+}
+
+function resetNewMemberForm(): void {
+  newMemberName.value = ''
+  newMemberActorId.value = ''
+  newMemberError.value = ''
 }
 
 function startPinEdit(actorId: string): void {
@@ -233,6 +253,39 @@ async function bindMemberAccount(): Promise<void> {
   }
 }
 
+async function createFamilyMember(): Promise<void> {
+  const householdId = session.selectedHouseholdId
+  const displayName = newMemberName.value.trim()
+  const actorId = newMemberActorId.value.trim()
+  newMemberError.value = ''
+  if (!householdId) {
+    newMemberError.value = '请先选择家庭。'
+    return
+  }
+  const validation = memberSetupValidationMessage(displayName, actorId)
+  if (validation) {
+    newMemberError.value = validation
+    return
+  }
+
+  newMemberSaving.value = true
+  try {
+    const member = await apiClient.createMember(
+      householdId,
+      { display_name: displayName, role: 'DEPENDENT', actor_id: actorId },
+      { ...requestOptions.value, idempotencyKey: createIdempotencyKey() },
+    )
+    await refreshMembers()
+    ensurePinRow(member.actor_id ?? actorId)
+    resetNewMemberForm()
+    pushToast('success', `已添加${member.display_name}。请继续为他设置六位数字密码，保存后即可在成员前台选人登录。`)
+  } catch (cause) {
+    newMemberError.value = formatError(cause)
+  } finally {
+    newMemberSaving.value = false
+  }
+}
+
 async function registerCredential(): Promise<void> {
   const householdId = session.selectedHouseholdId
   if (registrationBlockReason.value) {
@@ -314,6 +367,7 @@ async function deleteCredential(credential: FaceCredential): Promise<void> {
 watch(() => session.selectedHouseholdId, () => {
   clearRegistrationOutcome()
   clearPinRows()
+  resetNewMemberForm()
   resetForm()
   void loadCredentials()
 })
@@ -366,6 +420,38 @@ onMounted(() => {
           <AppIcon name="info" :size="16" />
           家庭管理员和每位家人都要各设一组。成员前台登录时：管理员账号 → 选人 → 输入这里保存的数字。忘记管理员密码时也可以用同一组数字本地恢复。
         </p>
+
+        <div class="member-add-panel">
+          <div>
+            <p class="eyebrow">家庭成员</p>
+            <h4 class="card-title">新增家人</h4>
+            <p class="form-sub">添加后会同步到成员前台和后台的成员选择器；还需在下面保存六位数字密码，家人才可以登录。</p>
+          </div>
+          <form class="member-add-form" data-testid="add-member-form" @submit.prevent="createFamilyMember">
+            <label class="field">
+              家人称呼
+              <input v-model="newMemberName" required maxlength="120" autocomplete="name" placeholder="例如 奶奶" />
+            </label>
+            <label class="field">
+              登录名
+              <input
+                v-model="newMemberActorId"
+                required
+                maxlength="120"
+                autocomplete="username"
+                pattern="[A-Za-z0-9][A-Za-z0-9._:-]{0,119}"
+                placeholder="例如 grandma-1"
+              />
+              <small>用于登录和 PIN 绑定，只能使用字母、数字、点、下划线、冒号或短横线。</small>
+            </label>
+            <p v-if="newMemberError || newMemberValidation" class="notice error" role="alert">
+              <AppIcon name="alert" :size="16" /> {{ newMemberError || newMemberValidation }}
+            </p>
+            <button type="submit" class="btn btn-ghost" data-testid="add-member-submit" :disabled="!canCreateMember">
+              <AppIcon name="plus" :size="15" /> {{ newMemberSaving ? '正在添加' : '新增成员' }}
+            </button>
+          </form>
+        </div>
 
         <form v-if="unboundMembers.length > 0" class="section-stack" @submit.prevent="bindMemberAccount">
           <p class="form-sub">还有成员没有登录名，先补上才能出现在下面名单里。</p>
@@ -531,6 +617,41 @@ onMounted(() => {
 .pin-person-list {
   display: grid;
   gap: 10px;
+}
+
+.member-add-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--line) 78%, var(--pine));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--card) 82%, var(--pine-tint));
+}
+
+.member-add-panel .card-title {
+  margin: 2px 0 4px;
+}
+
+.member-add-panel .form-sub {
+  margin: 0;
+}
+
+.member-add-form {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.member-add-form .notice {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+@media (max-width: 840px) {
+  .member-add-form {
+    grid-template-columns: 1fr;
+  }
 }
 
 .pin-person-row {

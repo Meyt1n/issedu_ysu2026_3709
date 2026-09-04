@@ -6,6 +6,7 @@ from sqlalchemy import (
     JSON,
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -319,6 +320,54 @@ class MemberStateProjection(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class DigitalTwinMemory(Base):
+    """Long-lived, model-extracted chat memory for the family twin.
+
+    These rows are deliberately separate from ``HealthEvent``.  A model may
+    discover a useful statement in a chat, but it is not a health fact until a
+    person confirms it.  ``term_vector`` reuses the local sparse vocabulary
+    used by the knowledge store; it is not a neural embedding.
+    """
+
+    __tablename__ = "digital_twin_memory"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    household_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("household.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    member_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("member.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    category: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    label: Mapped[str] = mapped_column(String(120), nullable=False)
+    value: Mapped[str] = mapped_column(String(500), nullable=False)
+    attributes: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    source_kind: Mapped[str] = mapped_column(String(24), nullable=False, default="CHAT")
+    source_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    source_digest: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    evidence_excerpt: Mapped[str] = mapped_column(String(600), nullable=False, default="")
+    term_vector: Mapped[dict[str, int]] = mapped_column(JSON, nullable=False, default=dict)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="UNCONFIRMED", index=True
+    )
+    occurrence_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    confirmed_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), server_default=func.now()
+    )
+
+
 class ProjectionCheckpoint(Base):
     __tablename__ = "projection_checkpoint"
 
@@ -372,6 +421,20 @@ Index("uq_event_supersedes", HealthEvent.supersedes_event_id, unique=True)
 Index("ix_event_correlation", HealthEvent.correlation_id)
 Index("uq_outbox_event", OutboxMessage.event_id, unique=True)
 Index("ix_outbox_status_available", OutboxMessage.status, OutboxMessage.available_at)
+Index(
+    "uq_digital_twin_memory_fact",
+    DigitalTwinMemory.household_id,
+    DigitalTwinMemory.member_id,
+    DigitalTwinMemory.category,
+    DigitalTwinMemory.value,
+    unique=True,
+)
+Index(
+    "ix_digital_twin_memory_scope_status",
+    DigitalTwinMemory.household_id,
+    DigitalTwinMemory.member_id,
+    DigitalTwinMemory.status,
+)
 Index(
     "uq_checkpoint_member_sequence",
     ProjectionCheckpoint.member_id,

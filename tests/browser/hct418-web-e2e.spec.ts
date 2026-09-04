@@ -149,6 +149,35 @@ async function installSyntheticApi(page: Page, qualityDecision: 'PASS' | 'RETAKE
     if (request.method() === 'GET' && (path.endsWith('/plans') || path.endsWith('/tasks'))) return respond([])
     if (request.method() === 'GET' && path.startsWith('/api/v1/weather/')) return respond({ status: 'unavailable', cache_status: 'none', action_cards: [] })
 
+    if (request.method() === 'POST' && path === '/api/v1/assistant/chat/stream') {
+      await new Promise(resolve => setTimeout(resolve, 350))
+      const response = {
+        answer: '根据本地合成证据，当前仅能确认需要人工核对。',
+        sources: ['Synthetic care guide · 2026.08 · chunk-1'],
+        citations: [{
+          document_id: document.id,
+          version: document.version,
+          chunk_id: 'chunk-1',
+          document_title: document.title,
+          text: 'Synthetic evidence fragment',
+          locator: 'p1',
+        }],
+        suggested_questions: ['这条证据来自哪个版本？'], confidence: 'medium', escalate: false,
+        degraded: false, degrade_reason: null, model: 'synthetic-model-v1', route: 'local', open_chat: true,
+      }
+      return route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body: [
+          'event: token',
+          'data: {"token":"根据本地合成证据，当前仅能确认需要人工核对。"}',
+          '',
+          `event: done\ndata: ${JSON.stringify({ response })}`,
+          '',
+        ].join('\n'),
+      })
+    }
+
     if (request.method() === 'POST' && path === '/api/v1/vision-quality/check') {
       return respond({
         schema_version: 'quality-v1', config_version: 'synthetic-quality-v1', media_type: 'image',
@@ -260,6 +289,17 @@ test('助手链路显示本地依据，并保留受控检索结果', async ({ pa
 
   await navItem(page, '健康助手').click()
   await expect(page.getByRole('heading', { name: '本地证据助手' })).toBeVisible()
+  await expect(page.locator('.assistant-compose-hint')).toHaveCount(0)
+  await expect(page.getByTitle('Enter 发送 · Shift + Enter 换行')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '停止生成本次回答' })).toHaveCount(0)
+  await page.locator('textarea[placeholder^="例如：最近的用药提醒"]').fill('nihao')
+  const streamRequest = page.waitForRequest('**/api/v1/assistant/chat/stream')
+  await page.getByRole('button', { name: '发送' }).click()
+  await streamRequest
+  await expect(page.getByRole('button', { name: '停止生成本次回答' })).toBeVisible()
+  await page.getByRole('button', { name: '停止生成本次回答' }).click()
+  await expect(page.getByRole('button', { name: '发送' })).toBeVisible()
+
   await page.locator('textarea[placeholder^="例如：最近的用药提醒"]').fill('nihao')
   await page.getByRole('button', { name: '发送' }).click()
   await expect(page.getByText('根据本地合成证据')).toBeVisible({ timeout: 15_000 })

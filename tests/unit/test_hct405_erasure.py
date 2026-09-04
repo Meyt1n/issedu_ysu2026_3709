@@ -15,7 +15,14 @@ from app.erasure import (
     request_household_erasure,
 )
 from app.knowledge import KnowledgeChunk, add_document
-from app.models import FaceCredential, HealthEvent, Household, Member, VisionTask
+from app.models import (
+    DigitalTwinMemory,
+    FaceCredential,
+    HealthEvent,
+    Household,
+    Member,
+    VisionTask,
+)
 
 
 def test_redacted_audit_rejects_health_fields() -> None:
@@ -99,6 +106,20 @@ def test_household_erasure_hides_rows_and_writes_skip_marker(
         consented_at=event.created_at,
     )
     db_session.add(credential)
+    memory = DigitalTwinMemory(
+        household_id=household.id,
+        member_id=member.id,
+        category="NOTE",
+        label="家庭记录",
+        value="合成删除线索",
+        source_digest="c" * 64,
+        evidence_excerpt="合成删除线索",
+        term_vector={"合成删除线索": 1},
+        confidence=0.8,
+        status="UNCONFIRMED",
+        created_by="owner",
+    )
+    db_session.add(memory)
 
     scoped = add_document(
         db_session,
@@ -117,6 +138,7 @@ def test_household_erasure_hides_rows_and_writes_skip_marker(
         permission_scope={"household_ids": [other.id]},
     )
     db_session.commit()
+    memory_id = memory.id
 
     task = request_household_erasure(db_session, household, actor_id="owner")
     db_session.commit()
@@ -143,20 +165,35 @@ def test_household_erasure_hides_rows_and_writes_skip_marker(
     assert credential.status == "DELETED"
     assert credential.encrypted_template == b""
     assert "face_credential" in task.scope["tables_affected"]
+    assert "digital_twin_memory" in task.scope["tables_affected"]
+    assert (
+        db_session.scalar(
+            select(func.count())
+            .select_from(DigitalTwinMemory)
+            .where(DigitalTwinMemory.id == memory_id)
+        )
+        == 0
+    )
     assert not (tmp_path / storage_key).exists()
     assert not cache_file.exists()
     assert scoped.status == "deleted"
-    assert db_session.scalar(
-        select(func.count())
-        .select_from(KnowledgeChunk)
-        .where(KnowledgeChunk.document_id == scoped.id)
-    ) == 0
+    assert (
+        db_session.scalar(
+            select(func.count())
+            .select_from(KnowledgeChunk)
+            .where(KnowledgeChunk.document_id == scoped.id)
+        )
+        == 0
+    )
     assert kept.status == "active"
-    assert db_session.scalar(
-        select(func.count())
-        .select_from(KnowledgeChunk)
-        .where(KnowledgeChunk.document_id == kept.id)
-    ) >= 1
+    assert (
+        db_session.scalar(
+            select(func.count())
+            .select_from(KnowledgeChunk)
+            .where(KnowledgeChunk.document_id == kept.id)
+        )
+        >= 1
+    )
 
     marker_path = tmp_path / "backup-skip" / f"{task.id}.json"
     marker = json.loads(marker_path.read_text(encoding="utf-8"))

@@ -1,22 +1,19 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
 
 import AppIcon from '@/components/AppIcon.vue'
 import ErrorNotice from '@/components/ErrorNotice.vue'
 import ListLoadingState from '@/components/ListLoadingState.vue'
 import { presentListApiError, type ErrorPresentation } from '@/api/errors'
-import type { HealthNewsItem, HealthNewsResponse } from '@/api/types'
+import type { HealthNewsResponse } from '@/api/types'
 import { activeProvider } from '@/data'
 import {
-  assistantPromptForItem,
   itemSourceLine,
   presentHealthNews,
   presentHealthNewsFreshness,
   refreshOutcomeMessage,
 } from '@/utils/healthNews'
 
-const router = useRouter()
 const news = ref<HealthNewsResponse | null>(null)
 const loading = ref(false)
 const loadError = ref<ErrorPresentation | null>(null)
@@ -53,10 +50,6 @@ async function loadNews(options?: { refresh?: boolean }): Promise<void> {
 
 function refreshNews(): void {
   void loadNews({ refresh: true })
-}
-
-function openItem(item: HealthNewsItem): void {
-  void router.push({ name: 'assistant', query: { prompt: assistantPromptForItem(item) } })
 }
 
 onMounted(() => {
@@ -110,18 +103,14 @@ onMounted(() => {
     </p>
     <ul v-else-if="news && news.items.length > 0" class="health-news-list">
       <li v-for="item in news.items" :key="item.id">
-        <button type="button" class="health-news-item" @click="openItem(item)">
+        <article class="health-news-item">
           <span class="health-news-tag-row">
             <span class="health-news-tag">{{ item.tag }}</span>
           </span>
           <strong>{{ item.title }}</strong>
           <span class="health-news-summary">{{ item.summary }}</span>
           <span v-if="item.source !== 'seasonal_calendar'" class="health-news-source">{{ itemSourceLine(item) }}</span>
-          <span class="health-news-cta">
-            问助手
-            <AppIcon name="chevron-right" :size="16" />
-          </span>
-        </button>
+        </article>
       </li>
     </ul>
     <p v-else class="meta-line health-news-empty" role="status">
@@ -234,7 +223,6 @@ onMounted(() => {
 
 .health-news-item {
   width: 100%;
-  min-height: var(--tap);
   display: grid;
   gap: 7px;
   padding: 14px;
@@ -244,12 +232,9 @@ onMounted(() => {
   border-radius: 18px;
   background: var(--c-surface-solid);
   box-shadow: var(--shadow-press);
-  cursor: pointer;
-  transition: transform var(--speed) var(--ease), border-color var(--speed) var(--ease);
 }
 
-.health-news-item:hover { transform: translateY(-1px); border-color: var(--c-brand); }
-.health-news-item:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 3px; }
+.health-news-item { border-color: var(--c-line-strong); }
 
 .health-news-tag-row {
   display: flex;
@@ -263,7 +248,6 @@ onMounted(() => {
 .health-news-summary,
 .health-news-source { color: var(--c-ink-soft); line-height: 1.5; }
 .health-news-source { color: var(--c-ink-faint); font-size: 0.78rem; }
-.health-news-cta { display: inline-flex; align-items: center; gap: 4px; color: var(--c-brand-strong); font-size: 0.84rem; font-weight: 800; }
 
 @media (max-width: 360px) {
   .health-news-heading { gap: 8px; }

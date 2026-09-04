@@ -5,9 +5,11 @@ call stays on this machine.  Local small models are, however, not always strong
 enough for the harder care questions, so an operator may point the *same*
 pipeline at an OpenAI-compatible chat-completions endpoint instead.
 
-The switch is deliberately ops-only (``LLM_PROVIDER=cloud`` in ``.env``) and has
-no UI: the frontend, the orchestrator, the tool contract, the safety gates and
-the response schema are all untouched.  ``CloudChatClient`` mirrors
+The switch is deliberately ops-only (``LLM_PROVIDER=cloud`` in ``.env``). The
+ordinary text path keeps the frontend, orchestrator, tool contract, safety
+gates and response schema unchanged; the separate transient attachment/vision
+path may pass OpenAI-compatible ``image_url`` content only when explicitly
+enabled. ``CloudChatClient`` mirrors
 ``OllamaClient``'s interface exactly — same method names, same keyword
 arguments, same Ollama-shaped return value, and the same
 ``RuntimeError("OLLAMA_UNAVAILABLE: ...")`` on failure so the existing
@@ -159,6 +161,7 @@ class CloudChatClient:
         max_tokens_ceiling: int = 2048,
         supports_tools: bool = True,
         response_format_mode: str = "json_schema",
+        vision_enabled: bool = False,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self._api_key = api_key
@@ -167,7 +170,13 @@ class CloudChatClient:
         self._max_tokens_ceiling = max_tokens_ceiling
         self._supports_tools = supports_tools
         self._response_format_mode = response_format_mode
+        self._vision_enabled = vision_enabled
         self._available: bool | None = None
+
+    @property
+    def vision_enabled(self) -> bool:
+        """Whether this client is explicitly allowed to send image content."""
+        return self._vision_enabled
 
     # ── endpoint helpers ────────────────────────────────────────────────
     @property
@@ -454,6 +463,7 @@ def build_cloud_client() -> CloudChatClient:
         max_tokens_ceiling=int(settings.llm_api_max_tokens),
         supports_tools=bool(settings.llm_api_supports_tools),
         response_format_mode=settings.llm_api_response_format_mode,
+        vision_enabled=bool(settings.llm_api_vision_enabled),
     )
 
 

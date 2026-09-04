@@ -7,10 +7,8 @@ import LevelTag from '@/components/LevelTag.vue'
 import ListLoadingState from '@/components/ListLoadingState.vue'
 import ListStatusAnnouncer from '@/components/ListStatusAnnouncer.vue'
 import PrivacyBadge from '@/components/PrivacyBadge.vue'
-import { useSpeech } from '@/composables/useSpeech'
 import { createVisionTaskPolling, visionTaskStatusLabel } from '@/composables/useVisionTaskPolling'
 import { activeProvider, canSubmitWrites } from '@/data'
-import { recognitionStatusLabel } from '@/data/labels'
 import type { MemberSummary, QualityCheckResult, RecognitionCandidate } from '@/data/types'
 import { formatDateTime } from '@/utils/format'
 import { trustedReviewTarget } from '@/utils/reviewHandoff'
@@ -30,7 +28,6 @@ type Stage = 'idle' | 'checking' | 'quality' | 'recognizing' | 'result'
 
 const { session } = useSession()
 const { capabilities, hasCapability } = useCapabilities()
-const speech = useSpeech()
 let memberLoadGeneration = 0
 let memberLoadInFlight = false
 
@@ -126,7 +123,6 @@ async function cancelVisionTask(): Promise<void> {
 watch(() => polling.state.value.phase, (phase) => {
   const snapshot = polling.state.value.snapshot
   if (phase !== 'terminal' || !snapshot) return
-  speech.speak(`视觉任务${visionTaskStatusLabel(snapshot.status)}。${snapshot.nextStep}`)
   if (notifiedTaskId.value === snapshot.taskId) return
   notifiedTaskId.value = snapshot.taskId
   if (noticeState.value === 'granted') {
@@ -245,11 +241,6 @@ async function checkQuality(picked: File): Promise<void> {
     if (expectedKey !== sessionContextKey(session)) return
     quality.value = nextQuality
     stage.value = 'quality'
-    if (quality.value.decision === 'PASS') {
-      speech.speak(isVideo ? '视频抽帧质量合格，可以开始识别。' : '照片质量合格，可以开始识别。')
-    } else {
-      speech.speak(`${isVideo ? '视频需要重拍' : '照片需要重拍'}。${quality.value.retakePrompts.join('，')}`)
-    }
   } catch (cause) {
     if (expectedKey !== sessionContextKey(session)) return
     error.value = presentApiError(cause)
@@ -273,7 +264,6 @@ async function recognize(): Promise<void> {
     if (expectedKey !== sessionContextKey(session)) return
     candidate.value = nextCandidate
     stage.value = 'result'
-    speech.speak(`识别结果：${recognitionStatusLabel(candidate.value.status)}。${candidate.value.notice}`)
     // MOB-132：任务创建成功后立即开始状态回查（同一任务，绝不重复创建）。
     startStatusPolling()
   } catch (cause) {

@@ -8,6 +8,7 @@ import type {
   AssistantAgentCatalog,
   AssistantAgentTrace,
   AssistantExternalSource,
+  AssistantFileExtractionResponse,
   AssistantResponse,
   AssistantTool,
   Authorization,
@@ -29,6 +30,9 @@ import type {
   HealthResponse,
   CapabilityResponse,
   DashboardSummary,
+  DigitalTwinMemory,
+  DigitalTwinMemoryActionResponse,
+  DigitalTwinResponse,
   Household,
   KnowledgeDocument,
   KnowledgeDocumentDetail,
@@ -63,6 +67,7 @@ import type {
   CreateVisionTaskInput,
   SubmitVisionEvidenceInput,
   VisionTask,
+  VisionLlmAssistResponse,
   WeatherResponse,
   WebSearchOpsSnapshot,
 } from './types'
@@ -413,6 +418,15 @@ export class ApiClient {
     return this.request('/api/v1/files/upload', { method: 'POST', body }, options)
   }
 
+  extractAssistantFile(
+    file: File,
+    options?: RequestOptions,
+  ): Promise<AssistantFileExtractionResponse> {
+    const body = new FormData()
+    body.append('file', file)
+    return this.request('/api/v1/assistant/files/extract', { method: 'POST', body }, options)
+  }
+
   deleteUploadedFile(storageKey: string, options?: RequestOptions): Promise<{ deleted: boolean }> {
     return this.request(
       `/api/v1/files/${encodeURIComponent(storageKey)}`,
@@ -438,6 +452,17 @@ export class ApiClient {
       `/api/v1/vision-tasks/${encodeURIComponent(taskId)}/evidence`,
       { method: 'POST', body: JSON.stringify(input) },
       options,
+    )
+  }
+
+  assistVisionTask(
+    taskId: string,
+    options?: RequestOptions,
+  ): Promise<VisionLlmAssistResponse> {
+    return this.request(
+      `/api/v1/vision-tasks/${encodeURIComponent(taskId)}/llm-assist`,
+      { method: 'POST' },
+      { timeoutMs: 120_000, ...options },
     )
   }
 
@@ -655,6 +680,55 @@ export class ApiClient {
     return this.request(
       `/api/v1/households/${householdId}/members/${memberId}/relationship-graph`,
       undefined,
+      options,
+    )
+  }
+
+  getDigitalTwin(householdId: string, options?: RequestOptions): Promise<DigitalTwinResponse> {
+    return this.request(
+      `/api/v1/households/${encodeURIComponent(householdId)}/digital-twin`,
+      undefined,
+      options,
+    )
+  }
+
+  listDigitalTwinMemories(
+    householdId: string,
+    memberId?: string,
+    status?: string,
+    options?: RequestOptions,
+  ): Promise<DigitalTwinMemory[]> {
+    const params = new URLSearchParams()
+    if (memberId) params.set('member_id', memberId)
+    if (status) params.set('status', status)
+    const query = params.toString()
+    return this.request(
+      `/api/v1/households/${encodeURIComponent(householdId)}/digital-twin/memories${query ? `?${query}` : ''}`,
+      undefined,
+      options,
+    )
+  }
+
+  confirmDigitalTwinMemory(
+    householdId: string,
+    memoryId: string,
+    options?: RequestOptions,
+  ): Promise<DigitalTwinMemoryActionResponse> {
+    return this.request(
+      `/api/v1/households/${encodeURIComponent(householdId)}/digital-twin/memories/${encodeURIComponent(memoryId)}/confirm`,
+      { method: 'POST' },
+      options,
+    )
+  }
+
+  rejectDigitalTwinMemory(
+    householdId: string,
+    memoryId: string,
+    options?: RequestOptions,
+  ): Promise<DigitalTwinMemoryActionResponse> {
+    return this.request(
+      `/api/v1/households/${encodeURIComponent(householdId)}/digital-twin/memories/${encodeURIComponent(memoryId)}/reject`,
+      { method: 'POST' },
       options,
     )
   }

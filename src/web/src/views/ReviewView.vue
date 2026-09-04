@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 
 import { apiClient } from '../api/client'
-import type { ReviewCandidate, ReviewTask, VisionTask } from '../api/types'
+import type { ReviewCandidate, ReviewTask, VisionLlmAssistResponse, VisionTask } from '../api/types'
 import AppIcon from '../components/AppIcon.vue'
 import VisionResultViewer from '../components/VisionResultViewer.vue'
 import {
@@ -28,6 +28,8 @@ const tasks = ref<EnrichedReviewTask[]>([])
 const loading = ref(false)
 const loadError = ref('')
 const busyTaskId = ref<string | null>(null)
+const assistingTaskId = ref<string | null>(null)
+const assistByTask = ref<Record<string, VisionLlmAssistResponse>>({})
 const showAllMembers = ref(false)
 const expandedMetaId = ref<string | null>(null)
 
@@ -39,6 +41,7 @@ const panel = reactive({
   correctDrug: '',
   correctDosage: '',
   correctFrequency: '',
+  correctIngredients: '',
   skipReason: '',
 })
 
@@ -87,6 +90,11 @@ function candidateLine(candidate: ReviewCandidate): string {
     parts.push(`证据置信度 ${(candidate.confidence * 100).toFixed(0)}%（仍需人工确认）`)
   }
   return parts.join(' · ')
+}
+
+function assistConfidenceLabel(result: VisionLlmAssistResponse | undefined): string {
+  if (result?.confidence == null) return '未提供置信度'
+  return `${(result.confidence * 100).toFixed(0)}% · 仅供复核`
 }
 
 function settledDrugLabel(task: EnrichedReviewTask): string {
@@ -185,7 +193,11 @@ async function loadTasks(): Promise<void> {
   }
 }
 
-function openPanel(task: ReviewTask, mode: 'confirm' | 'correct' | 'skip'): void {
+function openPanel(
+  task: ReviewTask,
+  mode: 'confirm' | 'correct' | 'skip',
+  suggestion?: VisionLlmAssistResponse,
+): void {
   if (panel.taskId === task.id && panel.mode === mode) {
     panel.taskId = ''
     return
@@ -195,10 +207,31 @@ function openPanel(task: ReviewTask, mode: 'confirm' | 'correct' | 'skip'): void
   panel.selectedIndex = 0
   panel.note = ''
   const first = task.candidates[0] ?? {}
-  panel.correctDrug = String(first.drug_name ?? '')
-  panel.correctDosage = String(first.dosage ?? '')
+  const assist = suggestion ?? assistByTask.value[task.id]
+  panel.correctDrug = String(assist?.drug_name ?? first.drug_name ?? '')
+  panel.correctDosage = String(assist?.specification ?? first.specification ?? first.dosage ?? '')
   panel.correctFrequency = String(first.frequency ?? '')
+  panel.correctIngredients = (assist?.active_ingredients ?? first.active_ingredients ?? []).join('、')
   panel.skipReason = ''
+}
+
+async function requestLlmAssist(task: ReviewTask): Promise<void> {
+  if (assistingTaskId.value || task.status !== 'PENDING_REVIEW') return
+  assistingTaskId.value = task.id
+  try {
+    const result = await apiClient.assistVisionTask(task.vision_task_id, requestOptions.value)
+    assistByTask.value = { ...assistByTask.value, [task.id]: result }
+    if (result.status === 'READY') {
+      openPanel(task, 'correct', result)
+      pushToast('success', '云端 AI 已给出候选建议，已带入人工修正表单，请对照原图核对。')
+    } else {
+      pushToast('info', result.reason === 'MODEL_UNAVAILABLE' ? '云端模型暂不可用，仍可人工修正。' : '云端 AI 未能可靠判断，请人工核对。')
+    }
+  } catch (cause) {
+    pushToast('error', formatError(cause))
+  } finally {
+    assistingTaskId.value = null
+  }
 }
 
 async function submitPanel(task: ReviewTask): Promise<void> {
@@ -233,7 +266,12 @@ async function submitPanel(task: ReviewTask): Promise<void> {
           manual_payload: {
             drug_name: panel.correctDrug.trim(),
             dosage: panel.correctDosage.trim() || null,
+            specification: panel.correctDosage.trim() || null,
             frequency: panel.correctFrequency.trim() || null,
+            active_ingredients: panel.correctIngredients
+              .split(/[、,，;；\n]/)
+              .map(item => item.trim())
+              .filter(Boolean),
           },
           correction_note: panel.note.trim() || null,
         },
@@ -418,6 +456,40 @@ onMounted(() => void loadTasks())
           没有可用候选，请选择「人工修正」手工填写，或跳过并补拍。
         </p>
 
+        <section
+          v-if="assistByTask[task.id]"
+          class="review-ai-assist"
+          aria-label="云端 AI 辅助建议"
+        >
+          <div class="review-ai-assist-heading">
+            <span><AppIcon name="sparkle" :size="14" />云端 AI 辅助建议</span>
+            <span v-if="assistByTask[task.id]?.confidence != null" class="text-faint">
+              {{ assistConfidenceLabel(assistByTask[task.id]) }}
+            </span>
+          </div>
+          <template v-if="assistByTask[task.id]?.status === 'READY'">
+            <p class="review-ai-assist-values">
+              药品：<strong>{{ assistByTask[task.id]?.drug_name || '未可靠识别' }}</strong>
+              · 规格：{{ assistByTask[task.id]?.specification || '未识别' }}
+            </p>
+            <p v-if="assistByTask[task.id]?.active_ingredients?.length" class="review-ai-assist-values">
+              成分：{{ assistByTask[task.id]?.active_ingredients.join('、') }}
+            </p>
+            <p v-if="assistByTask[task.id]?.rationale" class="text-faint review-ai-assist-rationale">
+              {{ assistByTask[task.id]?.rationale }}
+            </p>
+            <button type="button" class="btn btn-ghost btn-small" @click="openPanel(task, 'correct', assistByTask[task.id])">
+              带入人工修正表单
+            </button>
+          </template>
+          <p v-else class="text-faint" style="margin: 0">
+            AI 未给出可安全采用的建议（{{ assistByTask[task.id]?.reason || '需人工判断' }}）。
+          </p>
+          <p v-if="assistByTask[task.id]?.warnings?.length" class="text-faint review-ai-assist-warning">
+            {{ assistByTask[task.id]?.warnings.join('；') }}
+          </p>
+        </section>
+
         <details class="review-meta-details">
           <summary @click.prevent="toggleMeta(task.id)">
             {{ expandedMetaId === task.id ? '收起版本与追溯' : '版本、任务编号与追溯' }}
@@ -443,6 +515,15 @@ onMounted(() => void loadTasks())
           <button type="button" class="btn btn-ghost btn-small" @click="toggleEvidence(task)">
             <AppIcon name="eye" :size="14" />
             {{ evidenceOpenId === task.id ? '收起原图' : '看原图' }}
+          </button>
+          <button
+            type="button"
+            class="btn btn-ghost btn-small"
+            :disabled="assistingTaskId === task.id || Boolean(assistingTaskId)"
+            @click="requestLlmAssist(task)"
+          >
+            <AppIcon name="sparkle" :size="14" />
+            {{ assistingTaskId === task.id ? 'AI 判断中…' : '云端 AI 判断' }}
           </button>
           <div class="review-actions-more">
             <button type="button" class="btn btn-ghost btn-small" @click="openPanel(task, 'correct')">
@@ -478,14 +559,18 @@ onMounted(() => void loadTasks())
             </label>
             <div class="grid-two" style="gap: 12px">
               <label class="field">
-                剂量（可选）
-                <input v-model="panel.correctDosage" autocomplete="off" placeholder="例如 0.25g" />
+                包装规格/含量（可选）
+                <input v-model="panel.correctDosage" autocomplete="off" placeholder="例如 0.25g×24粒" />
               </label>
               <label class="field">
                 频次（可选）
                 <input v-model="panel.correctFrequency" autocomplete="off" placeholder="例如 每日三次" />
               </label>
             </div>
+            <label class="field">
+              有效成分（可选）
+              <input v-model="panel.correctIngredients" autocomplete="off" placeholder="多个成分用顿号分隔" />
+            </label>
             <label class="field">
               修正原因
               <input v-model="panel.note" autocomplete="off" placeholder="例如 OCR 将 0.25g 误读为 0.75g" />

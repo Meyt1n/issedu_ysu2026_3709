@@ -408,7 +408,15 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
         </span>
         <span class="medication-empty-visual" aria-hidden="true">
           <span class="medication-empty-orbit" />
-          <AppIcon name="plan" :size="24" />
+          <span class="medication-bottle">
+            <span class="medication-bottle-cap" />
+            <span class="medication-bottle-label"><AppIcon name="pill" :size="19" /></span>
+          </span>
+          <span class="medication-calendar">
+            <AppIcon name="plan" :size="44" />
+          </span>
+          <AppIcon class="medication-leaf medication-leaf--left" name="leaf" :size="34" />
+          <AppIcon class="medication-leaf medication-leaf--right" name="leaf" :size="34" />
         </span>
         <span class="medication-empty-copy">
           <strong>今天先轻轻休息一下</strong>
@@ -524,12 +532,6 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
       </ul>
     </section>
 
-    <aside v-if="session.isOwnerView" class="overview-authorization-action">
-      <button type="button" class="btn btn-ghost btn-small" @click="setView('authorizations')">
-        管理授权
-        <AppIcon name="arrow-right" :size="14" />
-      </button>
-    </aside>
   </div>
 
   <HealthNewsPanel />
@@ -561,13 +563,6 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
   padding-left: 0;
   padding-top: 18px;
   position: static;
-}
-
-.overview-authorization-action {
-  align-items: center;
-  display: flex;
-  justify-content: flex-end;
-  min-height: 0;
 }
 
 .home-dashboard-weather {
@@ -872,10 +867,11 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
   border: 1px solid color-mix(in srgb, var(--pine) 20%, var(--line-soft));
   border-radius: 16px;
   display: flex;
+  flex-direction: column;
   gap: 13px;
-  justify-content: space-between;
+  justify-content: center;
   margin-top: 16px;
-  min-height: 196px;
+  min-height: 270px;
   overflow: hidden;
   padding: 14px 16px;
   position: relative;
@@ -930,46 +926,107 @@ onBeforeUnmount(() => removeHealthRefreshListener?.())
 .medication-empty-ambient i:nth-child(4) { bottom: 26%; right: 15%; }
 
 .medication-empty-visual {
-  margin-left: 7%;
-}
-
-.medication-empty-visual {
   align-items: center;
-  background: color-mix(in srgb, var(--card) 84%, transparent);
-  border: 1px solid color-mix(in srgb, var(--pine) 24%, transparent);
-  border-radius: 50%;
   color: var(--pine-deep);
   display: inline-flex;
-  flex: 0 0 auto;
-  height: 52px;
+  height: 142px;
   justify-content: center;
   position: relative;
-  width: 52px;
+  width: 250px;
 }
 
 .medication-empty-orbit {
-  border: 1px dashed color-mix(in srgb, var(--pine) 42%, transparent);
+  background: radial-gradient(circle, color-mix(in srgb, var(--gold) 18%, transparent), transparent 68%);
   border-radius: 50%;
-  inset: -5px;
+  height: 142px;
   position: absolute;
-  animation: medication-orbit 4.5s linear infinite;
+  left: 50%;
+  top: 0;
+  transform: translateX(-50%);
+  width: 190px;
 }
 
-@keyframes medication-orbit {
-  to { transform: rotate(360deg); }
+.medication-bottle,
+.medication-calendar {
+  align-items: center;
+  background: color-mix(in srgb, var(--card) 86%, transparent);
+  border: 2px solid color-mix(in srgb, var(--pine) 58%, var(--line));
+  box-shadow: 0 8px 18px rgba(66, 93, 76, .1);
+  display: inline-flex;
+  justify-content: center;
+  position: absolute;
+}
+
+.medication-bottle {
+  border-radius: 16px 16px 14px 14px;
+  height: 88px;
+  left: 50px;
+  top: 35px;
+  transform: rotate(-1deg);
+  width: 58px;
+}
+
+.medication-bottle-cap {
+  background: color-mix(in srgb, var(--pine) 22%, var(--card));
+  border: 2px solid color-mix(in srgb, var(--pine) 58%, var(--line));
+  border-bottom: 0;
+  border-radius: 8px 8px 4px 4px;
+  height: 16px;
+  left: 8px;
+  position: absolute;
+  top: -17px;
+  width: 38px;
+}
+
+.medication-bottle-label {
+  align-items: center;
+  background: color-mix(in srgb, var(--card) 94%, transparent);
+  border-radius: 9px;
+  color: var(--clay);
+  display: inline-flex;
+  height: 39px;
+  justify-content: center;
+  width: 44px;
+}
+
+.medication-calendar {
+  background: color-mix(in srgb, var(--card) 90%, var(--sky-tint));
+  border-radius: 15px;
+  color: var(--pine);
+  height: 82px;
+  left: 105px;
+  top: 48px;
+  transform: rotate(3deg);
+  width: 82px;
+}
+
+.medication-leaf {
+  color: color-mix(in srgb, var(--pine) 68%, var(--sage));
+  position: absolute;
+  top: 75px;
+}
+
+.medication-leaf--left {
+  left: 23px;
+  transform: rotate(-22deg);
+}
+
+.medication-leaf--right {
+  right: 23px;
+  transform: scaleX(-1) rotate(-22deg);
 }
 
 .medication-empty-copy {
   display: grid;
   gap: 4px;
   min-width: 0;
+  text-align: center;
 }
 
 .medication-empty-copy strong { color: var(--pine-deep); font-size: 15px; }
 .medication-empty-copy span { color: var(--ink-soft); font-size: 12.5px; }
 
 @media (prefers-reduced-motion: reduce) {
-  .medication-empty-orbit,
   .pending-empty-orbit { animation: none; }
 }
 

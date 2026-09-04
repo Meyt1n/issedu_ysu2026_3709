@@ -2,7 +2,10 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import AppIcon from '../AppIcon.vue'
-import { pushToast, session, setView } from '../../store'
+import CompanionPet from '../CompanionPet.vue'
+import type { CompanionPetState } from '../../assets/pet/manifest'
+import { session, setView } from '../../store'
+import { resolvePetMenuPlacement } from '../../ui/petMenuPlacement'
 import { guardianStateFor, type GuardianState } from '../../ui/showcase'
 
 /* ── 家健镜桌宠（HCT-534）──
@@ -29,19 +32,19 @@ const stateLabel: Record<GuardianState, string> = {
 
 const hour = new Date().getHours()
 const idleMessages = computed(() => {
-  if (hour < 5) return ['夜深了，记得早点休息，我来守着数据。']
-  if (hour < 11) return ['早上好呀，今天也一起守护家人健康吧。', '所有健康数据都留在家里，不出网。']
-  if (hour < 14) return ['中午好，别忘了按时吃饭呀。', '有我在，数据安安全全的。']
-  if (hour < 19) return ['下午好～需要我帮你看看家庭近况吗？', '点我一下，可以快速打开健康助手。']
-  return ['晚上好，今天家人的记录都同步好了。', '晚风轻轻的，记得提醒家人按时用药哦。']
+  if (hour < 5) return ['夜深啦，先好好休息吧，我会安静陪着你 (－ω－) zzZ']
+  if (hour < 11) return ['早上好呀，今天也一起照顾好家人吧 (｡•̀ᴗ-)✧', '家庭记录都在本地可信空间里，安心交给我吧 ( ´ ▽ ` )ﾉ']
+  if (hour < 14) return ['中午好，忙碌的时候也别忘了按时吃饭呀 (๑´ڡ`๑)', '我在这里，需要时轻轻叫我就好 (｡･ω･｡)ﾉ♡']
+  if (hour < 19) return ['下午好～要不要一起看看家里最近的变化？( •̀ ω •́ )✧', '左键和我互动，右键可以打开快捷入口哦 (￣▽￣)ノ']
+  return ['晚上好，今天也辛苦啦 (づ｡◕‿‿◕｡)づ', '慢慢整理就好，我会一直陪着你 (｡•́‿•̀｡)']
 })
 
 const contextMessage = computed<string | null>(() => {
-  if (state.value === 'offline') return '本地服务暂时不在线，我陪你一起等它回来。'
-  if (state.value === 'loading') return '正在同步家庭数据，稍等一下下…'
-  if (state.value === 'attention') return `有 ${session.pendingReviewCount} 条识别候选等你复核，不会自动入档。`
-  if (state.value === 'assistant') return '问吧，我一直在听。'
-  if (state.value === 'scanning') return '正在本机识别图片，完成后会请你人工确认。'
+  if (state.value === 'offline') return '本地服务暂时没连上，我陪你一起等等 (｡•́︿•̀｡)'
+  if (state.value === 'loading') return '正在整理家庭数据，马上就好啦 ( •̀ᴗ•́ )و'
+  if (state.value === 'attention') return `有 ${session.pendingReviewCount} 条识别候选等你复核，不会自动入档哦 (｀･ω･´)ゞ`
+  if (state.value === 'assistant') return '我在认真听呢，请慢慢说 (｡･ω･｡)'
+  if (state.value === 'scanning') return '正在本机识别图片，稍后还要请你确认一下 ( •̀ ω •́ )✧'
   return null
 })
 
@@ -72,7 +75,13 @@ const menuOpen = ref(false)
 
 const homeView = computed(() => (session.portal === 'member' ? 'member-home' : 'overview'))
 
-const CHIRP_LINES = ['嘿嘿，找我呀？', '在呢在呢～', '要点什么？', '叮！桌宠待命中。']
+const CHIRP_LINES = [
+  '嘿嘿，找到我啦 (≧▽≦)',
+  '我在呢～(｡･ω･｡)ﾉ',
+  '今天也一起加油吧 (ง •̀_•́)ง',
+  '被摸摸头啦，好开心 (๑˃̵ᴗ˂̵)و',
+  '慢慢来，我陪着你 (づ￣ ³￣)づ',
+]
 
 const menuItems = computed(() => {
   const items: Array<{ key: string; label: string; hint: string; icon: string; badge?: number; run: () => void }> = [
@@ -113,14 +122,44 @@ const menuItems = computed(() => {
   return items
 })
 
-function toggleMenu(): void {
+const menuVertical = ref<'above' | 'below'>('above')
+const menuHorizontal = ref<'left' | 'right'>('right')
+const menuLeft = ref(0)
+
+function updateMenuPlacement(): void {
+  const rect = rootEl.value?.getBoundingClientRect()
+  if (!rect) return
+  const estimatedMenuWidth = 246
+  const estimatedMenuHeight = session.portal === 'admin' ? 350 : 270
+  const viewportWidth = globalThis.innerWidth || 1280
+  const viewportHeight = globalThis.innerHeight || 720
+  const actualMenuWidth = Math.min(estimatedMenuWidth, Math.max(viewportWidth - 20, 1))
+  const placement = resolvePetMenuPlacement(
+    rect,
+    { width: viewportWidth, height: viewportHeight },
+    { width: actualMenuWidth, height: estimatedMenuHeight },
+  )
+  menuVertical.value = placement.vertical
+  menuHorizontal.value = placement.horizontal
+
+  const idealLeft = placement.horizontal === 'left' ? rect.left : rect.right - actualMenuWidth
+  const clampedLeft = Math.min(
+    Math.max(idealLeft, 10),
+    Math.max(viewportWidth - actualMenuWidth - 10, 10),
+  )
+  menuLeft.value = clampedLeft - rect.left
+}
+
+function toggleContextMenu(): void {
+  updateMenuPlacement()
   menuOpen.value = !menuOpen.value
-  if (menuOpen.value) {
-    bubbleVisible.value = false
-    // 三成概率随机啾一下，让每次打开都有点惊喜。
-    if (Math.random() < 0.3) {
-      showMessage(CHIRP_LINES[Math.floor(Math.random() * CHIRP_LINES.length)] ?? '在呢～', 2400)
-    }
+  bubbleVisible.value = false
+}
+
+function onPetKeydown(event: KeyboardEvent): void {
+  if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+    event.preventDefault()
+    toggleContextMenu()
   }
 }
 
@@ -137,14 +176,29 @@ const showCookie = ref(false)
 const munching = ref(false)
 let munchTimer: ReturnType<typeof setTimeout> | null = null
 
+const companionState = computed<CompanionPetState>(() => {
+  if (showHearts.value) return 'cheer'
+  if (munching.value) return 'happy'
+  const stateMap: Record<GuardianState, CompanionPetState> = {
+    idle: 'idle',
+    loading: 'loading',
+    scanning: 'think',
+    assistant: 'listening',
+    attention: 'reminder',
+    offline: 'sleep',
+  }
+  return stateMap[state.value]
+})
+
 function petHead(): void {
   heartsTick.value += 1
   showHearts.value = true
-  if (state.value === 'offline') {
-    pushToast('info', '桌宠只是视觉陪伴，不做健康判断；本地服务恢复后它会亮起来。')
-  } else {
-    pushToast('success', '桌宠很开心！它只是视觉陪伴，不做健康判断。')
-  }
+  showMessage(
+    contextMessage.value
+      ?? CHIRP_LINES[Math.floor(Math.random() * CHIRP_LINES.length)]
+      ?? '我在呢～(｡･ω･｡)ﾉ',
+    3200,
+  )
   setTimeout(() => { showHearts.value = false }, 1800)
 }
 
@@ -210,6 +264,7 @@ function persistPos(): void {
 }
 
 function onDragStart(event: PointerEvent): void {
+  if (event.button !== 0) return
   if ((event.target as HTMLElement).closest('.pet-menu') !== null) return
   dragging = true
   dragMoved = false
@@ -240,10 +295,17 @@ function onDragEnd(): void {
 
 function onViewportResize(): void {
   if (petPos.value) petPos.value = clampPos(petPos.value.left, petPos.value.top)
+  if (menuOpen.value) updateMenuPlacement()
 }
 
 function onGlobalKeydown(event: KeyboardEvent): void {
   if (event.key === 'Escape' && menuOpen.value) menuOpen.value = false
+}
+
+function onDocumentPointerDown(event: PointerEvent): void {
+  if (!menuOpen.value) return
+  const target = event.target as Node | null
+  if (target && !rootEl.value?.contains(target)) menuOpen.value = false
 }
 
 onMounted(() => {
@@ -253,6 +315,7 @@ onMounted(() => {
   setTimeout(() => { if (state.value !== 'offline') showMessage(idleMessages.value[0] ?? '我在这儿呢。', 6000) }, 4_000)
   globalThis.addEventListener?.('resize', onViewportResize)
   globalThis.addEventListener?.('keydown', onGlobalKeydown)
+  globalThis.document?.addEventListener('pointerdown', onDocumentPointerDown)
 })
 
 onBeforeUnmount(() => {
@@ -261,6 +324,7 @@ onBeforeUnmount(() => {
   if (munchTimer) clearTimeout(munchTimer)
   globalThis.removeEventListener?.('resize', onViewportResize)
   globalThis.removeEventListener?.('keydown', onGlobalKeydown)
+  globalThis.document?.removeEventListener('pointerdown', onDocumentPointerDown)
 })
 </script>
 
@@ -269,7 +333,12 @@ onBeforeUnmount(() => {
     v-if="session.status === 'ready'"
     ref="rootEl"
     class="pet-root"
-    :class="[`pet-root--${state}`, { 'pet-root--dragging': dragging, 'pet-root--munch': munching, 'pet-root--night': isNight }]"
+    :class="[
+      `pet-root--${state}`,
+      `pet-root--menu-${menuVertical}`,
+      `pet-root--menu-${menuHorizontal}`,
+      { 'pet-root--dragging': dragging, 'pet-root--munch': munching, 'pet-root--night': isNight },
+    ]"
     :style="petPos ? { left: `${petPos.left}px`, top: `${petPos.top}px`, right: 'auto', bottom: 'auto' } : undefined"
   >
     <!-- 情境气泡 -->
@@ -286,7 +355,14 @@ onBeforeUnmount(() => {
 
     <!-- 快捷菜单 -->
     <Transition name="pet-menu">
-      <div v-if="menuOpen" class="pet-menu" role="menu" aria-label="桌宠快捷菜单">
+      <div
+        v-if="menuOpen"
+        class="pet-menu"
+        :class="[`pet-menu--${menuVertical}`, `pet-menu--${menuHorizontal}`]"
+        :style="{ left: `${menuLeft}px`, right: 'auto' }"
+        role="menu"
+        aria-label="小芽精灵快捷菜单"
+      >
         <p class="pet-menu-title">{{ stateLabel[state] }} · 快捷入口</p>
         <button
           v-for="item in menuItems"
@@ -335,81 +411,28 @@ onBeforeUnmount(() => {
     <button
       type="button"
       class="pet-button"
-      :aria-label="`桌宠小精灵。当前状态：${stateLabel[state]}。点击打开快捷菜单，拖动可调整位置`"
+      :aria-label="`小芽精灵。当前状态：${stateLabel[state]}。左键互动，右键打开快捷菜单，拖动可调整位置`"
       :aria-expanded="menuOpen"
       aria-haspopup="menu"
-      :title="`${stateLabel[state]} · 点击打开快捷菜单`"
-      @click="dragMoved ? undefined : toggleMenu()"
-      @dblclick.prevent="menuOpen = false; petHead()"
+      :title="`${stateLabel[state]} · 左键互动，右键打开快捷栏`"
+      @click="dragMoved ? undefined : petHead()"
+      @contextmenu.prevent="toggleContextMenu"
+      @keydown="onPetKeydown"
       @pointerdown="onDragStart"
       @pointermove="onDragMove"
       @pointerup="onDragEnd"
       @pointercancel="onDragEnd"
       @mouseenter="bubbleVisible = bubbleVisible || state === 'idle'"
     >
-      <svg class="pet-body" viewBox="0 0 96 96" fill="none" aria-hidden="true">
-        <!-- 头顶新芽 -->
-        <g class="pet-sprout">
-          <path d="M48 15c0-5 3-8 8-9-1 5-4 8-8 9z" />
-          <path d="M48 15c0-4-2.5-6.5-6.5-7.5.8 4 3.2 6.5 6.5 7.5z" opacity="0.7" />
-          <path d="M48 15v5" />
-        </g>
-        <!-- 身体 -->
-        <path
-          class="pet-blob"
-          d="M48 18c17 0 28 10.5 28 25 0 8-2.6 14.5-6.4 19.4C64.6 68.8 57 74 48 74s-16.6-5.2-21.6-11.6C22.6 57.5 20 51 20 43c0-14.5 11-25 28-25z"
-        />
-        <!-- 腮红 -->
-        <circle class="pet-cheek" cx="33" cy="48" r="3.4" />
-        <circle class="pet-cheek" cx="63" cy="48" r="3.4" />
-        <!-- 眼睛 -->
-        <g class="pet-eyes">
-          <g class="pet-eye">
-            <ellipse cx="38.5" cy="43" rx="3.4" ry="4.1" />
-            <circle class="pet-eye-light" cx="39.8" cy="41.4" r="1.15" />
-          </g>
-          <g class="pet-eye">
-            <ellipse cx="57.5" cy="43" rx="3.4" ry="4.1" />
-            <circle class="pet-eye-light" cx="58.8" cy="41.4" r="1.15" />
-          </g>
-        </g>
-        <!-- 开心眯眼（assistant / attention 用） -->
-        <g class="pet-eyes-happy">
-          <path d="M34.5 44c2.4-3.4 5.6-3.4 8 0" />
-          <path d="M53.5 44c2.4-3.4 5.6-3.4 8 0" />
-        </g>
-        <!-- 睡着（offline / 夜间打盹） -->
-        <g class="pet-eyes-sleep">
-          <path d="M35 43.5h7" />
-          <path d="M54 43.5h7" />
-        </g>
-        <!-- 嘴 -->
-        <path class="pet-mouth" d="M44.5 52.5c2.2 2.2 4.8 2.2 7 0" />
-        <!-- 需要注意的叹气滴 -->
-        <g class="pet-alert-drop">
-          <circle cx="66" cy="58" r="2.2" />
-        </g>
-        <!-- 扫描配饰：放大镜 -->
-        <g class="pet-gear pet-gear--magnifier">
-          <circle cx="74" cy="36" r="6" fill="#fffdf6" stroke="var(--sky, #47708c)" stroke-width="2" />
-          <line x1="78.5" y1="40.5" x2="83" y2="45" stroke="var(--sky, #47708c)" stroke-width="2.4" stroke-linecap="round" />
-        </g>
-        <!-- 陪伴配饰：耳机 -->
-        <g class="pet-gear pet-gear--headphone">
-          <path d="M33 30a15 15 0 0 1 30 0" fill="none" stroke="var(--pine, #38665a)" stroke-width="2.4" stroke-linecap="round" />
-          <rect x="30" y="28" width="6" height="10" rx="3" fill="var(--pine, #38665a)" />
-          <rect x="60" y="28" width="6" height="10" rx="3" fill="var(--pine, #38665a)" />
-        </g>
-        <!-- 夜晚/离线配饰：瞌睡 zz -->
-        <g class="pet-gear pet-gear--zzz" fill="var(--pine, #38665a)">
-          <text x="66" y="26" font-size="10" font-weight="700">z</text>
-          <text x="73" y="20" font-size="7.5" font-weight="700" opacity="0.75">z</text>
-        </g>
-        <!-- 夜晚配饰：月牙 -->
-        <g class="pet-gear pet-gear--moon">
-          <path d="M76 22a7.5 7.5 0 0 1-9.6 9 8.4 8.4 0 0 0 4.2-11.4A8.4 8.4 0 0 1 76 22z" fill="#e9c46a" stroke="#c99b3f" stroke-width="1.2" />
-        </g>
-      </svg>
+      <CompanionPet
+        class="pet-body"
+        :state="isNight && state === 'idle' ? 'sleep' : companionState"
+        size="medium"
+        :clickable="false"
+        :show-bubble="false"
+        :loop="true"
+        :autoplay="true"
+      />
       <span class="pet-status" aria-hidden="true"><i /></span>
     </button>
   </div>
@@ -611,18 +634,23 @@ onBeforeUnmount(() => {
 
 /* 快捷菜单 */
 .pet-menu {
+  box-sizing: border-box;
   background: rgba(255, 253, 247, 0.98);
   border: 1px solid color-mix(in srgb, var(--pine, #38665a) 26%, var(--line, #d7dde5));
   border-radius: 16px;
-  bottom: calc(100% + 10px);
   box-shadow: 0 18px 40px rgba(64, 84, 74, 0.2);
   color: var(--ink, #3f3a31);
-  min-width: 236px;
+  min-width: 0;
   padding: 10px;
   pointer-events: auto;
   position: absolute;
-  right: 0;
+  width: min(246px, calc(100vw - 20px));
 }
+
+.pet-menu--above { bottom: calc(100% + 10px); top: auto; transform-origin: bottom; }
+.pet-menu--below { bottom: auto; top: calc(100% + 10px); transform-origin: top; }
+.pet-menu--left { left: 0; right: auto; }
+.pet-menu--right { left: auto; right: 0; }
 
 .pet-menu-title {
   color: var(--ink-faint, #877966);

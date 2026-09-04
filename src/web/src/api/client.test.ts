@@ -85,6 +85,41 @@ describe('ApiClient authorization contract', () => {
     expect(requests[1]?.headers.get('Accept')).toBe('application/json')
   })
 
+  it('creates a household member with the login identity and idempotency key', async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = []
+    const client = new ApiClient({
+      baseUrl: 'http://local.test',
+      fetcher: async (input, init) => {
+        requests.push({ url: String(input), init: init ?? {} })
+        return new Response(JSON.stringify({
+          id: 'member-2',
+          household_id: 'household-1',
+          display_name: '奶奶',
+          role: 'DEPENDENT',
+          actor_id: 'grandma-1',
+          created_at: '2026-09-04T00:00:00Z',
+        }), { status: 201, headers: { 'content-type': 'application/json' } })
+      },
+    })
+
+    const created = await client.createMember(
+      'household-1',
+      { display_name: '奶奶', role: 'DEPENDENT', actor_id: 'grandma-1' },
+      { sessionToken: 's'.repeat(40), idempotencyKey: 'member-create-1' },
+    )
+
+    expect(created.actor_id).toBe('grandma-1')
+    expect(requests[0]?.url).toBe('http://local.test/api/v1/households/household-1/members')
+    expect(requests[0]?.init.method).toBe('POST')
+    expect(new Headers(requests[0]?.init.headers).get('Authorization')).toBe(`Bearer ${'s'.repeat(40)}`)
+    expect(new Headers(requests[0]?.init.headers).get('Idempotency-Key')).toBe('member-create-1')
+    expect(JSON.parse(String(requests[0]?.init.body))).toEqual({
+      display_name: '奶奶',
+      role: 'DEPENDENT',
+      actor_id: 'grandma-1',
+    })
+  })
+
   it('preserves version conflict details for optimistic authorization edits', async () => {
     const fetcher: typeof fetch = async () =>
       new Response(

@@ -6,7 +6,6 @@ import AppIcon from '@/components/AppIcon.vue'
 import SwitchRow from '@/components/SwitchRow.vue'
 import ErrorNotice from '@/components/ErrorNotice.vue'
 import ListLoadingState from '@/components/ListLoadingState.vue'
-import { createSpeaker } from '@/composables/useSpeech'
 import { ApiClient, ApiClientError } from '@/api/client'
 import { presentApiError, presentListApiError, type ErrorPresentation } from '@/api/errors'
 import { clearLocalData, localDataInventory } from '@/stores/localData'
@@ -35,7 +34,6 @@ const { session, updateSession } = useSession()
 const { auth, signOut, beginStepUp, confirmStepUp, cancelStepUp } = useAuth()
 const { authorizationBoundary, resumeAuthorizationBoundary } = useAuthorizationBoundary()
 const { setCapabilities, clearCapabilities } = useCapabilities()
-const feedbackSpeaker = createSpeaker(() => true)
 
 const isNativeApp = Capacitor.isNativePlatform()
 const connectionState = ref<'idle' | 'testing' | 'ok' | 'failed'>('idle')
@@ -230,9 +228,6 @@ function onMobileRoleChange(role: MobileRole): void {
 function onElderModeChange(enabled: boolean): void {
   setElderMode(enabled)
   tapFeedback([12, 60, 18])
-  feedbackSpeaker.speak(
-    enabled ? '长辈模式已开启，字号已调大，语音播报已打开。' : '长辈模式已关闭。',
-  )
 }
 
 function persistContact(): void {
@@ -266,12 +261,9 @@ function contactCaregiver(): void {
     return
   }
   contactError.value = ''
-  const confirmed = typeof window.confirm !== 'function'
-    || window.confirm(`将打开手机拨号界面：${phone}。确认继续吗？`)
-  if (confirmed) {
-    contactCallMessage.value = '正在拨号'
-    window.location.href = `tel:${phone}`
-  }
+  contactCallMessage.value = '正在拨号'
+  tapFeedback([12, 60, 18])
+  window.location.href = `tel:${phone}`
 }
 
 /**
@@ -525,14 +517,6 @@ onMounted(() => {
         {{ mobileRoleMessage }}
       </p>
     </section>
-
-    <RouterLink v-if="!isMemberMode" class="card link-card" to="/assistant">
-      <AppIcon name="mic" :size="22" />
-      <span class="link-card-text">
-        <strong>语音助手</strong>
-      </span>
-      <AppIcon name="chevron-right" :size="18" />
-    </RouterLink>
 
     <RouterLink class="card link-card" to="/me/accessibility">
       <AppIcon name="settings" :size="22" />
@@ -833,10 +817,6 @@ onMounted(() => {
       <RouterLink class="btn btn-quiet btn-block" to="/me/privacy">
         <AppIcon name="shield" :size="18" />
         隐私设置
-      </RouterLink>
-      <RouterLink v-if="!isMemberMode" class="btn btn-quiet btn-block" to="/knowledge">
-        <AppIcon name="eye" :size="18" />
-        知识库
       </RouterLink>
     </section>
 
