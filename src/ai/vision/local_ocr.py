@@ -46,6 +46,24 @@ logger = logging.getLogger(__name__)
 MAX_OCR_TOKENS = 512
 MAX_BARCODES = 64
 
+DEFAULT_OCR_MODEL_DIR = (
+    Path(__file__).resolve().parents[3]
+    / "src"
+    / "models"
+    / "vision"
+    / "ocr"
+    / "paddleocr"
+    / "ppocrv4-ch"
+)
+
+
+def _default_ocr_model_dir() -> str | None:
+    """Use the bundled PP-OCRv4 cache when no operator override is set."""
+    configured = os.environ.get("HCT_OCR_MODEL_DIR")
+    if configured:
+        return configured
+    return str(DEFAULT_OCR_MODEL_DIR) if DEFAULT_OCR_MODEL_DIR.is_dir() else None
+
 # opencv-contrib decoded_type values -> evidence contract formats
 BARCODE_FORMAT_MAP: dict[str, BarcodeFormat] = {
     "EAN_13": "EAN-13",
@@ -158,6 +176,7 @@ class LocalPaddleOCR:
     """
 
     lang: str = field(default_factory=lambda: os.environ.get("HCT_OCR_LANG", "ch"))
+    model_dir: str | None = field(default_factory=_default_ocr_model_dir)
     timeout_seconds: int = 300
     run_batch_fn: Callable[[str, list[dict]], dict] | None = None
     _version: str | None = field(default=None, repr=False)
@@ -170,7 +189,11 @@ class LocalPaddleOCR:
         # so the host process does not need the package importable
         if os.environ.get("HCT_VISION_WORKER_PYTHON"):
             return True
-        return importlib.util.find_spec("paddleocr") is not None
+        return (
+            importlib.util.find_spec("paddleocr") is not None
+            and self.model_dir is not None
+            and Path(self.model_dir).is_dir()
+        )
 
     @property
     def engine_version(self) -> str:
@@ -189,7 +212,12 @@ class LocalPaddleOCR:
             return self.run_batch_fn(image_path, crop_rects)
         worker = Path(__file__).with_name("_paddle_worker.py")
         request = json.dumps(
-            {"image_path": image_path, "lang": self.lang, "crops": crop_rects}
+            {
+                "image_path": image_path,
+                "lang": self.lang,
+                "model_dir": self.model_dir,
+                "crops": crop_rects,
+            }
         )
         completed = subprocess.run(  # noqa: S603 (fixed worker script, no shell)
             [worker_python(), "-X", "utf8", str(worker)],

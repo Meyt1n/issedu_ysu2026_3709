@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from pathlib import Path
 
 
 def clamp_rect(
@@ -67,6 +68,23 @@ def _jsonable(lines: list) -> list:
     return result
 
 
+def _local_model_arguments(request: dict) -> dict[str, str]:
+    """Return explicit PP-OCRv4 model paths and fail closed if incomplete."""
+    configured = request.get("model_dir") or os.environ.get("HCT_OCR_MODEL_DIR")
+    if not configured:
+        return {}
+    root = Path(configured)
+    directories = {
+        "det_model_dir": root / "det" / "ch" / "ch_PP-OCRv4_det_infer",
+        "rec_model_dir": root / "rec" / "ch" / "ch_PP-OCRv4_rec_infer",
+        "cls_model_dir": root / "cls" / "ch_ppocr_mobile_v2.0_cls_infer",
+    }
+    missing = [str(path) for path in directories.values() if not path.is_dir()]
+    if missing:
+        raise RuntimeError("incomplete local OCR model directory: " + ", ".join(missing))
+    return {name: str(path) for name, path in directories.items()}
+
+
 def main() -> int:
     request = json.loads(sys.stdin.read())
     image = read_image_bgr(request["image_path"])
@@ -78,9 +96,13 @@ def main() -> int:
     os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
     from paddleocr import PaddleOCR
 
-    engine = PaddleOCR(
-        use_angle_cls=True, lang=request.get("lang", "ch"), show_log=False
-    )
+    engine_kwargs = {
+        "use_angle_cls": True,
+        "lang": request.get("lang", "ch"),
+        "show_log": False,
+    }
+    engine_kwargs.update(_local_model_arguments(request))
+    engine = PaddleOCR(**engine_kwargs)
 
     response = {"full": _jsonable(_unwrap(engine.ocr(image, cls=True))), "crops": []}
     height, width = image.shape[:2]

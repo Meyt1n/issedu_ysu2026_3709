@@ -32,8 +32,8 @@ uv run python scripts/hct202_quality_demo.py --iterations 50
 
 | 引擎 | 角色 | 依赖（可选） | 不可用时 |
 |---|---|---|---|
-| `LocalPaddleOCR` | 文字主来源：全图 OCR 优先，YOLO 裁剪只补充非重复 token（隔离子进程 `_paddle_worker`） | `paddleocr`（PP-OCRv4 本地缓存，CPU） | 返回空列表，适配器记录降级 |
-| `YoloBoxAssist` | 包装/裁剪辅助定位，不承担药品身份（隔离子进程 `_yolo_worker`） | `ultralytics` + 仓库外权重 | 返回空列表 |
+| `LocalPaddleOCR` | 文字主来源：全图 OCR 优先，YOLO 裁剪只补充非重复 token（隔离子进程 `_paddle_worker`） | `paddleocr`（`src/models/vision/ocr/paddleocr/ppocrv4-ch`，CPU） | 返回空列表，适配器记录降级 |
+| `YoloBoxAssist` | 包装/裁剪辅助定位，不承担药品身份（隔离子进程 `_yolo_worker`） | `ultralytics` + `src/models/vision/yolo/.../weights/best.pt` | 返回空列表 |
 | `LocalBarcodeDecoder` | 条码/二维码独立通道，GTIN 校验位规则判定 | `opencv-contrib` | 返回空列表 |
 | `rule_fields.propose_fields` | 契约规定的规则/词典字段候选层：日期/批号/规格/厂家模式 + 逐字子 token 拆分 | 无（纯规则） | 不适用（确定性） |
 | `QwenLoraFieldExtractor` | 已有候选的槽位归类，反幻觉过滤 | `transformers`/`peft`/`bitsandbytes` + 仓库外权重 | 返回空列表 |

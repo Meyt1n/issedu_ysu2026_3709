@@ -19,9 +19,9 @@ Governance boundaries (HCT-203 / HCT-205 / AI-RAG spec):
 * Everything stays ``EXPERIMENTAL_UNRELEASED``: results always require human
   confirmation downstream and never write health facts.
 
-Environment variables (all optional; unset means unavailable):
+Environment variables (all optional; the bundled local model is the default):
 
-``HCT_VISION_WEIGHTS``     path to the YOLO ``best.pt`` (outside Git)
+``HCT_VISION_WEIGHTS``     override path to the YOLO ``best.pt`` (outside Git)
 ``HCT_VISION_DEVICE``      ``cpu`` (default) or a CUDA index such as ``0``
 ``HCT_VISION_CONF``        detection confidence threshold (default ``0.25``)
 ``HCT_LLM_BASE_MODEL``     path to the local Qwen3-4B base directory
@@ -81,6 +81,25 @@ LLM_SYSTEM_PROMPT = (
     "缺失字段不得编造，冲突必须保留；所有结果必须由用户人工确认后才能入库。"
 )
 
+DEFAULT_YOLO_WEIGHTS = (
+    Path(__file__).resolve().parents[3]
+    / "src"
+    / "models"
+    / "vision"
+    / "yolo"
+    / "hct-yolo11n-box-assist-experimental-v1.2-opt-a"
+    / "weights"
+    / "best.pt"
+)
+
+
+def _default_yolo_weights() -> str | None:
+    """Use the bundled demo weights when no operator override is set."""
+    configured = os.environ.get("HCT_VISION_WEIGHTS")
+    if configured:
+        return configured
+    return str(DEFAULT_YOLO_WEIGHTS) if DEFAULT_YOLO_WEIGHTS.is_file() else None
+
 
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
@@ -129,7 +148,7 @@ class YoloBoxAssist:
     """
 
     weights_path: str | None = field(
-        default_factory=lambda: os.environ.get("HCT_VISION_WEIGHTS") or None
+        default_factory=_default_yolo_weights
     )
     device: str = field(default_factory=lambda: os.environ.get("HCT_VISION_DEVICE", "cpu"))
     confidence: float = field(
