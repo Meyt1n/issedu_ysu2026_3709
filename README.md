@@ -12,7 +12,8 @@ src/
 ├─ shared/voice/                前后端共享的语音类型与工具
 ├─ models/
 │  ├─ face/                     YuNet/SFace 人脸视觉模型
-│  └─ llm/hct402-qlora-v5/      默认本地 LLM、Modelfile、模型说明
+│  ├─ llm/hct402-qlora-v5/      默认本地 LLM、Modelfile、模型说明
+│  └─ vision/                   YOLO 包装检测与 PP-OCRv4 中文 OCR 模型
 └─ runtime/
    ├─ data/                     主数据与上传文件（本机运行资产）
    ├─ database/                 SQLite 演示数据库（本机运行资产）
@@ -51,7 +52,7 @@ uv run python scripts/setup_vision_demo.py
 
 ## 运行资产与 Git 边界
 
-`src/runtime/database/*.sqlite3`、`src/runtime/data/`、`src/models/face/*.onnx` 和 `src/models/llm/**/*.gguf` 已物理迁移到本目录，但被 `.gitignore` 排除。它们可能包含健康数据、上传文件或大体积模型权重，不应提交到 Git；仓库只提交结构、配置、Modelfile、哈希和模型说明。
+`src/runtime/database/*.sqlite3`、`src/runtime/data/`、`src/models/face/*.onnx`、`src/models/llm/**/*.gguf`、`src/models/vision/yolo/**/*.pt` 和 `src/models/vision/ocr/paddleocr/ppocrv4-ch/**` 已物理迁移到本目录，但被 `.gitignore` 排除。它们可能包含健康数据、上传文件或大体积模型权重，不应提交到 Git；仓库只提交结构、配置、Modelfile、哈希和模型说明。
 
 `src/runtime/database/homecare-dev.sqlite3` 是当前本地演示数据库。正式部署前应使用空库执行迁移并导入经过审批的数据集。
 

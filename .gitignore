@@ -37,6 +37,14 @@ models/
 !src/models/llm/hct402-qlora-v5/
 !src/models/llm/hct402-qlora-v5/Modelfile
 !src/models/llm/hct402-qlora-v5/MODEL_INFO.md
+!src/models/vision/
+!src/models/vision/yolo/
+!src/models/vision/yolo/hct-yolo11n-box-assist-experimental-v1.2-opt-a/
+!src/models/vision/yolo/hct-yolo11n-box-assist-experimental-v1.2-opt-a/MODEL_INFO.md
+!src/models/vision/ocr/
+!src/models/vision/ocr/paddleocr/
+!src/models/vision/ocr/paddleocr/ppocrv4-ch/
+!src/models/vision/ocr/paddleocr/ppocrv4-ch/MODEL_INFO.md
 indexes/
 logs/
 uploads/
@@ -51,6 +59,9 @@ src/runtime/database/*.sqlite3
 src/runtime/logs/
 src/models/face/*.onnx
 src/models/llm/**/*.gguf
+src/models/vision/yolo/**/*.pt
+src/models/vision/ocr/paddleocr/ppocrv4-ch/**
+!src/models/vision/ocr/paddleocr/ppocrv4-ch/MODEL_INFO.md
 
 # Editors / OS
 .idea/

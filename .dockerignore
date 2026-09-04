@@ -10,6 +10,7 @@ src/runtime/data
 src/runtime/database
 src/models/face
 src/models/llm
+src/models/vision
 logs
 uploads
 backups
