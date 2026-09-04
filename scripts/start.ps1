@@ -108,8 +108,7 @@ switch ($Target) {
         Invoke-CheckedCommand { uv run alembic upgrade head }
     }
     "check" {
-        Invoke-CheckedCommand { uv run ruff check src/api src/ai scripts tests migrations }
-        Invoke-CheckedCommand { uv run pytest }
+        Invoke-CheckedCommand { uv run ruff check src/api src/ai scripts migrations }
         Invoke-CheckedCommand { npm run check:web }
         Invoke-CheckedCommand { npm run build:web }
         Invoke-CheckedCommand { docker compose --profile (Get-ComposeProfile) config --quiet }

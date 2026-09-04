@@ -51,7 +51,7 @@ if (-not $SkipMysql) {
     }
 }
 
-$fileRoot = if ($env:FILE_ROOT) { $env:FILE_ROOT } else { "./data/files" }
+$fileRoot = if ($env:FILE_ROOT) { $env:FILE_ROOT } else { "./src/runtime/data/files" }
 if (-not $SkipFiles) {
     Write-Host "[HCT-408 backup] collecting file inventory ..."
     if (-not (Test-Path -LiteralPath $fileRoot)) {

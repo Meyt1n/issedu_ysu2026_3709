@@ -3893,7 +3893,7 @@ def _require_knowledge_steward(actor_id: str) -> None:
 def _crawl_config_missing_error(exc: FileNotFoundError) -> HTTPException:
     """Translate a missing allowlist/fixture tree into an actionable 503.
 
-    Containerised deployments that ship without ``docs/knowledge/crawl/`` used
+    Containerised deployments that ship without ``src/runtime/knowledge/crawl/`` used
     to surface this as a bare 500, which the web UI could only render as a
     vague "爬虫状态暂时不可用".  A stable reason code lets the UI say exactly
     what is wrong instead of blaming API availability.

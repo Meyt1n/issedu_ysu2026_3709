@@ -587,7 +587,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onDetailKeydown))
           <div v-if="showSources && crawlSources.length > 0" class="source-list">
             <p class="row-meta" style="margin: 0 0 6px; line-height: 1.65">
               抓取范围只来自这份白名单。网页端抓取<strong>只运行本地夹具（fixture）来源</strong>，服务端不出网；
-              远程 HTTPS 来源需在 <span class="mono">docs/knowledge/crawl/allowlist.json</span> 中
+              远程 HTTPS 来源需在 <span class="mono">src/runtime/knowledge/crawl/allowlist.json</span> 中
               <span class="mono">enabled: true</span> 且域名命中 <span class="mono">allowed_hosts</span>，
               再由管理员在终端执行：
             </p>

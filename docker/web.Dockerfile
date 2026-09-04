@@ -4,8 +4,8 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY src/web ./src/web
-# Web 助手朗读依赖仓库根 shared/voice（@hct/voice），构建镜像必须一并打入。
-COPY shared ./shared
+# Web 助手朗读依赖 src/shared/voice（@hct/voice），构建镜像必须一并打入。
+COPY src/shared ./src/shared
 # HCT-498：所有 Web 构建不编译开发身份入口；正式账号、PIN/人脸等能力
 # 仍按门户和凭证配置呈现，并统一使用正式会话。
 RUN npm run build:web

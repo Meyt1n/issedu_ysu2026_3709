@@ -18,7 +18,7 @@ COPY src ./src
 # 容器内爬虫接口会以 KNOWLEDGE_CRAWL_CONFIG_MISSING 降级而不是可用。
 # staging 与 approved/incoming 为运行期产物，写入容器文件系统（教学演示用途）；
 # 本地已有的运行产物由 .dockerignore 排除，不会进入镜像。
-COPY docs/knowledge ./docs/knowledge
+COPY src/runtime/knowledge ./src/runtime/knowledge
 
 ENV PYTHONPATH=/app/src/api:/app/src
 

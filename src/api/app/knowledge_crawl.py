@@ -1,8 +1,8 @@
 """Controlled knowledge crawl → staging pipeline (never auto-ingests).
 
 Fetches only allowlisted sources, writes UTF-8 markdown drafts under
-``docs/knowledge/staging/``, and records a crawl run ledger. Live RAG ingest
-still requires human promotion into ``docs/knowledge/approved/``.
+``src/runtime/knowledge/staging/``, and records a crawl run ledger. Live RAG
+ingest still requires human promotion into ``src/runtime/knowledge/approved/``.
 """
 from __future__ import annotations
 
@@ -20,9 +20,10 @@ from urllib.request import Request, urlopen
 logger = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-ALLOWLIST_PATH = REPO_ROOT / "docs" / "knowledge" / "crawl" / "allowlist.json"
-FIXTURES_ROOT = REPO_ROOT / "docs" / "knowledge" / "crawl" / "fixtures"
-STAGING_ROOT = REPO_ROOT / "docs" / "knowledge" / "staging"
+KNOWLEDGE_ROOT = REPO_ROOT / "src" / "runtime" / "knowledge"
+ALLOWLIST_PATH = KNOWLEDGE_ROOT / "crawl" / "allowlist.json"
+FIXTURES_ROOT = KNOWLEDGE_ROOT / "crawl" / "fixtures"
+STAGING_ROOT = KNOWLEDGE_ROOT / "staging"
 RUNS_PATH = STAGING_ROOT / "crawl_runs.jsonl"
 
 # Source ids double as staging file names; reject anything that could escape
@@ -654,8 +655,8 @@ def promote_approved_staging(
         "manifest_path": manifest_rel,
         "ingest_hint": (
             "uv run python scripts/ingest_local_knowledge.py "
-            "--manifest docs/knowledge/approved/incoming/正式知识清单.crawl.json "
-            "--source-root docs/knowledge/approved "
+            "--manifest src/runtime/knowledge/approved/incoming/正式知识清单.crawl.json "
+            "--source-root src/runtime/knowledge/approved "
             "--actor-id knowledge-steward "
             "--index-version approved-crawl-v1 --dry-run"
         ),

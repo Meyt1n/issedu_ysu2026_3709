@@ -74,7 +74,7 @@ if ($LASTEXITCODE -ne 0) { throw "Alembic migration failed after restore." }
 $fileManifest = Join-Path $backupPath "file_manifest.json"
 if (Test-Path -LiteralPath $fileManifest) {
     $manifestFiles = @((Get-Content -LiteralPath $fileManifest -Raw | ConvertFrom-Json).files)
-    $fileRootValue = if ($FileRoot) { $FileRoot } elseif ($env:FILE_ROOT) { $env:FILE_ROOT } else { "./data/files" }
+    $fileRootValue = if ($FileRoot) { $FileRoot } elseif ($env:FILE_ROOT) { $env:FILE_ROOT } else { "./src/runtime/data/files" }
     if ($manifestFiles.Count -gt 0) {
         Write-Host "[HCT-408 restore] restoring FILE_ROOT from files.tar.gz into $fileRootValue ..."
         & uv run python (Join-Path $scriptDir "hct408_file_archive.py") restore --backup $backupPath --file-root $fileRootValue --wipe-existing

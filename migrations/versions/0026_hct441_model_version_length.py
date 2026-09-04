@@ -12,20 +12,20 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.alter_column(
-        "vision_task",
-        "model_version",
-        existing_type=sa.String(length=64),
-        type_=sa.String(length=128),
-        existing_nullable=True,
-    )
+    with op.batch_alter_table("vision_task") as batch_op:
+        batch_op.alter_column(
+            "model_version",
+            existing_type=sa.String(length=64),
+            type_=sa.String(length=128),
+            existing_nullable=True,
+        )
 
 
 def downgrade() -> None:
-    op.alter_column(
-        "vision_task",
-        "model_version",
-        existing_type=sa.String(length=128),
-        type_=sa.String(length=64),
-        existing_nullable=True,
-    )
+    with op.batch_alter_table("vision_task") as batch_op:
+        batch_op.alter_column(
+            "model_version",
+            existing_type=sa.String(length=128),
+            type_=sa.String(length=64),
+            existing_nullable=True,
+        )

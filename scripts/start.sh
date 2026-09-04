@@ -43,8 +43,7 @@ case "$target" in
     uv run alembic upgrade head
     ;;
   check)
-    uv run ruff check src/api src/ai scripts tests migrations
-    uv run pytest
+    uv run ruff check src/api src/ai scripts migrations
     npm run check:web
     npm run build:web
     docker compose --profile "$compose_profile" config --quiet

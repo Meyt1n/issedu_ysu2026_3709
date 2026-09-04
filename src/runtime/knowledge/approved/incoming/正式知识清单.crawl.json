@@ -1,0 +1,51 @@
+{
+  "manifest_version": "1",
+  "status": "approved",
+  "approval_note": "由 demo-parent 从 staging 晋升；仍须独立 index-version 入库。禁止未审核自动抓取直写正式索引。",
+  "documents": [
+    {
+      "path": "incoming/fixture-allergy-share.md",
+      "title": "过敏信息分享边界教学摘录（本地夹具）",
+      "source": "crawl:fixture-allergy-share",
+      "license": "internal-demo",
+      "version": "crawl-0412a76ee698",
+      "permission_scope": {
+        "internal": true
+      },
+      "content_sha256": "0412a76ee698fcbb26b8fc6b49acb53c1df8aa73d1d02b57c981d59a56c65b79"
+    },
+    {
+      "path": "incoming/fixture-med-storage.md",
+      "title": "家庭药箱存放教学摘录（本地夹具）",
+      "source": "crawl:fixture-med-storage",
+      "license": "internal-demo",
+      "version": "crawl-d07d2cc17055",
+      "permission_scope": {
+        "internal": true
+      },
+      "content_sha256": "d07d2cc170557babcce74f558baf2022dd60cc1d9cc6c13e0003d95e9100aa8f"
+    },
+    {
+      "path": "incoming/fixture-packaging-check.md",
+      "title": "包装复核与条码冲突教学摘录（本地夹具）",
+      "source": "crawl:fixture-packaging-check",
+      "license": "internal-demo",
+      "version": "crawl-1595425b4345",
+      "permission_scope": {
+        "internal": true
+      },
+      "content_sha256": "1595425b43453029e51a2a95bbf83cde3582fcd775bb9e08a04346b6766e7381"
+    },
+    {
+      "path": "incoming/fixture-reminder-escalation.md",
+      "title": "提醒升级与静默窗口教学摘录（本地夹具）",
+      "source": "crawl:fixture-reminder-escalation",
+      "license": "internal-demo",
+      "version": "crawl-1609b70e8e3d",
+      "permission_scope": {
+        "internal": true
+      },
+      "content_sha256": "1609b70e8e3d46e001554d5870429f5b9899ab2726bb52cc138f3119d44a41f9"
+    }
+  ]
+}

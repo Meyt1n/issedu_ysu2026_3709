@@ -13,9 +13,9 @@
     "types": ["node"],
     "baseUrl": ".",
     "paths": {
-      "@hct/voice": ["../../shared/voice/index.ts"],
-      "@hct/voice/*": ["../../shared/voice/*"]
+      "@hct/voice": ["../shared/voice/index.ts"],
+      "@hct/voice/*": ["../shared/voice/*"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.vue", "../../shared/voice/**/*.ts"]
+  "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.vue", "../shared/voice/**/*.ts"]
 }

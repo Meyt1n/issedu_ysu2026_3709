@@ -34,7 +34,7 @@ export default defineConfig(({ mode }) => {
     plugins: [vue()],
     resolve: {
       alias: {
-        '@hct/voice': fileURLToPath(new URL('../../shared/voice', import.meta.url)),
+        '@hct/voice': fileURLToPath(new URL('../shared/voice', import.meta.url)),
       },
     },
     ...(portalMode
